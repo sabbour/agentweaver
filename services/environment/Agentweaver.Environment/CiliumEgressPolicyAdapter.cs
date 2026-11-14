@@ -630,6 +630,7 @@ public sealed class CiliumEgressPolicyAdapter(
     }
 
     /// <summary>Creates a generation-pinned deny-all tombstone for this Environment selector.</summary>
+    /// <remarks>The hash binds the selector and generation, so an older tombstone cannot verify as current.</remarks>
     private static CiliumNetworkPolicyDocument RenderRevocation(
         EnvironmentEgressSelector selector,
         long generation)
@@ -755,6 +756,7 @@ public sealed class CiliumEgressPolicyAdapter(
     internal static bool SameSpec(CiliumPolicySpec left, CiliumPolicySpec right) =>
         string.Equals(CanonicalJson(left), CanonicalJson(right), StringComparison.Ordinal);
 
+    /// <summary>Allows Kubernetes status data but rejects other fields outside the desired policy object.</summary>
     private static bool HasOnlyExpectedRootFields(CiliumNetworkPolicyDocument policy) =>
         policy.AdditionalProperties is null ||
         policy.AdditionalProperties.Keys.All(key => string.Equals(key, "status", StringComparison.Ordinal));

@@ -277,6 +277,7 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
             : null;
     }
 
+    // Kubernetes responses can omit an empty annotation map.
     private static ImmutableDictionary<string, string> Annotations(CiliumNetworkPolicyDocument policy) =>
         policy.Metadata.Annotations ?? ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
 

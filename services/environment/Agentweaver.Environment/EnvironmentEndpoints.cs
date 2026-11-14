@@ -335,6 +335,7 @@ public static class EnvironmentEndpoints
                 if (!TryReadCaller(context, out var caller))
                     return Results.Unauthorized();
                 var recoveryQuery = context.Request.Query["checkpointRecoveryOperationId"];
+                // Accept recovery only on the base or readiness route, with one query value that matches the operation.
                 if (recoveryQuery.Count > 1 ||
                     recoveryQuery.Count == 1 &&
                     (!Guid.TryParse(recoveryQuery[0], out var recoveryId) || recoveryId == Guid.Empty ||
@@ -1133,6 +1134,7 @@ public static class EnvironmentEndpoints
                 reservation.TransitionState,
                 reservation.Replayed,
                 reservation.CurrentResource,
+                // Expose the target resource only after the owner records completion.
                 reservation.TransitionState == EnvironmentWorkspaceVolumeTransitionState.Completed
                     ? reservation.TargetResource
                     : null);
@@ -1374,6 +1376,7 @@ public static class EnvironmentEndpoints
         }
     }
 
+    /// <summary>Creates an actor credential only for an authenticated, unexpired request; callers must invalidate it.</summary>
     private static async Task<(RuntimeActorAuthorization Actor, SecretCredential Credential)> CreateP1ActorAsync(
         HttpContext context,
         CurrentCallerRequest caller,

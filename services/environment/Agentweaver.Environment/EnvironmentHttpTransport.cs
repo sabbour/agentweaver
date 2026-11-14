@@ -3,7 +3,7 @@ namespace Agentweaver.Environment;
 /// <summary>Shared safeguards for HTTP clients used by the Environment service.</summary>
 internal static class EnvironmentHttpTransport
 {
-    /// <summary>Accepts only absolute HTTPS base URIs without embedded credentials or request components.</summary>
+    /// <summary>Accepts an absolute HTTPS URI without embedded credentials, query, or fragment.</summary>
     /// <param name="value">Configured URI text to validate.</param>
     /// <param name="name">Configuration name included in a rejection message.</param>
     /// <returns>The parsed trusted base URI.</returns>
