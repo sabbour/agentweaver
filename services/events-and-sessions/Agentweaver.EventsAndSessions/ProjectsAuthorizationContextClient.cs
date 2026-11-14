@@ -291,6 +291,7 @@ public sealed class ProjectsAuthorizationContextClient(
     private static (string? ProjectId, string? RunId) RequireProjectReadCaller(
         HttpContext context, string projectId, string? audience)
     {
+        // Optional binding claims only narrow this read; a run ID requires a matching project ID.
         var subjects = context.User.FindAll("sub").Take(2).ToArray();
         var projects = context.User.FindAll("project_id").Take(2).ToArray();
         var runs = context.User.FindAll("run_id").Take(2).ToArray();

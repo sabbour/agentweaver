@@ -100,6 +100,7 @@ public static class RuntimeRateCardContract
                     writer.WriteString("region", retail.Region);
                     writer.WritePropertyName("meterIds");
                     writer.WriteStartArray();
+                    // Sort meter IDs so input order does not change the canonical bytes.
                     foreach (var meterId in retail.MeterIds.OrderBy(value => value, StringComparer.Ordinal))
                         writer.WriteStringValue(meterId);
                     writer.WriteEndArray();

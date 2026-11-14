@@ -36,6 +36,7 @@ public sealed class RuntimeRateCardStore
         var canonicalRuntimeCard = RuntimeRateCardContract.SerializeCanonical(runtimeRateCard);
         var multipliers = JsonSerializer.Serialize(card.ModelMultipliers, JsonOptions);
 
+        // A rate-card ID and version are immutable; accept retries only when the stored content matches.
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_quotedSchema}.usage_rate_cards (

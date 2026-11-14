@@ -15,6 +15,7 @@ public sealed class ProjectUsageReadStore(NpgsqlDataSource dataSource, PostgresS
     {
         options.Validate();
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // Keep aggregates unknown when any row lacks its measurement; a partial sum is not complete.
         await using var command = new NpgsqlCommand($"""
             WITH scoped AS MATERIALIZED (
                 SELECT l.*, dimension.kind, dimension.id
