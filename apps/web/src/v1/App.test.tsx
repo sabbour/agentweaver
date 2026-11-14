@@ -305,6 +305,28 @@ function projectSummary(projectId: string, name: string, effectiveRoles: Effecti
   };
 }
 
+function repoAppStatus(
+  connectionId: string | null = 'identity-app-1',
+  connectionRevision = 4,
+  state: 'connected' | 'not_connected' | 'revoked' | 'rotation_uncertain' = 'connected',
+) {
+  const localReadiness = {
+    connected: 'access_token_available',
+    not_connected: 'not_connected',
+    revoked: 'reauthorization_required',
+    rotation_uncertain: 'rotation_uncertain',
+  }[state];
+  return {
+    state,
+    localReadiness,
+    connectionId,
+    connectionRevision: state === 'connected' ? connectionRevision : null,
+    githubLogin: state === 'connected' ? 'octo' : null,
+    accessTokenExpiresAt: state === 'connected' ? '2026-10-08T18:00:00Z' : null,
+    updatedAt: state === 'connected' ? '2026-10-08T17:00:00Z' : null,
+  };
+}
+
 function selectionSnapshot(projectId: string, runId: string): EffectiveRunSelection {
   return {
     projectId,
@@ -617,6 +639,21 @@ describe('v1 web project scoping', () => {
 
   it('creates a project from a GitHub repository and saves the repository in its configuration', async () => {
     mocks.createProject.mockResolvedValue(projectSummary('p9', 'From GitHub'));
+    mocks.getRepoAppStatus.mockResolvedValue(repoAppStatus());
+    const storedConfiguration = {
+      ...projectConfiguration('p9', 17).configuration,
+      sourceControl: {
+        repository: { owner: 'old', name: 'repository' },
+        authMode: 'secret',
+        apiSecretReference: 'secrets/api:v4',
+        checkoutSecretReference: 'secrets/checkout:v2',
+        webhookSecretReference: 'secrets/webhook:v7',
+      },
+    };
+    mocks.getProjectConfiguration.mockResolvedValue({
+      ...projectConfiguration('p9', 17),
+      configuration: storedConfiguration,
+    });
     // Saving the configuration returns the next revision, like the real owner.
     mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) =>
       projectConfiguration(projectId, revision + 1));
@@ -631,19 +668,31 @@ describe('v1 web project scoping', () => {
     expect(submit.disabled).toBe(true);
     // A full clone URL is accepted and reduced to owner and name.
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'https://github.com/octo/agentweaver.git' } });
+    await waitFor(() => expect(submit.disabled).toBe(false));
     fireEvent.click(submit);
 
     await screen.findByText('Project From GitHub was created. It uses octo/agentweaver.');
-    // The repository is saved as a second step, on revision 1 of the new project's configuration.
+    // The second write uses the current revision, preserves the webhook reference and unrelated fields,
+    // and does not copy API or checkout secret references.
     expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
-      'broker-token', 'p9', 1,
-      expect.objectContaining({ sourceControl: expect.objectContaining({ repository: { owner: 'octo', name: 'agentweaver' }, authMode: 'githubApp' }) }),
+      'broker-token', 'p9', 17,
+      {
+        ...storedConfiguration,
+        sourceControl: {
+          repository: { owner: 'octo', name: 'agentweaver' },
+          authMode: 'githubApp',
+          identityConnectionId: 'identity-app-1',
+          webhookSecretReference: 'secrets/webhook:v7',
+        },
+      },
       'tenant-1',
     );
+    expect(mocks.getRepoAppStatus).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a new project when its optional repository setup fails', async () => {
     mocks.createProject.mockResolvedValue(projectSummary('p9', 'Repository unavailable'));
+    mocks.getRepoAppStatus.mockResolvedValue(repoAppStatus());
     // The project remains created when the optional configuration read fails.
     mocks.getProjectConfiguration.mockRejectedValue(new GatewayError(503, { code: 'unavailable' }, 'Unavailable'));
     window.history.replaceState({}, '', '/projects');
@@ -652,10 +701,273 @@ describe('v1 web project scoping', () => {
     fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'Repository unavailable' } });
     fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }));
+    const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
 
     await screen.findByText(/The repository was not saved\. Add it later in Settings > Repository\./);
     // The project is kept, and no configuration write is tried without a current revision.
+    expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'disconnected', result: repoAppStatus(null, 4, 'not_connected'), unavailable: false },
+    { name: 'revoked', result: repoAppStatus('identity-app-1', 5, 'revoked'), unavailable: false },
+    { name: 'uncertain rotation', result: repoAppStatus('identity-app-1', 5, 'rotation_uncertain'), unavailable: false },
+    { name: 'missing connection ID', result: repoAppStatus(null), unavailable: false },
+    { name: 'unavailable status', result: null, unavailable: true },
+  ])('blocks project creation when the $name status is unusable', async ({ result, unavailable }) => {
+    const pendingStatus = deferred<ReturnType<typeof repoAppStatus>>();
+    mocks.getRepoAppStatus.mockReturnValueOnce(pendingStatus.promise);
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'From GitHub'));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+    const dialog = within(screen.getByRole('dialog'));
+    const form = dialog.getByLabelText('Project name').closest('form')!;
+    const submit = dialog.getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    await waitFor(() => expect(mocks.getRepoAppStatus).toHaveBeenCalledTimes(1));
+
+    // Unknown status blocks both a button click and a form submission (for example, Enter).
+    fireEvent.click(submit);
+    fireEvent.submit(form);
+    expect(mocks.createProject).not.toHaveBeenCalled();
+    expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
+
+    await act(async () => {
+      if (unavailable) {
+        pendingStatus.reject(new Error('Identity Broker unavailable'));
+      } else {
+        pendingStatus.resolve(result!);
+      }
+    });
+    await waitFor(() => {
+      expect(submit.disabled).toBe(true);
+      if (unavailable)
+        expect(screen.getByText('GitHub connection status is unavailable. Try again.')).toBeTruthy();
+    });
+    fireEvent.click(submit);
+    fireEvent.submit(form);
+    expect(mocks.createProject).not.toHaveBeenCalled();
+    expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
+
+    mocks.getRepoAppStatus.mockResolvedValueOnce(repoAppStatus());
+    fireEvent.click(dialog.getByRole('button', { name: 'Refresh status' }));
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    expect(mocks.createProject).not.toHaveBeenCalled();
+  });
+
+  it('does not use a connection that changes before submit and accepts the same ID after rotation', async () => {
+    const accountA = repoAppStatus('identity-connection-A', 4);
+    const accountB = repoAppStatus('identity-connection-B', 5);
+    const rotatedAccountB = { ...repoAppStatus('identity-connection-B', 6), localReadiness: 'refresh_required' as const };
+    mocks.getRepoAppStatus
+      .mockResolvedValueOnce(accountA)
+      .mockResolvedValueOnce(accountB)
+      .mockResolvedValueOnce(accountB)
+      .mockResolvedValueOnce(rotatedAccountB);
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'From GitHub'));
+    mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) =>
+      projectConfiguration(projectId, revision + 1));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+    const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+
+    fireEvent.click(submit);
+    expect(await within(screen.getByRole('dialog')).findByText(
+      'The GitHub connection changed. Review the updated account and select Create project again.',
+    )).toBeTruthy();
+    expect(await screen.findByText('identity-connection-B', { selector: 'code' })).toBeTruthy();
+    expect(mocks.createProject).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await screen.findByText('Project From GitHub was created. It uses octo/agentweaver.');
+    expect(mocks.createProject).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
+      'broker-token', 'p9', 1,
+      expect.objectContaining({
+        sourceControl: expect.objectContaining({
+          identityConnectionId: 'identity-connection-B',
+        }),
+      }),
+      'tenant-1',
+    );
+  });
+
+  it('keeps form values and creates nothing when the submit status check fails', async () => {
+    const connected = repoAppStatus();
+    mocks.getRepoAppStatus
+      .mockResolvedValueOnce(connected)
+      .mockRejectedValueOnce(new Error('Identity Broker unavailable'))
+      .mockResolvedValueOnce(connected)
+      .mockResolvedValueOnce(connected);
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'From GitHub'));
+    mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) =>
+      projectConfiguration(projectId, revision + 1));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+    const dialog = within(screen.getByRole('dialog'));
+    const submit = dialog.getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+
+    fireEvent.click(submit);
+    expect(await dialog.findByText('Identity Broker unavailable')).toBeTruthy();
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    expect((dialog.getByLabelText('Project name') as HTMLInputElement).value).toBe('From GitHub');
+    expect((dialog.getByLabelText('Repository') as HTMLInputElement).value).toBe('octo/agentweaver');
+    expect(mocks.createProject).not.toHaveBeenCalled();
+    expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
+
+    fireEvent.click(submit);
+    await screen.findByText('Project From GitHub was created. It uses octo/agentweaver.');
+    expect(mocks.createProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('only enables creation after a tracked connect callback and a connected Broker status', async () => {
+    const notConnected = repoAppStatus(null, 4, 'not_connected');
+    mocks.getRepoAppStatus
+      .mockResolvedValueOnce(notConnected)
+      .mockResolvedValueOnce(repoAppStatus());
+    const popup = { name: '', closed: false, close: vi.fn() };
+    const openPopup = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    mocks.beginRepoAppConnect.mockResolvedValue(undefined);
+    window.history.replaceState({}, '', '/projects');
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+      fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+      fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+      fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+      const dialog = within(screen.getByRole('dialog'));
+      const submit = dialog.getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+      await screen.findByText('No GitHub Repo App connection is available for this identity.');
+      expect(submit.disabled).toBe(true);
+
+      fireEvent.click(dialog.getByRole('button', { name: 'Connect GitHub Repo App' }));
+      await waitFor(() => expect(mocks.beginRepoAppConnect).toHaveBeenCalledWith(
+        popup,
+        expect.any(AbortSignal),
+      ));
+      expect(submit.disabled).toBe(true);
+
+      act(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          origin: window.location.origin,
+          source: popup as unknown as MessageEventSource,
+          data: { type: 'agentweaver.repo-app.connected' },
+        }));
+      });
+      expect(await screen.findByText('identity-app-1', { selector: 'code' })).toBeTruthy();
+      await waitFor(() => expect(submit.disabled).toBe(false));
+      expect(mocks.createProject).not.toHaveBeenCalled();
+    } finally {
+      openPopup.mockRestore();
+    }
+  });
+
+  it('ignores a late status response after closing and reopening GitHub project creation', async () => {
+    const staleStatus = deferred<ReturnType<typeof repoAppStatus>>();
+    const currentStatus = deferred<ReturnType<typeof repoAppStatus>>();
+    mocks.getRepoAppStatus
+      .mockReturnValueOnce(staleStatus.promise)
+      .mockReturnValueOnce(currentStatus.promise);
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+    await waitFor(() => expect(mocks.getRepoAppStatus).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    await waitFor(() => expect(mocks.getRepoAppStatus).toHaveBeenCalledTimes(2));
+    expect(submit.disabled).toBe(true);
+    await act(async () => { staleStatus.resolve(repoAppStatus('stale-connection')); });
+    expect(submit.disabled).toBe(true);
+
+    await act(async () => { currentStatus.resolve(repoAppStatus('current-connection')); });
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    expect(screen.getByText('current-connection', { selector: 'code' })).toBeTruthy();
+    expect(mocks.createProject).not.toHaveBeenCalled();
+  });
+
+  it('keeps form and account controls disabled until GitHub project setup finishes', async () => {
+    const pendingCreate = deferred<ReturnType<typeof projectSummary>>();
+    const storedConfiguration = projectConfiguration('p9', 8);
+    mocks.getRepoAppStatus.mockResolvedValue(repoAppStatus());
+    mocks.createProject.mockReturnValue(pendingCreate.promise);
+    mocks.getProjectConfiguration.mockImplementation(async () => {
+      assertSubmissionControlsDisabled();
+      return storedConfiguration;
+    });
+    mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) => {
+      assertSubmissionControlsDisabled();
+      return projectConfiguration(projectId, revision + 1);
+    });
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+
+    function assertSubmissionControlsDisabled() {
+      const dialog = within(screen.getByRole('dialog'));
+      for (const name of ['Blank project', 'GitHub repository'])
+        expect((dialog.getByRole('radio', { name }) as HTMLInputElement).disabled).toBe(true);
+      expect((dialog.getByLabelText('Project name') as HTMLInputElement).disabled).toBe(true);
+      expect((dialog.getByLabelText('Repository') as HTMLInputElement).disabled).toBe(true);
+      for (const name of [
+        'Reauthorize GitHub Repo App',
+        'Browse repositories',
+        'Disconnect GitHub',
+        'Refresh status',
+      ])
+        expect((dialog.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+      const submit = dialog.queryByRole('button', { name: 'Create project' }) ??
+        dialog.getByRole('button', { name: 'Creating…' });
+      expect((submit as HTMLButtonElement).disabled).toBe(true);
+    }
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+    const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() => expect(mocks.createProject).toHaveBeenCalledTimes(1));
+    assertSubmissionControlsDisabled();
+
+    await act(async () => { pendingCreate.resolve(projectSummary('p9', 'From GitHub')); });
+    await screen.findByText('Project From GitHub was created. It uses octo/agentweaver.');
+    expect(mocks.getProjectConfiguration).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProjectConfiguration).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('creates a blank project without reading Broker status or writing repository settings', async () => {
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'Blank project'));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'Blank project' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }));
+
+    expect(await screen.findByText('Project Blank project was created.')).toBeTruthy();
+    expect(mocks.getRepoAppStatus).not.toHaveBeenCalled();
     expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
   });
 

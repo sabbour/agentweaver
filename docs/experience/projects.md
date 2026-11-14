@@ -35,13 +35,31 @@ current tenant.
 2. In **Project name**, enter up to 120 characters.
 3. In **Start from**, choose **Blank project** or **GitHub repository**.
 4. For **GitHub repository**, enter the repository as `owner/name` or as its
-   `github.com` address.
+   `github.com` address. The dialog shows the current identity's GitHub Repo
+   App account and connection ID. Confirm that this is the account the project
+   should use.
 5. Select **Create project**.
 
-For **GitHub repository**, the app creates the project and then saves the
-repository in the project configuration with **GitHub App** sign-in. Saving the
-repository is a separate step. If it fails, the project remains available and
-you can add the repository later in **Settings > Repository**.
+**Blank project** does not need a GitHub connection. For **GitHub repository**,
+the app enables **Create project** only when the Broker confirms a connected
+account with a usable connection ID. The app checks the same connection again
+before it creates the project. If the account changes, review the updated
+connection and select **Create project** again.
+
+The app creates the project first, then saves the repository settings with
+`sourceControl.authMode: "githubApp"` and the displayed
+`sourceControl.identityConnectionId`. It preserves the webhook secret reference
+and other configuration fields. It does not copy API or checkout secret
+references. This saved connection reference does not prove repository access,
+clone the repository, or pin it to a run.
+
+If saving the repository settings fails, the project remains available. Do not
+create the project again. To complete setup, confirm the account in
+**Settings > Connections**. In **Settings > Repository**, set the repository
+and **GitHub App** sign-in method. In **Settings > Advanced**, set
+`sourceControl.identityConnectionId`, remove API and checkout secret
+references, keep the webhook reference and other configuration, and save at
+the current revision.
 
 **Expected result:** A message confirms the new project, and the project list
 refreshes. You are the Owner of the project you create.
@@ -184,7 +202,7 @@ not confirm that the services are deployed in your environment.
 | Create | `POST /api/v1/projects` with `{ "name": "..." }` | Projects & Config | Creates a project in the selected tenant; it does not grant project roles. |
 | Read the project | `GET /api/v1/projects/{projectId}` | Projects & Config | Returns the project summary with the current caller's effective role names and resource scopes. |
 | Read configuration | `GET /api/v1/projects/{projectId}/configuration` | Projects & Config | Returns the configuration that the Dashboard readiness card uses. |
-| Save the GitHub repository | `PUT /api/v1/projects/{projectId}/configuration` | Projects & Config | Saves the repository for a project created from a GitHub repository. |
+| Save the GitHub repository | `PUT /api/v1/projects/{projectId}/configuration` | Projects & Config | Saves the repository and `sourceControl.identityConnectionId` at the current revision for a project created from a GitHub repository. |
 | List runs | `GET /api/v1/projects/{projectId}/runs` | Orchestrator | Returns one page of runs, newest first. The `state` filter and `cursor` select the rows. |
 | Read run metrics | `GET /api/v1/projects/{projectId}/metrics` | Orchestrator | Returns run counts and daily buckets for a UTC range of up to 92 days. |
 | Read usage | `GET /api/v1/projects/{projectId}/usage` | Events & Sessions | Returns usage and cost subtotals by model and agent for the same range. |

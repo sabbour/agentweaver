@@ -209,6 +209,8 @@ function ProjectsPage() {
   const [projectName, setProjectName] = useState('');
   const [startFrom, setStartFrom] = useState<'blank' | 'github'>('blank');
   const [repositoryInput, setRepositoryInput] = useState('');
+  const [repoAppStatus, setRepoAppStatus] = useState<RepoAppConnectionStatus | null>(null);
+  const [repoAppPanelKey, setRepoAppPanelKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -238,7 +240,10 @@ function ProjectsPage() {
   // The repository is only used when "GitHub repository" is selected. When it
   // is selected, the form cannot submit until the input parses as owner/name.
   const repository = startFrom === 'github' ? parseRepository(repositoryInput) : null;
-  const createDisabled = busy || !projectName.trim() || (startFrom === 'github' && !repository);
+  const connectionId = repoAppStatus?.connectionId;
+  const createDisabled = busy || !projectName.trim() || (startFrom === 'github' && (
+    !repository || repoAppStatus?.state !== 'connected' || !connectionId?.trim()
+  ));
 
   /** Creates the project, then optionally saves the chosen repository into its configuration. */
   const create = async (event: FormEvent) => {
@@ -246,15 +251,42 @@ function ProjectsPage() {
     // Enter in a field can submit the form even when the button is disabled,
     // so repeat the same check here.
     if (createDisabled) return;
+    const name = projectName.trim();
+    const selectedRepository = repository ? { ...repository } : null;
+    const selectedConnectionId = connectionId;
     setBusy(true);
     setError(null);
     try {
+      if (selectedRepository && selectedConnectionId) {
+        let currentStatus: RepoAppConnectionStatus;
+        try {
+          currentStatus = await repoAppBrokerClient.getStatus();
+        } catch (reason) {
+          setRepoAppStatus(null);
+          setRepoAppPanelKey((key) => key + 1);
+          setError(reason);
+          return;
+        }
+        if (currentStatus.state !== 'connected' ||
+            !currentStatus.connectionId?.trim() ||
+            currentStatus.connectionId !== selectedConnectionId) {
+          setRepoAppStatus(null);
+          setRepoAppPanelKey((key) => key + 1);
+          setError(new Error(
+            currentStatus.state === 'connected' && currentStatus.connectionId?.trim()
+              ? 'The GitHub connection changed. Review the updated account and select Create project again.'
+              : 'The GitHub connection is not confirmed. Refresh status before creating the project.',
+          ));
+          return;
+        }
+      }
+
       const created = await apiCall(
-        (token, tenantSelector) => gatewayClient.createProject(token, projectName.trim(), tenantSelector),
+        (token, tenantSelector) => gatewayClient.createProject(token, name, tenantSelector),
         null,
       );
       let message = `Project ${created.name} was created.`;
-      if (repository) {
+      if (selectedRepository && selectedConnectionId) {
         // Second step: save the repository. The project already exists at
         // this point, so a failure here must not be reported as a failed
         // create. It only changes the success message.
@@ -263,14 +295,17 @@ function ProjectsPage() {
             // Read the current configuration first, so the update keeps every
             // other field and is checked against the current revision.
             const current = await gatewayClient.getProjectConfiguration(token, created.projectId, tenantSelector);
-            // Keep any existing source-control fields and switch the auth
-            // mode to the GitHub App.
-            const sourceControl = { ...(current.configuration.sourceControl ?? {}), repository, authMode: 'githubApp' as const };
+            const sourceControl = {
+              repository: selectedRepository,
+              authMode: 'githubApp' as const,
+              identityConnectionId: selectedConnectionId,
+              webhookSecretReference: current.configuration.sourceControl?.webhookSecretReference,
+            };
             return gatewayClient.updateProjectConfiguration(
               token, created.projectId, current.revision, { ...current.configuration, sourceControl }, tenantSelector,
             );
           }, null);
-          message += ` It uses ${repository.owner}/${repository.name}.`;
+          message += ` It uses ${selectedRepository.owner}/${selectedRepository.name}.`;
         } catch {
           // Keep the project and tell the user how to add the repository later.
           message += ` The repository was not saved. Add it later in Settings > Repository.`;
@@ -280,6 +315,7 @@ function ProjectsPage() {
       setProjectName('');
       setRepositoryInput('');
       setStartFrom('blank');
+      setRepoAppStatus(null);
       setNotice(message);
       setCreateOpen(false);
       await load();
@@ -317,19 +353,38 @@ function ProjectsPage() {
               ))}
             </TileGrid>
           )}
-      <AppDialog open={createOpen} onOpenChange={setCreateOpen} title="Create a project">
+      <AppDialog open={createOpen} onOpenChange={(open) => {
+        if (busy) return;
+        if (!open) setRepoAppStatus(null);
+        setCreateOpen(open);
+      }} title="Create a project">
           <form className="v1-form" onSubmit={(event) => void create(event)}>
             {/* The dialog covers the page, so the create error is repeated here where the user can see it. */}
             {error != null && <ErrorNotice>{errorMessage(error)}</ErrorNotice>}
             <Field label="Project name">
-              <Input value={projectName} onChange={(_, data) => setProjectName(data.value)} maxLength={120} />
+              <Input value={projectName} onChange={(_, data) => setProjectName(data.value)} maxLength={120} disabled={busy} />
             </Field>
             <Field label="Start from">
-              <RadioGroup layout="horizontal" value={startFrom} onChange={(_, data) => setStartFrom(data.value as 'blank' | 'github')}>
-                <Radio value="blank" label="Blank project" />
-                <Radio value="github" label="GitHub repository" />
+              <RadioGroup layout="horizontal" value={startFrom} onChange={(_, data) => {
+                if (busy) return;
+                const next = data.value as 'blank' | 'github';
+                setStartFrom(next);
+                if (next === 'blank') setRepoAppStatus(null);
+              }}>
+                <Radio value="blank" label="Blank project" disabled={busy} />
+                <Radio value="github" label="GitHub repository" disabled={busy} />
               </RadioGroup>
             </Field>
+            {createOpen && startFrom === 'github' && (
+              <>
+                <p className="v1-muted">This project will use the GitHub Repo App connection shown below.</p>
+                <ProjectRepoAppConnectionPanel
+                  key={repoAppPanelKey}
+                  onStatusChange={setRepoAppStatus}
+                  disabled={busy}
+                />
+              </>
+            )}
             {startFrom === 'github' && (
               <Field
                 label="Repository"
@@ -337,14 +392,17 @@ function ProjectsPage() {
                 validationState={repositoryInput.trim() && !repository ? 'error' : 'none'}
                 validationMessage={repositoryInput.trim() && !repository ? 'Enter the repository as owner/name.' : undefined}
               >
-                <Input value={repositoryInput} onChange={(_, data) => setRepositoryInput(data.value)} />
+                <Input value={repositoryInput} onChange={(_, data) => setRepositoryInput(data.value)} disabled={busy} />
               </Field>
             )}
             <Button appearance="primary" type="submit" disabled={createDisabled}>
               {busy ? 'Creating…' : 'Create project'}
             </Button>
             <p className="v1-muted">You become the owner when you create a project.</p>
-            <Button appearance="transparent" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button appearance="transparent" type="button" disabled={busy} onClick={() => {
+              setRepoAppStatus(null);
+              setCreateOpen(false);
+            }}>Cancel</Button>
           </form>
       </AppDialog>
     </>
@@ -352,7 +410,13 @@ function ProjectsPage() {
 }
 
 /** Manages a project's GitHub App installation and repository connection. */
-function ProjectRepoAppConnectionPanel() {
+function ProjectRepoAppConnectionPanel({
+  onStatusChange,
+  disabled = false,
+}: {
+  onStatusChange?: (status: RepoAppConnectionStatus | null) => void;
+  disabled?: boolean;
+}) {
   const [connection, setConnection] = useState<RepoAppConnectionStatus | null>(null);
   const [repositories, setRepositories] = useState<RepoAppRepository[]>([]);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -381,20 +445,23 @@ function ProjectRepoAppConnectionPanel() {
 
   const loadConnection = useCallback(async () => {
     const generation = ++statusGenerationRef.current;
+    onStatusChange?.(null);
     setStatusLoading(true);
     try {
       const result = await repoAppBrokerClient.getStatus();
       if (generation !== statusGenerationRef.current) return;
       setConnection(result);
+      onStatusChange?.(result);
       setError(null);
     } catch (reason) {
       if (generation !== statusGenerationRef.current) return;
       setConnection(null);
+      onStatusChange?.(null);
       setError(reason);
     } finally {
       if (generation === statusGenerationRef.current) setStatusLoading(false);
     }
-  }, []);
+  }, [onStatusChange]);
 
   const loadRepositories = useCallback(async () => {
     setRepositoriesLoading(true);
@@ -455,6 +522,7 @@ function ProjectRepoAppConnectionPanel() {
 
   const connect = async () => {
     if (statusUnavailable) return;
+    onStatusChange?.(null);
     const generation = ++connectGenerationRef.current;
     const requestId = `agentweaver-repo-app-${generation}-${window.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
     const popup = window.open(
@@ -524,6 +592,7 @@ function ProjectRepoAppConnectionPanel() {
       setError(new Error('The Broker did not return a connection revision; refresh status before disconnecting.'));
       return;
     }
+    onStatusChange?.(null);
     setBusy(true);
     setError(null);
     try {
@@ -532,6 +601,7 @@ function ProjectRepoAppConnectionPanel() {
         connection.connectionRevision,
       );
       setConnection(next);
+      onStatusChange?.(next);
       setRepositories([]);
       setNotice({ intent: 'success', text: 'GitHub Repo App was disconnected from this identity.' });
     } catch (reason) {
@@ -564,31 +634,37 @@ function ProjectRepoAppConnectionPanel() {
             : 'The GitHub Repo App connection requires attention before it can be used.'}
         </p>
       )}
-      <p className="v1-muted">
-        To use this connection, choose GitHub App access in project source-control settings. Projects that use another
-        access method keep it until you change the setting.
-      </p>
+      {onStatusChange && connected && !connection.connectionId?.trim() && (
+        <p className="v1-muted">The connected account has no usable connection ID. Refresh status before creating the project.</p>
+      )}
+      {!onStatusChange && (
+        <p className="v1-muted">
+          To use this connection, choose GitHub App access in project source-control settings. Projects that use another
+          access method keep it until you change the setting.
+        </p>
+      )}
       {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
       {notice && <MessageBar intent={notice.intent}><MessageBarBody>{notice.text}</MessageBarBody></MessageBar>}
       <div className="v1-actions">
         <Button
           appearance="primary"
-          disabled={busy || statusLoading || statusUnavailable}
+          type="button"
+          disabled={disabled || busy || statusLoading || statusUnavailable}
           onClick={() => void connect()}
         >
           {statusUnavailable ? 'Connection status unavailable' : busy ? 'Opening GitHub…' : connected ? 'Reauthorize GitHub Repo App' : 'Connect GitHub Repo App'}
         </Button>
         {connected && (
           <>
-            <Button appearance="secondary" disabled={busy || statusLoading || repositoriesLoading} onClick={() => void loadRepositories()}>
+            <Button appearance="secondary" type="button" disabled={disabled || busy || statusLoading || repositoriesLoading} onClick={() => void loadRepositories()}>
               {repositoriesLoading ? 'Loading repositories…' : 'Browse repositories'}
             </Button>
-            <Button appearance="secondary" disabled={busy || statusLoading} onClick={() => void disconnect()}>
+            <Button appearance="secondary" type="button" disabled={disabled || busy || statusLoading} onClick={() => void disconnect()}>
               Disconnect GitHub
             </Button>
           </>
         )}
-        <Button appearance="secondary" disabled={statusLoading || busy} onClick={() => void loadConnection()}>
+        <Button appearance="secondary" type="button" disabled={disabled || statusLoading || busy} onClick={() => void loadConnection()}>
           Refresh status
         </Button>
       </div>
