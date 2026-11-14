@@ -1144,10 +1144,10 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 | Method and path | Contract |
 | --- | --- |
 | `GET /` | Redirect to `/.well-known/openid-configuration` with HTTP 302. |
-| `GET /connect/authorize` | OpenIddict authorization request and external sign-in or consent prompt. Supports `prompt=none`: it never displays sign-in or consent UI, and returns an authorization code only when the same client already has valid consent for the requested scopes. |
+| `GET /connect/authorize` | OpenIddict authorization request and external sign-in or consent prompt. Supports `prompt=none`: it never displays sign-in or consent UI, and returns an authorization code only when the same client already has valid consent for the requested scopes. The `agentweaver-cli` client can add a `workspace_selection_request` parameter. See [Native Workspace repository review](#native-workspace-repository-review). |
 | `GET /connect/authorize/resume` | Single-use external sign-in continuation; preserves `prompt=none` after successful upstream sign-in and returns silent interaction errors to the registered redirect URI. |
 | `POST /connect/consent` | Consent handle, approval, optional scope subset, local cookie, and `X-CSRF-TOKEN`. |
-| `POST /connect/token` | Form-encoded authorization-code or refresh exchange. |
+| `POST /connect/token` | Form-encoded authorization-code or refresh exchange. An authorization-code exchange for an approved native repository review also returns `workspace_selection`. |
 | `GET /diagnostics/whoami` | Bearer validation diagnostic. It is not an audience acceptance test. |
 | `POST /secrets/redeem` | Validated bearer and exact secret ID, version, purpose, and run ID. |
 | `POST /internal/connections/remote-mcp/register` | Bind the authenticated human, tenant, project, current Environment connection revision/resource, configured issuer/client/callback, and operator-approved scopes. |
@@ -1194,6 +1194,57 @@ continuation. The Broker sends the client a safe OAuth error and fixed
 actionable `error_description`; when present, it includes only the numeric
 Microsoft Entra error code. Provider descriptions and account details are not
 returned.
+
+### Native Workspace repository review
+
+The native CLI uses this review to get one Repo App repository selection for
+one Workspace read. The review uses the normal authorization-code flow with
+PKCE. It adds no route.
+
+The CLI sends `workspace_selection_request` on `GET /connect/authorize`. The
+value is base64url-encoded JSON. The request must use client `agentweaver-cli`,
+`response_type=code`, S256 PKCE, the exact loopback redirect URI, and exactly
+the scopes `openid api.read offline_access projects.admin`. It must not use
+`prompt=none` or a run binding. `actorId` must be the signed-in local user.
+`operationId` is `listWorkspaceRepositoryRefs`, `readWorkspaceRepositoryTree`,
+or `readWorkspaceRepositoryFile`.
+
+The Broker reads `version` first. Then it requires the exact field set for that
+version:
+
+| Version | Fields | Repository values |
+| --- | --- | --- |
+| `1` | `version`, `actorId`, `tenantId`, `projectId`, `connectionId`, `connectionRevision`, `installationId`, `repositoryId`, `repositoryFullName`, `operationId` | The client sends the connection revision, installation ID, and repository ID. At approval, the Broker requires a fresh GitHub listing to contain the same values. |
+| `2` | `version`, `actorId`, `tenantId`, `projectId`, `connectionId`, `repositoryFullName`, `operationId` | The client does not send these values. At approval, the Broker lists the repositories of the approving user's own Repo App connection from GitHub. `connectionId` must be the user's current connection. Exactly one listed repository must have a full name equal to `repositoryFullName` (ordinal, case-sensitive). The Broker uses the current connection revision and the installation ID and repository ID of that match. |
+
+A request with a missing field, an extra field, or another version fails with
+`invalid_request`. A version `2` request that contains `connectionRevision`,
+`installationId`, or `repositoryId` fails.
+
+The Broker shows a review page to the signed-in user. The page shows the
+repository, project, tenant, connection ID, and action. For version `1`, it also
+shows the connection revision. The Broker calls GitHub only when the user
+approves the review.
+
+The Broker checks the stored selection, the current connection revision, and
+the active installation against the requested or found values at approval, when
+it issues the authorization code, and at the code exchange. If a value changes
+during approval, the Broker redirects to the client with an OAuth error. If a
+value changes after approval, the authorization code request or the code
+exchange fails with `invalid_grant`, and the Broker returns no selection. If no
+repository or more than one repository matches a version `2` request, or if
+`connectionId` is not the user's current connection, the Broker redirects to the
+client with `temporarily_unavailable` and stores no selection.
+
+The code exchange response contains `workspace_selection` with exactly these
+fields: `version`, `actorId`, `tenantId`, `projectId`, `operationId`, `code`,
+`connectionId`, `connectionRevision`, `installationId`, `repositoryId`,
+`repositoryFullName`, and `expiresAt`. `version` is the request version. For
+version `2`, `connectionRevision`, `installationId`, and `repositoryId` are the
+values that the Broker found. The selection code is short-lived and single use.
+A refresh response does not contain `workspace_selection`. A selection does not
+grant project access. The Orchestrator and the Broker still check the current
+project owner, connection, and repository when the selection is used.
 
 `IdentityBroker:WebOrigin` is an optional, origin-only HTTPS value, required when
 `IdentityBroker:GitHubRepoApp` is configured. It has no path, credentials, query, or

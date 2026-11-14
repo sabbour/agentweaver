@@ -12,6 +12,8 @@ internal sealed partial class GitHubRepoAppConnectionService
         string code,
         CancellationToken cancellationToken)
     {
+        if (intent.ConnectionRevision is null || intent.InstallationId is null || intent.RepositoryId is null)
+            throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RepositoryUnavailable);
         var codeHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(code)));
         var now = _timeProvider.GetUtcNow();
         var selection = await _db.RepoAppRepositorySelections.AsNoTracking()

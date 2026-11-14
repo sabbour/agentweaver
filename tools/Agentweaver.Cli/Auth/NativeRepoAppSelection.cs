@@ -10,12 +10,25 @@ public sealed record NativeRepoAppSelectionIntent(
     [property: JsonPropertyName("tenantId")] string TenantId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("connectionId")] string ConnectionId,
-    [property: JsonPropertyName("connectionRevision")] long ConnectionRevision,
-    [property: JsonPropertyName("installationId")] long InstallationId,
-    [property: JsonPropertyName("repositoryId")] long RepositoryId,
+    [property: JsonPropertyName("connectionRevision"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? ConnectionRevision,
+    [property: JsonPropertyName("installationId"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? InstallationId,
+    [property: JsonPropertyName("repositoryId"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? RepositoryId,
     [property: JsonPropertyName("repositoryFullName")] string RepositoryFullName,
     [property: JsonPropertyName("operationId")] string OperationId)
 {
+    /// <summary>
+    /// Creates a version 2 intent. The Identity Broker finds the connection revision,
+    /// installation ID, and repository ID when the user approves the review.
+    /// </summary>
+    public static NativeRepoAppSelectionIntent ForProjectRepository(
+        string actorId,
+        string tenantId,
+        string projectId,
+        string connectionId,
+        string repositoryFullName,
+        string operationId) =>
+        new(2, actorId, tenantId, projectId, connectionId, null, null, null, repositoryFullName, operationId);
+
     internal static string Encode(NativeRepoAppSelectionIntent intent)
     {
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(intent);
@@ -32,16 +45,18 @@ public sealed record NativeRepoAppSelectionIntent(
     }
 
     internal bool Matches(NativeRepoAppSelection selection) =>
-        Version == 1 &&
+        Version is 1 or 2 &&
+        Version == selection.Version &&
         ActorId == selection.ActorId &&
         TenantId == selection.TenantId &&
         ProjectId == selection.ProjectId &&
         ConnectionId == selection.ConnectionId &&
-        ConnectionRevision == selection.ConnectionRevision &&
-        InstallationId == selection.InstallationId &&
-        RepositoryId == selection.RepositoryId &&
         RepositoryFullName == selection.RepositoryFullName &&
-        OperationId == selection.OperationId;
+        OperationId == selection.OperationId &&
+        (Version == 2 ||
+            ConnectionRevision == selection.ConnectionRevision &&
+            InstallationId == selection.InstallationId &&
+            RepositoryId == selection.RepositoryId);
 }
 
 public interface INativeRepoAppSelectionHandoff
@@ -58,6 +73,7 @@ public sealed class NativeRepoAppSelection : IDisposable
     private string? _code;
 
     internal NativeRepoAppSelection(
+        int version,
         string actorId,
         string tenantId,
         string projectId,
@@ -70,6 +86,7 @@ public sealed class NativeRepoAppSelection : IDisposable
         string repositoryFullName,
         DateTimeOffset expiresAt)
     {
+        Version = version;
         ActorId = actorId;
         TenantId = tenantId;
         ProjectId = projectId;
@@ -83,6 +100,7 @@ public sealed class NativeRepoAppSelection : IDisposable
         ExpiresAt = expiresAt;
     }
 
+    public int Version { get; }
     public string ActorId { get; }
     public string TenantId { get; }
     public string ProjectId { get; }
@@ -110,13 +128,16 @@ internal static class NativeRepoAppSelectionIntentValidator
     };
 
     public static bool IsValid(NativeRepoAppSelectionIntent intent) =>
+        intent.Version switch
+        {
+            1 => intent.ConnectionRevision > 0 && intent.InstallationId > 0 && intent.RepositoryId > 0,
+            2 => intent.ConnectionRevision is null && intent.InstallationId is null && intent.RepositoryId is null,
+            _ => false,
+        } &&
         IsCanonicalGuid(intent.ActorId) &&
         IsCanonicalGuid(intent.TenantId) &&
         IsCanonicalGuid(intent.ProjectId) &&
         IsConnectionId(intent.ConnectionId) &&
-        intent.ConnectionRevision > 0 &&
-        intent.InstallationId > 0 &&
-        intent.RepositoryId > 0 &&
         IsRepositoryFullName(intent.RepositoryFullName) &&
         IsOperationId(intent.OperationId);
 

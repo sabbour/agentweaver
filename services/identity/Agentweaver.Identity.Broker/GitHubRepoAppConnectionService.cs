@@ -417,9 +417,46 @@ internal sealed partial class GitHubRepoAppConnectionService
         if (installationId <= 0 || repositoryId <= 0)
             throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RepositoryUnavailable);
 
+        return await CreateRepositorySelectionAsync(
+            ownerId,
+            expectedConnectionId: null,
+            candidate => candidate.RepositoryId == repositoryId && candidate.InstallationId == installationId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Finds the one repository with this exact full name in a fresh GitHub listing of the
+    /// owner's current connection, and stores a selection for it. Zero or more than one
+    /// match fails.
+    /// </summary>
+    internal async Task<GitHubRepoAppRepositorySelection> CreateRepositorySelectionByNameAsync(
+        Guid ownerId,
+        string connectionId,
+        string repositoryFullName,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(connectionId) || string.IsNullOrEmpty(repositoryFullName))
+            throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RepositoryUnavailable);
+
+        return await CreateRepositorySelectionAsync(
+            ownerId,
+            connectionId,
+            candidate => string.Equals(candidate.FullName, repositoryFullName, StringComparison.Ordinal),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<GitHubRepoAppRepositorySelection> CreateRepositorySelectionAsync(
+        Guid ownerId,
+        string? expectedConnectionId,
+        Func<GitHubRepoAppRepository, bool> matches,
+        CancellationToken cancellationToken)
+    {
         var connection = await GetConnectionAsync(ownerId, cancellationToken).ConfigureAwait(false);
         if (connection.State != RepoAppConnectionState.Connected)
             throw FailureForState(connection.State);
+        if (expectedConnectionId is not null &&
+            !string.Equals(connection.ConnectionId, expectedConnectionId, StringComparison.Ordinal))
+            throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RepositoryUnavailable);
 
         SecretCredential? accessToken = null;
         try
@@ -431,12 +468,11 @@ internal sealed partial class GitHubRepoAppConnectionService
             current = await SynchronizeInstallationsAsync(current, browse.Installations, cancellationToken)
                 .ConfigureAwait(false);
             current = await EnsureConnectionCurrentAsync(current, cancellationToken).ConfigureAwait(false);
-            var repository = browse.Repositories.SingleOrDefault(candidate =>
-                candidate.RepositoryId == repositoryId &&
-                candidate.InstallationId == installationId);
-            if (repository is null)
+            var matching = browse.Repositories.Where(matches).Take(2).ToArray();
+            if (matching.Length != 1)
                 throw new GitHubRepoAppConnectionException(
                     GitHubRepoAppConnectionFailure.RepositoryUnavailable);
+            var repository = matching[0];
 
             var code = NewSelectionCode();
             var now = _timeProvider.GetUtcNow();
@@ -446,8 +482,8 @@ internal sealed partial class GitHubRepoAppConnectionService
                 OwnerId = ownerId,
                 ConnectionId = current.ConnectionId,
                 ConnectionRevision = current.ConnectionRevision,
-                InstallationId = installationId,
-                RepositoryId = repositoryId,
+                InstallationId = repository.InstallationId,
+                RepositoryId = repository.RepositoryId,
                 RepositoryFullName = repository.FullName,
                 CreatedAt = now,
                 ExpiresAt = now.Add(AuthorizationLifetime)
@@ -455,7 +491,7 @@ internal sealed partial class GitHubRepoAppConnectionService
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             current = await EnsureConnectionCurrentAsync(current, cancellationToken).ConfigureAwait(false);
             return new(code, connection.ConnectionId, connection.ConnectionRevision,
-                installationId, repositoryId, repository.FullName);
+                repository.InstallationId, repository.RepositoryId, repository.FullName);
         }
         catch (GitHubRepoAppProviderException error)
         {
