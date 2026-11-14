@@ -7,6 +7,7 @@ using OpenIddict.Validation.AspNetCore;
 
 // Keep owner HTTP clients unbounded here; GatewayOwnerClient applies per-request deadlines.
 var builder = WebApplication.CreateBuilder(args);
+// Limit each request body to 64 KiB. A route can set a different limit with RequestSizeLimit metadata.
 builder.WebHost.ConfigureKestrel(server => server.Limits.MaxRequestBodySize = 64 * 1024);
 var options = GatewayOptions.Read(builder.Configuration);
 

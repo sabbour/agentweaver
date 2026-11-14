@@ -86,6 +86,8 @@ public static class GatewayEndpoints
                     cookieErrorCode: "callback_cookie_invalid",
                     cancellationToken: cancellationToken));
 
+        // GitHub sends the browser to these callbacks without a bearer. The Gateway forwards only the
+        // allowed query values and the named state cookie, and the Broker checks them.
         endpoints.MapGet(
                 "/auth/github/repo-app/callback",
                 (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
@@ -163,6 +165,8 @@ public static class GatewayEndpoints
             (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
                 owner.ProxyCopilotConnectionListAsync(context, cancellationToken));
 
+        // The CLI calls the relay without a bearer. The Gateway sends only a small JSON body to a
+        // fixed Broker lookup, and the Broker checks the state.
         endpoints.MapPost(
                 "/api/connections/copilot-user/v1/callback-relay",
                 (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
@@ -298,6 +302,7 @@ public static class GatewayEndpoints
                 endpoint.WithMetadata(new RequestSizeLimitAttribute(maximumRequestBodyBytes));
         }
 
+        // An unknown /api/v1 path returns 404 without sign-in and is never sent to an owner.
         endpoints.MapFallback(
                 "/api/v1/{**path}",
                 () => Results.Problem(

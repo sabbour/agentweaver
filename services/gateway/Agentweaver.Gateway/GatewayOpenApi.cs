@@ -1175,6 +1175,7 @@ else if (route.OperationId is
             : throw new InvalidOperationException(
                 $"The Gateway route '{route.OperationId}' has no OpenAPI contract.");
 
+    /// <summary>Throws when a schema reference does not name a schema in the document.</summary>
     private static void ValidateSchemaReferences(IReadOnlyDictionary<string, object> schemas)
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(schemas, JsonOptions));
@@ -1907,7 +1908,7 @@ else if (route.OperationId is
             ("updatedByActorId", NullableStr()), ("createdAt", NullableDate())),
         ["UpdatePlatformRuntimeDefaultsRequest"] = Obj(["expectedRevision", "defaults"],
             ("expectedRevision", Int()), ("defaults", Ref("PlatformRuntimeDefaults"))),
-        // Platform component report: identities, versions, and readiness only; no options or endpoints.
+        // Native ACS policy artifacts carry file bytes and the SHA-256 of the content.
         ["NativeAcsArtifactFile"] = StrictObj(["relativePath", "bytes"],
             ("relativePath", Str()), ("bytes", Arr(ByteValue()))),
         ["NativeAcsArtifact"] = StrictObj(["manifestBytes", "files", "contentSha256"],
@@ -1934,6 +1935,7 @@ else if (route.OperationId is
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
             ("revision", Int()), ("contentSha256", Str()), ("auditId", Uuid()), ("outboxId", Uuid()),
             ("replayed", Bool())),
+        // Platform component report: identities, versions, and readiness only; no options or endpoints.
         ["PlatformComponentReport"] = Obj(["observedAt", "areas"],
             ("observedAt", Date()), ("areas", Arr(Ref("PlatformComponentAreaReport")))),
         ["PlatformComponentAreaReport"] = Obj(
