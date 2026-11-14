@@ -739,6 +739,10 @@ and tool results. Later ordered checks can add Microsoft Purview DLP, Llama Guar
 Guardrails. Projects can select or reorder only platform-enabled checks. The ordered result, versions, and
 failures are journaled; classifier transport and credentials remain outside prompt content.
 
+A response-body read that ends early returns `Unavailable`. The existing gate fails closed and withholds
+content. A later caller retry may succeed after the transport recovers; the classifier does not retry
+automatically.
+
 The Orchestrator Core `GuardrailsContentGate` is the fail-closed gate for this contract. It consumes an
 owner-produced ordered stage/content pin, runs checks in that exact order, sends bounded finding codes to
 the existing AGT provider, records redacted provider/version metadata through the evidence journal, and

@@ -126,6 +126,67 @@ public sealed class PromptShieldsClassifierTests
         Assert.Equal(GuardrailsClassifierFailure.InvalidResponse, result.Failure);
     }
 
+    [Theory]
+    [InlineData(GuardrailsContentStage.UserInput, false)]
+    [InlineData(GuardrailsContentStage.UserInput, true)]
+    [InlineData(GuardrailsContentStage.ToolResult, false)]
+    [InlineData(GuardrailsContentStage.ToolResult, true)]
+    public async Task DroppedResponseBodyIsUnavailable(GuardrailsContentStage stage, bool afterPrefix)
+    {
+        var prefix = afterPrefix
+            ? Encoding.UTF8.GetBytes("""{"userPromptAnalysis":{"attackDetected":""")
+            : [];
+        var stream = new ResponseBodyStream(
+            prefix, new HttpIOException(HttpRequestError.ResponseEnded, "response-body-secret"));
+        var handler = new StubHandler((_, _) => DroppedResponse(stream));
+
+        var result = await Create(handler).ClassifyAsync(Options(), Request(stage, "text"), default);
+
+        Assert.Equal(GuardrailsClassifierOutcome.Error, result.Outcome);
+        Assert.Equal(GuardrailsClassifierFailure.Unavailable, result.Failure);
+        Assert.Empty(result.Findings);
+        Assert.True(stream.ReadCalls > 0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DroppedLaterChunkInvalidatesWholeClassification(bool firstChunkIsAttack)
+    {
+        var stream = new ResponseBodyStream(
+            [], new HttpIOException(HttpRequestError.ResponseEnded, "response-body-secret"));
+        var handler = new StubHandler((_, call) => call == 2
+            ? DroppedResponse(stream)
+            : Json(HttpStatusCode.OK, firstChunkIsAttack ? UserAttack : Clear));
+        var text = new string('a', PromptShieldsClassifier.MaximumCharactersPerRequest) +
+            new string('b', PromptShieldsClassifier.MaximumCharactersPerRequest) + "c";
+
+        var result = await Create(handler).ClassifyAsync(
+            Options(), Request(GuardrailsContentStage.UserInput, text), default);
+
+        Assert.Equal(GuardrailsClassifierOutcome.Error, result.Outcome);
+        Assert.Equal(GuardrailsClassifierFailure.Unavailable, result.Failure);
+        Assert.Empty(result.Findings);
+        Assert.Equal(2, handler.Calls.Count);
+        Assert.True(stream.ReadCalls > 0);
+    }
+
+    [Fact]
+    public async Task BodyReadCancellationPropagates()
+    {
+        var stream = new ResponseBodyStream([], waitForCancellation: true);
+        var handler = new StubHandler((_, _) => DroppedResponse(stream));
+        using var cancellation = new CancellationTokenSource();
+        var classification = Create(handler).ClassifyAsync(
+            Options(), Request(GuardrailsContentStage.UserInput, "text"), cancellation.Token);
+
+        await stream.ReadStarted.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => classification);
+        Assert.True(stream.ReadCalls > 0);
+    }
+
     [Fact]
     public async Task TransportErrorAndCredentialErrorAreUnavailable()
     {
@@ -238,7 +299,71 @@ public sealed class PromptShieldsClassifierTests
         Content = new StringContent(body, Encoding.UTF8, "application/json")
     };
 
+    internal static HttpResponseMessage DroppedResponse(ResponseBodyStream stream) => new(HttpStatusCode.OK)
+    {
+        Content = new StreamContent(stream)
+    };
+
     internal sealed record Call(Uri Uri, string? Authorization, bool HasSubscriptionKey, string Body);
+
+    internal sealed class ResponseBodyStream : Stream
+    {
+        private readonly byte[] _prefix;
+        private readonly Exception? _failure;
+        private readonly bool _waitForCancellation;
+        private readonly TaskCompletionSource<bool> _readStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _position;
+
+        public ResponseBodyStream(byte[] prefix, Exception? failure = null, bool waitForCancellation = false)
+        {
+            _prefix = prefix;
+            _failure = failure;
+            _waitForCancellation = waitForCancellation;
+        }
+
+        public int ReadCalls { get; private set; }
+        public Task ReadStarted => _readStarted.Task;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            ReadCalls++;
+            _readStarted.TrySetResult(true);
+            if (_position < _prefix.Length)
+            {
+                var count = Math.Min(buffer.Length, _prefix.Length - _position);
+                _prefix.AsMemory(_position, count).CopyTo(buffer);
+                _position += count;
+                return count;
+            }
+
+            if (_waitForCancellation)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return 0;
+            }
+
+            throw _failure ?? new InvalidOperationException("No response body remains.");
+        }
+    }
 
     // Records each outgoing request (URI, auth header, key header, body) and returns a response chosen by the
     // test from the request body and the 1-based call number.

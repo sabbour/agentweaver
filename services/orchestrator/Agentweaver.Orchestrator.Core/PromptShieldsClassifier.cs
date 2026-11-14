@@ -213,14 +213,14 @@ public sealed class PromptShieldsClassifier : IGuardrailsClassifier<PromptShield
                         ? GuardrailsClassifierFailure.Unavailable
                         : GuardrailsClassifierFailure.ProviderFailure));
 
-            // A connection that drops mid-body is transient. A body over the size limit is treated as a
-            // malformed response, because a valid Prompt Shields response is always small.
+            // A dropped connection while reading the body is transient. A body over the size limit is treated
+            // as a malformed response, because a valid Prompt Shields response is always small.
             byte[] payload;
             try
             {
                 payload = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
             }
-            catch (HttpRequestException)
+            catch (Exception exception) when (exception is HttpRequestException or HttpIOException)
             {
                 return (false, GuardrailsClassifierResult.Failed(GuardrailsClassifierFailure.Unavailable));
             }
