@@ -7,6 +7,7 @@ for await (const chunk of process.stdin) chunks.push(chunk);
 let output = {};
 try {
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  // Routed agent turns have their own role and charter; this reminder is for coordinator turns.
   if (
     input !== null &&
     typeof input === "object" &&

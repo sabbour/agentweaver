@@ -87,6 +87,7 @@ export class AgentweaverClient {
    * Throws when the document is unavailable, malformed, empty, or has ambiguous operation IDs.
    */
   async discover() {
+    // Do not leave an old contract usable if refreshing the live document fails.
     this.operations.clear();
     const call = await this.call('GET', '/openapi/v1.json', undefined, { authenticated: false });
     const document = call.transientResponseBody;

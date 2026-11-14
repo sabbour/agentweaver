@@ -280,6 +280,7 @@ def utc_now() -> str:
 
 
 def process_start_ticks(pid: int) -> int:
+    # Pair a PID with its creation time so recovery can detect when Windows has reused that PID.
     if os.name != "nt":
         raise BlockedError("Owned-process identity is supported only on Windows.")
     kernel = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
@@ -407,6 +408,7 @@ def process_is_alive(pid: int, start_ticks: int) -> bool:
 
 
 def terminate_owned_process(pid: int, start_ticks: int) -> bool:
+    # Recheck the creation time while holding the process handle before terminating a recovered PID.
     kernel = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
     kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
     kernel.OpenProcess.restype = ctypes.c_void_p
@@ -798,6 +800,7 @@ def run_powershell(
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
         if context is not None:
+            # Persist helper identity before waiting so interrupted runs can recover only owned processes.
             identity = {
                 "pid": process.pid,
                 "startTimeFiletime": process_start_ticks(process.pid),
@@ -891,6 +894,7 @@ def inspect_owned_trust(context: dict[str, Any], *, allow_missing_ca: bool = Fal
     assert_no_reparse_components(journal_path)
     assert_no_reparse_components(ca_path)
     ca_missing = not ca_path.exists()
+    # The certificate file and journal must still identify the exact run-owned root before store access.
     if (
         not workspace.is_dir()
         or not journal_path.is_file()
@@ -1025,6 +1029,7 @@ def run_attended_trust_action(
     print(details, file=sys.stderr, flush=True)
 
     journal = context["journal"]
+    # Record intent before launching the store operation because a lost reply cannot prove it did not run.
     process_identity: dict[str, Any] = {
         "pid": None,
         "startTimeFiletime": None,
@@ -1235,6 +1240,7 @@ def fsync_directory(path: Path) -> None:
 
 def write_journal(journal_path: Path, temporary_path: Path, journal: dict[str, Any]) -> None:
     encoded = (json.dumps(journal, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    # Replace the journal only after the new contents reach disk, so recovery sees a complete record.
     with temporary_path.open("wb") as stream:
         stream.write(encoded)
         stream.flush()
@@ -1244,6 +1250,7 @@ def write_journal(journal_path: Path, temporary_path: Path, journal: dict[str, A
 
 
 def workspace_plan(workspace: Path, receipt: dict[str, Any]) -> list[str]:
+    # Cleanup may remove only paths recorded before extraction and fixture creation begin.
     paths = {workspace / "journal.json", workspace / "journal.json.new"}
     for directory in ("extracted", "fixtures", "child-temp"):
         paths.add(workspace / directory)
@@ -1368,6 +1375,7 @@ def make_openapi() -> bytes:
 
 
 class FixtureServer(http.server.ThreadingHTTPServer):
+    # Track accepted sockets and workers because shutdown alone does not close stalled TLS clients.
     daemon_threads = True
     block_on_close = False
     allow_reuse_address = False
@@ -1680,6 +1688,7 @@ def run_cli(
         stdout, stderr = process.communicate()
         identity["state"] = "stopped-after-timeout"
         persist_journal(context)
+        # A timed-out call may have rotated a credential before its reply was lost, so never retry it.
         raise CheckError(f"Extracted apphost command {label} timed out; rotating credentials were not retried.") from error
     except BaseException:
         if process.poll() is None:
@@ -2049,6 +2058,7 @@ def remove_owned_trust(context: dict[str, Any], errors: list[str]) -> None:
     if not journal.get("trustImportAttempted"):
         journal["trustRemovedAndVerified"] = True
         return
+    # An interrupted import may have changed the store before verification completed.
     journal["trustRemovedAndVerified"] = False
     try:
         persist_journal(context)
@@ -2196,6 +2206,7 @@ def delete_workspace_paths(
 ) -> tuple[bool, list[str]]:
     workspace: Path = context["workspace"]
     journal = context["journal"]
+    # Do not delete unjournaled paths, even when they are inside the owned workspace.
     expected = {Path(value) for value in journal["createdPaths"]}
     errors: list[str] = []
     if not workspace.exists():
@@ -2256,6 +2267,7 @@ def cleanup_run(context: dict[str, Any], server: FixtureServer | None, worker: t
     journal["cleanupProgress"] = "stopping-owned-processes"
     persist_journal(context)
 
+    # Stop child writers and the listener before checking or deleting their credentials and files.
     errors.extend(stop_owned_children(context))
     if trust_recovery_unresolved(journal):
         errors.append("current-user-root-removal-unverified")
@@ -2545,6 +2557,7 @@ def verify_and_run(args: argparse.Namespace) -> int:
     result = initial_sidecar(run_id, source_commit, None, started, "failed")
     attended_trust = bool(getattr(args, "attended_trust", False))
     result["controlledArchiveChecks"]["trustMode"] = "attended" if attended_trust else "unattended"
+    # Trusting a root certificate changes the current user's store, so the operator must opt in.
     if not attended_trust:
         failure = "Windows archive trust checks require an attended operator. Run manually with --attended-trust."
         result["controlledArchiveChecks"].update({
@@ -3160,6 +3173,7 @@ def cleanup_only(
             "agentweaver-cli",
         ),
     })
+    # Recovery records cleanup only; it cannot turn the interrupted archive check into a pass.
     result = initial_sidecar(
         str(journal.get("runId")),
         journal.get("sourceCommit"),

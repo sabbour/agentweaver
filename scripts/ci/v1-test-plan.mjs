@@ -82,6 +82,7 @@ export function verifyTrx(xml) {
   const counters = xml.match(/<Counters\b[^>]*\/>/)?.[0];
   const count = (name) => Number(counters?.match(new RegExp(`\\b${name}="(\\d+)"`))?.[1]);
   const skipped = [...xml.matchAll(/<UnitTestResult\b[^>]*outcome="NotExecuted"/g)].length;
+  // Every discovered test must either pass or be recorded as skipped; a partial TRX is not a pass.
   if (!counters || !(count('executed') > 0) || count('executed') > count('total') ||
       count('passed') !== count('executed') || count('failed') !== 0 ||
       count('executed') + skipped !== count('total')) {

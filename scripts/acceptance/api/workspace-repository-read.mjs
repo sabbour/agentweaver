@@ -223,6 +223,7 @@ export function buildWorkspaceCommand(input, command, options = {}) {
 }
 
 export function childEnvironment(env) {
+  // The case supplies target selectors explicitly; ambient values must not redirect a command.
   const childEnv = { ...env };
   const excluded = new Set([...TARGET_ENV, 'AGENTWEAVER_CLI_PATH']);
   for (const key of Object.keys(childEnv)) {
@@ -276,6 +277,7 @@ function parseJson(text, step) {
 }
 
 function requireSuccess(record, command) {
+  // Browser approval timeouts and explicit Broker denial or cancellation are blocked, not test failures.
   if (command.interactive && record.timedOut) throw new CaseOutcome('blocked', APPROVAL_TIMEOUT);
   if (command.interactive && record.exitCode !== 0
     && BROKER_MESSAGES.some(message => record.stderr.includes(message))) {
@@ -393,6 +395,7 @@ export async function runCase(options, env = process.env, overrides = {}) {
     return 0;
   }
   if (!options.interactive) {
+    // Live workspace reads can launch browser approval, so require explicit permission before creating evidence.
     throw new Error('This case opens browser approvals. Run it again with --interactive.');
   }
 
@@ -467,6 +470,7 @@ export async function runCase(options, env = process.env, overrides = {}) {
     let cursor;
     const seenCursors = new Set();
     let reference = null;
+    // Bound pagination and reject repeated cursors so a malformed live result cannot loop forever.
     for (let page = 1; reference === null; page += 1) {
       if (page > MAXIMUM_REF_PAGES) throw new Error(`The ref was not found in ${MAXIMUM_REF_PAGES} pages.`);
       const refs = await execute(buildWorkspaceCommand(input, 'refs', { ...overrides, cursor }), 'refs');

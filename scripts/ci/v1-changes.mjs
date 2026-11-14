@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 export function classify(paths, full = false) {
   const result = { dotnet: full, web: full, node: full, images: full, cli: full };
   for (const path of paths) {
+    // Documentation, Squad metadata, release metadata, and top-level Markdown do not select executable test surfaces.
     if (/^(docs\/|\.squad\/|\.changeset\/)/.test(path) || /^[^/]+\.md$/.test(path)) continue;
     if (path.startsWith('.github/workflows/') &&
         !['.github/workflows/v1-ci.yml', '.github/workflows/v1-cli-package.yml'].includes(path)) continue;
