@@ -11,6 +11,14 @@ const fields = [
   'checkpointDecisionStateVersion', 'workPlanId', 'associationId', 'sendStateBeforeHash',
   'sendStateAfterHash', 'recordedAt', 'canonicalPayloadHash',
 ];
+const nativeNoSendFields = [
+  'contractVersion', 'receiptId', 'projectId', 'runId', 'rootSessionId', 'sessionId',
+  'runtimeInstanceId', 'registrationRevision', 'executionFence', 'attemptId', 'dispatchId',
+  'requestHash', 'denialReceiptId', 'denialPayloadHash', 'registrationHash', 'sourceHash',
+  'sourceGrantId', 'sourceGrantRevision', 'sdkSessionIdHash', 'beforeCursorHash',
+  'afterCursorHash', 'observedEventCount', 'rangeComplete', 'recordedAt',
+  'canonicalPayloadHash',
+];
 const expectedFields = fields.filter(key => ![
   'contractVersion', 'receiptId', 'observedCount', 'sendStateBeforeHash',
   'sendStateAfterHash', 'recordedAt', 'canonicalPayloadHash',
@@ -24,6 +32,13 @@ const positiveFields = ['registrationRevision', 'sourceRegistrationRevision', 'e
   'ownerRevision', 'acceptedLimit', 'checkpointRevision', 'checkpointDecisionStateVersion'];
 const checkpointFields = ['checkpointId', 'checkpointRevision', 'checkpointHash',
   'checkpointDecisionStateVersion', 'workPlanId', 'associationId'];
+const nativeNoSendGuidFields = ['receiptId', 'runtimeInstanceId', 'attemptId', 'dispatchId',
+  'denialReceiptId', 'sourceGrantId'];
+const nativeNoSendHashFields = ['requestHash', 'denialPayloadHash', 'registrationHash', 'sourceHash',
+  'sdkSessionIdHash', 'beforeCursorHash', 'afterCursorHash', 'canonicalPayloadHash'];
+const nativeNoSendIdentifierFields = ['projectId', 'runId', 'rootSessionId', 'sessionId'];
+const nativeNoSendDenialFields = ['projectId', 'runId', 'rootSessionId', 'sessionId',
+  'runtimeInstanceId', 'registrationRevision', 'executionFence'];
 const hashedLimitKind = { modelTurns: 'ModelTurns', toolCalls: 'ToolCalls' };
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const positive = value => Number.isSafeInteger(value) && value > 0;
@@ -109,6 +124,16 @@ export function numericDenialPayloadHash(receipt) {
   return createHash('sha256').update(`{${entries.join(',')}}`, 'utf8').digest('hex');
 }
 
+export function numericNoSendPayloadHash(receipt) {
+  const entries = nativeNoSendFields.map(key => {
+    let value = key === 'canonicalPayloadHash' ? '' : receipt[key];
+    if (key === 'recordedAt') value = timestamp(value).canonical;
+    return `${dotnetString(key[0].toUpperCase() + key.slice(1))}:${
+      typeof value === 'string' && key !== 'recordedAt' ? dotnetString(value) : JSON.stringify(value)}`;
+  });
+  return createHash('sha256').update(`{${entries.join(',')}}`, 'utf8').digest('hex');
+}
+
 export function validateNumericDenialInput(input) {
   if (!record(input) || Object.keys(input).length === 0 ||
       Object.keys(input).some(key => !['modelTurns', 'toolCalls'].includes(key))) {
@@ -126,10 +151,8 @@ export function validateNumericDenialInput(input) {
   }
 }
 
-function validateReceipt(result, pin) {
-  requireShape(result, ['receipt']);
-  if (result.receipt === null) return null;
-  const receipt = result.receipt;
+function validateDenialReceipt(receipt, pin) {
+  if (receipt === null) return null;
   requireShape(receipt, fields);
   validateIdentity(receipt);
   if (receipt.contractVersion !== 1 || !guid(receipt.receiptId) ||
@@ -146,6 +169,52 @@ function validateReceipt(result, pin) {
   }
   if (numericDenialPayloadHash(receipt) !== receipt.canonicalPayloadHash) {
     throw new Error('Numeric denial receipt canonical payload hash is invalid.');
+  }
+  return receipt;
+}
+
+function validateNativeNoSend(companion, receipt) {
+  requireShape(companion, nativeNoSendFields);
+  if (companion.contractVersion !== 1 ||
+      nativeNoSendGuidFields.some(key => !guid(companion[key])) ||
+      nativeNoSendHashFields.some(key => !hash(companion[key])) ||
+      nativeNoSendIdentifierFields.some(key => !identifier(companion[key])) ||
+      !positive(companion.registrationRevision) || !positive(companion.executionFence) ||
+      !positive(companion.sourceGrantRevision) ||
+      companion.observedEventCount !== 0 || companion.rangeComplete !== true ||
+      companion.beforeCursorHash !== companion.afterCursorHash ||
+      companion.dispatchId !== companion.attemptId) {
+    throw new Error('Numeric denial native no-send companion is malformed.');
+  }
+  const recordedAt = timestamp(companion.recordedAt);
+  if (recordedAt.ticks === timestamp('0001-01-01T00:00:00+00:00').ticks ||
+      numericNoSendPayloadHash(companion) !== companion.canonicalPayloadHash) {
+    throw new Error('Numeric denial native no-send companion timestamp or hash is invalid.');
+  }
+  if (receipt === null || receipt.limitKind !== 'modelTurns' ||
+      receipt.rootSessionId !== receipt.sessionId ||
+      receipt.grantId !== receipt.attemptId || receipt.grantRevision !== '1' ||
+      receipt.dispatchId !== receipt.attemptId ||
+      nativeNoSendDenialFields.some(key => companion[key] !== receipt[key]) ||
+      companion.attemptId !== receipt.attemptId ||
+      companion.dispatchId !== receipt.dispatchId ||
+      companion.requestHash !== receipt.requestHash ||
+      companion.denialReceiptId !== receipt.receiptId ||
+      companion.denialPayloadHash !== receipt.canonicalPayloadHash ||
+      companion.sourceHash !== receipt.sourceHash ||
+      companion.sourceGrantId !== receipt.sourceGrantId) {
+    throw new Error('Numeric denial native no-send companion does not match its root denial.');
+  }
+}
+
+function validateReceipt(result, pin) {
+  if (!record(result) || !Object.hasOwn(result, 'receipt') ||
+      Object.keys(result).some(key => !['receipt', 'nativeNoSend'].includes(key))) {
+    throw new Error('Numeric denial read result has missing or unknown fields.');
+  }
+  const receipt = validateDenialReceipt(result.receipt, pin);
+  if (Object.hasOwn(result, 'nativeNoSend') && result.nativeNoSend !== null) {
+    validateNativeNoSend(result.nativeNoSend, receipt);
   }
   return receipt;
 }

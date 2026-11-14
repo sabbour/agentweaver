@@ -97,8 +97,17 @@ registration, root owner revision, source grant and source hash. The runner
 then checks every expected identity field, `observedCount >= acceptedLimit`,
 the unchanged persisted send-state hashes, the observation interval, and
 `canonicalPayloadHash`. That checksum is **not authentication**: authenticity
-comes from the authorized fixed owner route. HTTP clients must return the
-actual `{ receipt }` result; `null` means missing evidence, not success.
+comes from the authorized fixed owner route. The response has a required,
+nullable `receipt` and an optional, nullable `nativeNoSend` companion. The
+current HTTP serializer includes `nativeNoSend`, even when its value is
+`null`; the reader also accepts the property as absent. It accepts no other
+top-level fields.
+
+The reader checks a non-null companion's exact field set and types, denial
+links, non-default `recordedAt`, empty-range values, and canonical payload
+hash. This check does not verify that no native send occurred. A `null` receipt
+with no companion means the denial is missing; a companion without a valid
+denial is rejected.
 
 Hashing matches the C# producer's default `JsonSerializer` bytes: PascalCase
 property names and enum names, declaration order, explicit nulls, default
@@ -106,9 +115,13 @@ string escaping, and `DateTimeOffset` formatting with its retained offset and
 fractional ticks. The HTTP receipt and input pins use camelCase `limitKind`
 values (`modelTurns` or `toolCalls`); the hash uses the PascalCase C# enum name.
 This is not a sorted-key or camelCase JavaScript JSON hash. The controlled
-vectors in `tests/producer-vectors.json` contain the HTTP form and were emitted
-by the actual `RuntimeNumericLimitDenialReceipt.Seal` and HTTP serializer.
-Regenerate them from the repository root with .NET 10:
+vectors in `tests/producer-vectors.json` contain the HTTP form. The denial
+vectors use `RuntimeNumericLimitDenialReceipt.Seal`. The read-result vectors
+use `RuntimeNumericLimitDenialReadResult`; their companion is sealed with
+`RuntimeNumericLimitNativeNoSendReceipt.Seal` and checked by
+`RuntimeNumericLimitNativeNoSendContract.ValidatePair`. The HTTP serializer
+uses the runtime's camelCase enum converter. Regenerate the vectors from the
+repository root with .NET 10:
 
 ```powershell
 dotnet run --file scripts\azure\p1-dispatch-recovery-probes\tests\producer-vectors.cs --verbosity quiet | Set-Content -Encoding utf8 scripts\azure\p1-dispatch-recovery-probes\tests\producer-vectors.json

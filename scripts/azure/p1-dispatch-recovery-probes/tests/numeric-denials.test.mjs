@@ -5,12 +5,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { numericDenialPayloadHash } from '../numeric-denials.mjs';
+import { numericDenialPayloadHash, numericNoSendPayloadHash } from '../numeric-denials.mjs';
 import { runP1DispatchRecoveryCli, runP1DispatchRecoveryProbes } from '../run.mjs';
 import { validateP1NativeProbeResults } from '../../../harness-shared/p1-acceptance-result.mjs';
 
 // Captured from producer-vectors.cs using the actual C# Seal and HTTP serializer.
-const vectors = JSON.parse(readFileSync(new URL('./producer-vectors.json', import.meta.url), 'utf8'));
+const producerVectors = JSON.parse(readFileSync(new URL('./producer-vectors.json', import.meta.url), 'utf8'));
+const vectors = producerVectors.denialVectors;
+const readResults = producerVectors.readResults;
 const otherId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const otherHash = 'c'.repeat(64);
 
@@ -28,6 +30,10 @@ function pinFor(receipt) {
 
 function reseal(receipt) {
   return { ...receipt, canonicalPayloadHash: numericDenialPayloadHash(receipt) };
+}
+
+function resealNativeNoSend(companion) {
+  return { ...companion, canonicalPayloadHash: numericNoSendPayloadHash(companion) };
 }
 
 async function runCase(receipt, { pin = pinFor(vectors[1].receipt), result, input } = {}) {
@@ -74,6 +80,141 @@ test('real C# producer vectors hash exactly, including nullable checkpoint and e
     assert.equal(numericDenialPayloadHash(vector.receipt), expectedHashes[index]);
     assert.notEqual(createHash('sha256')
       .update(JSON.stringify({ ...vector.receipt, canonicalPayloadHash: '' })).digest('hex'), expectedHashes[index]);
+  }
+});
+
+test('C# read-result vectors include the nullable field and match the companion hash byte for byte', () => {
+  for (const [result, limitKind] of [
+    [readResults.modelTurnsWithNull, 'modelTurns'],
+    [readResults.toolCallsWithNull, 'toolCalls'],
+  ]) {
+    assert.ok(Object.hasOwn(result, 'nativeNoSend'));
+    assert.equal(result.nativeNoSend, null);
+    assert.equal(result.receipt.limitKind, limitKind);
+  }
+  const pair = readResults.modelTurnsWithNativeNoSend;
+  assert.equal(pair.result.receipt.limitKind, 'modelTurns');
+  assert.equal(pair.result.nativeNoSend.sourceGrantRevision, 4);
+  assert.notEqual(pair.result.nativeNoSend.sourceGrantRevision,
+    pair.result.nativeNoSend.registrationRevision);
+  assert.equal(createHash('sha256').update(pair.canonicalPayload).digest('hex'),
+    pair.result.nativeNoSend.canonicalPayloadHash);
+  assert.equal(numericNoSendPayloadHash(pair.result.nativeNoSend),
+    pair.result.nativeNoSend.canonicalPayloadHash);
+});
+
+test('real response envelopes accept explicit null companions for model and tool denials', async () => {
+  for (const result of [readResults.modelTurnsWithNull, readResults.toolCallsWithNull]) {
+    const { report, item } = await runCase(result.receipt, {
+      pin: pinFor(result.receipt),
+      result,
+    });
+    assert.equal(item.status, 'observed');
+    assert.equal(item.evidence.nativeNoSendProven, false);
+    assert.equal(item.evidence.acceptanceEvidence, false);
+    assert.equal(report.liveObservations.numericDenials.status, 'partial');
+  }
+});
+
+test('a valid companion stays owner-only and cannot promote acceptance or erase a sibling', async () => {
+  const paired = readResults.modelTurnsWithNativeNoSend.result;
+  const { report, item } = await runCase(paired.receipt, {
+    pin: pinFor(paired.receipt),
+    result: paired,
+  });
+  assert.equal(item.status, 'observed');
+  assert.equal(item.evidence.nativeNoSendProven, false);
+  assert.equal(item.evidence.acceptanceEvidence, false);
+  assert.equal(Object.hasOwn(item.evidence, 'nativeNoSend'), false);
+  assert.equal(report.overallStatus, 'blocked');
+  assert.ok(report.probes.every(probe => probe.status === 'blocked'));
+  assert.ok(report.probes[0].evidence.requiredReceipts.some(required =>
+    required.receipt === 'native-turn-observations'));
+
+  let count = 0;
+  const toolResult = { ...readResults.toolCallsWithNull, unexpected: true };
+  const siblingReport = await runP1DispatchRecoveryProbes({
+    numericDenialInput: {
+      modelTurns: pinFor(paired.receipt),
+      toolCalls: pinFor(toolResult.receipt),
+    },
+    numericDenialDependencies: {
+      ownerCaller: { async postJson() { return count++ === 0 ? paired : toolResult; } },
+    },
+  });
+  assert.equal(siblingReport.liveObservations.numericDenials.status, 'partial');
+  assert.equal(siblingReport.liveObservations.numericDenials.cases.modelTurns.status, 'observed');
+  assert.equal(siblingReport.liveObservations.numericDenials.cases.toolCalls.status, 'blocked');
+  assert.equal(siblingReport.overallStatus, 'blocked');
+});
+
+test('null and omitted receipts stay missing, while orphaned or malformed envelopes are rejected', async () => {
+  for (const result of [
+    { receipt: null },
+    { receipt: null, nativeNoSend: null },
+  ]) {
+    const { item } = await runCase(null, { result });
+    assert.equal(item.status, 'blocked');
+    assert.equal(item.code, 'numeric_denial_receipt_missing');
+    assert.equal(item.evidence, undefined);
+  }
+  for (const result of [
+    { nativeNoSend: null },
+    { receipt: null, nativeNoSend: readResults.modelTurnsWithNativeNoSend.result.nativeNoSend },
+    { receipt: vectors[1].receipt, nativeNoSend: null, unexpected: true },
+    null,
+    [],
+    { receipt: vectors[1].receipt, nativeNoSend: undefined },
+  ]) {
+    const { item } = await runCase(null, { result });
+    assert.equal(item.status, 'blocked');
+    assert.equal(item.code, 'numeric_denial_read_invalid');
+    assert.equal(item.evidence, undefined);
+  }
+});
+
+test('companion shape, timestamp, hash, pair links and empty-range invariants stay strict', async () => {
+  const valid = readResults.modelTurnsWithNativeNoSend.result;
+  const companion = valid.nativeNoSend;
+  const mutations = [
+    { ...valid, extra: 'redaction-sentinel' },
+    { ...valid, nativeNoSend: { ...companion, extra: true } },
+    { ...valid, nativeNoSend: Object.fromEntries(Object.entries(companion)
+      .filter(([key]) => key !== 'sdkSessionIdHash')) },
+    { ...valid, nativeNoSend: 'not-an-object' },
+    { ...valid, nativeNoSend: [] },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, contractVersion: '1' }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, registrationRevision: Number.MAX_SAFE_INTEGER + 1 }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, sourceGrantRevision: Number.MAX_SAFE_INTEGER + 1 }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, sourceGrantId: 7 }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, registrationHash: 'C'.repeat(64) }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, projectId: 'other-project' }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, denialReceiptId: otherId }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, observedEventCount: 1 }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, rangeComplete: false }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, afterCursorHash: otherHash }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, dispatchId: otherId }) },
+    { ...valid, nativeNoSend: { ...companion, recordedAt: 'invalid' } },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, recordedAt: '0001-01-01T00:00:00+00:00' }) },
+    { ...valid, nativeNoSend: resealNativeNoSend({ ...companion, recordedAt: '0001-01-01T00:00:00Z' }) },
+    { ...valid, nativeNoSend: { ...companion, canonicalPayloadHash: otherHash } },
+    { ...valid, receipt: vectors[3].receipt },
+    { ...valid, receipt: null },
+  ];
+  const defaultTime = resealNativeNoSend({
+    ...companion, recordedAt: '0001-01-01T00:00:00+00:00',
+  });
+  assert.equal(numericNoSendPayloadHash(defaultTime), defaultTime.canonicalPayloadHash);
+
+  for (const result of mutations) {
+    const pin = pinFor(result.receipt ?? valid.receipt);
+    const { item, report } = await runCase(null, { pin, result });
+    assert.equal(item.status, 'blocked');
+    assert.equal(item.code, 'numeric_denial_read_invalid');
+    assert.equal(item.reason,
+      'The authenticated numeric denial read failed or returned mismatched, stale, or malformed evidence.');
+    assert.equal(item.evidence, undefined);
+    assert.equal(JSON.stringify(report).includes('redaction-sentinel'), false);
   }
 });
 
