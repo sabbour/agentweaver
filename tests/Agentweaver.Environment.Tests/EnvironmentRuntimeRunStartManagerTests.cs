@@ -705,6 +705,48 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
     }
 
     [Theory]
+    [InlineData(true, HttpStatusCode.ServiceUnavailable, "upstream_unavailable")]
+    [InlineData(false, HttpStatusCode.Forbidden, "policy_generation_unverified")]
+    public async Task PlacementEndpointReportsTransientEgressFailureAsUnavailable(
+        bool transient, HttpStatusCode expectedStatus, string expectedCode)
+    {
+        using var fixture = CreateFixture(database, 1);
+        if (transient)
+            fixture.Network.FailGetOnce = true;
+        else
+            fixture.Network.HideReads = true;
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, RuntimeRunStartTestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton(fixture.Manager);
+        builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+        builder.Services.AddScoped<EnvironmentRuntimeBootstrapDelivery>(_ =>
+            throw new NotSupportedException("The placement endpoint does not use bootstrap delivery."));
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapEnvironmentRuntimeBootstrap();
+        await app.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/internal/runtime/run-start/placement")
+        {
+            Content = JsonContent.Create(
+                new RuntimeRunStartPlacementRequest(1, fixture.Owner, null, Guid.NewGuid()), options: JsonOptions)
+        };
+        request.Headers.Authorization = new("Bearer", "first-start-token");
+        request.Headers.Add("X-Agentweaver-Tenant", fixture.Owner.TenantId);
+        using var response = await app.GetTestClient().SendAsync(request);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(expectedCode, body.RootElement.GetProperty("code").GetString());
+        Assert.Equal(0, fixture.Storage.ProvisionCalls);
+        Assert.Equal(0, fixture.Sandbox.ProvisionCalls);
+    }
+
+    [Theory]
     [InlineData("foreign-actor-token", false)]
     [InlineData("first-start-token", true)]
     public async Task RejectsForeignActorOrTenantBeforePlacement(

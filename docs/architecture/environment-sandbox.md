@@ -62,6 +62,12 @@ does not send a model turn. A retry requires fresh authenticated run authority;
 the durable intent stores operation IDs and non-credential receipts, not bearer
 credentials.
 
+If the network-policy step fails because Kubernetes or Projects & Config is
+unavailable, a retry of the same start runs that step again. A conflicting
+policy object, a changed owner fence, or a changed run authority still stops
+the start. Environment reports a transient failure as unavailable (HTTP 503),
+not as a denial.
+
 Dispatch uses the same placement and activation owners for a committed child,
 with a separate child-specific authority check and a durable startup intent.
 Missing or stale readiness prevents its task message from being sent.

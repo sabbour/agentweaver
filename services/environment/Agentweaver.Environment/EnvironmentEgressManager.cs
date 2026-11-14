@@ -94,15 +94,33 @@ public sealed class EnvironmentEgressManager(
                 request.Fence.Owner.ProjectId,
                 request.Fence.Owner.RunId,
                 providerOptions.Namespace);
-            var reservation = await lifecycleStore.ReserveNetworkEffectAsync(
-                request.Fence,
-                $"{selector.Namespace}/{selector.PolicyName}",
-                request.PolicyGeneration,
-                request.ExpectedPreviousPolicyGeneration,
-                EnvironmentNetworkEffectKind.Apply,
-                EffectIdempotencyKey(request.IdempotencyKey, EnvironmentNetworkEffectKind.Apply),
-                cancellationToken).ConfigureAwait(false);
-            if (reservation.State is EnvironmentNetworkEffectState.ReconciliationRequired or
+            var resourceId = $"{selector.Namespace}/{selector.PolicyName}";
+            var effectKey = EffectIdempotencyKey(request.IdempotencyKey, EnvironmentNetworkEffectKind.Apply);
+            // Only first-start opts in to re-arm a Failed effect; other stores keep the non-reusable result.
+            var reservation = firstStartOwner is not null &&
+                lifecycleStore is IEnvironmentFirstStartNetworkEffectStore firstStartStore
+                ? await firstStartStore.ReserveFirstStartNetworkEffectAsync(
+                    request.Fence,
+                    resourceId,
+                    request.PolicyGeneration,
+                    request.ExpectedPreviousPolicyGeneration,
+                    EnvironmentNetworkEffectKind.Apply,
+                    effectKey,
+                    cancellationToken).ConfigureAwait(false)
+                : await lifecycleStore.ReserveNetworkEffectAsync(
+                    request.Fence,
+                    resourceId,
+                    request.PolicyGeneration,
+                    request.ExpectedPreviousPolicyGeneration,
+                    EnvironmentNetworkEffectKind.Apply,
+                    effectKey,
+                    cancellationToken).ConfigureAwait(false);
+            // The first-start owner pins the selection revisions, so a replayed uncertain apply has the same intent.
+            // A re-drive repeats every guard below; the adapter accepts only an identical live object.
+            var redrive = firstStartOwner is not null && reservation.Replayed &&
+                reservation.State is EnvironmentNetworkEffectState.ReconciliationRequired or
+                    EnvironmentNetworkEffectState.Reconciled;
+            if (!redrive && reservation.State is EnvironmentNetworkEffectState.ReconciliationRequired or
                 EnvironmentNetworkEffectState.Reconciled)
                 return Failure(
                     "environment_effect_reconciliation_required",
@@ -136,28 +154,59 @@ public sealed class EnvironmentEgressManager(
                     request.PolicyGeneration,
                     cancellationToken).ConfigureAwait(false);
                 TracePolicyObservation(trace, observed);
-                var completed = await lifecycleStore.CompleteNetworkEffectAsync(
-                    reservation.OperationId,
-                    request.Fence,
-                    effectMayHaveApplied: true,
-                    exactGenerationVerified: observed.ObjectVerified,
-                    cancellationToken).ConfigureAwait(false);
-                if (!observed.ObjectVerified)
-                    return new(
-                        false,
-                        false,
-                        observed,
-                        null,
-                        "policy_generation_unverified",
-                        "The exact Cilium policy object was not observed after apply; the environment is not ready.");
-                if (completed.State != EnvironmentNetworkEffectState.Completed)
-                    return new(
-                        false,
-                        false,
-                        observed,
-                        null,
-                        "environment_fence_changed",
-                        "The Environment owner fence changed during policy apply; readiness is withheld pending owner reconciliation.");
+                if (redrive)
+                {
+                    if (!observed.ObjectVerified)
+                        return new(
+                            false,
+                            false,
+                            observed,
+                            null,
+                            "policy_generation_unverified",
+                            "The exact Cilium policy object was not observed after apply; the environment is not ready.");
+                    var reconciled = await lifecycleStore.MarkNetworkEffectReconciledAsync(
+                        reservation.OperationId,
+                        request.Fence,
+                        new EnvironmentNetworkEffectObservation(
+                            observed.ObjectVerified,
+                            observed.AppliedIntentGeneration,
+                            observed.Revoked,
+                            observed.IntentHash),
+                        cancellationToken).ConfigureAwait(false);
+                    if (reconciled.State != EnvironmentNetworkEffectState.Reconciled)
+                        return new(
+                            false,
+                            false,
+                            observed,
+                            null,
+                            "environment_effect_reconciliation_conflict",
+                            "The Environment owner did not accept the exact observed provider result.");
+                }
+                else
+                {
+                    var completed = await lifecycleStore.CompleteNetworkEffectAsync(
+                        reservation.OperationId,
+                        request.Fence,
+                        effectMayHaveApplied: true,
+                        exactGenerationVerified: observed.ObjectVerified,
+                        cancellationToken).ConfigureAwait(false);
+                    if (!observed.ObjectVerified)
+                        return new(
+                            false,
+                            false,
+                            observed,
+                            null,
+                            "policy_generation_unverified",
+                            "The exact Cilium policy object was not observed after apply; the environment is not ready.");
+                    if (completed.State != EnvironmentNetworkEffectState.Completed)
+                        return new(
+                            false,
+                            false,
+                            observed,
+                            null,
+                            "environment_fence_changed",
+                            "The Environment owner fence changed during policy apply; readiness is withheld pending owner reconciliation.");
+                }
 
                 try
                 {

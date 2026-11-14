@@ -162,6 +162,24 @@ public interface IEnvironmentWorkspaceRecoveryStore
         CancellationToken cancellationToken);
 }
 
+/// <summary>Reserves a first-start network effect and can re-arm a matching effect that failed before any provider call.</summary>
+public interface IEnvironmentFirstStartNetworkEffectStore
+{
+    /// <summary>
+    /// Reserves like <see cref="IEnvironmentLifecycleStore.ReserveNetworkEffectAsync"/>. A replayed <c>Failed</c>
+    /// effect returns to <c>Reserved</c> only when its fence is current, no other effect for the resource is
+    /// unresolved, and the last verified generation equals the expected previous generation.
+    /// </summary>
+    Task<EnvironmentNetworkEffectReservation> ReserveFirstStartNetworkEffectAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        long expectedPreviousPolicyGeneration,
+        EnvironmentNetworkEffectKind kind,
+        string idempotencyKey,
+        CancellationToken cancellationToken);
+}
+
 internal static class EnvironmentWorkspaceVolumeProjection
 {
     public static EnvironmentWorkspaceVolumeStatus FromSnapshot(
