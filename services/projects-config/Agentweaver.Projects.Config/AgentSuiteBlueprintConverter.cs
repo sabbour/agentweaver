@@ -305,6 +305,8 @@ public static class AgentSuiteBlueprintConverter
             for (var slash = file.Path.LastIndexOf('/'); slash > 0; slash = file.Path.LastIndexOf('/', slash - 1))
                 entries.TryAdd(file.Path[..slash] + "/", (null, null));
         }
+        // Retained directory and link entries replace the implied directory entries. A path that is also a
+        // file or another retained entry is refused.
         foreach (var metadata in preservedEntries)
         {
             if (metadata.Type is not ("directory" or "symlink" or "hardlink"))
@@ -329,6 +331,7 @@ public static class AgentSuiteBlueprintConverter
         using var tar = new MemoryStream();
         using (var writer = new TarWriter(tar, TarEntryFormat.Ustar, leaveOpen: true))
         {
+            // Hard links go last because the content reader requires each target to name an earlier regular file in the archive.
             IEnumerable<KeyValuePair<string, (AgentSuiteFile? File, AgentSuiteArchiveEntryMetadata? Metadata)>> orderedEntries =
                 preservedEntries.Any(item => item.Type == "hardlink")
                     ? entries.OrderBy(item => item.Value.Metadata?.Type == "hardlink" ? 1 : 0)

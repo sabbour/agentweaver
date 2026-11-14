@@ -154,7 +154,8 @@ internal static class AgentSuiteContent
                         if (header.Size > MaxRetainedMetadataBytes - retained)
                             return $"retained metadata exceeds {MaxRetainedMetadataBytes} bytes";
                     }
-                    // Read one extra byte so a body that is shorter or longer than Size is detected.
+                    // The entry reader never returns more than Size bytes, so the extra byte does not change the
+                    // result. A short body gives an error or fewer than Size bytes, and both are refused below.
                     var readError = tar.ReadAll(header.Size + 1, out var data);
                     // The two branches return different messages to match the Go error texts.
                     if (retain)
@@ -255,7 +256,7 @@ internal static class AgentSuiteContent
             offset += length;
         }
         // FNAME (0x08) and FCOMMENT (0x10): NUL-terminated strings, in that order.
-        // Like Go, a string longer than 512 bytes is an invalid header.
+        // Like Go, a string of 512 bytes or more (before its NUL) is an invalid header.
         foreach (var flag in new byte[] { 0x08, 0x10 })
         {
             if ((flags & flag) == 0)

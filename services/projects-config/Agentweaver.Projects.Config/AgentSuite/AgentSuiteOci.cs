@@ -63,7 +63,8 @@ internal static class AgentSuiteOci
         var dirs = new HashSet<string>(StringComparer.Ordinal);
         // Case-folded names seen so far, to catch "A.json" vs "a.json" (they collide on Windows/macOS).
         var folded = new HashSet<string>(StringComparer.Ordinal);
-        // The reader stops with a limit error if more bytes than the archive limit are ever read.
+        // The caller already refuses archives larger than MaxArchiveBytes, so this bound is only a backstop:
+        // the reader throws a limit error if it reads more than MaxArchiveBytes + 1 bytes.
         var tar = new GoTarReader(new GoReader(new MemoryStream(archive, writable: false), AgentSuiteValidator.MaxArchiveBytes + 1L));
         var count = 0;
         while (true)
@@ -104,7 +105,8 @@ internal static class AgentSuiteOci
                 dirs.Add(name);
                 continue;
             }
-            // Ask for one extra byte so we can tell "exactly Size bytes" from a body that is short.
+            // The entry reader never returns more than Size bytes, so the extra byte does not change the result.
+            // A short body gives an error or fewer than Size bytes, and both are refused.
             var readError = tar.ReadAll(header.Size + 1, out var data);
             if (readError is not null || data.LongLength != header.Size)
                 return $"The archive entry {Go.Quote(header.Name)} is truncated.";
@@ -432,7 +434,8 @@ internal static class AgentSuiteOci
             }
         }
         // Standard base64 must be padded, so a leftover partial group is an error.
-        // The reported offset follows Go's rules for where the bad input starts.
+        // The offset matches Go only for a group of one character. For two or three characters, Go
+        // reports the input length minus the group size, but this code reports the input length.
         if (count != 0)
             return $"illegal base64 data at input byte {input.Length - (input.Length > 0 && count == 1 ? 1 : 0)}";
         data = [.. output];

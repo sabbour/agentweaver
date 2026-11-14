@@ -185,7 +185,8 @@ internal sealed class GoTarReader(GoReader reader)
                 if (flag == TypeXGlobalHeader)
                 {
                     // A global PAX header is returned to the caller as its own entry (as Go does)
-                    // so the validator can reject it; its records are only checked, not kept.
+                    // so the validator can reject it. Its records can change only the entry name, not later
+                    // entries. Unlike Go, which ignores a merge error here, an invalid record fails the read.
                     if (MergePax(header, records!) is { } globalError)
                         return globalError;
                     result = new TarHeader { Name = header.Name, Typeflag = flag, ModTimeZero = true };
@@ -448,7 +449,8 @@ internal sealed class GoTarReader(GoReader reader)
         // The archive ends with two all-zero 512-byte blocks.
         if (_block.All(b => b == 0))
         {
-            // The second block must also be present and all zero; one zero block alone is invalid.
+            // Like Go, the input may end after one zero block, which gives "EOF". A short second block gives
+            // "unexpected EOF", and a second block that is not all zero is an invalid header.
             if (reader.ReadFull(_block, out _) is { } secondError)
                 return secondError;
             return _block.All(b => b == 0) ? GoReader.Eof : ErrHeader;
@@ -614,7 +616,7 @@ internal sealed class GoTarReader(GoReader reader)
                 trimmed = trimmed[..nul];
             ulong value = 0;
             var digits = trimmed;
-            // Go's unsigned number parser accepts one leading '+'.
+            // This accepts one leading '+'. Go strconv.ParseUint does not, so Go rejects such a field.
             if (digits.Length > 0 && digits[0] == '+')
                 digits = digits[1..];
             if (digits.Length == 0)
