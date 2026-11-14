@@ -30,6 +30,7 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     private BacklogOwnerStore _backlog = null!;
     private CoordinationOwnerStore _coordination = null!;
     private CoordinatorDecisionOwnerStore _decisions = null!;
+    private CoordinatorRunSelectionContextStore _runSelectionContexts = null!;
     private NoPrerequisitesEvidenceReader _evidence = null!;
 
     public BacklogOwnerStorePostgresTests(CoordinationPostgresFixture fixture) =>
@@ -42,10 +43,10 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
 
         var catalog = ProviderCatalog.Create([], [], []).Value!;
         var resolver = new ProviderResolver(catalog);
-        var contexts = new CoordinatorRunSelectionContextStore(
+        _runSelectionContexts = new CoordinatorRunSelectionContextStore(
             _fixture.DataSource, _schema, catalog, resolver, []);
         _decisions = new CoordinatorDecisionOwnerStore(
-            _fixture.DataSource, _schema, contexts, TimeProvider.System);
+            _fixture.DataSource, _schema, _runSelectionContexts, TimeProvider.System);
         _coordination = new CoordinationOwnerStore(
             _fixture.DataSource, _schema, TimeProvider.System, _decisions);
         _backlog = new BacklogOwnerStore(_fixture.DataSource, _schema);
@@ -1131,6 +1132,12 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(projects);
         builder.Services.AddSingleton(_backlog);
+        // Other mapped backlog routes need these services for parameter inference; the add-task route does not use them.
+        builder.Services.AddSingleton(_coordination);
+        builder.Services.AddSingleton(_decisions);
+        builder.Services.AddSingleton(_runSelectionContexts);
+        builder.Services.AddSingleton(_ => new EventsAddressedMessageClient(
+            new HttpClient(), options, new HttpContextAccessor()));
         await using var app = builder.Build();
         app.MapBacklogEndpoints();
         var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources
