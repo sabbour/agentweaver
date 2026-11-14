@@ -21,6 +21,7 @@ public sealed class NativeAcsPolicyEvaluator
         _workRoot = Path.GetFullPath(workRoot);
     }
 
+    /// <summary>Validates inputs before native evaluation. A cleanup failure overrides even an allow or deny result with an error.</summary>
     public async Task<NativeAcsEvaluationResult> EvaluateAsync(
         NativeAcsArtifact artifact,
         InterventionPoint interventionPoint,
@@ -122,6 +123,7 @@ public sealed class NativeAcsPolicyEvaluator
         return cleanupFailed ? Error(artifactHash, "artifact_cleanup_failed") : evaluation;
     }
 
+    /// <summary>Returns true when all required identifiers are valid and any human identity has valid IDs and the same tenant; otherwise false.</summary>
     private static bool IsValidSnapshot(NativeAcsEvaluationSnapshot snapshot)
     {
         if (!IsIdentifier(snapshot.Identity.ProjectId) ||
@@ -138,12 +140,14 @@ public sealed class NativeAcsPolicyEvaluator
              string.Equals(human.TenantId, snapshot.TenantId, StringComparison.Ordinal));
     }
 
+    /// <summary>Returns true for a non-blank identifier of at most 256 ASCII letters, digits, dot, underscore, hyphen, or colon; otherwise false.</summary>
     private static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 256 &&
         value.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
 
+    /// <summary>Returns true only for packet or known-destination checks over TCP on the fixed HTTPS port and a canonical DNS name or IP address; otherwise false. Null input throws.</summary>
     private static bool IsValidNetworkFacts(NativeAcsNetworkEvaluationFacts network)
     {
         if (network.CheckKind is not ("packet" or "known_destination_use") ||
@@ -161,6 +165,7 @@ public sealed class NativeAcsPolicyEvaluator
         };
     }
 
+    /// <summary>Returns true for a lower-case multi-label DNS name with valid 1-to-63 character labels, no final dot, and a non-numeric final label; otherwise false.</summary>
     private static bool IsCanonicalDnsName(string? value)
     {
         if (string.IsNullOrEmpty(value) ||
@@ -217,6 +222,7 @@ public sealed class NativeAcsPolicyEvaluator
         }
     }
 
+    /// <summary>Returns true when <paramref name="left"/> is fully qualified and <c>Path.GetFullPath(left)</c> equals <paramref name="right"/>, ignoring case only on Windows; otherwise false. Invalid paths can throw.</summary>
     private static bool IsSamePath(string? left, string right) =>
         !string.IsNullOrWhiteSpace(left) &&
         Path.IsPathFullyQualified(left) &&

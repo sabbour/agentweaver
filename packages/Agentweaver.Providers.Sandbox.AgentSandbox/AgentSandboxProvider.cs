@@ -17,7 +17,7 @@ public sealed record AgentSandboxPersistentVolumeClaimAttachment(
     string ClaimName,
     string ClaimUid)
 {
-    /// <summary>Requires this descriptor's provider, namespace, claim name, and UID to match the negotiation.</summary>
+    /// <summary>Requires contract version 1, the negotiated provider and claim UID, and valid namespace and claim names.</summary>
     /// <exception cref="ArgumentException">The descriptor is malformed or does not identify the negotiated Storage resource.</exception>
     public AgentSandboxPersistentVolumeClaimAttachment ValidateFor(
         WorkspaceVolumeAttachmentNegotiation negotiation)
@@ -35,7 +35,7 @@ public sealed record AgentSandboxPersistentVolumeClaimAttachment(
         return this;
     }
 
-    /// <summary>Checks a Kubernetes DNS subdomain used as a namespace or claim identity.</summary>
+    /// <summary>Returns true for a lower-case DNS subdomain of at most 253 characters whose 1-to-63 character labels use letters, digits, or hyphens and start and end with a letter or digit; otherwise false.</summary>
     private static bool IsDnsSubdomain(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 253 &&
@@ -757,7 +757,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 : SandboxReleaseDisposition.Released).ValidateFor(request);
     }
 
-    /// <summary>Deserializes and checks the exact provider options revision stored in a lease intent.</summary>
+    /// <summary>Deserializes the saved options and requires exact provider, adapter version, options schema version, and options revision matches.</summary>
     /// <exception cref="SandboxProviderException">The saved options or provider/version/revision pin is invalid.</exception>
     private AgentSandboxOptions ReadPinnedOptions(SandboxLeaseProvisionIntent pinnedIntent)
     {
@@ -795,7 +795,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return options;
     }
 
-    /// <summary>Validates the owner, workspace negotiation, provider, and egress selector in a recovery intent.</summary>
+    /// <summary>Accepts recovery intent contract version 1 only, then validates its owner, workspace negotiation, provider, and egress selector.</summary>
     /// <exception cref="SandboxProviderException">The recovery request does not match the lease's immutable fence.</exception>
     private static AgentSandboxRecoveryIntent ReadRecoveryIntent(
         SandboxLeaseSnapshot lease,
@@ -1628,7 +1628,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The owned AgentHost launch configuration differs from its pinned profile.");
     }
 
-    /// <summary>Checks that each expected JSON subtree is present and has the exact configured value.</summary>
+    /// <summary>Returns true when expected object properties exist with matching values, arrays have the same length and order, and scalar values are equal; otherwise false. Extra object properties are allowed.</summary>
     private static bool ContainsLaunchConfiguration(JsonNode? actual, JsonNode? expected) => expected switch
     {
         JsonObject properties => actual is JsonObject candidate &&
@@ -1705,7 +1705,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The current claim does not match the exact pinned sandbox owner and generation.");
     }
 
-    /// <summary>Compares recovery metadata structurally and returns false for malformed JSON.</summary>
+    /// <summary>Returns true when parsed recovery JSON equals the expected descriptor, false for a mismatch or malformed JSON. Null JSON input throws.</summary>
     private static bool RecoveryDescriptorMatches(
         string recoveryJson,
         AgentSandboxRecoveryDescriptor expected)
@@ -1804,7 +1804,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 throw ProviderResourceMismatch("The backing Pod ownership labels do not match its Sandbox claim.");
     }
 
-    /// <summary>Verifies the exact workspace PVC mount and its current claim fence before reporting attachment success.</summary>
+    /// <summary>Returns true only when the Pod has the pinned workspace PVC mount and the claim has the expected namespace, name, UID, and Bound phase. The claim annotations must match the fence's project ID and environment ID, include a volume ID, and use the pinned workspace resource generation; the resulting workspace identity fingerprint must match the recorded fingerprint. This check does not include tenant ID, run ID, or lifecycle generation. A missing claim or mismatch returns false; malformed required fields and Kubernetes read failures throw.</summary>
     private async Task<bool> VerifyAttachedPodAsync(
         JsonElement pod,
         EnvironmentGenerationFence fence,
@@ -1846,7 +1846,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             descriptor);
     }
 
-    /// <summary>Checks that the PVC is bound and matches the lease owner, environment, volume generation, and fingerprint.</summary>
+    /// <summary>Returns true only when the claim has the expected namespace, name, UID, and Bound phase, its annotations match the fence project ID and environment ID, it has a volume ID and the pinned workspace resource generation, and its workspace identity fingerprint matches the recorded fingerprint. The check does not include tenant ID, run ID, or lifecycle generation. Missing required metadata objects or strings and non-string annotations throw; missing annotation keys or mismatches return false.</summary>
     private static bool ValidateWorkspaceClaimForFence(
         JsonElement claim,
         EnvironmentGenerationFence fence,
@@ -1874,7 +1874,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             StringComparison.Ordinal);
     }
 
-    /// <summary>Checks the Pod runtime class, service account, host networking, and restricted workload profile.</summary>
+    /// <summary>Returns true after the runtime class, service-account, host-network, and optional AgentHost restrictions pass. It returns false for a mismatch or an unverified runtime class; other validation and read failures throw.</summary>
     private async Task<bool> VerifyPodIsolationAsync(
         JsonElement pod,
         AgentSandboxOptions options,
@@ -1942,8 +1942,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ImmutableDictionary<string, string>.Empty.Add(ClaimUidLabel, descriptor.ClaimUid!),
             cancellationToken);
 
-    /// <summary>Deletes an owned Kubernetes object only after matching all pinned labels and its expected UID.</summary>
-    /// <returns><see langword="true"/> when an object was found and deletion requested; otherwise false.</returns>
+    /// <summary>Deletes an object only after its pinned labels and UID match.</summary>
+    /// <returns>False if the object is already absent; true after UID-preconditioned deletion is confirmed. Identity mismatches and unconfirmed deletion throw.</returns>
     /// <exception cref="SandboxProviderException">The object identity differs or deletion is not confirmed.</exception>
     private async Task<bool> DeleteOwnedResourceAsync(
         string apiGroup,
@@ -2197,7 +2197,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             .ValidateFor(resource);
     }
 
-    /// <summary>Validates every recovery field and recomputes deterministic resource names from the fence.</summary>
+    /// <summary>Requires recovery contract version 1, the current options schema version, and exact owner, provider, resource, and generation pins; then recomputes the resource names.</summary>
     /// <exception cref="SandboxProviderException">Any owner, generation, option, selector, name, or digest pin is invalid.</exception>
     private static void ValidateRecoveryDescriptor(
         AgentSandboxRecoveryDescriptor descriptor,
@@ -2415,7 +2415,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             .ToImmutableArray();
     }
 
-    /// <summary>Requires the selected container to run the pinned image digest and return its start timestamp.</summary>
+    /// <summary>Returns true when the image ID ends with the pinned digest, the Pod declares the selected workspace image, and its running start time parses; otherwise false and the output time is default. Malformed non-object paths can throw.</summary>
     private static bool IsSelectedImageRunning(
         JsonElement pod,
         JsonElement container,
@@ -2439,7 +2439,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return false;
     }
 
-    /// <summary>Finds a successful image-pull event for the exact Pod UID and configured digest.</summary>
+    /// <summary>Returns true for the first Pulled event with the exact Pod UID and pinned digest in <c>message</c>, or in <c>note</c> when <c>message</c> is missing or not a string, and a parseable <c>eventTime</c>, <c>lastTimestamp</c>, or <c>metadata.creationTimestamp</c> (tried in that order). It skips matching events without a parseable time and returns false only when no matching event has a parseable timestamp. An empty <c>message</c> takes precedence over <c>note</c>. Malformed non-object paths can throw.</summary>
     private static bool TryReadMatchingImagePullCompletedAt(
         IReadOnlyList<JsonElement> events,
         string podUid,
@@ -2462,7 +2462,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return false;
     }
 
-    /// <summary>Reads a true status condition and its transition timestamp when present.</summary>
+    /// <summary>Returns true for the first condition with the requested type and status True; the output time is null when that condition has no parseable transition time. Otherwise false. A non-object condition can throw.</summary>
     private static bool HasTrueCondition(
         JsonElement resource,
         string type,
@@ -2499,11 +2499,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return null;
     }
 
-    /// <summary>Returns whether Kubernetes reports the Pod phase as Failed.</summary>
+    /// <summary>Returns true only when the Pod phase is exactly Failed; missing or other phases return false. Non-object path values can throw.</summary>
     private static bool IsPodFailed(JsonElement pod) =>
         string.Equals(ReadOptionalString(pod, "status", "phase"), "Failed", StringComparison.Ordinal);
 
-    /// <summary>Restricts workspace mounts to bounded absolute paths beneath the reserved Agentweaver workspace root.</summary>
+    /// <summary>Returns true for exactly /workspace or a bounded path below /workspace/agentweaver/ with no empty, dot, or parent segment; otherwise false.</summary>
     private static bool IsWorkspaceMountPath(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 ||
@@ -2517,7 +2517,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return segments.Skip(1).All(segment => segment is not ("" or "." or ".."));
     }
 
-    /// <summary>Checks the lower-case Kubernetes DNS subdomain syntax used by stored resource names.</summary>
+    /// <summary>Returns true for a valid lower-case Kubernetes DNS subdomain of at most 253 characters; otherwise false.</summary>
     private static bool IsDnsSubdomain(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 253 &&
@@ -2528,7 +2528,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             label.All(character =>
                 character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-'));
 
-    /// <summary>Checks a lower-case 64-character SHA-256 digest.</summary>
+    /// <summary>Returns true for exactly 64 lowercase hexadecimal characters; otherwise false. Null input throws.</summary>
     private static bool IsSha256(string value) =>
         value.Length == 64 && value.All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');
@@ -2560,7 +2560,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
-    /// <summary>Checks Kubernetes label-key syntax, including an optional DNS prefix.</summary>
+    /// <summary>Returns true for a Kubernetes label key of at most 317 characters with one valid name or a valid DNS prefix and name; otherwise false.</summary>
     private static bool IsKubernetesLabelKey(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 317)
@@ -2574,7 +2574,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return true;
     }
 
-    /// <summary>Checks the bounded name portion of a Kubernetes label key.</summary>
+    /// <summary>Returns true for a 1-to-63 character label name that starts and ends with an ASCII letter or digit and contains only letters, digits, dot, underscore, or hyphen; otherwise false. Null input throws.</summary>
     private static bool IsLabelName(string value) =>
         value.Length is >= 1 and <= 63 &&
         value[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' &&
@@ -2582,7 +2582,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         value.All(character =>
             character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '_' or '-');
 
-    /// <summary>Checks that metadata has a controlling owner reference with the requested UID.</summary>
+    /// <summary>Returns true when an owner reference has the exact UID and a JSON controller value of true; otherwise false. A malformed reference entry can throw.</summary>
     private static bool HasOwnerReference(JsonElement metadata, string uid)
     {
         var references = TryGetArray(metadata, "ownerReferences");
@@ -2598,7 +2598,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
     private static ImmutableDictionary<string, string> ReadLabels(JsonElement resource) =>
         ReadStringDictionary(RequiredObject(resource, "metadata"), "labels");
 
-    /// <summary>Reads a string annotation by name, returning false when metadata or the annotation is absent.</summary>
+    /// <summary>Returns true when metadata.annotations contains the named JSON string; otherwise false, including missing or non-object metadata, non-object annotations, a missing key, or a non-string value.</summary>
     private static bool TryGetAnnotation(JsonElement resource, string name, out string value)
     {
         var metadata = TryGetObject(resource, "metadata");
@@ -2616,7 +2616,6 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return false;
     }
 
-    /// <summary>Compares an annotation value using ordinal equality.</summary>
     private static bool HasAnnotation(
         ImmutableDictionary<string, string> annotations,
         string key,
@@ -2624,7 +2623,6 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         annotations.TryGetValue(key, out var value) &&
         string.Equals(value, expected, StringComparison.Ordinal);
 
-    /// <summary>Compares a Kubernetes label value using ordinal equality.</summary>
     private static bool HasAnnotationOrLabel(
         ImmutableDictionary<string, string> labels,
         string key,
@@ -2687,11 +2685,9 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             : null;
     }
 
-    /// <summary>Reads one required-path boolean property from a JSON object.</summary>
     private static bool TryGetBoolean(JsonElement parent, string name, out bool value) =>
         TryGetBoolean(parent, [name], out value);
 
-    /// <summary>Reads a boolean property nested under two object properties.</summary>
     private static bool TryGetBoolean(
         JsonElement parent,
         string first,
@@ -2699,7 +2695,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         out bool value) =>
         TryGetBoolean(parent, [first, second], out value);
 
-    /// <summary>Reads a boolean value by JSON path, returning false when the path or value is invalid.</summary>
+    /// <summary>Returns true when every path segment exists and the final value is a JSON boolean, including false; otherwise false with output false. A non-object intermediate throws.</summary>
     private static bool TryGetBoolean(JsonElement parent, string[] path, out bool value)
     {
         value = false;
@@ -2711,8 +2707,9 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
     }
 
     /// <summary>
-    /// Reads a Kubernetes non-pointer <c>bool</c> marked <c>omitempty</c>. The API server omits it when
-    /// false, so an absent final property reads as false; a present value must be a JSON boolean.
+    /// Returns true when the parent path is an object and the final property is absent or a JSON boolean.
+    /// An absent property sets output false; a missing parent or non-boolean value returns false. Non-object
+    /// intermediate values and an empty path can throw.
     /// </summary>
     private static bool TryGetKubernetesBoolean(JsonElement parent, string[] path, out bool value)
     {
@@ -2724,7 +2721,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             (!owner.TryGetProperty(path[^1], out _) || TryGetBoolean(owner, path[^1], out value));
     }
 
-    /// <summary>Reads an integer-valued JSON number without treating strings as numbers.</summary>
+    /// <summary>Returns true for an Int64 JSON number, including zero; false for a missing, non-number, or out-of-range value. A non-object parent throws.</summary>
     private static bool TryGetInt64(JsonElement parent, string name, out long value)
     {
         value = 0;
@@ -2755,14 +2752,12 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ? value
             : null;
 
-    /// <summary>Reads a round-trip timestamp from one JSON property.</summary>
     private static bool TryGetDateTime(
         JsonElement parent,
         string name,
         out DateTimeOffset result) =>
         TryGetDateTime(parent, [name], out result);
 
-    /// <summary>Reads a round-trip timestamp from a three-level JSON path.</summary>
     private static bool TryGetDateTime(
         JsonElement parent,
         string first,
@@ -2771,7 +2766,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         out DateTimeOffset result) =>
         TryGetDateTime(parent, [first, second, third], out result);
 
-    /// <summary>Reads a round-trip timestamp by path, returning false for missing or invalid values.</summary>
+    /// <summary>Returns true when the path exists and its JSON string parses with invariant-culture <c>DateTimeOffset.TryParse</c> and <c>RoundtripKind</c>; otherwise false. A non-object intermediate throws.</summary>
     private static bool TryGetDateTime(
         JsonElement parent,
         string[] path,
@@ -2787,7 +2782,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                    out result);
     }
 
-    /// <summary>Walks a JSON object path and returns its final element when each segment exists.</summary>
+    /// <summary>Returns true when every path segment exists and outputs the final element; a missing segment returns false. An empty path succeeds with the original element; a non-object intermediate throws.</summary>
     private static bool TryGetPropertyPath(
         JsonElement parent,
         string[] path,

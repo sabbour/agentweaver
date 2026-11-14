@@ -10,7 +10,7 @@ public sealed record WorkspaceVolumeApiFlushRequest(
     WorkspaceVolumeApiTransitionRequest Transition,
     RuntimeHostSuspendRequest Suspend)
 {
-    /// <summary>Checks workspace flush identity, expected generations, and suspend authority.</summary>
+    /// <summary>Requires proof contract version 1, phase version at least 1, an Observe grant, matching owner/run/environment and flush generations, and an idempotency key; next data generation must be expected + 1. Invalid requests throw.</summary>
     public WorkspaceVolumeApiFlushRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Transition);
@@ -38,7 +38,6 @@ public sealed record WorkspaceVolumeApiFlushRequest(
     }
 }
 
-/// <summary>Versioned transition fields supplied to the workspace owner.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkspaceVolumeApiTransitionRequest(
     long ExpectedTransitionRevision,
@@ -50,7 +49,6 @@ public sealed record WorkspaceVolumeApiTransitionRequest(
     /// <summary>Exact Core invocation expected for a P1-specific provider provision; omitted for ordinary writes.</summary>
     public P1InvocationBindingExpectation? P1Binding { get; init; }
 
-    /// <summary>Converts API fields into the validated workspace transition contract.</summary>
     public WorkspaceVolumeTransitionRequest ToTransition(
         string volumeId,
         WorkspaceVolumeTransitionKind operation) =>
@@ -64,7 +62,6 @@ public sealed record WorkspaceVolumeApiTransitionRequest(
             IdempotencyKey).ValidateFor(operation);
 }
 
-/// <summary>Workspace transition reservation, completion, current volume, cleanup, and suspend evidence.</summary>
 public sealed record WorkspaceVolumeLifecycleResult(
     EnvironmentWorkspaceVolumeTransitionReservation Reservation,
     EnvironmentWorkspaceVolumeTransitionResult? Completion,
@@ -76,6 +73,7 @@ public sealed record WorkspaceVolumeLifecycleResult(
     public WorkspaceVolumeFlushReceipt? FlushReceipt { get; init; }
     public RuntimeHostSuspendReceipt? HostSuspendReceipt { get; init; }
 
+    /// <summary>True for a cleanup failure, a non-completed status, or a completed replacement with no cleanup status; otherwise false.</summary>
     public bool CleanupPending =>
         CleanupFailureCode is not null ||
         CleanupStatus is { State: not EnvironmentWorkspaceVolumeCleanupState.Completed } ||
@@ -95,7 +93,7 @@ public sealed record RuntimeSuspendPlacementReleaseRequest(
     RuntimeHostSuspendReceipt HostReceipt,
     long FlushTransitionRevision)
 {
-    /// <summary>Checks the recorded host suspension and its matching Environment generation.</summary>
+    /// <summary>Requires a valid host receipt and matching Environment fence. The transition revision must be at least 3 and below Int64.MaxValue so the next revision can be incremented.</summary>
     public RuntimeSuspendPlacementReleaseRequest Validate()
     {
         RuntimeWorkspaceSuspendHttpClient.ValidateRecordedHostReceipt(HostReceipt);
@@ -128,7 +126,7 @@ public sealed record RuntimeSuspendPlacementReleaseReceipt(
     long WorkspaceDataGeneration,
     long WorkspaceTransitionRevision)
 {
-    /// <summary>Matches the released resource, fencing generation, and workspace transition to the request.</summary>
+    /// <summary>Accepts only receipt contract version 1 in Released state with the request's exact operation and manifest IDs, resource and fence, and workspace transition; mismatches throw.</summary>
     public RuntimeSuspendPlacementReleaseReceipt ValidateFor(RuntimeSuspendPlacementReleaseRequest request)
     {
         request.Validate();
@@ -242,7 +240,7 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         return result;
     }
 
-    /// <summary>Checks the host suspension against the current request, source grant, and time.</summary>
+    /// <summary>Requires the recorded receipt, operation, manifest, registration, and flush to agree; the Observe grant must match the request and expire after <paramref name="now"/>.</summary>
     public static void ValidateHostReceipt(
         RuntimeHostSuspendReceipt receipt, RuntimeHostSuspendRequest request, DateTimeOffset now)
     {
@@ -259,7 +257,7 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         receipt.WorkspaceFlush!.ValidateFor(request.WorkspaceFlush);
     }
 
-    /// <summary>Validates all persisted suspend, cache, grant, native-turn, and workspace evidence.</summary>
+    /// <summary>Requires receipt and cache contract version 1, then validates the persisted grant, native-turn, and workspace evidence.</summary>
     public static void ValidateRecordedHostReceipt(RuntimeHostSuspendReceipt receipt)
     {
         if (receipt is null || receipt.Registration?.Binding is null ||
@@ -292,6 +290,7 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         receipt.WorkspaceFlush.Validate();
     }
 
+    /// <summary>Returns true when both values serialize to deeply equal JSON; otherwise false. Serialization failures throw.</summary>
     private static bool SameJson<T>(T expected, T actual) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(expected, JsonOptions),

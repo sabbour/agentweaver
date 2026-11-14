@@ -102,9 +102,9 @@ public static class PlannedRuntimeGrants
         if (entry.GetProperty("role").GetString() != runtimeRole)
             throw new InvalidOperationException($"The configured {service} runtime role differs from the reviewed plan.");
 
-        // Step 3: the compiled migrator always applies every version it knows. Requiring its catalog to
-        // equal the planned list means an image with an extra (unreviewed) migration stops here, before
-        // migrating, and an image missing a planned one stops too.
+        // The plan maps orchestrator to coreVersions, events-and-sessions to eventsVersions, and environment
+        // to environmentVersions. Each full ordered list must match the compiled catalog, so an image with
+        // extra or missing migrations stops here, before migration starts.
         var versionsProperty = service switch
         {
             "orchestrator" => "coreVersions",
@@ -288,7 +288,6 @@ public static class PlannedRuntimeGrants
         $"{Marker} service={plan.Service} schema={plan.Schema} role={plan.RuntimeRole} " +
         $"planSha256={plan.PlanSha256} versions={string.Join(',', applied)}";
 
-    /// <summary>Quotes a PostgreSQL identifier by doubling embedded quotes.</summary>
     public static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
     private static async Task ExecuteAsync(

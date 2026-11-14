@@ -38,7 +38,7 @@ public static class NativeAcsFiniteNetworkProfile
         };
     }
 
-    /// <summary>True when the supplied files or manifest claim the finite network profile.</summary>
+    /// <summary>Returns true when a file path is <c>policy/network.rego</c> or valid UTF-8 manifest text contains <c>agentweaver_platform_network</c>; otherwise false. Malformed manifest text returns false only when no matching file path was found. Null input throws.</summary>
     public static bool IsCandidate(NativeAcsArtifact artifact)
     {
         ArgumentNullException.ThrowIfNull(artifact);
@@ -58,7 +58,7 @@ public static class NativeAcsFiniteNetworkProfile
         }
     }
 
-    /// <summary>Validates the artifact closure, protected catalog, and supported JSON data shape.</summary>
+    /// <summary>Returns valid only for the fixed finite-network-v1 files and hash with data for the pinned catalog; otherwise it returns validation diagnostics. Null input throws.</summary>
     public static NativeAcsFiniteNetworkValidationResult Validate(NativeAcsArtifact artifact)
     {
         ArgumentNullException.ThrowIfNull(artifact);
@@ -116,6 +116,7 @@ public static class NativeAcsFiniteNetworkProfile
         }
     }
 
+    /// <summary>Returns true only for the finite-network-v1 data shape, an allowed mode, the pinned catalog revision and destinations, and no repeated destination; otherwise false.</summary>
     private static bool TryReadPolicy(
         JsonElement root,
         out NativeAcsFiniteNetworkPolicy policy,
@@ -179,6 +180,7 @@ public static class NativeAcsFiniteNetworkProfile
         return true;
     }
 
+    /// <summary>Returns true for an array of valid host/port objects and sorts the output by host then port; malformed entries return false.</summary>
     private static bool TryReadDestinations(
         JsonElement element,
         out ImmutableArray<PlatformEgressDestination> destinations,
@@ -215,6 +217,7 @@ public static class NativeAcsFiniteNetworkProfile
         return true;
     }
 
+    /// <summary>Returns true when any object in this JSON tree repeats a property name; otherwise false.</summary>
     private static bool HasDuplicateProperties(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.Object)
@@ -234,6 +237,7 @@ public static class NativeAcsFiniteNetworkProfile
         return false;
     }
 
+    /// <summary>Returns true when the object has exactly the expected property names, in any order; otherwise false.</summary>
     private static bool HasProperties(JsonElement element, params string[] expected)
     {
         if (element.ValueKind != JsonValueKind.Object)
@@ -243,6 +247,7 @@ public static class NativeAcsFiniteNetworkProfile
         return actual.SequenceEqual(expected.OrderBy(name => name, StringComparer.Ordinal), StringComparer.Ordinal);
     }
 
+    /// <summary>Returns true when the named property exists as a JSON string; otherwise false. A non-object element throws.</summary>
     private static bool TryGetString(JsonElement element, string name, out string value)
     {
         value = string.Empty;

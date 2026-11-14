@@ -37,9 +37,10 @@ public sealed class AgentSessionsVerificationException(string sessionId, AgentSe
 /// </para>
 /// <para>
 /// Each record maps to one envelope. A message becomes a turn, a tool call or tool result becomes a
-/// tool-call payload, and every other event kind becomes an artifact reference. Each payload refers to
-/// the stored record by the object key <c>agentsessions/{uid}/{seq}</c>, so the full event stays in the
-/// export rather than in the envelope. Create, append, and fork aren't supported, because an
+/// tool-call payload, and every other event kind becomes an artifact reference. Empty message roles
+/// become <c>user</c>; a result without an earlier tool call uses <c>unknown</c> as its tool name. Each
+/// payload refers to the stored record by the object key <c>agentsessions/{uid}/{seq}</c>, so the full
+/// event stays in the export rather than in the envelope. Create, append, and fork aren't supported, because an
 /// AgentSessions log is appended only by its own store under compare-and-swap and fencing rules that the
 /// Sessions contract doesn't express.
 /// </para>

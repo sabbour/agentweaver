@@ -389,6 +389,7 @@ public sealed class NativeAcsArtifactValidator
         }
     }
 
+    /// <summary>Returns true for an AST data reference with a <c>data</c> root and one or more string path segments; otherwise false. Non-object AST segments can throw.</summary>
     private static bool TryReadDataPath(JsonElement path, out string dataPath)
     {
         dataPath = string.Empty;
@@ -611,12 +612,14 @@ public sealed class NativeAcsArtifactValidator
             Add(diagnostics, "external_path", "ACS data paths must name supplied relative files or directories.");
     }
 
+    /// <summary>Removes one leading <c>./</c> and returns true only when the result is a canonical relative path; otherwise false. Null input throws.</summary>
     private static bool TryNormalizeRelativePath(string value, out string path)
     {
         path = value.StartsWith("./", StringComparison.Ordinal) ? value[2..] : value;
         return IsCanonicalRelativePath(path);
     }
 
+    /// <summary>Returns true for an absolute, drive-rooted, URL, or parent-traversal path; otherwise false. Null input throws.</summary>
     private static bool IsExternalPath(string value) =>
         value.StartsWith("/", StringComparison.Ordinal) ||
         value.StartsWith('\\') ||
@@ -651,6 +654,7 @@ public sealed class NativeAcsArtifactValidator
         }
     }
 
+    /// <summary>Returns true only when the JSON error object has a non-empty errors array and every code is <c>rego_parse_error</c>; malformed JSON returns false. Null input throws.</summary>
     private static bool IsRegoParseError(string error)
     {
         try
@@ -779,6 +783,7 @@ public sealed class NativeAcsArtifactValidator
         }
     }
 
+    /// <summary>Returns true for a pinned unsafe builtin or blocked http, rand, uuid, time.now_ns, or opa.runtime namespace; it also blocks print, trace, and net.lookup_ip_addr. Otherwise false. Null input throws.</summary>
     private static bool IsUnsafeBuiltinPath(string path) =>
         UnsafeBuiltins.Contains(path) ||
         path == "http" ||
@@ -793,6 +798,7 @@ public sealed class NativeAcsArtifactValidator
         path.StartsWith("opa.runtime.", StringComparison.Ordinal) ||
         path == "net.lookup_ip_addr";
 
+    /// <summary>Returns true for a reference AST with a variable root and only string path segments; otherwise false. Non-object AST segments can throw.</summary>
     private static bool TryReadReferencePath(JsonElement reference, out string path)
     {
         path = string.Empty;
@@ -829,6 +835,7 @@ public sealed class NativeAcsArtifactValidator
         return true;
     }
 
+    /// <summary>Returns true for a path of at most 256 allowed ASCII characters with no root, backslash, colon, control, empty, dot, or parent segment; otherwise false. Null input throws.</summary>
     private static bool IsCanonicalRelativePath(string path)
     {
         if (path.Length > 256 || path.StartsWith('/') || path.Contains('\\') || path.Contains(':') ||
@@ -842,9 +849,11 @@ public sealed class NativeAcsArtifactValidator
                 char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-'));
     }
 
+    /// <summary>Returns true when the manifest text contains <c>://</c> anywhere; otherwise false. This is a text check, not URI parsing. Null input throws.</summary>
     private static bool ContainsExternalUrl(string manifest) =>
         manifest.Contains("://", StringComparison.Ordinal);
 
+    /// <summary>Returns true for exactly 64 hexadecimal characters; uppercase and lowercase digits are accepted. Otherwise false. Null input throws.</summary>
     private static bool IsSha256(string value)
     {
         if (value.Length != 64 || value.Any(character => !Uri.IsHexDigit(character)))
