@@ -8,7 +8,6 @@ namespace Agentweaver.Identity;
 /// <summary>Shared fail-closed validators and hashing helpers for runtime identity contracts.</summary>
 public static class RuntimeContractValidation
 {
-    /// <summary>Validates runtime registration bindings, endpoints, identities, limits, and selection hashes.</summary>
     /// <exception cref="RuntimeAuthorizationException">Any registration field is invalid or inconsistent.</exception>
     public static void Validate(RuntimeRegistration registration)
     {
@@ -125,7 +124,6 @@ public static class RuntimeContractValidation
             throw new RuntimeAuthorizationException("runtime_hash_invalid");
     }
 
-    /// <summary>Returns the lowercase SHA-256 digest of arbitrary bytes.</summary>
     public static string Hash(ReadOnlySpan<byte> value) =>
         Convert.ToHexStringLower(SHA256.HashData(value));
 
@@ -143,7 +141,9 @@ public static class RuntimeContractValidation
     public static string RegistrationHash(RuntimeRegistration registration) =>
         Hash(JsonSerializer.SerializeToUtf8Bytes(registration));
 
-    /// <summary>Checks an absolute HTTPS endpoint without user info, query, or fragment.</summary>
+    /// <summary>
+    /// Returns true only for an absolute HTTPS URI with no user info, query, or fragment; false otherwise.
+    /// </summary>
     public static bool IsHttpsEndpoint(Uri? endpoint) =>
         endpoint is { IsAbsoluteUri: true } &&
         endpoint.Scheme == Uri.UriSchemeHttps &&
@@ -160,7 +160,10 @@ public static class RuntimeContractValidation
             throw new RuntimeAuthorizationException("runtime_identifier_invalid");
     }
 
-    /// <summary>Compares a secret's digest with the expected digest using a fixed-time comparison.</summary>
+    /// <summary>
+    /// Returns true when the SHA-256 digest of a valid secret equals the expected verifier, and false
+    /// when the digests differ. Invalid digest inputs throw. The digest comparison uses fixed time.
+    /// </summary>
     public static bool VerifierMatches(string secret, string expectedVerifier)
     {
         ValidateHash(secret);

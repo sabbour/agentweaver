@@ -20,7 +20,7 @@ public sealed record RuntimeServiceTlsOptions
     public string? PeerOwnerAddress { get; init; }
     public string[]? PeerCertificateSha256Pins { get; init; }
 
-    /// <summary>Checks service identities, principal IDs, certificate paths, ports, pins, and fixed HTTPS owner address.</summary>
+    /// <summary>Returns a validated copy with its own peer-certificate pin array.</summary>
     public RuntimeServiceTlsOptions Validate(string localServiceName, string peerServiceName)
     {
         if (LocalServiceName != localServiceName || PeerServiceName != peerServiceName ||
@@ -41,7 +41,7 @@ public sealed record RuntimeServiceTlsOptions
         return this with { PeerCertificateSha256Pins = pins.ToArray() };
     }
 
-    /// <summary>Checks for a 64-character hexadecimal certificate digest.</summary>
+    /// <summary>Returns true only for 64 ASCII hexadecimal characters; false otherwise.</summary>
     internal static bool IsPin(string? value) =>
         value is { Length: 64 } && value.All(char.IsAsciiHexDigit);
 
@@ -90,7 +90,10 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
     public string PeerServiceName => _options.PeerServiceName!;
     public Uri PeerOwnerAddress => new(_options.PeerOwnerAddress!, UriKind.Absolute);
 
-    /// <summary>Accepts a peer certificate only when chain validation and client EKU/pinning both pass.</summary>
+    /// <summary>
+    /// Returns true only when the peer certificate has no non-chain TLS errors and passes the mounted-CA,
+    /// client-purpose, and pin checks; returns false otherwise.
+    /// </summary>
     public bool AcceptClientCertificate(
         X509Certificate2? certificate, X509Chain? chain, SslPolicyErrors errors)
     {
@@ -100,7 +103,11 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
             RuntimeOwnerHttpTransport.ServiceBackendCaFile, _timeProvider.GetUtcNow());
     }
 
-    /// <summary>Validates a pinned client leaf against the mounted backend CA and its client-auth purpose.</summary>
+    /// <summary>
+    /// Returns true only when the certificate has no non-chain TLS errors, the CA file exists, one to four
+    /// pins are configured, the certificate chains to that CA, is valid for client authentication, and one
+    /// pin matches; false otherwise. Pin comparisons use fixed time.
+    /// </summary>
     public static bool ValidatePinnedClientCertificate(
         X509Certificate? certificate,
         X509Chain? peerChain,
@@ -144,7 +151,10 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
         return IsPinnedClientCertificateLeaf(leaf, sha256Pins, now);
     }
 
-    /// <summary>Checks a TLS-authenticated client leaf's validity, client purpose, and exact fingerprint pin.</summary>
+    /// <summary>
+    /// Returns true only when the certificate is within its validity window, is not a CA, has client-auth
+    /// usage, and matches one of one to four configured pins; false otherwise. Pin comparisons use fixed time.
+    /// </summary>
     public static bool IsPinnedClientCertificateLeaf(
         X509Certificate? certificate,
         IReadOnlyCollection<string> sha256Pins,
@@ -209,7 +219,10 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
         return handler;
     }
 
-    /// <summary>Checks backend-CA trust and hostname before enforcing server purpose and the peer pin.</summary>
+    /// <summary>
+    /// Returns true only when backend-CA, hostname, server-purpose, and peer-pin checks pass; returns false
+    /// when any check fails.
+    /// </summary>
     internal bool AcceptServerCertificate(
         X509Certificate? certificate,
         X509Chain? chain,
@@ -221,7 +234,10 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
             certificate, chain, errors, caFile, revocationMode, disableCertificateDownloads: false) &&
         AcceptPeerCertificate(certificate, ServerAuthentication);
 
-    /// <summary>Checks certificate validity, required EKU, and fixed-time SHA-256 pin equality.</summary>
+    /// <summary>
+    /// Returns true only when the certificate is valid for the requested purpose and its digest matches a
+    /// configured pin; false otherwise. Pin comparisons use fixed time.
+    /// </summary>
     private bool AcceptPeerCertificate(X509Certificate? certificate, string purpose)
     {
         if (certificate is null)
@@ -236,7 +252,10 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
                    pin, SHA256.HashData(leaf.RawData)));
     }
 
-    /// <summary>Checks the certificate time window, non-CA status, and required extended key usage.</summary>
+    /// <summary>
+    /// Returns true only when the certificate is within its validity window, is not a CA, and has the
+    /// requested extended key usage; returns false otherwise.
+    /// </summary>
     private static bool HasCertificatePurpose(
         X509Certificate2 certificate, string purpose, DateTimeOffset now) =>
         now >= certificate.NotBefore.ToUniversalTime() &&
@@ -246,6 +265,5 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
         certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>()
             .Any(extension => extension.EnhancedKeyUsages.Cast<Oid>().Any(usage => usage.Value == purpose));
 
-    /// <summary>Disposes the loaded local certificate.</summary>
     public void Dispose() => Certificate.Dispose();
 }

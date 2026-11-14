@@ -50,7 +50,7 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    /// <summary>Starts owner-side admission for a workflow turn and validates its result.</summary>
+    /// <summary>Starts owner-side admission for a native model turn and validates its result.</summary>
     internal async Task<RuntimeNativeTurnBeginResult> BeginNativeTurnAsync(
         AuthorizedRuntimeSession session, RuntimeA2ASendRequest message, CancellationToken cancellationToken)
     {
@@ -91,7 +91,7 @@ public sealed class RuntimeUsageSourceHttpClient(
         return response;
     }
 
-    /// <summary>Reads one persisted run-wide numeric-limit denial for the exact current registration.</summary>
+    /// <summary>Reads one persisted numeric-limit denial for an attempt under the current registration.</summary>
     internal async Task<RuntimeNumericLimitDenialReceipt?> ReadNumericLimitDenialAsync(
         AuthorizedRuntimeSession session, Guid attemptId, CancellationToken cancellationToken)
     {
@@ -159,7 +159,7 @@ public sealed class RuntimeUsageSourceHttpClient(
         return stored;
     }
 
-    /// <summary>Records evidence that an admitted native turn was denied without sending it.</summary>
+    /// <summary>Records evidence that native turn admission was denied before sending.</summary>
     internal async Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
         AuthorizedRuntimeSession session, RuntimeNativeCreditDenialReceipt denial,
         RuntimeNativeTurnNoSendReceipt evidence, CancellationToken cancellationToken)
@@ -227,7 +227,7 @@ public sealed class RuntimeUsageSourceHttpClient(
         return stored;
     }
 
-    /// <summary>Reads and validates host pre-queue fixed-credit evidence.</summary>
+    /// <summary>Reads the host pre-queue fixed-credit denial and any no-send evidence.</summary>
     internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
         AuthorizedRuntimeSession session, Guid requestId, string requestHash,
         CancellationToken cancellationToken)

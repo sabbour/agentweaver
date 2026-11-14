@@ -22,7 +22,6 @@ public sealed record RuntimeEgressVerificationRequest(
     long PolicyGeneration,
     string ContextRevision)
 {
-    /// <summary>Rejects incomplete owner fences and selection revisions before they cross the service boundary.</summary>
     public RuntimeEgressVerificationRequest Validate()
     {
         // The lifecycle fence and selection revision are inseparable request identity, not optional hints.
@@ -47,7 +46,6 @@ public sealed record RuntimeEgressVerificationReceipt(
     string ContextRevision,
     string IntentHash)
 {
-    /// <summary>Checks every returned binding against the request rather than accepting a partial owner match.</summary>
     public RuntimeEgressVerificationReceipt ValidateFor(RuntimeEgressVerificationRequest request)
     {
         request.Validate();
@@ -69,7 +67,6 @@ public sealed record RuntimeEgressVerificationResponse(
     string? FailureCode,
     string? FailureMessage)
 {
-    /// <summary>Validates the response shape and fails with the Environment's stable outcome code.</summary>
     public RuntimeEgressVerificationReceipt ValidateFor(RuntimeEgressVerificationRequest request)
     {
         request.Validate();
@@ -83,11 +80,9 @@ public sealed record RuntimeEgressVerificationResponse(
         throw new RuntimeAuthorizationException(FailureCode!);
     }
 
-    /// <summary>Creates a typed success response after the owner has completed all readback checks.</summary>
     public static RuntimeEgressVerificationResponse Success(RuntimeEgressVerificationReceipt receipt) =>
         new(1, receipt ?? throw new ArgumentNullException(nameof(receipt)), null, null);
 
-    /// <summary>Creates a typed non-ready response without exposing provider or credential details.</summary>
     public static RuntimeEgressVerificationResponse Failure(string code, string message) =>
         new(1, null, code, message);
 }

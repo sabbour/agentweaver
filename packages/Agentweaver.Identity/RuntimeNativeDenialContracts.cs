@@ -204,7 +204,6 @@ public static class RuntimeNativeDenialContract
     public static RuntimeNativeTurnNoSendReceipt SealNoSend(RuntimeNativeTurnNoSendReceipt receipt) =>
         receipt with { CanonicalPayloadHash = NoSendPayloadHash(receipt) };
 
-    /// <summary>Checks denial scope, source accounting, hard limit, dispatch revision, and canonical hashes.</summary>
     public static void ValidateDenial(
         RuntimeNativeCreditDenialReceipt receipt,
         RuntimeRegistration registration,
@@ -216,6 +215,7 @@ public static class RuntimeNativeDenialContract
         RuntimeContractValidation.Validate(registration);
         RuntimeUsageSourceReceiptContract.ValidateSource(registration, sourceReceipt.Source);
         var binding = registration.Binding;
+        // Preparation can be denied before a dispatch row exists; turn-begin must leave its prepared row unchanged.
         var validDispatch = receipt.Stage switch
         {
             RuntimeCreditLimitDenialStage.Preparation =>
@@ -271,7 +271,7 @@ public static class RuntimeNativeDenialContract
             throw new RuntimeAuthorizationException("runtime_native_credit_denial_invalid");
     }
 
-    /// <summary>Requires a completed native-turn denial to be backed by a complete empty event range.</summary>
+    /// <summary>Requires a turn-begin denial and a complete empty native event range.</summary>
     public static void ValidateNoSend(
         RuntimeNativeTurnNoSendReceipt evidence,
         RuntimeNativeCreditDenialReceipt denial,
@@ -301,7 +301,6 @@ public static class RuntimeNativeDenialContract
         RuntimeContractValidation.ValidateHash(evidence.AfterCursorHash);
     }
 
-    /// <summary>Checks a read result for the requested dispatch and denial stage.</summary>
     public static void ValidateReadResult(
         RuntimeNativeCreditDenialReadResult result,
         RuntimeRegistration registration,
@@ -318,6 +317,7 @@ public static class RuntimeNativeDenialContract
         }
         if (result.NoSend is { } evidence)
         {
+            // No-send evidence is meaningful only with the denial from native turn admission.
             if (result.Receipt is not { } nativeDenial ||
                 stage != RuntimeCreditLimitDenialStage.NativeTurnBegin ||
                 nativeDenial.Stage != RuntimeCreditLimitDenialStage.NativeTurnBegin)
@@ -326,7 +326,6 @@ public static class RuntimeNativeDenialContract
         }
     }
 
-    /// <summary>Validates the authenticated evidence request before it reaches the owner.</summary>
     public static void ValidateRequest(
         RuntimeNativeTurnNoSendEvidenceRequest request,
         RuntimeRegistration registration,
@@ -337,7 +336,6 @@ public static class RuntimeNativeDenialContract
         ValidateNoSend(request.Evidence, request.Denial, registration, sourceReceipt);
     }
 
-    /// <summary>Validates the identifiers and stage in a denial read request.</summary>
     public static void ValidateReadRequest(RuntimeNativeCreditDenialReadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);

@@ -85,7 +85,6 @@ public sealed record RuntimeAcceptedModelSelection(
         return ReadSelection(snapshot, selectedModel, selectedConnectionScope);
     }
 
-    /// <summary>Validates one selected model against its source, credential, connection, and pin.</summary>
     private static RuntimeAcceptedModelSelection ReadSelection(
         JsonElement snapshot, JsonElement model, ProjectAuthorityResourceType? acceptedConnectionScope)
     {
@@ -114,7 +113,6 @@ public sealed record RuntimeAcceptedModelSelection(
         };
     }
 
-    /// <summary>Reads exact model settings and requires any BYOK pin to match them.</summary>
     private static ModelSelectionFields ReadModelSelectionFields(JsonElement model)
     {
         if (model.ValueKind != JsonValueKind.Object)
@@ -197,7 +195,7 @@ public sealed record RuntimeAcceptedModelSelection(
         return new(referenceValue, reasoningEffort, sourceMode, credential, connectionId, pin);
     }
 
-    /// <summary>Reads the required, supported settings for one accepted model selection.</summary>
+    /// <summary>Fields extracted from one accepted model selection after shape validation.</summary>
     private sealed record ModelSelectionFields(
         string Reference,
         string ReasoningEffort,
@@ -206,7 +204,11 @@ public sealed record RuntimeAcceptedModelSelection(
         Guid? ConnectionId,
         RuntimeModelBindingPin? ModelBindingPin);
 
-    /// <summary>Reads the exact model-selection and authority-scope fields from one effective entry.</summary>
+    /// <summary>
+    /// For an object entry, returns true only when it has one object selection and one recognized string
+    /// scope; returns false for missing, duplicate, wrong-type, or extra fields, but throws if it encounters
+    /// an unsupported scope.
+    /// </summary>
     private static bool TryReadEffectiveSelection(
         JsonElement entry,
         out JsonElement selection,
@@ -240,7 +242,6 @@ public sealed record RuntimeAcceptedModelSelection(
         return seenSelection && seenScope;
     }
 
-    /// <summary>Reads a required model reference from one accepted selection.</summary>
     private static string ReadReference(JsonElement selection)
     {
         if (selection.ValueKind != JsonValueKind.Object ||

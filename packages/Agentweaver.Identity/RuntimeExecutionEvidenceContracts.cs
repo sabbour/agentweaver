@@ -50,7 +50,6 @@ public sealed record RuntimeNumericLimitDenialReceipt(
     [property: JsonRequired] DateTimeOffset RecordedAt,
     [property: JsonRequired] string CanonicalPayloadHash)
 {
-    /// <summary>Checks request scope, accepted limit, checkpoint binding, no-send equality, and payload hash.</summary>
     public RuntimeNumericLimitDenialReceipt Validate()
     {
         if (ContractVersion != 1 || ReceiptId == Guid.Empty || RuntimeInstanceId == Guid.Empty ||
@@ -299,10 +298,10 @@ public static class RuntimeNumericLimitNativeNoSendIdentity
 /// <summary>Validation for attempt-addressed Orchestrator numeric-limit denial reads.</summary>
 public static class RuntimeNumericLimitDenialReadContract
 {
-    /// <summary>Rejects malformed request identities before authorization or storage access.</summary>
     public static void ValidateRequest(RuntimeNumericLimitDenialReadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // Call before owner authorization or storage access so malformed identities fail at the boundary.
         if (request.RuntimeInstanceId == Guid.Empty || request.RegistrationRevision < 1 ||
             request.ExecutionFence < 1 || request.AttemptId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_request_invalid");
@@ -415,10 +414,10 @@ public sealed record RuntimeReplacementComparisonBlocker(
 /// <summary>Validation for blocked replacement comparison requests.</summary>
 public static class RuntimeReplacementComparisonContract
 {
-    /// <summary>Rejects malformed request identities before authorization or storage access.</summary>
     public static void ValidateRequest(RuntimeReplacementComparisonRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // Call before owner authorization or storage access so malformed identities fail at the boundary.
         if (request.RuntimeInstanceId == Guid.Empty || request.RegistrationRevision < 1 ||
             request.ExecutionFence < 1 || request.DispatchId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_replacement_comparison_invalid");

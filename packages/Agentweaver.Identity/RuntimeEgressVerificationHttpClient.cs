@@ -97,7 +97,9 @@ public sealed class RuntimeEgressVerificationHttpClient(HttpClient client, Uri e
         }
     }
 
-    /// <summary>Restricts remote failure codes to the documented fail-closed outcomes.</summary>
+    /// <summary>
+    /// Returns true for a documented fail-closed owner outcome code and false for any other code.
+    /// </summary>
     internal static bool IsKnownFailureCode(string code) => code is
         RuntimeEgressVerificationFailureCodes.Missing or
         RuntimeEgressVerificationFailureCodes.StaleFence or

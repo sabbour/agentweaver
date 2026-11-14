@@ -52,7 +52,6 @@ public static class RuntimeActionContract
         "exec.read", "exec.write", "exec.stop"
     }.ToFrozenSet(StringComparer.Ordinal);
 
-    /// <summary>Checks version, IDs, allowed action, dispatch fields, and the canonical input hash.</summary>
     public static void Validate(RuntimeActionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -82,7 +81,6 @@ public static class RuntimeActionContract
             throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
     }
 
-    /// <summary>Returns the policy step identity for a child-work or accepted coordinator-root action.</summary>
     public static string RequireActionStepId(RuntimeBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
@@ -94,7 +92,6 @@ public static class RuntimeActionContract
         throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
     }
 
-    /// <summary>Rejects invalid counters and stops new admissions when the configured capacity is reserved.</summary>
     public static void RequireInvocationCapacity(int? limit, long reserved, string exhaustedCode)
     {
         if (reserved < 0 || limit is < 1)
@@ -132,7 +129,6 @@ public static class RuntimeActionContract
         return content;
     }
 
-    /// <summary>Returns the SHA-256 digest of the validated serialized request.</summary>
     public static string Hash(RuntimeActionRequest request)
     {
         Validate(request);

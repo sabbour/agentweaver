@@ -20,6 +20,10 @@ public static class IssueSyncServiceTransport
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
+    /// <returns>
+    /// <see langword="true"/> when the channel is configured; <see langword="false"/> when its
+    /// configuration section is absent or empty. Invalid settings throw instead of returning either value.
+    /// </returns>
     public static bool AddChannel(WebApplicationBuilder builder, string key, string sectionName,
         string local, string peer, bool listener)
     {

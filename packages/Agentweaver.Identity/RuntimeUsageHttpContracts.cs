@@ -56,7 +56,6 @@ public sealed record RuntimeUsageCostPreflightReceipt(
 /// <summary>Validates that a cost preflight is consistent with its selected source and binding.</summary>
 public static class RuntimeUsageCostPreflightContract
 {
-    /// <summary>Checks receipt identifiers, source hashes, and the priced/unpriced shape.</summary>
     public static void Validate(RuntimeUsageCostPreflightReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
@@ -213,7 +212,6 @@ public static class RuntimeNativeTurnContract
     public static string RequestHash(RuntimeA2ASendRequest message) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(message));
 
-    /// <summary>Checks that admission matches a valid user text message, runtime registration, and SDK source.</summary>
     public static void ValidateAdmission(
         RuntimeNativeTurnAdmissionReceipt admission, RuntimeRegistration registration,
         SdkSessionFacts source, RuntimeA2ASendRequest message)
@@ -238,7 +236,6 @@ public static class RuntimeNativeTurnContract
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_invalid");
     }
 
-    /// <summary>Checks that observed SDK events and accounting data are valid for the admitted turn.</summary>
     public static void ValidateObservation(
         RuntimeNativeTurnAdmissionReceipt admission, RuntimeNativeTurnObservation observation)
     {
@@ -321,7 +318,6 @@ public static class RuntimeNativeTurnContract
         return RuntimeContractValidation.Hash(stream.ToArray());
     }
 
-    /// <summary>Checks the persisted observation digest and that its owner revision follows admission.</summary>
     public static void ValidateRecorded(RuntimeNativeTurnRecordedReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);

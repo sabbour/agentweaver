@@ -23,7 +23,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Stores user or assistant turn content as bounded UTF-8 material.</summary>
     internal async Task<SessionMaterialAcknowledgment> WriteTurnContentAsync(
         AuthorizedRuntimeSession session, Guid eventId, string role, string content, CancellationToken cancellationToken)
     {
@@ -34,12 +33,10 @@ public sealed class RuntimeSessionMaterialHttpClient(
             Utf8.GetBytes(content), role, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Stores a native SDK filesystem snapshot.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteCacheAsync(
         AuthorizedRuntimeSession session, Guid eventId, byte[] nativeFiles, CancellationToken cancellationToken) =>
         WriteAsync(session, eventId, SessionMaterialKind.SdkCache, nativeFiles, null, cancellationToken);
 
-    /// <summary>Stores the runtime configuration whose hash was consumed during bootstrap.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteRuntimeConfigurationAsync(
         AuthorizedRuntimeSession session, Guid eventId, byte[] configuration, CancellationToken cancellationToken) =>
         WriteAsync(session, eventId, SessionMaterialKind.RuntimeConfiguration, configuration, null, cancellationToken);
@@ -56,7 +53,9 @@ public sealed class RuntimeSessionMaterialHttpClient(
         Task.FromException<SessionMaterialReadResult>(
             new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable"));
 
-    /// <summary>Writes one material item and validates the owner's receipt against the submitted bytes.</summary>
+    /// <summary>
+    /// Rejects an owner receipt that does not bind the submitted bytes to this runtime selection.
+    /// </summary>
     private async Task<SessionMaterialAcknowledgment> WriteAsync(
         AuthorizedRuntimeSession session, Guid eventId, SessionMaterialKind kind, byte[] bytes,
         string? role, CancellationToken cancellationToken)
@@ -110,8 +109,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
     }
 
     /// <summary>
-    /// Reconstructs session history from ordered Events pages and validates each referenced
-    /// turn and cache item; returns the journal hash and latest usable cache.
+    /// With an expected acknowledgment, returns only that cache. Otherwise, rebuilds ordered history
+    /// and may return journal evidence and a cache newer than the latest turn.
     /// </summary>
     internal async Task<RuntimeSessionRecovery> ReadRecoveryAsync(
         RuntimeRegistration registration,
@@ -217,6 +216,7 @@ public sealed class RuntimeSessionMaterialHttpClient(
                     new RuntimeSessionJournalHashEntry(recorded, turnMaterial, turnContentSha256), JournalJson);
                 var lengthPrefix = new byte[sizeof(int)];
                 BinaryPrimitives.WriteInt32BigEndian(lengthPrefix, journalEntry.Length);
+                // Length prefixes keep adjacent serialized entries unambiguous in the journal digest.
                 journalHash.AppendData(lengthPrefix);
                 journalHash.AppendData(journalEntry);
                 journalEntryCount++;
@@ -228,6 +228,7 @@ public sealed class RuntimeSessionMaterialHttpClient(
             cursor = next;
         }
 
+        // A cache before the latest turn would omit that turn when the SDK resumes from the cache.
         SessionMaterialReadResult? cache = null;
         if (latestCache is not null && latestCache.Position > lastTurnPosition)
         {
@@ -458,7 +459,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         return result;
     }
 
-    /// <summary>Checks material identity, event, kind, size, and content digest.</summary>
     private static void ValidateRead(
         SessionMaterialReadResult result, SessionIdentity identity, Guid eventId, SessionMaterialKind kind)
     {
@@ -471,13 +471,11 @@ public sealed class RuntimeSessionMaterialHttpClient(
             throw new RuntimeAuthorizationException("runtime_material_read_invalid");
     }
 
-    /// <summary>Reads the original model pin from the resume receipt's durable configuration acknowledgment.</summary>
     private static SessionMaterialBinding ReadPreviousConfigurationBinding(
         RuntimeResumeBootstrapRequest request) =>
         RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(
             request.Resume.SourceRelease.HostReceipt).Reference.Material!;
 
-    /// <summary>Checks the receipt contract version, event position, and material reference.</summary>
     private static void Validate(SessionMaterialAcknowledgment receipt)
     {
         if (receipt.ContractVersion != 1 || receipt.EventId == Guid.Empty || receipt.Position <= 0)

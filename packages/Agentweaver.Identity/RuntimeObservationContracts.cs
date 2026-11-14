@@ -29,7 +29,6 @@ public sealed record RuntimeObservationSection<T>(
     [property: JsonRequired] T? Value)
     where T : class
 {
-    /// <summary>Checks the closed state enum and value/state consistency rule.</summary>
     public RuntimeObservationSection<T> Validate()
     {
         if (!Enum.IsDefined(State) ||
@@ -47,7 +46,6 @@ public sealed record RuntimeObservationRegistration(
     [property: JsonRequired] RuntimeObservationRegistrationState State,
     [property: JsonRequired] DateTimeOffset ExpiresAt)
 {
-    /// <summary>Checks identity, positive revision, lifecycle state, and expiry.</summary>
     public RuntimeObservationRegistration Validate()
     {
         if (RuntimeInstanceId == Guid.Empty || Revision < 1 ||
@@ -68,7 +66,6 @@ public sealed record RuntimeObservationCreditGuard(
     [property: JsonRequired] bool HardCapExhausted,
     [property: JsonRequired] DateTimeOffset UpdatedAt)
 {
-    /// <summary>Checks nonnegative totals, positive revision, timestamp, and ledger digest.</summary>
     public RuntimeObservationCreditGuard Validate()
     {
         if (CopilotAicFloor < 0 || AccountedThroughLedgerEventCount < 0 ||
@@ -146,7 +143,6 @@ public sealed record RuntimeObservationDispatch(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeObservationNativeRebind? NativeRebind { get; init; }
 
-    /// <summary>Checks dispatch scope, revisions, timestamps, and optional witness digest.</summary>
     public RuntimeObservationDispatch Validate()
     {
         if (DispatchId == Guid.Empty || ExecutionFence < 1 || OwnerRevision < 1 ||
@@ -187,9 +183,9 @@ public sealed record RuntimeObservationDispatchCollection(
 {
     public const int MaximumItems = 100;
 
-    /// <summary>Enforces the maximum count, uniqueness, truncation semantics, and item validation.</summary>
     public RuntimeObservationDispatchCollection Validate()
     {
+        // A truncated page must be full so callers can distinguish it from a complete short page.
         if (Items is null || Items.Count > MaximumItems ||
             Truncated && Items.Count != MaximumItems ||
             Items.Any(item => item is null) ||
@@ -209,7 +205,6 @@ public sealed record RuntimeObservationToolReservation(
     [property: JsonRequired] long ExecutionFence,
     [property: JsonRequired] DateTimeOffset OccurredAt)
 {
-    /// <summary>Checks the event identity, session, fence, and recorded time.</summary>
     public RuntimeObservationToolReservation Validate()
     {
         if (EventId == Guid.Empty || ExecutionFence < 1 || OccurredAt == default)
@@ -227,9 +222,9 @@ public sealed record RuntimeObservationToolReservationCollection(
 {
     public const int MaximumItems = 100;
 
-    /// <summary>Enforces the maximum count, uniqueness, truncation semantics, and item validation.</summary>
     public RuntimeObservationToolReservationCollection Validate()
     {
+        // A truncated page must be full so callers can distinguish it from a complete short page.
         if (Items is null || Items.Count > MaximumItems ||
             Truncated && Items.Count != MaximumItems ||
             Items.Any(item => item is null) ||
@@ -246,7 +241,6 @@ public sealed record RuntimeObservationToolReservationCollection(
 public sealed record RuntimeObservationPendingDispatch(
     [property: JsonRequired] Guid MessageId)
 {
-    /// <summary>Requires a nonempty message identity.</summary>
     public RuntimeObservationPendingDispatch Validate()
     {
         if (MessageId == Guid.Empty)
@@ -277,7 +271,6 @@ public sealed record RuntimeObservationExecution(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeExecutionResultDigest? ResultDigest { get; init; }
 
-    /// <summary>Checks execution scope, checkpoint versions, and status-specific evidence.</summary>
     public RuntimeObservationExecution Validate()
     {
         if (ContractVersion != 1 || ExecutionFence < 1 || CheckpointRevision < 1 ||
@@ -291,6 +284,7 @@ public sealed record RuntimeObservationExecution(
         RuntimeContractValidation.ValidateIdentifier(WorkPlanId);
         RuntimeContractValidation.ValidateIdentifier(AssociationId);
         RuntimeContractValidation.ValidateIdentifier(CheckpointId);
+        // Pending work is reported only while running; a result digest is evidence of success.
         if (PendingDispatch is { } pending &&
             (Status != RuntimeExecutionTaskStatus.Running || pending.MessageId == Guid.Empty))
             throw new RuntimeAuthorizationException("runtime_observation_execution_invalid");
@@ -310,7 +304,6 @@ public sealed record RuntimeObservationExecutionV2(
     [property: JsonRequired] RuntimeObservationExecution Observation,
     [property: JsonRequired] RuntimeExecutionCheckpointParent CheckpointParent)
 {
-    /// <summary>Validates the nested execution data and parent metadata.</summary>
     public RuntimeObservationExecutionV2 Validate()
     {
         if (ContractVersion != 2 || Observation is null || CheckpointParent is null)
@@ -320,7 +313,6 @@ public sealed record RuntimeObservationExecutionV2(
         return this;
     }
 
-    /// <summary>Projects a validated execution observation into the runtime observation contract.</summary>
     public static RuntimeObservationExecutionV2 From(RuntimeExecutionObservationV2 observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
@@ -361,7 +353,6 @@ public sealed record RuntimeObservationV1(
     [property: JsonRequired]
     RuntimeObservationSection<RuntimeObservationToolReservationCollection> ToolReservations)
 {
-    /// <summary>Validates every section state and every supplied section payload.</summary>
     public RuntimeObservationV1 Validate()
     {
         if (ContractVersion != 1 || Registration is null || Execution is null ||

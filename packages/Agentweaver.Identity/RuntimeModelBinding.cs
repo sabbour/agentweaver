@@ -17,7 +17,9 @@ public sealed record RuntimeByokProvider(
         ImmutableDictionary<string, string>.Empty;
 
     /// <summary>
-    /// True for an <c>openai</c> provider that uses the Azure OpenAI v1 API path on an Azure-owned host.
+    /// Returns true for an <c>openai</c> provider over HTTPS when the host ends with
+    /// <c>.openai.azure.com</c>, <c>.cognitiveservices.azure.com</c>, or <c>.services.ai.azure.com</c>,
+    /// and the path without trailing slashes is <c>/openai/v1</c>; false otherwise.
     /// </summary>
     [JsonIgnore]
     public bool IsAzureOpenAIV1Endpoint =>
@@ -43,7 +45,6 @@ public sealed record RuntimeModelBinding(
     /// <summary>Reasoning levels explicitly supported by a BYOK model binding.</summary>
     public ImmutableArray<string> SupportedReasoningEfforts { get; init; } = [];
 
-    /// <summary>Checks model identity, source mode, prompt capacity, and the provider allow-list.</summary>
     internal void Validate()
     {
         RuntimeContractValidation.ValidateIdentifier(ModelId);
