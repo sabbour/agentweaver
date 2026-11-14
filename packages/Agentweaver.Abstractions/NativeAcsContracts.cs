@@ -29,6 +29,7 @@ public static class NativeAcsArtifactHash
         hash.AppendData("agentweaver-native-acs-artifact-v1\0"u8);
         AppendField(hash, artifact.ManifestBytes.IsDefault ? [] : artifact.ManifestBytes.AsSpan());
 
+        // Sorting makes caller order irrelevant when artifact paths are unique.
         var files = artifact.Files.IsDefault
             ? Enumerable.Empty<NativeAcsArtifactFile>()
             : artifact.Files.OrderBy(file => file?.RelativePath, StringComparer.Ordinal);
@@ -45,6 +46,7 @@ public static class NativeAcsArtifactHash
 
     private static void AppendField(IncrementalHash hash, ReadOnlySpan<byte> bytes)
     {
+        // Length-prefix each field to preserve its boundary in the hashed stream.
         Span<byte> length = stackalloc byte[sizeof(int)];
         BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
         hash.AppendData(length);

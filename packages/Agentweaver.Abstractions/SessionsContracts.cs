@@ -527,6 +527,7 @@ public static class SessionEventPayloadValidation
     };
 
     /// <summary>Returns whether an event version can represent the supplied payload type.</summary>
+    /// <remarks>Version 1 predates policy-evaluation, run-capture, and runtime-configuration payloads.</remarks>
     public static bool SupportsEventVersion(int eventVersion, SessionEventPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);

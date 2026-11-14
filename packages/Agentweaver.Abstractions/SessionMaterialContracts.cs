@@ -293,6 +293,7 @@ public static class SessionMaterialValidation
         }
         var digest = System.Security.Cryptography.SHA256.HashData(stream.ToArray());
         var eventId = new Guid(digest.AsSpan(0, 16));
+        // If the first 128 digest bits form Guid.Empty, use the next 128 bits as the fallback.
         return eventId == Guid.Empty ? new Guid(digest.AsSpan(16, 16)) : eventId;
     }
 

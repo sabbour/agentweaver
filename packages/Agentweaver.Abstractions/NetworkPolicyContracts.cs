@@ -216,6 +216,7 @@ public static class NetworkEgressRuleSemantics
         var maximum = bytes.Length * 8;
         if (prefix < 1 || prefix > maximum)
             throw new ArgumentException("CIDR prefix is outside the address-family range.");
+        // Clear host bits so equivalent CIDRs have the same canonical network address.
         for (var i = 0; i < bytes.Length; i++)
         {
             var remaining = prefix - (i * 8);
@@ -255,6 +256,7 @@ public static class NetworkEgressRuleSemantics
         if (!candidate.EndsWith(suffixWithSeparator, StringComparison.Ordinal))
             return false;
         var label = candidate[..^suffixWithSeparator.Length];
+        // A wildcard covers one label only, not a nested subdomain.
         return label.Length > 0 && !label.Contains('.');
     }
 

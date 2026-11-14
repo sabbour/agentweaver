@@ -264,6 +264,12 @@ public static class AddressedMessageValidation
         draft.UserQuote is null && draft.CoordinatorInstructions is null;
 
     /// <summary>Recognizes the bounded, plain-text shape reserved for a user-to-run message.</summary>
+    /// <remarks>
+    /// This shape alone is not authorization. SendProjectRunMessageAsync calls RequireOwnerActor,
+    /// ReadAcceptedSelectionWithAuthorityAsync, and RequireUnchangedAuthorizedSelectionAsync.
+    /// ValidateMessageRouteAsync checks that a run-user self-message comes from the active root session.
+    /// SendMessageAsync skips RequirePersistedFirstMessageAsync for a root-session run user self-message.
+    /// </remarks>
     public static bool IsRunUserMessage(AddressedMessageDraft draft) =>
         draft.Kind == AddressedMessageKind.Text &&
         draft.Purpose == AddressedMessagePurpose.Steering &&
