@@ -33,9 +33,6 @@ public static partial class CoordinationEndpoints
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>
-    /// Creates the checkpoint binding for one accepted session and selected model.
-    /// </summary>
     internal static MafCheckpointBinding CreateExecutionCheckpointBinding(
         SessionIdentity identity,
         CoordinationActor actor,
@@ -2924,7 +2921,7 @@ public static partial class CoordinationEndpoints
     /// <param name="associationId">The work-item or fixed-work association ID.</param>
     /// <param name="fixedAssociation">The fixed-work binding, when this is a fixed action.</param>
     /// <param name="intent">The deterministic pending message intent, when dispatch is being recorded.</param>
-    /// <returns>The next checkpoint state, or <see langword="null"/> when an identical or completed association is already present.</returns>
+    /// <returns>The next state, or <see langword="null"/> when the association is running without a new intent, succeeded, or already has the same pending intent.</returns>
     /// <exception cref="CoordinationException">Thrown when plan, progress, fixed association, or retry intent conflicts with persisted state.</exception>
     internal static MafExecutionCheckpoint? PrepareRunningCheckpoint(
         MafExecutionCheckpointSnapshot? latest,
@@ -3024,13 +3021,12 @@ public static partial class CoordinationEndpoints
         };
     }
 
-    /// <summary>Compares checkpoint identity across independently materialized database reads.</summary>
+    /// <summary>Returns true when both values are null or their session and checkpoint IDs match; false otherwise. Revisions are not compared.</summary>
     internal static bool SameCheckpointInfo(CheckpointInfo? left, CheckpointInfo? right)
     {
-        // Null represents the uninitialized state; only two absent snapshots are the same checkpoint.
         if (left is null || right is null)
             return left is null && right is null;
-        // PostgreSQL rematerializes checkpoint objects per read, so compare their persisted identifiers.
+        // PostgreSQL creates a new object for each read, so object identity cannot compare checkpoints.
         return string.Equals(left.SessionId, right.SessionId, StringComparison.Ordinal) &&
             string.Equals(left.CheckpointId, right.CheckpointId, StringComparison.Ordinal);
     }
@@ -3596,13 +3592,14 @@ public static partial class CoordinationEndpoints
     }
 
     /// <summary>
-    /// Checks whether a dispatch response exactly replays a result already stored for the same deterministic intent.
+    /// Returns true only when no intent is pending, the saved result matches <paramref name="response"/>,
+    /// and any stored completion's output hash matches that result and any supplied completion matches it.
+    /// Returns false only for the same pending intent without a result.
     /// </summary>
     /// <param name="state">The current checkpoint state.</param>
     /// <param name="intent">The dispatch intent being completed.</param>
     /// <param name="expectedIntent">The intent rebuilt from current checkpoint contents.</param>
     /// <param name="response">The returned child response.</param>
-    /// <returns><see langword="true"/> when the identical response is already recorded and no pending intent remains.</returns>
     /// <exception cref="CoordinationException">Thrown when pending intent or result state conflicts with the replay.</exception>
     internal static bool IsCompletedDispatchReplay(
         MafExecutionCheckpoint state,
@@ -3648,13 +3645,10 @@ public static partial class CoordinationEndpoints
         return true;
     }
 
-    /// <summary>
-    /// Decides whether a pending dispatch should be sent again or is already complete.
-    /// </summary>
+    /// <summary>Returns true only for a matching pending intent with running progress; false only for a saved result with succeeded progress. Other states throw.</summary>
     /// <param name="state">The current checkpoint state.</param>
     /// <param name="intent">The intent the caller wants to send.</param>
     /// <param name="expectedIntent">The deterministic intent rebuilt from the current checkpoint.</param>
-    /// <returns><see langword="true"/> only for a matching pending intent with running progress; <see langword="false"/> for a completed result.</returns>
     /// <exception cref="CoordinationException">Thrown when intent, result, and progress state conflict.</exception>
     internal static bool ShouldSendDispatchIntent(
         MafExecutionCheckpoint state, MafExecutionDispatchIntent intent, MafExecutionDispatchIntent expectedIntent)
@@ -3681,9 +3675,7 @@ public static partial class CoordinationEndpoints
         throw new CoordinationException("maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Compares a persisted fixed-work association with a retry candidate across all pinned fields and outputs.
-    /// </summary>
+    /// <summary>Returns true only when every association value and declared-output order is identical; false otherwise.</summary>
     private static bool FixedAssociationsMatch(
         MafExecutionFixedWorkAssociation expected,
         MafExecutionFixedWorkAssociation actual) =>

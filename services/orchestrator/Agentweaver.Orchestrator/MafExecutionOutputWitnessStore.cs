@@ -41,10 +41,6 @@ internal sealed partial class MafExecutionOutputWitnessStore
     private readonly string _schema;
     private readonly string _witnesses;
 
-    /// <summary>
-    /// Creates a witness store for a validated non-reserved PostgreSQL schema.
-    /// </summary>
-    /// <exception cref="ArgumentException">Thrown when the schema is invalid or reserved.</exception>
     internal MafExecutionOutputWitnessStore(string schema)
     {
         if (schema is null || !SchemaPattern.IsMatch(schema) ||
@@ -321,10 +317,6 @@ internal sealed partial class MafExecutionOutputWitnessStore
             proofSha256);
     }
 
-    /// <summary>
-    /// Validates the root, fence, checkpoint, decision, accepted selection hash, and output-set binding.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when any required identity, revision, or hash is invalid or stale.</exception>
     internal static void ValidateBinding(
         SessionIdentity root,
         long executionFence,
@@ -417,9 +409,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 "maf_execution_output_witness_plan_incomplete", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Compares output sets by work-plan ID, digest, and ordered obligations.
-    /// </summary>
+    /// <summary>Returns true only when the work-plan ID, digest, and ordered obligations are equal; false otherwise.</summary>
     private static bool OutputSetsMatch(
         MafBacklogOutputSetSnapshot expected,
         MafBacklogOutputSetSnapshot actual) =>
@@ -454,9 +444,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
         return stream.ToArray();
     }
 
-    /// <summary>
-    /// Computes the witness digest over its root, checkpoint, decision, selection, output, and owner evidence.
-    /// </summary>
+    /// <summary>Computes the digest that binds this witness to one accepted execution.</summary>
     private static string ComputeProofSha256(
         SessionIdentity root,
         long executionFence,
@@ -470,9 +458,6 @@ internal sealed partial class MafExecutionOutputWitnessStore
             checkpoint.State.Revision, decisionStateVersion, acceptedSelectionHash,
             outputSetSha256, ownerEvidence);
 
-    /// <summary>
-    /// Computes the proof digest from its explicit immutable binding fields.
-    /// </summary>
     private static string ComputeProofSha256(
         SessionIdentity root,
         long executionFence,
@@ -565,15 +550,11 @@ internal sealed partial class MafExecutionOutputWitnessStore
         }
     }
 
-    /// <summary>
-    /// Returns whether a value is a 64-character hexadecimal SHA-256 digest.
-    /// </summary>
+    /// <summary>Returns true only for a 64-character hexadecimal SHA-256 digest; false otherwise.</summary>
     private static bool IsSha256(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
-    /// <summary>
-    /// Returns whether a value is a lowercase 64-character hexadecimal SHA-256 digest.
-    /// </summary>
+    /// <summary>Returns true only for a lowercase 64-character hexadecimal SHA-256 digest; false otherwise.</summary>
     private static bool IsLowerSha256(string? value) =>
         value is { Length: 64 } && value.All(character =>
             char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');

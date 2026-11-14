@@ -7,7 +7,6 @@ namespace Agentweaver.Orchestrator;
 /// <summary>Checks current Environment-owner egress evidence before creating or delivering a MAF child intent.</summary>
 internal static class MafExecutionEgressGuard
 {
-    /// <summary>Maps expected Environment and registration authorization failures to controlled endpoint statuses.</summary>
     internal static CoordinationException MapVerificationFailure(RuntimeAuthorizationException failure)
     {
         // Expired credentials and explicit owner authorization changes are caller failures, not transient egress state.
@@ -102,7 +101,6 @@ internal static class MafExecutionEgressGuard
             contextRevision);
     }
 
-    /// <summary>Rejects a retry if the live verified generation or intent differs from its immutable intent.</summary>
     internal static void RequireSameReceipt(
         RuntimeEgressVerificationReceipt? pinned,
         RuntimeEgressVerificationReceipt current)

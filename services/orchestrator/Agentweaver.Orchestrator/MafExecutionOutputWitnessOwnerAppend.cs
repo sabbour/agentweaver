@@ -121,9 +121,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
             root.CurrentDecision).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Checks that an identifier list has no blank entries or duplicate values.
-    /// </summary>
+    // Returns true only when every ID is non-blank and unique; an empty list is true.
     private static bool HasUniqueIdentifiers(ImmutableArray<string> identifiers) =>
         identifiers.All(identifier => !string.IsNullOrWhiteSpace(identifier)) &&
         identifiers.Distinct(StringComparer.Ordinal).Count() == identifiers.Length;
@@ -152,15 +150,9 @@ internal sealed partial class MafExecutionOutputWitnessStore
             throw StaleOwnerBinding();
     }
 
-    /// <summary>
-    /// Creates the conflict response for owner evidence read from a changed binding.
-    /// </summary>
     private static CoordinationException StaleOwnerBinding() =>
         new("maf_execution_output_witness_owner_stale", StatusCodes.Status409Conflict);
 
-    /// <summary>
-    /// Creates the conflict response for malformed owner evidence input.
-    /// </summary>
     private static CoordinationException InvalidOwnerEvidence() =>
         new("maf_execution_output_witness_evidence_invalid", StatusCodes.Status409Conflict);
 }

@@ -91,6 +91,7 @@ internal static class MafOpenPullRequestContract
         return intent;
     }
 
+    // Returns true only for a valid workspace ID, non-empty incarnation, valid base/head SHAs, and valid branch names; false otherwise.
     internal static bool IsValidWorkspace(SourceControlPullRequestWorkspaceLocator? workspace) =>
         workspace is not null &&
         IsWorkspaceId(workspace.WorkspaceId) &&
@@ -100,6 +101,9 @@ internal static class MafOpenPullRequestContract
         IsGitSha(workspace.HeadSha) &&
         IsGitBranch(workspace.BaseBranch);
 
+    // Returns true only when IDs, hashes, versions, and bounds are valid; templates equal the defaults;
+    // request title/body derive from this intent; branch/SHA fields match its workspace; Draft is false;
+    // and the execution binding matches this intent. False otherwise.
     internal static bool IsValidIntent(MafExecutionOpenPullRequestIntent intent)
     {
         if (intent is null || intent.Request is null ||
@@ -373,6 +377,9 @@ internal static class MafOpenPullRequestContract
         return MafExecutionTaskStatus.Succeeded;
     }
 
+    // Returns true only for a positive-numbered, open, unmerged Created/Reused PR with branch names equal to the intent,
+    // head/base SHAs equal to the intent without case, and a valid bounded HTTPS URL for its repository and number.
+    // False means at least one condition is not met.
     internal static bool IsValidPullRequestResult(
         MafExecutionOpenPullRequestIntent intent,
         SourceControlPullRequest pullRequest) =>
@@ -415,6 +422,7 @@ internal static class MafOpenPullRequestContract
             intent.Request
         }, JsonOptions)));
 
+    // Returns true only when every execution-binding value matches the intent; branch names and IDs compare exactly, SHAs ignore case, and owner creation is disabled.
     private static bool IsMatchingExecutionBinding(
         MafExecutionOpenPullRequestIntent intent,
         SourceControlPullRequestExecutionBinding? binding) =>
@@ -434,6 +442,8 @@ internal static class MafOpenPullRequestContract
         string.Equals(binding.WorkspaceHeadSha, intent.Workspace.HeadSha, StringComparison.OrdinalIgnoreCase) &&
         !binding.OwnerMayCreate;
 
+    // True requires HTTPS, a host, no user info, query, or fragment, and a path ending in owner/name/pull/<number>.
+    // Owner, name, and "pull" compare without case; number is exact. URLs over 2,048 characters return false.
     private static bool IsPullRequestUrl(
         Uri uri,
         SourceControlRepositoryIdentity repository,
@@ -456,15 +466,19 @@ internal static class MafOpenPullRequestContract
                 StringComparison.Ordinal);
     }
 
+    // Returns true only when both repository components are non-blank, at most 100 characters, and contain no control characters; false otherwise.
     private static bool IsRepository(SourceControlRepositoryIdentity? repository) =>
         repository is not null &&
         IsMetadataValue(repository.Owner, 100) &&
         IsMetadataValue(repository.Name, 100);
 
+    // Returns true only for a non-blank workspace ID of at most 128 ASCII letters, digits, hyphens, or underscores; false otherwise.
     private static bool IsWorkspaceId(string? value) =>
         IsMetadataValue(value, 128) &&
         value!.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
+    // True requires a non-blank branch of at most 255 characters, no leading `-`, no `..` anywhere, and non-empty slash segments.
+    // Each segment must not start with `.`, end in `.lock`, or contain characters other than ASCII letters, digits, `-`, `_`, and `.`.
     private static bool IsGitBranch(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 255 &&
@@ -478,12 +492,15 @@ internal static class MafOpenPullRequestContract
             segment.All(character =>
                 char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'));
 
+    // Returns true only for a 40-character hexadecimal Git SHA; false otherwise.
     private static bool IsGitSha(string? value) =>
         value is { Length: 40 } && value.All(Uri.IsHexDigit);
 
+    // Returns true only for a 64-character hexadecimal SHA-256 digest; false otherwise.
     private static bool IsSha256(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
+    // Returns true only for a non-blank value within the supplied length and without control characters; false otherwise.
     private static bool IsMetadataValue(string? value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= maximumLength &&

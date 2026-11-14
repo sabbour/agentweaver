@@ -135,7 +135,7 @@ internal static class MafExecutionRecoveryProjector
         WorkPlanSnapshot plan,
         MafExecutionCheckpoint state)
     {
-        // A reused plan ID does not make old progress valid for associations removed by a confirmed replan.
+        // Returns true only when saved progress and platform operations still belong to the confirmed plan; false for stale or invalid entries.
         var steps = plan.Workflow.Definition.Steps.ToDictionary(step => step.Id, StringComparer.Ordinal);
         var itemIds = plan.Plan.Items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
         if (state.Progress.WorkItems.Any(item =>
@@ -197,7 +197,7 @@ internal static class MafExecutionRecoveryProjector
         WorkflowPlatformGate gate,
         IReadOnlyDictionary<string, WorkflowStepDefinition> steps)
     {
-        // Platform receipts are only current evidence when their step still declares the same gate.
+        // Returns true when every ID names a platform step with the same gate as the argument (including an empty list); false otherwise.
         return stepIds.All(stepId =>
             steps.TryGetValue(stepId, out var step) &&
             step.Mode == WorkflowStepMode.Platform &&
@@ -399,6 +399,8 @@ internal static class MafExecutionRecoveryProjector
             .ToImmutableArray();
     }
 
+    // Returns true for a succeeded Scribe with receipts for all outputs, or any recorded receipt for another gate; false otherwise.
+    // This checks receipt presence, not receipt contents.
     private static bool HasPlatformReceipt(string stepId, MafExecutionCheckpoint state) =>
         state.ScribeIntents.TryGetValue(stepId, out var scribe) &&
             state.Progress.NonModelSteps.GetValueOrDefault(stepId) == MafExecutionTaskStatus.Succeeded &&
@@ -409,6 +411,8 @@ internal static class MafExecutionRecoveryProjector
         state.ReviewReceipts.ContainsKey(stepId) ||
         state.RubberduckReceipts.ContainsKey(stepId);
 
+    // This marks an old-fence intent for owner reconciliation; the projection does not verify the remote PR.
+    // Returns true only for a running intent without an Open Pull Request receipt whose fence predates recovery; false otherwise.
     private static bool IsRecoveredCommittedOpenPullRequest(
         string stepId,
         MafExecutionCheckpoint state) =>

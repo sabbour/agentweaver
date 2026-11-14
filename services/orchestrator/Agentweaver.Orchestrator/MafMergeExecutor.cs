@@ -113,6 +113,7 @@ internal sealed class MafMergeExecutor(
             : MafMergeExecutionOutcome.NoProgress;
     }
 
+    // Returns true only when a new completion checkpoint was appended; false for an exact terminal replay.
     private async Task<bool> CompleteAsync(
         MafExecutionMergeIntent intent,
         MafMergeTerminalReceipt receipt,

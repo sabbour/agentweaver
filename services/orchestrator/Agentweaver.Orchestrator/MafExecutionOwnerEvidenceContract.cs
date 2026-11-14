@@ -358,9 +358,7 @@ internal static class MafExecutionOwnerEvidenceContract
             throw InvalidEvidence();
     }
 
-    /// <summary>
-    /// Checks whether a required or already-run platform operation prevents declaring an empty output set complete.
-    /// </summary>
+    /// <summary>Returns true when a required or non-pending platform step is neither verified BuildTest nor verified Scribe; false otherwise.</summary>
     private static bool HasRequiredOrCompletedPlatformOperation(
         WorkPlanSnapshot plan,
         MafExecutionCheckpointSnapshot checkpoint) =>
@@ -371,9 +369,7 @@ internal static class MafExecutionOwnerEvidenceContract
             (step.Cardinality.Minimum > 0 ||
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
 
-    /// <summary>
-    /// Checks for a platform operation other than the selected merge or a successfully receipted BuildTest step.
-    /// </summary>
+    /// <summary>Returns true when a required or non-pending platform step is neither the selected merge nor verified BuildTest or Scribe; false otherwise.</summary>
     private static bool HasUnsupportedPlatformOperation(
         WorkPlanSnapshot plan,
         MafExecutionCheckpointSnapshot checkpoint,
@@ -387,7 +383,8 @@ internal static class MafExecutionOwnerEvidenceContract
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
 
     /// <summary>
-    /// Identifies a BuildTest step whose checkpoint contains a successful owner-validated terminal receipt.
+    /// Returns true only when an executable BuildTest step has an intent and a matching receipt with succeeded status.
+    /// Missing records or another status return false; invalid receipt data throws.
     /// </summary>
     private static bool IsVerifiedBuildTest(
         WorkflowStepDefinition step, MafExecutionCheckpointSnapshot checkpoint) =>
@@ -396,6 +393,7 @@ internal static class MafExecutionOwnerEvidenceContract
         checkpoint.State.BuildTestReceipts.TryGetValue(step.Id, out var receipt) &&
         receipt.ValidateFor(intent) == MafExecutionTaskStatus.Succeeded;
 
+    /// <summary>Returns true when a Scribe step has succeeded and the checkpoint has a receipt entry for every output; contents are not checked.</summary>
     private static bool IsVerifiedScribe(
         WorkflowStepDefinition step, MafExecutionCheckpointSnapshot checkpoint) =>
         step.PlatformGate == WorkflowPlatformGate.Scribe &&
@@ -403,9 +401,6 @@ internal static class MafExecutionOwnerEvidenceContract
         checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) == MafExecutionTaskStatus.Succeeded &&
         intent.Outputs.All(output => checkpoint.State.ScribeReceipts.ContainsKey(output.AssociationId));
 
-    /// <summary>
-    /// Creates the conflict response used when the owner evidence contract cannot be satisfied.
-    /// </summary>
     private static CoordinationException InvalidEvidence() =>
         new("maf_execution_output_witness_evidence_invalid", StatusCodes.Status409Conflict);
 }

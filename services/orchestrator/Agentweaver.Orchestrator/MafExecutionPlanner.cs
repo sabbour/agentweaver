@@ -68,9 +68,7 @@ internal static class MafExecutionPlanner
         return new Guid(SHA256.HashData(scope).AsSpan(0, 16));
     }
 
-    /// <summary>
-    /// Detects control characters that are not valid in a model prompt.
-    /// </summary>
+    /// <summary>Returns true if the prompt has a control character other than carriage return, line feed, or tab; false otherwise.</summary>
     internal static bool HasUnsupportedPromptControls(string prompt) =>
         prompt.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t'));
 
@@ -453,9 +451,7 @@ internal static class MafExecutionPlanner
                 "maf_execution_frontier_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Aggregates item or association statuses into the status of their workflow step.
-    /// </summary>
+    /// <summary>A fixed step aggregates its associations for this plan; an open step with no work items is succeeded.</summary>
     private static MafExecutionTaskStatus StepStatus(
         WorkflowStepDefinition step,
         string workPlanId,
@@ -481,9 +477,7 @@ internal static class MafExecutionPlanner
         return AggregateStatus(statuses);
     }
 
-    /// <summary>
-    /// Applies failure-first aggregation, then success, running, and pending precedence to a status group.
-    /// </summary>
+    /// <summary>Indeterminate takes priority over failed; otherwise all-succeeded wins, then running, then pending. An empty group is pending.</summary>
     private static MafExecutionTaskStatus AggregateStatus(MafExecutionTaskStatus[] statuses)
     {
         if (statuses.Length == 0)
@@ -567,9 +561,7 @@ internal static class MafExecutionPlanner
         return progress.SetItem(id, observed);
     }
 
-    /// <summary>
-    /// Identifies failed and indeterminate dependencies that prevent a dependent action from running.
-    /// </summary>
+    /// <summary>Returns true only for failed or indeterminate status; false for every other status.</summary>
     private static bool IsTerminalFailure(MafExecutionTaskStatus status) =>
         status is MafExecutionTaskStatus.Failed or MafExecutionTaskStatus.Indeterminate;
 }

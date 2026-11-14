@@ -17,6 +17,9 @@ internal sealed class MafOpenPullRequestExecutor(
     Action markWallTimeLimitReached,
     Action<MafExecutionCheckpointSnapshot> updateCheckpoint)
 {
+    /// <summary>
+    /// Returns false at the wall-time limit or when the initial checkpoint read contains a receipt. Otherwise, returns true after this call records the owner result or confirms a matching concurrent completion.
+    /// </summary>
     internal async Task<bool> ExecuteAsync(
         MafExecutionOpenPullRequestIntent intent,
         CancellationToken cancellationToken)

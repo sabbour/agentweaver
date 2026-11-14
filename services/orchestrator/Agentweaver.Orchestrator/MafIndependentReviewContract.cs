@@ -29,7 +29,7 @@ internal static class MafIndependentReviewContract
             if (workflow.Steps.Any(step => step.PlatformGate == WorkflowPlatformGate.IndependentReview &&
                                            !Ancestors(workflow, merge).Contains(step.Id)))
                 throw Conflict("maf_execution_review_order_invalid");
-        // A selected local review must also be an ancestor of merge; the gate cannot be skipped on a parallel path.
+        // Every declared RubberDuck review must precede merge; a parallel review cannot be skipped.
         foreach (var merge in workflow.Steps.Where(step => step.PlatformGate == WorkflowPlatformGate.Merge))
             if (workflow.Steps.Any(step => step.PlatformGate == WorkflowPlatformGate.RubberDuck &&
                                            !Ancestors(workflow, merge).Contains(step.Id)))
@@ -124,7 +124,8 @@ internal static class MafIndependentReviewContract
 
     internal static bool IsValidIntent(MafExecutionReviewIntent? intent)
     {
-        // A checkpoint must preserve both the owner scope and the SHA-256 of the exact human-facing evidence.
+        // True requires a valid review intent: required IDs and hashes are valid, revisions and fence are positive,
+        // the approval ID derives from the operation, and the bounded evidence summary matches its hash; false otherwise.
         return intent is not null &&
         intent.OperationId != Guid.Empty &&
         intent.Identity != default &&
@@ -165,7 +166,7 @@ internal static class MafIndependentReviewContract
     internal static MafReviewTerminalReceipt? ReadDecision(
         MafExecutionReviewIntent intent, CoordinatorDecisionCurrentState current, string actorId)
     {
-        // Exactly one decision advance is allowed: an unrelated gate or changed authority fails closed.
+        // Accept at most one gate-opening advance and one terminal-answer advance; reject unrelated state changes.
         if (current.State.Fence != intent.ExecutionFence ||
             current.SelectionHash != intent.AcceptedSelectionHash ||
             current.State.ConfirmedWorkPlan?.Plan.Id != intent.WorkPlanId ||
@@ -217,7 +218,8 @@ internal static class MafIndependentReviewContract
         CoordinatorDecisionCurrentState current,
         long recordedVersion)
     {
-        // Fixed work and completed BuildTest evidence may span only durable review transitions.
+        // True means the version is unchanged (even with another pending gate), advances to one exact pending review,
+        // or spans matching completed reviews; false otherwise.
         if (recordedVersion < 1 || current.StateVersion < recordedVersion)
             return false;
         // An unchanged owner version needs no review proof and may still have an unrelated pending gate.
@@ -285,7 +287,8 @@ internal static class MafIndependentReviewContract
         SandboxBuildTestWorkspaceSource source,
         GitWorkspaceCaptureDocument current)
     {
-        // The canonical manifest digest covers file names, modes, and content hashes, while the tree hash binds Git identity.
+        // Returns true only when the valid current capture matches the source's workspace, run, repository, resource, incarnation, branch, and baseline; false otherwise.
+        // BaseSha is compared in lowercase; the manifest digest covers exact manifest bytes, and the tree hash binds the Git tree.
         var manifest = current.Manifest;
         return source.IsValid() &&
             GitWorkspaceCapturePackage.Hash(current.ManifestBytes) == current.ManifestSha256 &&
@@ -316,9 +319,11 @@ internal static class MafIndependentReviewContract
         return seen;
     }
 
+    // Returns true only for a 64-character hexadecimal hash; false otherwise.
     private static bool IsHash(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
+    // Returns true only for a non-empty ID of at most 128 characters with no control characters; false otherwise.
     private static bool ValidId(string? value) =>
         value is { Length: > 0 and <= 128 } && !value.Any(char.IsControl);
 
