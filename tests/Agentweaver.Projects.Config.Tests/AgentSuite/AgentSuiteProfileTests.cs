@@ -133,6 +133,7 @@ public sealed class AgentSuiteProfileTests
     [InlineData("localhost:5000/agentsuite/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
     [InlineData("[2001:db8::1]:5000/agentsuite/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
     [InlineData("agentsuite/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
+    [InlineData("index.docker.io/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
     [InlineData("registry..example/agentsuite/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
     [InlineData("registry.example:70000/agentsuite/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
     [InlineData("registry.example/agentsuite/harness:v1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
@@ -140,6 +141,35 @@ public sealed class AgentSuiteProfileTests
     [InlineData("registry.example/agentsuite/harness@sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg", false)]
     public void ImageReferenceGrammarMatchesUpstream(string reference, bool valid) =>
         Assert.Equal(valid, AgentSuiteImageReference.Validate(reference) is null);
+
+    [Theory]
+    [InlineData(247, true)]
+    [InlineData(248, false)]
+    [InlineData(255, false)]
+    public void ExplicitDockerHubSingleNameUsesNormalizedPathLength(int nameLength, bool valid) =>
+        Assert.Equal(valid, AgentSuiteImageReference.Validate(
+            $"docker.io/{new string('a', nameLength)}@sha256:{new string('a', 64)}") is null);
+
+    [Theory]
+    [InlineData(247, true)]
+    [InlineData(248, false)]
+    public void ExplicitDockerHubLibraryPathIsNotPrefixedTwice(int nameLength, bool valid) =>
+        Assert.Equal(valid, AgentSuiteImageReference.Validate(
+            $"docker.io/library/{new string('a', nameLength)}@sha256:{new string('a', 64)}") is null);
+
+    [Theory]
+    [InlineData(255, true)]
+    [InlineData(256, false)]
+    public void OtherRegistryUsesTheFullPathLength(int nameLength, bool valid) =>
+        Assert.Equal(valid, AgentSuiteImageReference.Validate(
+            $"registry.example/{new string('a', nameLength)}@sha256:{new string('a', 64)}") is null);
+
+    [Fact]
+    public void DockerHubPortDoesNotUseTheLibraryPrefix()
+    {
+        var reference = $"docker.io:443/{new string('a', 255)}@sha256:{new string('a', 64)}";
+        Assert.Null(AgentSuiteImageReference.Validate(reference));
+    }
 
     private static IEnumerable<TarEntry> ValidLayoutEntries() =>
         AgentSuiteArchives.Entries(AgentSuiteArchives.ReadDirectory(Path.Combine(AgentSuiteArchives.FixturesRoot, "valid")));

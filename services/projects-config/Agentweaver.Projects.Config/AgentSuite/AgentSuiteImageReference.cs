@@ -110,8 +110,7 @@ internal static class AgentSuiteImageReference
 
     private static (string Domain, string Remote) SplitDockerDomain(string name)
     {
-        // Docker naming rules, adapted from upstream. Unlike upstream, an explicit "docker.io/<name>"
-        // does not get the "library/" prefix, so the remote path is 8 bytes shorter for the length check.
+        // Docker naming rules, adapted from upstream.
         // No slash ("ubuntu"): an official Docker Hub image, stored under "library/".
         var slash = name.IndexOf('/', StringComparison.Ordinal);
         if (slash < 0)
@@ -121,8 +120,7 @@ internal static class AgentSuiteImageReference
         // "localhost" is always a registry even without a dot or port.
         if (maybeDomain == "localhost")
             return (maybeDomain, maybeRemote);
-        // The legacy Docker Hub name is rewritten to "docker.io".
-        if (maybeDomain == "index.docker.io")
+        if (maybeDomain is "index.docker.io" or "docker.io")
             return ("docker.io", maybeRemote.Contains('/', StringComparison.Ordinal) ? maybeRemote : "library/" + maybeRemote);
         // The first segment counts as a registry only if it has a dot, a port colon, or capitals
         // (repository names can't have capitals). Otherwise it is a Docker Hub user, e.g. "user/app".
