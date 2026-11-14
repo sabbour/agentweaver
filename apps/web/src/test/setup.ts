@@ -1,6 +1,14 @@
 import { cleanup } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
+// Keep AuthContext iframe tests offline while giving their callback frame a loaded page.
+window.happyDOM.settings.fetch.interceptor = {
+  beforeAsyncRequest: async ({ request }) =>
+    new URL(request.url).hostname === 'broker.test'
+      ? new window.Response('', { status: 200 })
+      : undefined,
+};
+
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>();
   return {
@@ -19,6 +27,9 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
   Object.defineProperty(window, name, { configurable: true, value: storage });
   Object.defineProperty(globalThis, name, { configurable: true, value: storage });
 }
+
+// happy-dom 21 exposes Web Animations but does not render them. Let Fluent UI use its test no-op.
+Object.defineProperty(Element.prototype, 'animate', { configurable: true, value: undefined });
 
 // happy-dom has no layout engine, so `<body>` reports a 0x0 rectangle. Tabster
 // (used by Fluent UI dialogs) reads that as "the page is hidden" and treats
