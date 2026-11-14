@@ -125,6 +125,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             return new(replay.Value.Lease, Replayed: true);
         }
 
+        // Resolve old provider work and late resources first, or two Sandboxes could remain live.
         await EnsureNoUnresolvedSandboxWorkAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
 
@@ -301,6 +302,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         var result = await callback(lease, connection, transaction, cancellationToken).ConfigureAwait(false);
         var currentLease = await ReadCurrentAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        // The core callback receives this transaction, so reject its result if the lease version changed.
         if (!SameLeaseVersion(lease, currentLease))
             throw new EnvironmentLifecycleException(
                 "sandbox_lease_stale",
@@ -309,7 +311,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Reads one Sandbox resource generation for the supplied Environment owner.</summary>
     public async Task<SandboxLeaseSnapshot?> GetAsync(
         EnvironmentGenerationFence fence,
         long resourceGeneration,
@@ -347,7 +348,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         return saved?.Lease;
     }
 
-    /// <summary>Persists the exact provider request before an external Sandbox provisioning attempt.</summary>
+    /// <summary>Pins one provider request to a current Provisioning lease; retries must use the same request.</summary>
     public async Task<SandboxLeaseSnapshot> SaveProviderRequestAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -436,7 +437,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Reserves a provider attempt with a stable operation key and the current lease fence.</summary>
     public Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
         SandboxProviderAttemptRequest request,
         CancellationToken cancellationToken)
@@ -457,6 +457,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "environment_owner_mismatch",
                 "The provider attempt source and current authorization fences have different owners.");
+        // A late resource keeps its source fence; the active owner fence authorizes only its cleanup.
         if ((request.EffectKind != SandboxProviderEffectKind.LateResourceRelease &&
                 request.Fence != currentFence) ||
             (request.EffectKind == SandboxProviderEffectKind.LateResourceRelease &&
@@ -662,7 +663,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         return updated.Validate();
     }
 
-    /// <summary>Reads provider attempt history for the exact Environment lease generation.</summary>
+    /// <summary>Lists all recorded attempts for one Sandbox operation under the active Environment owner fence.</summary>
     public async Task<ImmutableArray<SandboxProviderAttemptSnapshot>> GetProviderAttemptsAsync(
         EnvironmentGenerationFence currentFence,
         Guid operationId,
@@ -921,6 +922,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             if (p1Binding is null)
                 return;
             var actual = resultResource ?? completedLease.ProvisionedResource;
+            // Keep the link uncertain when an effect may exist but its current binding and active lease are not both confirmed.
             var linkState = actual is not null &&
                 p1BindingCurrent &&
                 completedLease.State == SandboxLeaseState.Active
@@ -1021,6 +1023,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
         }
+        // A result from a fenced-out provision is kept for cleanup, never made current again.
         if (provisionedResource is not null &&
             lease.CurrentFencingGeneration != lease.ProviderFencingGeneration &&
             lease.State is not (SandboxLeaseState.Released or SandboxLeaseState.Failed))
@@ -1078,6 +1081,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lateRetiredLease;
         }
+        // If the owner fence moved during provider work, retain any returned resource for cleanup.
         if (!ownerFenceIsActive)
         {
             if (provisionedResource is not null)
@@ -1499,7 +1503,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Records full release after the Sandbox resource is confirmed deleted or absent.</summary>
+    /// <summary>Stores the provider acknowledgment for the exact resource and marks the retiring lease released.</summary>
     public async Task<SandboxLeaseSnapshot> CompleteReleaseAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -1742,7 +1746,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Claims the next due late-resource cleanup with a bounded lease for one worker.</summary>
     public Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
         EnvironmentGenerationFence fence,
         CancellationToken cancellationToken) =>
@@ -1935,6 +1938,10 @@ public sealed class EnvironmentSandboxLeaseStore(
         return claim;
     }
 
+    /// <summary>
+    /// Returns true if cleanup for the exact operation and generation lacks a release receipt; false if it has one or does not exist.
+    /// Throws for invalid identifiers or an inactive, stale, or missing owner.
+    /// </summary>
     public async Task<bool> HasOutstandingLateResourceCleanupAsync(
         EnvironmentGenerationFence fence,
         Guid operationId,
@@ -1978,7 +1985,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         return outstanding;
     }
 
-    /// <summary>Completes a cleanup claim or records its retry state after provider work.</summary>
+    /// <summary>Stores the exact release receipt and completes its durable provider attempt while the claim still matches.</summary>
     public async Task CompleteLateResourceCleanupAsync(
         EnvironmentGenerationFence currentFence,
         SandboxLateResourceCleanupClaim claim,
@@ -2202,6 +2209,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         insert.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, now);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
+        // A conflict is idempotent only when the saved row points to this exact provision attempt.
         await using var verify = new NpgsqlCommand($"""
             SELECT provision_attempt_id
             FROM {LateResourceCleanups}
@@ -2233,6 +2241,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                 "sandbox_provider_attempt_mismatch",
                 "The Sandbox provider attempt does not identify the exact saved operation and resource fence.");
 
+        // Only late release can use a terminal lease; partial release requires authorized abandonment.
         var expected = request.EffectKind switch
         {
             SandboxProviderEffectKind.Provision
@@ -2392,6 +2401,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         JsonElement? outcome = null;
         if (!reader.IsDBNull(9))
         {
+            // Clone the outcome before this document is disposed.
             using var document = JsonDocument.Parse(reader.GetString(9));
             outcome = document.RootElement.Clone();
         }
@@ -2467,6 +2477,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         string? failureCode,
         CancellationToken cancellationToken)
     {
+        // A later provision result can resolve legacy uncertainty; a release result cannot.
         if (attempt.State == SandboxProviderAttemptState.Completed)
             return;
         if (attempt.State == SandboxProviderAttemptState.FailedNoEffect ||
@@ -2497,6 +2508,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             "A prior Sandbox provider attempt has no durable resolution; another provider effect is blocked.",
             SandboxProviderAttemptReceipt.From(attempt));
 
+    /// <summary>When cleanup is pending, only its claimed oldest resource may be released; other effects wait.</summary>
     private async Task EnsureProviderEffectDoesNotOvertakeLateCleanupAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2595,7 +2607,6 @@ public sealed class EnvironmentSandboxLeaseStore(
                 "The late Sandbox provider attempt does not match the exact pending resource.");
     }
 
-    /// <summary>Database projection of a late-resource cleanup item while it is being claimed or read.</summary>
     private sealed record CleanupReadRow(
         long ResourceGeneration,
         string Fingerprint,
@@ -2638,6 +2649,9 @@ public sealed class EnvironmentSandboxLeaseStore(
                 "The Environment lifecycle fence is stale.");
     }
 
+    /// <summary>
+    /// Returns true for an active owner at this generation, false for another saved state or generation, and throws if missing.
+    /// </summary>
     private static async Task<bool> IsOwnerFenceActiveAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2690,6 +2704,9 @@ public sealed class EnvironmentSandboxLeaseStore(
             : null;
     }
 
+    /// <summary>
+    /// Returns true when both are null or their identity, lease revision, fences, state, current flag, expiry, and timestamps match; otherwise false.
+    /// </summary>
     private static bool SameLeaseVersion(
         SandboxLeaseSnapshot? left,
         SandboxLeaseSnapshot? right) =>
@@ -2848,6 +2865,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         var partialReleaseJson = reader.IsDBNull(offset) ? null : reader.GetString(offset);
         offset++;
         var createdAt = reader.GetFieldValue<DateTimeOffset>(offset);
+        // Clone the saved JSON roots because the returned lease outlives these documents.
         var intent = new SandboxLeaseProvisionIntent(
             providerId,
             adapterVersion,
@@ -2938,6 +2956,9 @@ public sealed class EnvironmentSandboxLeaseStore(
                 "The Sandbox resource does not match the immutable selected provider and options revision.");
     }
 
+    /// <summary>
+    /// Returns true only when resource, endpoint, placement, capabilities, startup phases, and provider binding match; otherwise false.
+    /// </summary>
     private static bool SameProvisionedResource(
         SandboxProvisionedResource left,
         SandboxProvisionedResource right) =>
@@ -2948,6 +2969,9 @@ public sealed class EnvironmentSandboxLeaseStore(
         left.StartupPhases.SequenceEqual(right.StartupPhases) &&
         SameProviderBinding(left.ProviderBinding, right.ProviderBinding);
 
+    /// <summary>
+    /// Returns true only when provider ID, adapter and schema versions, option revision and snapshot, and release descriptor match; otherwise false.
+    /// </summary>
     private static bool SameProviderBinding(
         SandboxProviderBindingSnapshot left,
         SandboxProviderBindingSnapshot right) =>
@@ -2962,6 +2986,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             JsonNode.Parse(left.ReleaseDescriptor.GetRawText()),
             JsonNode.Parse(right.ReleaseDescriptor.GetRawText()));
 
+    // Include the source fence and exact resource so cleanup retries cannot merge different generations.
     private static string LateResourceFingerprint(
         SandboxLeaseSnapshot lease,
         ProviderResourceRef resource) =>
@@ -2981,6 +3006,7 @@ public sealed class EnvironmentSandboxLeaseStore(
 
     private static string LateResourceIdempotencyKey(string fingerprint) => "late-" + fingerprint;
 
+    // Include every immutable selection and provider input so an idempotency replay cannot change its intent.
     private static string ProvisionFingerprint(
         EnvironmentGenerationFence fence,
         SandboxLeaseProvisionIntent intent) =>
@@ -2999,6 +3025,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             intent.SelectionSnapshot.GetRawText(),
             intent.ProviderRequest.GetRawText()));
 
+    // Retirement replay requires the same reason, authorization or terminal evidence, and resource/provider generations.
     private static string RetirementFingerprint(
         SandboxRetirementReason reason,
         SandboxRetirementAuthorization? authorization,
@@ -3015,6 +3042,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             authorization?.MembershipRevision ?? 0,
             terminalEvidence is null ? string.Empty : JsonSerializer.Serialize(terminalEvidence, JsonOptions)));
 
+    // Callers separate fields with NULs before hashing to preserve field boundaries.
     private static string Fingerprint(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 

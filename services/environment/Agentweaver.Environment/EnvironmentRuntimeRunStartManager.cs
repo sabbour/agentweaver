@@ -43,6 +43,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
                 owner.TenantId, owner.ProjectId, owner.RunId, RuntimeRunStartKeys.IdempotencyKey(owner)))
             throw new RuntimeAuthorizationException("runtime_start_environment_binding_invalid");
 
+        // The initial registration can become stale, so guarded stages re-read the owner and selection.
         async Task RequireCurrentAsync(CancellationToken token)
         {
             if (!actor.Bearer.IsUsable())
@@ -67,6 +68,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         if (storageOptions.MaximumCapacityGiB < FirstStartCapacityGiB)
             throw new RuntimeAuthorizationException("runtime_start_workspace_capacity_unavailable");
 
+        // The Sandbox request pins this applied policy generation, so verify it before provisioning.
         var networkRequest = new ApplyEnvironmentEgressRequest(
             fence, 1, 0, RuntimeRunStartKeys.IdempotencyKey(owner) + ":network");
         var egressResult = await (isChild
@@ -130,6 +132,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         var currentVolume = await lifecycleStore.GetWorkspaceVolumeAsync(
             fence, volumeId, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_start_workspace_unavailable");
+        // A first start accepts only untouched data; replacement follows the saved resource and data generations.
         if (currentVolume.Phase is not (EnvironmentWorkspaceVolumeState.Ready or
                 EnvironmentWorkspaceVolumeState.Bound or EnvironmentWorkspaceVolumeState.Attached) ||
             currentVolume.Resource is null ||
@@ -193,6 +196,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
                 observation is null || endpoint is null)
                 throw new RuntimeAuthorizationException("runtime_start_placement_stale");
         await endpointVerifier.VerifyLiveAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        // Live endpoint verification can outlast the first snapshot, so compare fresh placement evidence before returning.
         await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
         var currentPlacement = await sandboxes.GetCurrentRunBoundPlacementAsync(
                 caller, owner.ProjectId, owner.RunId, fence.Owner.EnvironmentId, cancellationToken,
@@ -264,6 +268,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
                     .ConfigureAwait(false)
                 : await ownerContexts.ReadAsync(
                     actor, owner.ProjectId, owner.RunId, owner.SessionId, token).ConfigureAwait(false);
+            // Recovery may advance these owner-state versions, but every other owner field must still match.
             var expected = request.CheckpointRecoveryOperationId is null
                 ? owner
                 : owner with
@@ -286,6 +291,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             await lifecycleStore.RequireActiveAsync(fence, token).ConfigureAwait(false);
         }
 
+        // The Sandbox request pins this applied policy generation, so verify it before provisioning.
         var networkRequest = new ApplyEnvironmentEgressRequest(
             fence, 1, 0, RuntimeRunStartKeys.IdempotencyKey(owner) + ":network");
         var egressResult = await (request.ContractVersion == 2
@@ -350,6 +356,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             endpoint is null)
             throw new RuntimeAuthorizationException("runtime_start_placement_stale");
         await endpointVerifier.VerifyLiveAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        // Recheck the workspace and placement after live endpoint verification before issuing a receipt.
         await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
         var verifiedVolume = await lifecycleStore.GetWorkspaceVolumeAsync(
             fence, previous.WorkspaceVolumeId, cancellationToken).ConfigureAwait(false);
@@ -469,6 +476,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         var result = await sandboxes.AbandonCoordinatorFirstStartAsync(
             caller, projection, placement, RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
         if (result is null)
+            // No retained lease means there is no Sandbox resource to release.
             return new RuntimeRunStartCleanupReceipt(
                 projection.ContractVersion, projection.IntentId, Guid.Empty, 0, 0, null,
                 "absent", "cleanup_complete").Validate();
@@ -556,6 +564,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
                 : await ownerContexts.ReadAsync(
                     actor, retirement.Owner.ProjectId, retirement.Owner.RunId,
                     retirement.Owner.SessionId, token).ConfigureAwait(false);
+            // Recovery may advance these owner-state versions, but every other owner field must still match.
             var expected = request.CheckpointRecoveryOperationId is null
                 ? retirement.Owner
                 : retirement.Owner with
@@ -588,6 +597,13 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             .ValidateFor(retirement);
     }
 
+    /// <summary>
+    /// Returns true when <c>VolumeId</c>, <c>ProjectId</c>, <c>Owner.Kind</c>, <c>Owner.Id</c>, <c>EnvironmentId</c>, and
+    /// <c>StorageClass</c> match <paramref name="expected"/>. Fixed requirements are <c>BindingMode</c> = <c>Environment</c>,
+    /// <c>AccessMode</c> = <c>ReadWriteMany</c>, <c>CapacityGiB</c> = <c>FirstStartCapacityGiB</c>, <c>Consistency</c> = <c>Strict</c>,
+    /// <c>ReclaimPolicy</c> = <c>Retain</c>, <c>OwnerDeletionPolicy</c> = <c>Retain</c>, and <c>AuthorizedEnvironmentIds</c> is empty.
+    /// It returns false if the spec is missing or any check fails; invalid JSON can throw.
+    /// </summary>
     private static bool HasFirstStartWorkspaceSpec(JsonElement value, WorkspaceVolumeSpec expected)
     {
         var saved = value.Deserialize<WorkspaceVolumeSpec>(JsonOptions);
@@ -607,6 +623,9 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             saved.AuthorizedEnvironmentIds.IsEmpty;
     }
 
+    /// <summary>
+    /// Returns true only for a current, active, unexpired v1 placement with matching owner, resource, fences, and network generation; it also requires a runtime endpoint and startup evidence. Returns false otherwise.
+    /// </summary>
     private static bool IsUsableFirstStartPlacement(
         EnvironmentSandboxPlacementProjectionV1 placement,
         RuntimeOwnerContext owner,
