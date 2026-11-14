@@ -115,7 +115,8 @@ function iconStyle(node, color) {
   }
   const name = resolveFluentIcon(node);
   const svg = readFileSync(new URL(`../../docs/diagrams/drawio/icons/${name}.svg`,import.meta.url),'utf8')
-    .replaceAll('currentColor',color);
+      .replace(/\r\n?/g,'\n')
+      .replaceAll('currentColor',color);
   return `shape=image;aspect=fixed;image=data:image/svg+xml,${encodeURIComponent(svg)};`;
 }
 

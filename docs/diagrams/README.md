@@ -38,4 +38,6 @@ No version-override flag is required.
 
 The checks validate committed JSON, draw.io geometry, PNG output, and hash stamps. They do not require draw.io Desktop. Python 3 is required for draw.io normalization.
 
+Generated draw.io files and icon SVGs use LF line endings. `.gitattributes` sets this rule for every checkout. If a Windows worktree was checked out before this rule, the diagram check can report stale files. Commit or save all local changes under `docs/diagrams/drawio` first, because the next two commands discard them. Then run `git rm --cached -r -q docs/diagrams/drawio` and `git checkout HEAD -- docs/diagrams/drawio`.
+
 The figures describe current source. Do not copy the 0.x product topology into v1 diagrams.

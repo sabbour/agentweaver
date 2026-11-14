@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -13,6 +14,15 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
+
+test('generated draw.io files and icon SVGs check out with LF line endings', () => {
+  const files = [
+    'docs/diagrams/drawio/generated/flagship/v1-azure-acceptance.drawio',
+    'docs/diagrams/drawio/icons/agent.svg',
+  ];
+  const output = execFileSync('git', ['check-attr', 'eol', '--', ...files], { cwd: repoRoot, encoding: 'utf8' });
+  assert.deepEqual(output.trim().split(/\r?\n/), files.map((file) => `${file}: eol: lf`));
+});
 
 test('design-system manifest matches generator tokens and reusable library', async () => {
   const manifest = JSON.parse(await readFile(path.join(repoRoot, 'docs', 'diagrams', 'drawio', 'design-system.json'), 'utf8'));
