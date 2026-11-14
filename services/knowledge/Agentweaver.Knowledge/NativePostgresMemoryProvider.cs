@@ -346,6 +346,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             var candidate = await ReadRecordAsync(
                 connection, transaction, normalized.ProjectId, normalized.RecordId, cancellationToken)
                 .ConfigureAwait(false);
+            // Read the kind before the row lock to keep graph-changing Decision writes in project-then-row order.
             if (candidate?.Kind == KnowledgeRecordKind.Decision)
                 await AcquireDecisionGraphLockAsync(
                     connection, transaction, normalized.ProjectId, cancellationToken).ConfigureAwait(false);
@@ -401,6 +402,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 }
             }
 
+            // Content or rationale changes reset Decision trust to Pending; metadata-only edits preserve it.
             var decisionContentChanged = current.Content != normalized.Content ||
                 current.Rationale != normalized.Rationale;
             var contentChanged = current.Type != normalized.Type ||
@@ -1061,6 +1063,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             if (delivery is null)
                 return null;
 
+            // Claim by receipt ID first; release a claim when the receipt scope does not match this caller.
             var receipt = ReadReceiptPayload(delivery.Event, receiptId);
             if (receipt is null ||
                 !string.Equals(receipt.ProjectId, projectId, StringComparison.Ordinal) ||
@@ -1180,6 +1183,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             var records = ImmutableArray.CreateBuilder<KnowledgeRecord>();
             await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            // A Memory item is visible to its agent while pending; other agents need its cross-team tag and approval.
             await using var command = new NpgsqlCommand($"""
                 SELECT {RecordColumns}
                 FROM {_schema}.knowledge_records
@@ -1817,6 +1821,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                     StatusCodes.Status400BadRequest);
     }
 
+    // Sorting fixes a stable order for tag values before they are stored and fingerprinted.
     private static ImmutableArray<string> NormalizeTags(ImmutableArray<string> tags) =>
         tags.Select(tag => tag.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)

@@ -44,6 +44,7 @@ public sealed class GatewayToolCatalog(HttpClient client)
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(McpServiceOptions.GatewayRequestTimeout);
+        // Serialize the first fetch; a failed fetch leaves the cache empty for the next request.
         await _loadLock.WaitAsync(deadline.Token).ConfigureAwait(false);
         try
         {
@@ -270,6 +271,7 @@ public sealed class GatewayToolCatalog(HttpClient client)
                     var resolved = ResolveSchema(definition, schemas, referenceStack, depth + 1);
                     if (resolved is not JsonObject resolvedObject)
                         throw new InvalidDataException("A Gateway schema reference did not resolve to an object.");
+                    // OpenAPI 3.1 permits schema keywords beside $ref; apply them to the resolved schema.
                     foreach (var sibling in element.EnumerateObject().Where(property => property.Name != "$ref"))
                         resolvedObject[sibling.Name] = ResolveSchema(
                             sibling.Value,
