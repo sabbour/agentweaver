@@ -1303,6 +1303,7 @@ public sealed partial class ProjectsConfigService
             return selected ?? throw new InvalidOperationException(
                 "The explicit project model selection is missing.");
 
+        // Platform task, role, and agent defaults apply first; project overrides then apply in the same order.
         selected = ApplyModelOverride(
             selected,
             platform.ModelTaskDefaults.FirstOrDefault(item => item.TaskKind == taskKind)?.Selection);
@@ -1609,6 +1610,7 @@ public sealed partial class ProjectsConfigService
             selection.ProjectEgressNarrowing is not { IsDefault: true })
             return selection;
 
+        // Legacy run snapshots stored one effective allowlist; use it for the fields added by the layered egress contract.
         if (!selection.EgressBaseline.IsDefault ||
             !selection.RequiredEgress.IsDefault ||
             selection.ProjectEgressNarrowing is not null)
@@ -1651,6 +1653,7 @@ public sealed partial class ProjectsConfigService
                 item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
                 item.MeterSource)).ToArray();
 
+        // Keep the earlier host/port/protocol shape so retries match fingerprints already stored for legacy rules.
         if (requiredEgress.All(rule =>
             rule.Purpose == NetworkEgressPurpose.PublicHttps &&
             rule.DestinationKind == NetworkEgressDestinationKind.Fqdn))
@@ -2174,6 +2177,7 @@ public sealed partial class ProjectsConfigService
                 if (!properties.TryAdd(property.Name, property.Value))
                     throw new JsonException("An egress rule contains a duplicate property.");
 
+            // Older stored rules have only host, port, and protocol; read that exact form as public HTTPS.
             if (properties.ContainsKey("host"))
             {
                 RequireExactFields(properties, LegacyFields);
@@ -2199,6 +2203,7 @@ public sealed partial class ProjectsConfigService
             NetworkEgressRule value,
             JsonSerializerOptions options)
         {
+            // Read legacy rules only; always write the current canonical shape.
             writer.WriteStartObject();
             writer.WritePropertyName("purpose");
             JsonSerializer.Serialize(writer, value.Purpose, options);

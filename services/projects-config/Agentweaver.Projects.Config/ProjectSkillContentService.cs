@@ -87,6 +87,7 @@ public sealed class SkillContentService(
 
         VersionedProjectConfiguration current;
         (ProjectSkillContentRevisionRecord Revision, ProjectSkillContentRevocationRecord? Revocation)[] rows;
+        // Read configuration and revisions from one snapshot, then recheck authority before returning the page.
         await using (var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
             .ConfigureAwait(false))
@@ -473,6 +474,7 @@ public sealed class SkillContentService(
                 throw new SkillContentObjectStoreException(
                     SkillContentObjectStoreException.IntegrityErrorCode,
                     "The immutable skill revision metadata does not match its stored content.");
+            // The object-store read is separate from the database, so recheck current authority before returning its bytes.
             await EnsureCurrentRunAuthorityAsync(caller, projectId, runId, cancellationToken)
                 .ConfigureAwait(false);
             if (await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
@@ -693,6 +695,7 @@ public sealed class SkillContentService(
             ?? throw new InvalidOperationException("The stored skill import receipt could not be read.");
     }
 
+    // Bind retries to the imported content pin and source, not only to the idempotency key.
     private static string ImportRequestDigest(SkillContentImportRequest request) =>
         Hash(JsonSerializer.SerializeToUtf8Bytes(new
         {
@@ -702,6 +705,7 @@ public sealed class SkillContentService(
             request.Source,
         }, JsonOptions));
 
+    // Scope keys to one project and actor so a receipt cannot be replayed across either boundary.
     private static string IdempotencyScopeDigest(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -853,6 +857,7 @@ public sealed class SkillContentService(
 
     private static JsonSerializerOptions CreateJsonOptions()
     {
+        // Strict parsing makes mismatched stored contracts fail instead of silently dropping unknown fields.
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,

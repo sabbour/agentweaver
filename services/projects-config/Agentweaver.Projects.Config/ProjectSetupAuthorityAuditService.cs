@@ -67,6 +67,7 @@ public sealed class ProjectSetupAuthorityAuditService(ProjectsConfigDbContext db
         var rows = await invocationAudit
             .OrderBy(record => record.CreatedAt)
             .ThenBy(record => record.EventId)
+            // One extra row distinguishes a complete result from a truncated audit.
             .Take(MaximumRecords + 1)
             .Select(record => new ProjectSetupAuthorityAuditEvent(
                 record.EventId,
