@@ -127,6 +127,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .WithMany()
                 .HasForeignKey(assignment => assignment.MembershipId)
                 .OnDelete(DeleteBehavior.Restrict);
+            // Keep revoked grants as history while allowing one active assignment for the same member, resource, and role.
             entity.HasIndex(assignment => new
                 {
                     assignment.MembershipId,

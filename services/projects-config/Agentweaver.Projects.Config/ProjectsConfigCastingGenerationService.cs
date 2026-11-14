@@ -388,6 +388,7 @@ public sealed partial class ProjectsConfigService
 
     private static bool IsCastingGenerationIdempotencyRace(Exception exception)
     {
+        // Only these constraints represent an idempotency-key or run-binding race; other unique violations must propagate.
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {
             if (current is PostgresException
