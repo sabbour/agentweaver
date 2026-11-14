@@ -34,6 +34,7 @@ public sealed class SourceControlAuthModeJsonConverter : JsonConverter<SourceCon
         ref Utf8JsonReader reader,
         Type typeToConvert,
         JsonSerializerOptions options) =>
+        // Accept an older spelling when reading; Write emits only the canonical spelling.
         reader.TokenType == JsonTokenType.String
             ? reader.GetString() switch
             {

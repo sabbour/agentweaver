@@ -61,6 +61,7 @@ public static class SandboxResourceIdentity
             operationId.ToString("N"),
             providerId,
             optionsRevision);
+        // Text identity fields reject control characters, so NUL separators keep their boundaries distinct.
         var digest = Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
             .ToLowerInvariant();
@@ -658,6 +659,7 @@ public sealed record SandboxStartupTimeBudgets(
             var previousAt = leaseCreatedAt;
             foreach (var phase in Enum.GetValues<SandboxStartupPhase>())
             {
+                // Each phase budget starts at the preceding observation; the total budget starts at lease creation.
                 var deadline = previousAt.AddSeconds(For(phase));
                 if (!observedPhases.TryGetValue(phase, out var observed))
                 {
@@ -1179,6 +1181,7 @@ public sealed record SandboxProviderAttemptRequest(
         string? lateResourceFingerprint = null)
     {
         var owner = lease.Fence.Owner;
+        // Include owner and generation pins so provider attempts from different leases cannot share a fingerprint.
         var canonical = string.Join('\0',
             "sandbox-provider-attempt-v1",
             effectKind,
