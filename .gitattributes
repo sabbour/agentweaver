@@ -1,4 +1,7 @@
 docs/architecture/design/orchestration.md text eol=crlf
+# Generated draw.io XML and embedded icon SVGs are byte-compared by docs:check-diagrams.
+docs/diagrams/drawio/generated/**/*.drawio text eol=lf
+docs/diagrams/drawio/icons/*.svg text eol=lf
 # Squad: union merge for append-only team state files
 .squad/decisions.md merge=union
 .squad/agents/*/history.md merge=union
