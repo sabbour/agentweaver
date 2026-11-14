@@ -14,14 +14,30 @@ connecting one does not connect the other.
 
 ## Connect GitHub Repo App
 
+When you create a new project from a GitHub repository, the dialog uses the
+connected account it displays. You do not need to copy the connection ID. The
+dialog enables creation only after the Broker reports a connected account with
+a usable ID, and it checks that the same ID is still current before it creates
+the project. If the ID changes, review the updated account and select
+**Create project** again. **Blank project** does not need a GitHub connection.
+
+The saved `sourceControl.identityConnectionId` is a stable reference to the
+Identity connection. It does not prove access to a repository, clone it, or pin
+it to a run. Project creation does not create a repository-selection code.
+
+For an existing project, use these steps to connect the account and set its
+binding manually:
+
 1. Open `/projects/:projectId/settings?section=connections`.
 2. In **GitHub Repo App**, select **Connect GitHub Repo App** or
    **Reauthorize GitHub Repo App**.
 3. Complete GitHub authorization in the tracked popup.
 4. Wait for the app to reload connection status from the Identity Broker.
 5. In **Repository**, set **Sign-in method** to **GitHub App**. In
-   **Advanced**, set `sourceControl.identityConnectionId` to the matching Identity
-   connection ID. Select **Save changes**.
+   **Advanced**, set `sourceControl.identityConnectionId` to the matching
+   Identity connection ID. Remove API and checkout secret references. Keep the
+   webhook secret reference and other configuration, then select **Save
+   changes** at the current revision.
 
 **Expected result:** The Broker reports the connection state. A popup
 callback alone does not confirm a connected account. Select

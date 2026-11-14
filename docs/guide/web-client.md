@@ -134,11 +134,21 @@ scopes returned by the Projects owner. These labels are informational and do
 not authorize actions. Select
 **Create project** to open the creation dialog. Enter a **Project name** and
 choose **Start from**: **Blank project** or **GitHub repository**. For a
-GitHub repository, enter `owner/name` or a `github.com` address. The client
-creates the project and then saves the repository in its configuration with
-**GitHub App** sign-in. If saving the repository fails, the project is kept,
-and you can add the repository later in **Settings > Repository**. The project
-creator becomes its Owner.
+GitHub repository, enter `owner/name` or a `github.com` address. The dialog
+reuses the GitHub Repo App panel and shows the current identity's login and
+connection ID. The client enables creation only after the Broker confirms a
+connected account with a usable ID. Before creating the project, it checks that
+the displayed connection ID is still current. If the ID changed, review the
+updated account and submit again. **Blank project** does not need a Broker
+status request.
+
+The client creates the project, reads its current configuration and revision,
+then saves `sourceControl.authMode: "githubApp"` and the exact displayed
+`sourceControl.identityConnectionId`. It preserves the webhook secret reference
+and unrelated configuration fields, but does not copy API or checkout secret
+references. If the configuration read or save fails, the project remains and
+the app keeps its existing partial-success notice. Complete setup on that
+project; do not create another one. The project creator becomes its Owner.
 
 Within a project, use these destinations:
 
@@ -560,13 +570,17 @@ contain at most 25 records and 500 revisions, and its size is limited to
 ## Connect GitHub and Copilot accounts
 
 Use project **Settings > Connections**. GitHub and Copilot keep their existing
-authorization flows and revision checks.
+authorization flows and revision checks. New GitHub project creation reuses
+the Repo App panel in the dialog and binds the account that the Broker confirms.
 
 The Repo App account control uses Identity Broker status and an opaque
-`connectionId`. Project configuration selects the connection with
-`sourceControl.authMode: "githubApp"` and
-`sourceControl.identityConnectionId`. Configurations without `authMode` retain
-legacy secret mode. Provider tokens and permission grants remain owner-held.
+`connectionId`. New project creation checks that the displayed account is
+still connected with the same nonblank ID before its first write. A saved
+project binding stores that ID in `sourceControl.identityConnectionId` with
+`sourceControl.authMode: "githubApp"`. It is a stable reference, not proof of
+current repository access, a clone, or a run pin. Configurations without
+`authMode` retain legacy secret mode. Provider tokens and permission grants
+remain owner-held.
 Repository listing exposes installation and repository IDs to the authenticated
 browser only as selection metadata. Project configuration stores the connection
 ID and repository name; a short-lived Broker selection code, not the numeric
