@@ -87,6 +87,11 @@ internal static partial class GatewayOpenApi
             ["getPlatformRuntimeDefaults"] = C(null, "VersionedPlatformRuntimeDefaults", "200"),
             ["updatePlatformRuntimeDefaults"] = C("UpdatePlatformRuntimeDefaultsRequest", "VersionedPlatformRuntimeDefaults", "200"),
             ["getPlatformComponents"] = C(null, "PlatformComponentReport", "200"),
+            ["readPlatformNativeAcsPolicy"] = C(null, "NativeAcsPolicyReadResult", "200"),
+            ["validatePlatformNativeAcsPolicy"] = C(
+                "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
+            ["writePlatformNativeAcsPolicy"] = C(
+                "NativeAcsPolicyWriteRequest", "NativeAcsPolicyWriteReceipt", "200"),
             ["pinSourceControlRepository"] = C("SourceControlRepositoryPinRequest", "SourceControlRepositoryPinView", "200", "202"),
             ["createSourceControlIssue"] = C("SourceControlIssueRequest", "SourceControlIssue", "200"),
             ["createSourceControlPullRequest"] = C("SourceControlPullRequestRequest", "SourceControlPullRequest", "200"),
@@ -386,7 +391,8 @@ internal static partial class GatewayOpenApi
                          "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
-                        "readProjectTeamSync" or "commitProjectTeamSync") && status == "200"
+                        "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
+                        "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
@@ -407,6 +413,9 @@ internal static partial class GatewayOpenApi
                                                 "Privileged setup receipts are not cacheable.",
                                             "readProjectTeamSync" or "commitProjectTeamSync" =>
                                                 "Private repository team-sync responses are not cacheable.",
+                                            "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
+                                            "writePlatformNativeAcsPolicy" =>
+                                                "Platform Policy responses are not cacheable.",
                                             _ => "Runtime evidence responses are not cacheable.",
                                         },
                                     schema = new { type = "string", example = "no-store" },
@@ -638,6 +647,28 @@ else if (route.OperationId is
                     : "The assignment revision changed, or it is the last Owner of an active project.");
             responses["503"] = ProblemResponse(
                 "Project role assignment is not enabled because the runtime database grants are not applied.");
+        }
+        else if (route.OperationId is "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
+            "writePlatformNativeAcsPolicy")
+        {
+            responses["400"] = ProblemResponse("The request includes query parameters or an invalid policy request.");
+            responses["403"] = ProblemResponse("The caller lacks current Platform administrator authority.");
+            if (route.OperationId == "readPlatformNativeAcsPolicy")
+                responses["404"] = ProblemResponse("No Platform Policy revision exists.");
+            if (route.HasJsonBody)
+            {
+                responses["413"] = ProblemResponse(
+                    $"The request body exceeds the {route.MaximumRequestBodyBytes}-byte route limit.");
+                responses["422"] = ProblemResponse("The native ACS policy artifact is invalid.");
+                responses["429"] = ProblemResponse("The caller reached the policy validation limit.");
+                responses["503"] = ProblemResponse(
+                    route.OperationId == "writePlatformNativeAcsPolicy"
+                        ? "Policy head changes are disabled, validation is busy, or a validation dependency is unavailable."
+                        : "Validation is busy or a validation dependency is unavailable.");
+            }
+            if (route.OperationId == "writePlatformNativeAcsPolicy")
+                responses["409"] = ProblemResponse(
+                    "The expected revision is stale, a concurrent write conflicted, or the idempotency key conflicts.");
         }
 
         if (route.Owner == GatewayOwner.Environment)
@@ -1877,6 +1908,32 @@ else if (route.OperationId is
         ["UpdatePlatformRuntimeDefaultsRequest"] = Obj(["expectedRevision", "defaults"],
             ("expectedRevision", Int()), ("defaults", Ref("PlatformRuntimeDefaults"))),
         // Platform component report: identities, versions, and readiness only; no options or endpoints.
+        ["NativeAcsArtifactFile"] = StrictObj(["relativePath", "bytes"],
+            ("relativePath", Str()), ("bytes", Arr(ByteValue()))),
+        ["NativeAcsArtifact"] = StrictObj(["manifestBytes", "files", "contentSha256"],
+            ("manifestBytes", Arr(ByteValue())), ("files", Arr(Ref("NativeAcsArtifactFile"))),
+            ("contentSha256", Str())),
+        ["NativeAcsPolicyValidationRequest"] = StrictObj(["artifact"], ("artifact", Ref("NativeAcsArtifact"))),
+        ["NativeAcsPolicyWriteRequest"] = StrictObj(
+            ["expectedRevision", "artifact", "idempotencyKey", "reason", "correlationId"],
+            ("expectedRevision", NullableInt()), ("artifact", Ref("NativeAcsArtifact")),
+            ("idempotencyKey", Str()), ("reason", Str()), ("correlationId", Str())),
+        ["NativeAcsDiagnostic"] = Obj(["code", "message"],
+            ("code", Str()), ("message", Str()), ("relativePath", NullableStr()),
+            ("line", NullableInt()), ("column", NullableInt())),
+        ["NativeAcsPolicyValidationResponse"] = Obj(["isValid", "diagnostics"],
+            ("isValid", Bool()), ("diagnostics", Arr(Ref("NativeAcsDiagnostic")))),
+        ["NativeAcsPolicyScopeType"] = Enum("platform", "project"),
+        ["NativeAcsPolicyReadResult"] = Obj(
+            ["scopeType", "scopeId", "policyId", "revision", "contentSha256", "artifact", "updatedAt"],
+            ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
+            ("revision", Int()), ("contentSha256", Str()), ("artifact", Ref("NativeAcsArtifact")),
+            ("updatedAt", Date())),
+        ["NativeAcsPolicyWriteReceipt"] = Obj(
+            ["scopeType", "scopeId", "policyId", "revision", "contentSha256", "auditId", "outboxId", "replayed"],
+            ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
+            ("revision", Int()), ("contentSha256", Str()), ("auditId", Uuid()), ("outboxId", Uuid()),
+            ("replayed", Bool())),
         ["PlatformComponentReport"] = Obj(["observedAt", "areas"],
             ("observedAt", Date()), ("areas", Arr(Ref("PlatformComponentAreaReport")))),
         ["PlatformComponentAreaReport"] = Obj(
@@ -3041,6 +3098,7 @@ else if (route.OperationId is
     private static object Number() => new { type = "number" };
     private static object Bool() => new { type = "boolean" };
     private static object Base64Bytes() => new { type = "string", contentEncoding = "base64" };
+    private static object ByteValue() => new { type = "integer", minimum = 0, maximum = 255 };
     private static object Uuid() => new { type = "string", format = "uuid" };
     private static object Date() => new { type = "string", format = "date-time" };
     private static object EnvironmentEnum(params string[] values) =>

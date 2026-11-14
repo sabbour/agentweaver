@@ -327,7 +327,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     app.UseRouting();
                     app.UseAuthentication();
                     app.UseAuthorization();
-                    app.UseEndpoints(endpoints => endpoints.MapProjectConfigEndpoints());
+                    app.UseEndpoints(endpoints => endpoints.MapNativeAcsPolicyEndpoints());
                 });
             })
             .StartAsync();
