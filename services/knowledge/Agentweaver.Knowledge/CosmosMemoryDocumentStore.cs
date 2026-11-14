@@ -407,6 +407,7 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
                     AND c.record.sourceRunId = @run)
               )
             """)
+            // Pending Memory stays with its agent; approved Memory can cross agents only with the cross-team tag.
             .WithParameter("@project", projectId)
             .WithParameter("@recordType", RecordDocumentType)
             .WithParameter("@decision", (int)KnowledgeRecordKind.Decision)
@@ -536,6 +537,7 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             {
                 documents.Add(document);
                 if (maximumResults is { } maximum && documents.Count >= maximum)
+                    // Callers request one extra result to detect an exceeded limit without reading every page.
                     return documents;
             }
         }

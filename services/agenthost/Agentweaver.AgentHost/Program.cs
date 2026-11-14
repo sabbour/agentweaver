@@ -20,6 +20,7 @@ if (args.Length > 0 && args[0] == Agentweaver.Abstractions.SandboxBuildTestLimit
     return;
 }
 
+// This one-shot mode verifies the image-owned runtime without starting the API host.
 if (args.SequenceEqual(["--verify-native-runtime"]))
 {
     var verified = NativeRuntimeManifest.ReadAndVerify(AppContext.BaseDirectory);

@@ -1234,6 +1234,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             projectId, recordId, 1, pageSize, cancellationToken).ConfigureAwait(false);
         if (revision > firstPage.TotalCount)
             return null;
+        // Revision pages are newest first, so use the total to find the page that contains this revision.
         var pageNumber = ((firstPage.TotalCount - revision) / pageSize) + 1;
         var page = pageNumber == 1
             ? firstPage
@@ -1351,6 +1352,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
 
     private static void EnsureTransferFitsMemoryBatch(int recordCount, int revisionCount)
     {
+        // Import writes two documents per record, every saved revision, one graph, and one receipt.
         var operations = checked((long)recordCount * 2 + revisionCount + 2);
         if (operations > MaximumTransactionalBatchOperations)
             throw KnowledgeTransferValidator.TooLarge(
@@ -1616,6 +1618,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
                     StatusCodes.Status400BadRequest);
     }
 
+    // Sort tags and remove case-insensitive duplicates before computing the write fingerprint.
     private static ImmutableArray<string> NormalizeTags(ImmutableArray<string> tags) =>
         tags.Select(tag => tag.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1730,6 +1733,7 @@ internal static class KnowledgeMemoryDocumentIds
 
     public static string DecisionGraph() => "decision-graph";
 
+    // Hash variable IDs to keep document keys fixed-length and avoid storing raw values in IDs.
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }

@@ -185,6 +185,7 @@ public sealed class KnowledgeApplicationService(
         {
             var sourceRecords = new List<KnowledgeRecord>();
             var sourceTotalCount = 0;
+            // Read enough from each source to cover the requested global page before merging.
             for (var sourcePage = 1; sourceRecords.Count < lastIndex; sourcePage++)
             {
                 // Pending proposals are inactive by default; filter at the provider before count and paging.
