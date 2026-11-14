@@ -28,6 +28,7 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    // Redis server time sets lease deadlines, so worker clock differences do not change the lease boundary.
     private static readonly string BatchScript = """
         local keyType = redis.call('TYPE', KEYS[1]).ok
         if keyType ~= 'none' and keyType ~= 'hash' then return -1 end
@@ -477,6 +478,7 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
 
     private string ProjectKeyPattern => $"{options.KeyPrefix}:project:*";
 
+    // Hash project IDs to keep raw identifiers out of keys and give each project a fixed-size key.
     private string ProjectKey(string projectId)
     {
         var projectHash = Convert.ToHexString(
@@ -612,6 +614,7 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             ? version
             : throw new KnowledgeProviderUnavailableException("Redis did not report a valid server version.");
 
+    // Redis 7.4 added hash-field expiration; older servers still use the key-level TTL check.
     private static bool SupportsHashFieldExpiration(Version version) =>
         version >= new Version(7, 4);
 
