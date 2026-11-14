@@ -27,6 +27,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         CancellationToken cancellationToken)
     {
         var plan = Plan.Value;
+        // The dedicated migration owner and exact schema inventory are checked before any grants are applied.
         await VerifyMigrationOwnerAsync(connection, transaction, plan, cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, transaction,
@@ -137,6 +138,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         ServicePlan plan,
         CancellationToken cancellationToken)
     {
+        // Effective privilege checks catch inherited or pre-existing rights that exceed the reviewed plan.
         await using (var schema = new NpgsqlCommand("""
             SELECT has_schema_privilege(@role, @schema, 'USAGE')
                AND NOT has_schema_privilege(@role, @schema, 'CREATE')
@@ -339,6 +341,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             service.GetProperty("role").GetString() != "agentweaver-id-projects-config")
             throw new InvalidOperationException("The reviewed PostgreSQL grant plan has no approved Projects & Config entry.");
 
+        // Plan values become SQL identifiers or function signatures, so validate them before building grant commands.
         var tables = service.GetProperty("tables").EnumerateArray().Select(table => new TablePlan(
             RequiredString(table, "table"),
             ReadStrings(table.GetProperty("privileges")),

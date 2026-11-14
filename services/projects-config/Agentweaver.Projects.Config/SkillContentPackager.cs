@@ -56,7 +56,7 @@ public sealed record SkillContentPackageResult(ImmutableArray<SkillContentPackag
 public static class SkillContentPackager
 {
     public const int MaxUploadFiles = 1024;
-    /// <summary>Keeps the base64 JSON request under the 3 MiB route limit.</summary>
+    /// <summary>Caps file and expanded ZIP content at 2 MiB; the route separately limits the full JSON request to 3 MiB.</summary>
     public const long MaxUploadBytes = 2L * 1024 * 1024;
     private const string SkillFileName = "SKILL.md";
 
@@ -120,8 +120,8 @@ public static class SkillContentPackager
     }
 
     /// <summary>
-    /// Treats every SKILL.md as a skill root. Files under a root become its resources, except files that belong
-    /// to a nested skill root. Binary or oversized files are skipped and listed, so the preview shows what is kept.
+    /// Treats each <c>SKILL.md</c> as a skill root and excludes nested roots from parent resources.
+    /// Oversized or binary resource files are skipped; an invalid manifest makes its package invalid.
     /// </summary>
     private static SkillContentPackageResult FromFiles(
         IReadOnlyList<(string Path, byte[] Content)> files,
@@ -201,8 +201,7 @@ public static class SkillContentPackager
     }
 
     /// <summary>
-    /// Expands a ZIP archive with entry-count, per-entry, and total-size limits applied while reading,
-    /// so an archive cannot expand past the limits in memory.
+    /// Reads ZIP entries under the upload limits and counts expanded bytes so compression cannot bypass the cap.
     /// </summary>
     private static List<(string Path, byte[] Content)> ReadArchive(byte[] archive)
     {

@@ -818,6 +818,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
 
     private static JsonSerializerOptions CreateProjectSetupJsonOptions()
     {
+        // Reject unknown receipt fields so replay does not silently accept a changed stored contract.
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -1325,6 +1326,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     ?? throw ProjectConfigException.NotFound();
                 if (current.ResourceType == ProjectAuthorityResourceType.Project &&
                     current.Role == ProjectAuthorityRole.Owner)
+                    // Lock the project before the target row so concurrent Owner revocations cannot both pass the last-Owner check.
                     await LockProjectOwnersAsync(db, current.ResourceId, cancellationToken).ConfigureAwait(false);
 
                 var assignment = await db.RoleAssignments
@@ -1409,6 +1411,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     .OrderBy(id => id)
                     .ToArrayAsync(cancellationToken)
                     .ConfigureAwait(false);
+                // Acquire project locks in ID order before the membership row to avoid deadlocks across multi-project revocations.
                 foreach (var projectId in ownedProjects)
                     await LockProjectOwnersAsync(db, projectId, cancellationToken).ConfigureAwait(false);
 
@@ -1524,7 +1527,6 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             $"SELECT pg_advisory_xact_lock(hashtextextended({"platform-admin-grant"}, 0))",
             cancellationToken);
 
-    /// <summary>Creates the grant and membership audit row used by privileged authority changes.</summary>
     private ProjectAuthorityAuditRecord ToAudit(
         ProjectTenantMembershipRecord membership,
         string eventType,
