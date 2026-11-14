@@ -1,9 +1,19 @@
 using System.Collections.Immutable;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using NpgsqlTypes;
 using Xunit;
@@ -98,6 +108,142 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
         var graph = (await _backlog.ReadGraphAsync("backlog-project", CancellationToken.None)).Value!;
         Assert.Equal(0, graph.Revision);
         Assert.Empty(graph.Tasks);
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public async Task RevocationDuringRunTaskCreationRollsBackTaskAndGraph(
+        int failOnCheck,
+        bool createProject)
+    {
+        var projectId = createProject ? "backlog-new-project" : "backlog-project";
+        var task = new BacklogTaskReference(projectId, "revoked-run-task");
+        var before = createProject ? null : await AddTaskAsync(TaskRef("run-task-baseline"));
+        var expectedRevision = before?.Revision ?? 0;
+        var checks = 0;
+
+        var exception = await Assert.ThrowsAsync<CoordinationException>(() => _backlog.AddTaskAsync(
+            task,
+            expectedRevision,
+            CancellationToken.None,
+            _ => ++checks == failOnCheck
+                ? Task.FromException(new CoordinationException("run_selection_permission_denied", 403))
+                : Task.CompletedTask));
+
+        Assert.Equal("run_selection_permission_denied", exception.Code);
+        Assert.Equal(403, exception.StatusCode);
+        Assert.Equal(failOnCheck, checks);
+
+        var persisted = await new BacklogOwnerStore(_fixture.DataSource, _schema)
+            .ReadGraphAsync(projectId, CancellationToken.None);
+        Assert.True(persisted.IsSuccess);
+        Assert.DoesNotContain(persisted.Value!.Tasks, item => item.Reference == task);
+        if (before is null)
+        {
+            Assert.Equal(0, persisted.Value.Revision);
+            Assert.Empty(persisted.Value.Tasks);
+            Assert.Empty(persisted.Value.Dependencies);
+            Assert.Equal(0, await ReadCountAsync("backlog_projects", $"project_id = '{projectId}'"));
+        }
+        else
+        {
+            Assert.Equal(before.Revision, persisted.Value.Revision);
+            Assert.Equal(before.Tasks.ToArray(), persisted.Value.Tasks.ToArray());
+            Assert.Equal(before.Dependencies.ToArray(), persisted.Value.Dependencies.ToArray());
+        }
+    }
+
+    [Theory]
+    [InlineData(false, 403, "run_selection_permission_denied")]
+    [InlineData(true, 409, "coordinator_selection_stale")]
+    public async Task RunScopedAddTaskRechecksAuthorityAfterGraphLockWait(
+        bool changeSelection,
+        int expectedStatusCode,
+        string expectedError)
+    {
+        var before = await AddTaskAsync(TaskRef("run-task-lock-baseline"));
+        var runId = Guid.NewGuid().ToString("D");
+        var handler = new BacklogRunSelectionAuthorityHandler(_actor, before.ProjectId, runId);
+        using var projectsHttp = new HttpClient(handler);
+        var options = BacklogRouteOptions();
+        var projects = new ProjectsRunSelectionClient(projectsHttp, options, new NoSnapshotResolver());
+
+        await using var blockerConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blockerConnection.BeginTransactionAsync();
+        await using (var block = new NpgsqlCommand(
+            $"SELECT project_id FROM \"{_schema}\".backlog_projects WHERE project_id = @project FOR UPDATE",
+            blockerConnection,
+            blockerTransaction))
+        {
+            block.Parameters.AddWithValue("project", NpgsqlTypes.NpgsqlDbType.Varchar, before.ProjectId);
+            Assert.Equal(before.ProjectId, await block.ExecuteScalarAsync());
+        }
+
+        var responseTask = InvokeRunBacklogAddTaskRouteAsync(
+            runId, "run-task-after-revocation", before.Revision, options, projects);
+        if (!await WaitForBacklogGraphLockWaitAsync(blockerConnection.ProcessID, responseTask))
+        {
+            await blockerTransaction.RollbackAsync();
+            var early = await responseTask.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Fail($"The mapped add-task route did not wait for the graph lock; it returned HTTP {early.StatusCode}.");
+        }
+
+        if (changeSelection)
+            handler.ChangeSelection();
+        else
+            handler.RevokePermission();
+        await blockerTransaction.CommitAsync();
+
+        var response = await responseTask.WaitAsync(TimeSpan.FromSeconds(10));
+        AssertEndpointError(response, expectedStatusCode, expectedError);
+
+        var freshStore = new BacklogOwnerStore(_fixture.DataSource, _schema);
+        var persisted = (await freshStore.ReadGraphAsync(before.ProjectId, CancellationToken.None)).Value!;
+        AssertSameGraph(before, persisted);
+        Assert.DoesNotContain(persisted.Tasks, item => item.Reference.TaskId == "run-task-after-revocation");
+
+        if (!changeSelection)
+        {
+            handler.RestoreAuthority();
+            var refreshed = (await freshStore.ReadGraphAsync(before.ProjectId, CancellationToken.None)).Value!;
+            var retry = await InvokeRunBacklogAddTaskRouteAsync(
+                runId, "run-task-after-revocation", refreshed.Revision, options, projects);
+            Assert.Equal(StatusCodes.Status200OK, retry.StatusCode);
+
+            var created = (await freshStore.ReadGraphAsync(before.ProjectId, CancellationToken.None)).Value!;
+            Assert.Equal(refreshed.Revision + 1, created.Revision);
+            var task = Assert.Single(created.Tasks, item =>
+                item.Reference.TaskId == "run-task-after-revocation");
+            AssertDefaultTaskShape(task, "run-task-after-revocation",
+                before.ProjectId, refreshed.Tasks.Max(item => item.Position) + 1);
+        }
+    }
+
+    [Fact]
+    public async Task RunScopedAddTaskSucceedsWithStableAuthorityAndKeepsDefaultTaskShape()
+    {
+        var before = await AddTaskAsync(TaskRef("run-task-success-baseline"));
+        var runId = Guid.NewGuid().ToString("D");
+        var handler = new BacklogRunSelectionAuthorityHandler(_actor, before.ProjectId, runId);
+        using var projectsHttp = new HttpClient(handler);
+        var options = BacklogRouteOptions();
+        var projects = new ProjectsRunSelectionClient(projectsHttp, options, new NoSnapshotResolver());
+
+        var response = await InvokeRunBacklogAddTaskRouteAsync(
+            runId, "run-task-success", before.Revision, options, projects);
+
+        Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
+        using var responseJson = JsonDocument.Parse(response.Body);
+        Assert.Equal(before.Revision + 1, responseJson.RootElement.GetProperty("revision").GetInt64());
+        Assert.Equal(2, responseJson.RootElement.GetProperty("tasks").GetArrayLength());
+        var persisted = (await new BacklogOwnerStore(_fixture.DataSource, _schema)
+            .ReadGraphAsync(before.ProjectId, CancellationToken.None)).Value!;
+        Assert.Equal(before.Revision + 1, persisted.Revision);
+        var task = Assert.Single(persisted.Tasks, item => item.Reference.TaskId == "run-task-success");
+        AssertDefaultTaskShape(task, "run-task-success",
+            before.ProjectId, before.Tasks.Max(item => item.Position) + 1);
     }
 
     [Fact]
@@ -969,6 +1115,132 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
             revalidateCurrentAuthority ?? (_ => Task.CompletedTask),
             CancellationToken.None);
 
+    private OrchestratorOptions BacklogRouteOptions() =>
+        new(_actor.Issuer, "orchestrator-api", "https://projects.test/", "projects-api",
+            string.Empty, string.Empty, _schema);
+
+    private async Task<(int StatusCode, string Body)> InvokeRunBacklogAddTaskRouteAsync(
+        string runId,
+        string taskId,
+        long expectedGraphRevision,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton(options);
+        builder.Services.AddSingleton(projects);
+        builder.Services.AddSingleton(_backlog);
+        await using var app = builder.Build();
+        app.MapBacklogEndpoints();
+        var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(), candidate =>
+                candidate.RoutePattern.RawText == "/api/projects/{projectId}/runs/{runId}/backlog/tasks" &&
+                candidate.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("POST"));
+
+        var context = new DefaultHttpContext
+        {
+            RequestServices = app.Services,
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", _actor.Subject),
+                new Claim("aud", options.Audience),
+                new Claim("aud", options.ProjectsAudience),
+                new Claim("project_id", "backlog-project"),
+                new Claim("run_id", runId),
+                new Claim("scope", "api.read projects.orchestrator")
+            ], "backlog-test"))
+        };
+        context.Features.Set<IHttpRequestBodyDetectionFeature>(new RequestBodyDetectionFeature());
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = $"/api/projects/backlog-project/runs/{runId}/backlog/tasks";
+        context.Request.RouteValues = new RouteValueDictionary
+        {
+            ["projectId"] = "backlog-project",
+            ["runId"] = runId
+        };
+        context.Request.Headers.Authorization = "Bearer test-token";
+        context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        context.Request.ContentType = "application/json";
+        var body = JsonSerializer.SerializeToUtf8Bytes(
+            new AddBacklogTaskRequest(taskId, expectedGraphRevision),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        context.Request.ContentLength = body.Length;
+        context.Request.Body = new MemoryStream(body);
+        context.Response.Body = new MemoryStream();
+
+        await endpoint.RequestDelegate!(context);
+
+        context.Response.Body.Position = 0;
+        var responseBody = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        return (context.Response.StatusCode, responseBody);
+    }
+
+    private async Task<bool> WaitForBacklogGraphLockWaitAsync(int blockerProcessId, Task response)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (!timeout.IsCancellationRequested && !response.IsCompleted)
+            {
+                await using var observer = await _fixture.DataSource.OpenConnectionAsync(timeout.Token);
+                await using var query = new NpgsqlCommand("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM pg_stat_activity
+                        WHERE datname = current_database()
+                          AND @blocker = ANY(pg_blocking_pids(pid))
+                          AND query ILIKE '%backlog_projects%FOR UPDATE%'
+                          AND position(@schema in query) > 0)
+                    """, observer);
+                query.Parameters.AddWithValue("blocker", NpgsqlDbType.Integer, blockerProcessId);
+                query.Parameters.AddWithValue("schema", NpgsqlDbType.Text, _schema);
+                if ((bool)(await query.ExecuteScalarAsync(timeout.Token))!)
+                    return true;
+                await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            return false;
+        }
+        return false;
+    }
+
+    private static void AssertEndpointError(
+        (int StatusCode, string Body) response,
+        int expectedStatusCode,
+        string expectedError)
+    {
+        Assert.Equal(expectedStatusCode, response.StatusCode);
+        using var document = JsonDocument.Parse(response.Body);
+        Assert.Equal(expectedError, document.RootElement.GetProperty("error").GetString());
+    }
+
+    private static void AssertSameGraph(BacklogDependencyGraph expected, BacklogDependencyGraph actual)
+    {
+        Assert.Equal(expected.Revision, actual.Revision);
+        Assert.Equal(expected.Tasks.ToArray(), actual.Tasks.ToArray());
+        Assert.Equal(expected.Dependencies.ToArray(), actual.Dependencies.ToArray());
+    }
+
+    private static void AssertDefaultTaskShape(
+        BacklogTaskSnapshot task,
+        string taskId,
+        string projectId,
+        long expectedPosition)
+    {
+        Assert.Equal(new BacklogTaskReference(projectId, taskId), task.Reference);
+        Assert.Equal(0, task.Revision);
+        Assert.Equal(BacklogTaskState.Backlog, task.State);
+        Assert.False(task.IsArchived);
+        Assert.False(task.IsAutomationInvocationPending);
+        Assert.Equal(string.Empty, task.Title);
+        Assert.Null(task.Description);
+        Assert.Equal(BacklogTaskLifecycle.Open, task.Lifecycle);
+        Assert.Null(task.RepositoryIssue);
+        Assert.Equal(expectedPosition, task.Position);
+    }
+
     private AuthorizedRunSelection Selection(string runId)
     {
         using var snapshot = JsonDocument.Parse("""
@@ -1032,6 +1304,86 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
             DELETE FROM "{_schema}".coordination_schema_migrations WHERE version = 35;
             """, connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed class RequestBodyDetectionFeature : IHttpRequestBodyDetectionFeature
+    {
+        public bool CanHaveBody => true;
+    }
+
+    private sealed class NoSnapshotResolver : IReviewedRemoteToolSnapshotResolver
+    {
+        public Task<ReviewedRemoteToolSnapshot?> ResolveAsync(
+            ReviewedRemoteToolSnapshotReference reference,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<ReviewedRemoteToolSnapshot?>(null);
+    }
+
+    private sealed class BacklogRunSelectionAuthorityHandler(
+        CoordinationActor actor,
+        string projectId,
+        string runId) : HttpMessageHandler
+    {
+        private bool _acceptRunSelection = true;
+        private long _projectRevision = 1;
+
+        public void RevokePermission() => _acceptRunSelection = false;
+
+        public void ChangeSelection() => _projectRevision = 2;
+
+        public void RestoreAuthority()
+        {
+            _acceptRunSelection = true;
+            _projectRevision = 1;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath
+                ?? throw new InvalidOperationException("The fake Projects request has no absolute path.");
+            object body;
+            if (path == "/api/authorization/context")
+            {
+                var permissions = _acceptRunSelection
+                    ? ImmutableArray.Create(new ProjectsPermissionGrant("acceptRunSelection", 1))
+                    : ImmutableArray<ProjectsPermissionGrant>.Empty;
+                body = new ProjectsAuthorizationContext(
+                    1,
+                    actor.Issuer,
+                    actor.Subject,
+                    "tenant-1",
+                    _acceptRunSelection ? 1 : 2,
+                    projectId,
+                    runId,
+                    [new ProjectsAuthority("project", projectId, permissions)]);
+            }
+            else if (path == $"/api/projects/{projectId}/runs/{runId}/selection")
+            {
+                body = new
+                {
+                    projectId,
+                    runId,
+                    projectRevision = _projectRevision,
+                    projectConfigurationRevision = 1,
+                    platformRuntimeRevision = 1,
+                    contextRevision = "context-v1"
+                };
+            }
+            else
+            {
+                throw new InvalidOperationException($"Unexpected fake Projects route '{path}'.");
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = JsonContent.Create(body)
+            };
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            return Task.FromResult(response);
+        }
     }
 
     private static async Task<bool> WaitForGraphRowLockWaitAsync(NpgsqlDataSource dataSource) =>

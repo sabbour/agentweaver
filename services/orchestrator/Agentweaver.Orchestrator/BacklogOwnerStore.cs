@@ -113,8 +113,9 @@ internal sealed class BacklogOwnerStore
     public Task<BacklogCoreResult<BacklogDependencyGraph>> AddTaskAsync(
         BacklogTaskReference task,
         long expectedGraphRevision,
-        CancellationToken cancellationToken) =>
-        AddTaskCoreAsync(task, null, expectedGraphRevision, cancellationToken, null);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null) =>
+        AddTaskCoreAsync(task, null, expectedGraphRevision, cancellationToken, revalidateCurrentAuthority);
 
     /// <summary>Captures project task content without requiring an accepted run.</summary>
     public Task<BacklogCoreResult<BacklogDependencyGraph>> AddTaskAsync(

@@ -322,12 +322,13 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         BacklogOwnerStore backlog) =>
         ExecuteBacklogOperationAsync(projectId, runId, context, options, projects,
-            async (_, _, _, ct) =>
+            async (_, _, revalidate, ct) =>
             {
                 var result = await backlog.AddTaskAsync(
                     new BacklogTaskReference(projectId, request.TaskId),
                     request.ExpectedGraphRevision,
-                    ct).ConfigureAwait(false);
+                    ct,
+                    revalidate).ConfigureAwait(false);
                 return BacklogResult(result);
             });
 
