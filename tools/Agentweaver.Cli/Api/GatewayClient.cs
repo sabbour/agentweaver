@@ -578,6 +578,7 @@ public sealed partial class GatewayClient : IGatewayClient
             .ToHashSet(StringComparer.Ordinal);
         if (paths.Keys.Any(name => !templateNames.Contains(name)))
             throw new InvalidOperationException("An API path parameter is not advertised by the live operation.");
+        var ownerPath = GatewayContract.String(operation.Document, "x-agentweaver-owner-path");
 
         var path = PathParameterRegex.Replace(operation.Path, match =>
         {
@@ -586,6 +587,13 @@ public sealed partial class GatewayClient : IGatewayClient
                 throw new InvalidOperationException($"Missing required path parameter: {name}");
             var parameter = FindParameter(operation, "path", name);
             var normalized = ValidateParameter(parameter, value);
+            // The owner route marks a catch-all value; it keeps '/' and the Gateway encodes each segment the same way.
+            if (ownerPath?.Contains("{**" + name + "}", StringComparison.Ordinal) == true)
+            {
+                if (!WorkspaceFilePath.IsSafe(normalized))
+                    throw new InvalidOperationException("The API path parameter is not a safe repository path.");
+                return string.Join('/', normalized.Split('/').Select(Uri.EscapeDataString));
+            }
             if (normalized is "." or "..")
                 throw new InvalidOperationException("Dot-segment API path parameters are not allowed.");
             ValidateBoundSelector(name, normalized);

@@ -1,3 +1,5 @@
+using Agentweaver.Cli.Auth;
+
 namespace Agentweaver.Cli;
 
 public sealed record CliRuntimeOptions(
@@ -5,4 +7,5 @@ public sealed record CliRuntimeOptions(
     IGatewayClientFactory? GatewayClientFactory = null,
     ICliAuthentication? Authentication = null,
     TextWriter? Output = null,
-    TextWriter? Error = null);
+    TextWriter? Error = null,
+    INativeRepoAppSelectionHandoff? RepositorySelection = null);

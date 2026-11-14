@@ -61,6 +61,14 @@ public static class CliApplication
                 return await CopilotConnectionCommands.RunAsync(
                     args[1..], actualRuntime, httpClient, output, ct).ConfigureAwait(false);
             }
+            if (args[0] == "workspace")
+            {
+                var actualRuntime = runtime ?? new CliRuntimeOptions();
+                using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                var httpClient = actualRuntime.HttpClient ?? ownedClient!;
+                return await WorkspaceCommands.RunAsync(
+                    args[1..], actualRuntime, httpClient, output, error, ct).ConfigureAwait(false);
+            }
             throw new CliUsageException($"Unknown command: {args[0]}");
         }
         catch (OperationCanceledException)
@@ -483,6 +491,11 @@ public static class CliApplication
           agentweaver auth login|status|logout [target options] [--scope <scope>]
           agentweaver copilot status|connect --scope project|platform [--scope-id <id>] [target options]
           agentweaver copilot refresh|disconnect --connection-id <guid> [target options]
+          agentweaver workspace refs --project <project-id> --interactive [--cursor <2-10000>] [target options]
+          agentweaver workspace tree --project <project-id> --ref <commit-sha> --interactive [target options]
+          agentweaver workspace file --project <project-id> --ref <commit-sha> --path <repository-path>
+              --interactive [--output <new-file>] [target options]
+              Each workspace command opens one browser approval for one read.
           agentweaver api operations [target options]
           agentweaver api describe <operationId> [target options]
           agentweaver api invoke <operationId> [target options] [--path name=value] [--query name=value]

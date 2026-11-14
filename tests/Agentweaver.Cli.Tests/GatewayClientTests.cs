@@ -691,6 +691,84 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
+    public async Task CatchAllPathParameterKeepsSlashAndEncodesEachSegment()
+    {
+        var handler = new TestGatewayHandler();
+        using var http = new HttpClient(handler);
+        var client = new GatewayClient(http, RunIdentity, new TestAuthentication());
+
+        await client.InvokeAsync("readWorkspaceRepositoryFile", WorkspaceFileInvocation("docs/a b/c#.md"), CancellationToken.None);
+
+        var request = Assert.Single(handler.Requests, item => item.Path.Contains("/source-control/files/", StringComparison.Ordinal));
+        Assert.EndsWith("/source-control/files/docs/a%20b/c%23.md", request.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain("%2F", request.Path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [MemberData(nameof(UnsafeWorkspacePaths))]
+    public async Task CatchAllPathParameterRejectsUnsafePaths(string path)
+    {
+        var handler = new TestGatewayHandler();
+        using var http = new HttpClient(handler);
+        var client = new GatewayClient(http, RunIdentity, new TestAuthentication());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.InvokeAsync("readWorkspaceRepositoryFile", WorkspaceFileInvocation(path), CancellationToken.None));
+
+        Assert.Equal("The API path parameter is not a safe repository path.", error.Message);
+        Assert.DoesNotContain(handler.Requests, item => item.Path.Contains("/source-control/files/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PathParameterWithoutCatchAllExtensionStillEscapesSlash()
+    {
+        var handler = new TestGatewayHandler { OmitOwnerPath = true };
+        using var http = new HttpClient(handler);
+        var client = new GatewayClient(http, RunIdentity, new TestAuthentication());
+
+        await client.InvokeAsync("readWorkspaceRepositoryFile", WorkspaceFileInvocation("docs/a.md"), CancellationToken.None);
+
+        var request = Assert.Single(handler.Requests, item => item.Path.Contains("/source-control/files/", StringComparison.Ordinal));
+        Assert.EndsWith("/source-control/files/docs%2Fa.md", request.Path, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(WorkspacePathRuleCases))]
+    public void WorkspaceFilePathMatchesGatewayRules(string path, bool expected) =>
+        Assert.Equal(expected, WorkspaceFilePath.IsSafe(path));
+
+    private static readonly string[] UnsafePaths =
+    [
+        "docs%2Fa.md", "docs%5Ca.md", "docs%252Fa.md", "%2E%2E/a.md", "docs/%2e/a.md",
+        "../a.md", "docs//a.md", "/a.md", "a.md/", "a\\b.md",
+    ];
+
+    public static TheoryData<string> UnsafeWorkspacePaths() => new(UnsafePaths);
+
+    public static TheoryData<string, bool> WorkspacePathRuleCases()
+    {
+        var cases = new TheoryData<string, bool>
+        {
+            { "README.md", true },
+            { "docs/a b.md", true },
+            { "100%.md", true },
+            { "a%41.md", true },
+        };
+        foreach (var path in UnsafePaths)
+            cases.Add(path, false);
+        return cases;
+    }
+
+    private static GatewayInvocation WorkspaceFileInvocation(string path) =>
+        new(
+            new Dictionary<string, string> { ["projectId"] = "project-1", ["path"] = path },
+            new Dictionary<string, string> { ["ref"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SelectionCodeHeader] = new string('a', 64),
+            });
+
+    [Fact]
     public async Task DuplicateOperationIdsFailDiscoveryBeforeInvocation()
     {
         var handler = new TestGatewayHandler { DuplicateOperationId = true };
@@ -742,6 +820,7 @@ public sealed class GatewayClientTests
         public bool LowercaseBearerScheme { get; init; }
         public bool UnsupportedRequestBodyMediaType { get; init; }
         public bool IncludeSelectionHeader { get; init; }
+        public bool OmitOwnerPath { get; init; }
         public string? OwnerPermission { get; init; }
         public HttpContent? EventStreamContent { get; init; }
         public HttpContent? ResponseContent { get; init; }
@@ -782,6 +861,11 @@ public sealed class GatewayClientTests
                     StringComparison.Ordinal);
                 if (LowercaseBearerScheme)
                     openApi = openApi.Replace("\"Bearer\"", "\"bearer\"", StringComparison.Ordinal);
+                if (OmitOwnerPath)
+                    openApi = openApi.Replace(
+                        "\"x-agentweaver-owner-path\":\"/api/projects/{projectId}/source-control/files/{**path}\",",
+                        string.Empty,
+                        StringComparison.Ordinal);
                 if (UnsupportedRequestBodyMediaType)
                 {
                     openApi = openApi.Replace(
@@ -937,6 +1021,7 @@ public sealed class GatewayClientTests
             "/api/v1/projects/{projectId}/source-control/files/{path}":{
               "get":{
                 "operationId":"readWorkspaceRepositoryFile",
+                "x-agentweaver-owner-path":"/api/projects/{projectId}/source-control/files/{**path}",
                 "security":[{"Bearer":[]}],
                 "parameters":[
                   {"name":"projectId","in":"path","required":true,"schema":{"type":"string"}},

@@ -6,27 +6,25 @@
       "title": "Read caller authorization context",
       "caseScript": "scripts/acceptance/api/read-only-gateway.mjs",
       "watchRoutePrefixes": [
-        "/authorization/context",
+        "/authorization/context"
+      ],
+      "coveredOperations": [
+        "getAuthorizationContext"
+      ]
+    },
+    {
+      "id": "cp2-workspace-repository-read",
+      "title": "Read a Workspace repository through the native CLI",
+      "caseScript": "scripts/acceptance/api/workspace-repository-read.mjs",
+      "watchRoutePrefixes": [
         "/projects/{projectId}/source-control/refs",
         "/projects/{projectId}/source-control/tree",
         "/projects/{projectId}/source-control/files"
       ],
       "coveredOperations": [
-        "getAuthorizationContext"
-      ],
-      "outOfPath": [
-        {
-          "operation": "listWorkspaceRepositoryRefs",
-          "reason": "The current read-only Gateway case does not select a Workspace repository. Track its replacement in issue #2752."
-        },
-        {
-          "operation": "readWorkspaceRepositoryTree",
-          "reason": "The current read-only Gateway case does not read a Workspace repository tree. Track its replacement in issue #2752."
-        },
-        {
-          "operation": "readWorkspaceRepositoryFile",
-          "reason": "The current read-only Gateway case does not read Workspace repository files. Track its replacement in issue #2752."
-        }
+        "listWorkspaceRepositoryRefs",
+        "readWorkspaceRepositoryTree",
+        "readWorkspaceRepositoryFile"
       ]
     }
   ],

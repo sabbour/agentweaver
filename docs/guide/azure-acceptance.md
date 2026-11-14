@@ -192,9 +192,9 @@ tests.
 
 ## Workspace repository-read check
 
-The Workspace repository-read case is not available in the current API case scripts. The former native runner that exposed it has been removed. Do not run or report this Workspace check as accepted. Track its replacement in [issue #2752](https://github.com/sabbour/agentweaver/issues/2752).
+The Workspace repository-read case is `scripts/acceptance/api/workspace-repository-read.mjs`. It uses the `agentweaver workspace refs`, `tree`, and `file` commands, and each command opens a browser approval. For its input and results, see [Run the Workspace repository-read case](./api-acceptance-migration.md#run-the-workspace-repository-read-case). Do not report this Workspace check as accepted until a live run with approved input passes.
 
-The current read-only Gateway case does not select a Workspace repository or read repository files. Do not use internal CLI types, extract a selection code, or bypass sensitive-header guards.
+The read-only Gateway case does not select a Workspace repository or read repository files. Do not use internal CLI types, extract a selection code, or bypass sensitive-header guards.
 
 
 ## Expected result

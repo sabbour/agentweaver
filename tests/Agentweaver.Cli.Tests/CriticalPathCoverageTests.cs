@@ -40,36 +40,51 @@ public sealed class CriticalPathCoverageTests
     {
         JsonObject path = CriticalPath(id);
         string caseScript = path["caseScript"]!.GetValue<string>();
-        Assert.Equal("scripts/acceptance/api/read-only-gateway.mjs", caseScript);
+        Assert.Matches(@"^scripts/acceptance/api/[a-z0-9-]+\.mjs$", caseScript);
 
         string script = File.ReadAllText(Path.Combine(
-            AppContext.BaseDirectory, "Scripts", "acceptance", "api", "read-only-gateway.mjs"));
+            AppContext.BaseDirectory, "Scripts", "acceptance", "api", Path.GetFileName(caseScript)));
         HashSet<string> describedOperations = Regex.Matches(
                 script,
                 @"args\s*:\s*\[\s*'api'\s*,\s*'(?:describe|invoke)'\s*,\s*'(?<operation>[^']+)'",
                 RegexOptions.CultureInvariant)
             .Select(match => match.Groups["operation"].Value)
             .ToHashSet(StringComparer.Ordinal);
+        HashSet<string> workspaceOperations = Regex.Matches(
+                script,
+                @"args\s*:\s*\[\s*'workspace'\s*,\s*'(?<command>refs|tree|file)'",
+                RegexOptions.CultureInvariant)
+            .Select(match => WorkspaceOperations[match.Groups["command"].Value])
+            .ToHashSet(StringComparer.Ordinal);
         HashSet<string> covered = Strings(path["coveredOperations"]);
         Assert.NotEmpty(covered);
 
-        Match restCommand = Regex.Match(
-            script,
-            @"\{\s*id:\s*'rest-authorization-context'\s*,\s*args:\s*\[\s*'rest',(?<args>[\s\S]*?)\]\s*,?\s*\}",
-            RegexOptions.CultureInvariant);
-        Assert.True(restCommand.Success, "The named case must execute a literal agentweaver rest command.");
-        Match method = Regex.Match(restCommand.Groups["args"].Value, @"'--method'\s*,\s*'(?<value>[^']+)'");
-        Match url = Regex.Match(restCommand.Groups["args"].Value, @"'--url'\s*,\s*'(?<value>[^']+)'");
-        Assert.True(method.Success && url.Success, "The rest command must declare its method and route.");
-
         foreach (string operation in covered)
         {
-            Assert.Contains(operation, describedOperations);
             GatewayRoute route = Routes.Single(item => item.OperationId == operation);
+            if (workspaceOperations.Contains(operation))
+                continue;
+
+            Assert.Contains(operation, describedOperations);
+            Match restCommand = Regex.Match(
+                script,
+                @"\{\s*id:\s*'rest-authorization-context'\s*,\s*args:\s*\[\s*'rest',(?<args>[\s\S]*?)\]\s*,?\s*\}",
+                RegexOptions.CultureInvariant);
+            Assert.True(restCommand.Success, "The named case must execute a literal agentweaver rest command.");
+            Match method = Regex.Match(restCommand.Groups["args"].Value, @"'--method'\s*,\s*'(?<value>[^']+)'");
+            Match url = Regex.Match(restCommand.Groups["args"].Value, @"'--url'\s*,\s*'(?<value>[^']+)'");
+            Assert.True(method.Success && url.Success, "The rest command must declare its method and route.");
             Assert.Equal(route.Method, method.Groups["value"].Value);
             Assert.Equal(route.PublicPath, url.Groups["value"].Value);
         }
     }
+
+    private static readonly Dictionary<string, string> WorkspaceOperations = new(StringComparer.Ordinal)
+    {
+        ["refs"] = "listWorkspaceRepositoryRefs",
+        ["tree"] = "readWorkspaceRepositoryTree",
+        ["file"] = "readWorkspaceRepositoryFile",
+    };
 
     [Theory]
     [MemberData(nameof(PathIds))]

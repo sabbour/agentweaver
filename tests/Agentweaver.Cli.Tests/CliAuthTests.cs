@@ -460,6 +460,34 @@ public sealed class CliAuthTests
     public async Task ResolvedWorkspaceSelectionRejectsDifferentOperation() =>
         await AssertResolvedSelectionRejectedAsync("operationId", "\"readWorkspaceRepositoryFile\"");
 
+    [Fact]
+    public async Task ResolvedWorkspaceSelectionRejectsDifferentActor()
+    {
+        var browser = new TestBrowser();
+        var vault = new MemoryVault();
+        var directory = CreateTestDirectory();
+        try
+        {
+            using var signingKey = RSA.Create(2048);
+            using var http = new HttpClient(new OidcHandler(
+                signingKey, browser, actorId: "44444444-4444-4444-8444-444444444444",
+                workspaceSelectionJson: ResolvedSelectionResponse()));
+            using var service = CreateService(http, vault, browser, directory);
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.AcquireRepositorySelectionAsync(
+                    ResolvedSelectionIdentity(), ResolvedSelectionIntent(), InteractionPolicy.Allow,
+                    CancellationToken.None));
+
+            Assert.Contains("unexpected Workspace selection", error.Message, StringComparison.Ordinal);
+            Assert.Empty(vault.Values);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private const string ResolvedActorId = "11111111-1111-4111-8111-111111111111";
     private const string ResolvedTenantId = "22222222-2222-4222-8222-222222222222";
     private const string ResolvedProjectId = "33333333-3333-4333-8333-333333333333";
