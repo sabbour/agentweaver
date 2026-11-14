@@ -216,6 +216,27 @@ public sealed class AgentSuiteContentLayerTests
     }
 
     [Fact]
+    public void ImageReferenceOverNormalizedDockerHubPathLimitIsRejected()
+    {
+        var files = Minimal();
+        var originalProfile = Encoding.UTF8.GetString(files["build-profiles/default.json"]);
+        var imageReference = $"docker.io/{new string('a', 248)}@sha256:{new string('a', 64)}";
+        var updatedProfile = originalProfile.Replace(
+            "registry.example/agentsuite/harness@sha256:" + new string('a', 64),
+            imageReference,
+            StringComparison.Ordinal);
+        Assert.NotEqual(originalProfile, updatedProfile);
+        files["build-profiles/default.json"] = Encoding.UTF8.GetBytes(updatedProfile);
+        Rebind(files, "build-profiles/default.json");
+
+        var result = ValidateFiles(files);
+        Assert.Contains(
+            "build profile default: harness linux/amd64 imageRef must be a registry-qualified, digest-addressed OCI image reference",
+            result.NativeErrors);
+        Assert.Null(result.Graph);
+    }
+
+    [Fact]
     public void UpstreamTestdataSuitesAreAccepted()
     {
         // Every valid suite from the upstream Go testdata must also pass the .NET port.
