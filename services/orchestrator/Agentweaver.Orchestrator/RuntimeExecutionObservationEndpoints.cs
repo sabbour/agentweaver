@@ -237,7 +237,7 @@ public static partial class CoordinationEndpoints
     /// <param name="registrations">Optional registration owner; required together with <paramref name="evidenceStore"/> for the aggregate response.</param>
     /// <param name="evidenceStore">Optional evidence store paired with <paramref name="registrations"/>.</param>
     /// <exception cref="CoordinationException">Thrown when any owner state, selection, checkpoint, or association is stale or invalid.</exception>
-    /// <remarks>All participating authority is reread before returning so changes during construction invalidate the observation.</remarks>
+    /// <remarks>Before returning, the method rereads the accepted selection, owner state, decision, and owner context. When configured, it also rereads the registration; a detected mismatch returns a conflict.</remarks>
     private static Task<IResult> ReadRuntimeExecutionObservationCoreAsync(
         string projectId,
         string runId,

@@ -241,7 +241,7 @@ internal static class RuntimeGuardrailsGate
             }
             catch (CoordinationException failure) when (failure.StatusCode < StatusCodes.Status500InternalServerError)
             {
-                // A 4xx from the owner is a definite "no" (for example, not found or forbidden), not an outage.
+                // A CoordinationException with a status below 500 maps to Revoked, not Unavailable.
                 return GuardrailsAuthorityStatus.Revoked;
             }
             catch (Exception failure) when (failure is CoordinationException or HttpRequestException or

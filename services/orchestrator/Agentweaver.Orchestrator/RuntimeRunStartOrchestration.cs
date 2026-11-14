@@ -1697,7 +1697,7 @@ internal sealed partial class RuntimeRunStartContinuation(
         receipt.ValidateFor(request);
         if (receipt.State != "released")
             return null;
-        // Revoke before the attempt is replaced, so the retired registration never stays active unowned.
+        // Do not replace the intent until the released registration has been revoked.
         var revoked = await registrations.RevokeAfterPlacementReleaseAsync(registration, cancellationToken)
             .ConfigureAwait(false);
         if (revoked.State != RuntimeRegistrationState.Revoked ||
