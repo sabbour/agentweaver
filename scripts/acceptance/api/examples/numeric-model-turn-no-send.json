@@ -1,0 +1,19 @@
+{
+  "caseId": "numeric-model-turn-no-send",
+  "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "targetCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "apphostSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "approvedNonProduction": true,
+  "expectedActorId": "replace-with-approved-actor-id",
+  "expectedMaxModelTurns": 2,
+  "target": {
+    "gatewayUrl": "https://gateway.example.invalid",
+    "brokerIssuer": "https://identity.example.invalid/issuer-path",
+    "clientId": "agentweaver-cli",
+    "apiAudience": "replace-with-approved-api-audience",
+    "tenantId": "replace-with-approved-tenant-id",
+    "projectId": "00000000-0000-4000-8000-000000000001",
+    "runId": "00000000-0000-4000-8000-000000000002",
+    "sessionId": "replace-with-root-session-id"
+  }
+}

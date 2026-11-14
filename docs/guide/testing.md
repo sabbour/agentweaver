@@ -795,7 +795,9 @@ Follow [Run a read-only CLI API case](./api-acceptance-migration.md) for the app
 Use the [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
 to inspect complete v2 history and a recorded native tool-permission denial
 through normal CLI commands and `rest`. The case reads an existing child
-session. It does not create a run or call a model.
+session. It does not create a run or call a model. The same script also has
+root model-turn and hard-credit no-send cases. These cases use only facts from
+the current session, execution fence, and accepted selection.
 
 ## Record release acceptance results
 
@@ -837,7 +839,13 @@ The API tests cover the checked-in case scripts and launcher contracts with loca
 
 The [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
 checks the public CLI and `rest` reads against an existing child session. Its
-dry run is local only; it does not exercise a live target.
+root model-turn and hard-credit cases check an existing root session. Their
+dry runs are local only; they do not exercise a live target. The local test
+covers each case with fixtures:
+
+```powershell
+node --test scripts\acceptance\api\tests\numeric-runtime-observation.test.mjs
+```
 
 Run the focused contract, owner paging, query validation, and Gateway schema
 tests from the repository root:
@@ -879,7 +887,8 @@ and [MCP harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/m
 Use [Run a read-only CLI API case](./api-acceptance-migration.md) for the
 read-only discovery case. Use the
 [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
-to inspect existing tool-denial evidence. Keep controlled test results
+to inspect existing tool-denial, root model-turn, and hard-credit evidence.
+Keep controlled test results
 separate from live target evidence.
 ## Validate documentation changes
 

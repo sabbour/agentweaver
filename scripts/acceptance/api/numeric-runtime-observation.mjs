@@ -8,6 +8,17 @@ import { fileURLToPath } from 'node:url';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from '../../harness-shared/safe-jsonl.mjs';
 
 const CASE_ID = 'numeric-runtime-observation';
+const MODEL_TURN_CASE_ID = 'numeric-model-turn-no-send';
+const HARD_CREDIT_CASE_ID = 'numeric-hard-credit-no-send';
+const COMMON_INPUT_KEYS = [
+  'caseId', 'sourceCommit', 'targetCommit', 'apphostSha256',
+  'approvedNonProduction', 'expectedActorId', 'target',
+];
+const CASE_INPUT_KEYS = {
+  [CASE_ID]: [...COMMON_INPUT_KEYS, 'expectedMaxToolCalls'],
+  [MODEL_TURN_CASE_ID]: [...COMMON_INPUT_KEYS, 'expectedMaxModelTurns'],
+  [HARD_CREDIT_CASE_ID]: [...COMMON_INPUT_KEYS, 'expectedSoftWarning'],
+};
 const CASE_SCRIPT_PATH = fileURLToPath(import.meta.url);
 const MAX_OUTPUT = 4 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 60_000;
@@ -94,20 +105,33 @@ function isIdentifier(value) {
     && /^[A-Za-z0-9._:-]{1,256}$/.test(value);
 }
 
+function validCaseLimit(value) {
+  switch (value.caseId) {
+    case CASE_ID:
+      return Number.isInteger(value.expectedMaxToolCalls)
+        && value.expectedMaxToolCalls >= 1
+        && value.expectedMaxToolCalls <= 10_000;
+    case MODEL_TURN_CASE_ID:
+      return Number.isInteger(value.expectedMaxModelTurns)
+        && value.expectedMaxModelTurns >= 1
+        && value.expectedMaxModelTurns <= 10_000;
+    case HARD_CREDIT_CASE_ID:
+      return typeof value.expectedSoftWarning === 'boolean';
+    default:
+      return false;
+  }
+}
+
 export function validateInput(value) {
-  if (!exactKeys(value, [
-    'caseId', 'sourceCommit', 'targetCommit', 'apphostSha256',
-    'approvedNonProduction', 'expectedActorId', 'expectedMaxToolCalls', 'target',
-  ])
-    || value.caseId !== CASE_ID
+  const caseKeys = Object.hasOwn(CASE_INPUT_KEYS, value?.caseId) ? CASE_INPUT_KEYS[value.caseId] : null;
+  if (!caseKeys
+    || !exactKeys(value, caseKeys)
+    || !validCaseLimit(value)
     || !/^[a-f0-9]{40}$/i.test(value.sourceCommit ?? '')
     || !/^[a-f0-9]{40}$/i.test(value.targetCommit ?? '')
     || !/^[a-f0-9]{64}$/i.test(value.apphostSha256 ?? '')
     || value.approvedNonProduction !== true
     || !nonEmpty(value.expectedActorId)
-    || !Number.isInteger(value.expectedMaxToolCalls)
-    || value.expectedMaxToolCalls < 1
-    || value.expectedMaxToolCalls > 10_000
     || !exactKeys(value.target, TARGET_KEYS)
     || TARGET_KEYS.some(key => !nonEmpty(value.target[key]))
     || !isIdentifier(value.target.projectId)
@@ -120,16 +144,19 @@ export function validateInput(value) {
     gatewayUrl: validateUrl(value.target.gatewayUrl, 'Gateway URL', true),
     brokerIssuer: validateUrl(value.target.brokerIssuer, 'Broker issuer', false),
   };
-  return {
-    caseId: CASE_ID,
+  const parsed = {
+    caseId: value.caseId,
     sourceCommit: value.sourceCommit.toLowerCase(),
     targetCommit: value.targetCommit.toLowerCase(),
     apphostSha256: value.apphostSha256.toLowerCase(),
     approvedNonProduction: true,
     expectedActorId: value.expectedActorId,
-    expectedMaxToolCalls: value.expectedMaxToolCalls,
-    target,
   };
+  if (value.caseId === CASE_ID) parsed.expectedMaxToolCalls = value.expectedMaxToolCalls;
+  if (value.caseId === MODEL_TURN_CASE_ID) parsed.expectedMaxModelTurns = value.expectedMaxModelTurns;
+  if (value.caseId === HARD_CREDIT_CASE_ID) parsed.expectedSoftWarning = value.expectedSoftWarning;
+  parsed.target = target;
+  return parsed;
 }
 
 export function resolveCliPath(value, platform = process.platform) {
@@ -231,20 +258,51 @@ export function childEnvironment(env) {
 }
 
 function matchesToolLimitRejection(fact, sessionId) {
-  return fact?.kind === 'ToolPermissionRejected'
-    && fact.limitKind === 'ToolCalls'
+  return fact?.kind === 'toolPermissionRejected'
+    && fact.limitKind === 'toolCalls'
     && fact.stage === 'toolPermission'
     && fact.reasonCode === TOOL_LIMIT_DENIAL
     && fact.sessionId === sessionId
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fact.attemptId ?? '')
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fact.dispatchId ?? '')
-    && fact.ownerDecision?.state === 'Available'
-    && fact.toolPermission?.state === 'Available'
-    && fact.nativeNoSend?.state === 'Unavailable'
-    && fact.toolExecution?.state === 'Unavailable';
+    && fact.ownerDecision?.state === 'available'
+    && fact.toolPermission?.state === 'available'
+    && fact.nativeNoSend?.state === 'unavailable'
+    && fact.toolExecution?.state === 'unavailable';
+}
+
+function historyFacts(pages, firstHistory) {
+  if (pages.some(page => page.history?.complete !== true
+    || !Array.isArray(page.history?.items)
+    || !Object.hasOwn(page.history, 'nextCursor')
+    || (page.history.nextCursor !== null && typeof page.history.nextCursor !== 'string')
+    || page.history?.snapshotId !== firstHistory?.snapshotId
+    || page.history?.highWatermark !== firstHistory?.highWatermark)) {
+    throw new Error('The history is incomplete, malformed, or its pages do not share one snapshot.');
+  }
+
+  const factsById = new Map();
+  for (const page of pages) {
+    for (const fact of page.history.items ?? []) {
+      if (factsById.has(fact.factId)) throw new Error('The paged history contains a duplicate fact.');
+      factsById.set(fact.factId, fact);
+    }
+  }
+  return [...factsById.values()];
 }
 
 export function validateObservation(input, pages, exact, restExact) {
+  switch (input.caseId) {
+    case MODEL_TURN_CASE_ID:
+      return validateModelTurnObservation(input, pages, exact, restExact);
+    case HARD_CREDIT_CASE_ID:
+      return validateHardCreditObservation(input, pages, exact, restExact);
+    default:
+      return validateToolObservation(input, pages, exact, restExact);
+  }
+}
+
+function validateToolObservation(input, pages, exact, restExact) {
   if (!Array.isArray(pages) || pages.length === 0 || !pages[0]) {
     throw new Error('The observation history is empty or unavailable.');
   }
@@ -262,36 +320,20 @@ export function validateObservation(input, pages, exact, restExact) {
   if (first.acceptedLimits?.maxToolCalls !== input.expectedMaxToolCalls) {
     throw new Error('The accepted maxToolCalls value does not match the case input.');
   }
-  if (pages.some(page => page.history?.complete !== true
-    || !Array.isArray(page.history?.items)
-    || !Object.hasOwn(page.history, 'nextCursor')
-    || (page.history.nextCursor !== null && typeof page.history.nextCursor !== 'string')
-    || page.history?.snapshotId !== firstHistory.snapshotId
-    || page.history?.highWatermark !== firstHistory.highWatermark)) {
-    throw new Error('The history is incomplete, malformed, or its pages do not share one snapshot.');
-  }
-
-  const factsById = new Map();
-  for (const page of pages) {
-    for (const fact of page.history.items ?? []) {
-      if (factsById.has(fact.factId)) throw new Error('The paged history contains a duplicate fact.');
-      factsById.set(fact.factId, fact);
-    }
-  }
-  const facts = [...factsById.values()];
+  const facts = historyFacts(pages, firstHistory);
   const rejections = facts.filter(fact => matchesToolLimitRejection(fact, expected.sessionId));
   if (rejections.length === 0) {
     throw new Error('The selected session has no retained numeric tool-permission rejection.');
   }
   const rejection = rejections[0];
-  if (!facts.some(fact => fact.kind === 'ToolInvocationReserved'
-    && fact.limitKind === 'ToolCalls'
+  if (!facts.some(fact => fact.kind === 'toolInvocationReserved'
+    && fact.limitKind === 'toolCalls'
     && fact.sessionId === expected.sessionId
     && fact.attemptId !== rejection.attemptId)) {
     throw new Error('The history does not show a separate admitted tool reservation.');
   }
   const total = first.totals?.toolSlotsReserved;
-  if (total?.state !== 'Available' || total.value !== input.expectedMaxToolCalls) {
+  if (total?.state !== 'available' || total.value !== input.expectedMaxToolCalls) {
     throw new Error('Run-wide tool reservations do not match the configured test limit.');
   }
   const exactItems = exact?.history?.items;
@@ -317,6 +359,230 @@ export function validateObservation(input, pages, exact, restExact) {
     runWideToolSlotsReserved: total.value,
     conclusion: 'The owner recorded a tool-permission rejection. This does not prove that the SDK received it or that the tool did not run.',
   };
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '');
+}
+
+// The history of a root binding contains facts from all sessions, fences, and selections of the run.
+function authorityMismatch(fact, binding, sessionId) {
+  if (fact?.sessionId !== sessionId) return 'another session';
+  if (fact.executionFence !== binding.currentExecutionFence) return 'a stale or different execution fence';
+  if (fact.acceptedSelectionHash !== binding.acceptedSelectionHash) return 'another accepted selection';
+  return null;
+}
+
+function currentAuthorityFacts(candidates, binding, sessionId, label) {
+  if (candidates.length === 0) throw new Error(`The history has no retained ${label}.`);
+  const current = candidates.filter(fact => authorityMismatch(fact, binding, sessionId) === null);
+  if (current.length === 0) {
+    const mismatches = [...new Set(candidates.map(fact => authorityMismatch(fact, binding, sessionId)))];
+    throw new Error(`No retained ${label} matches the current authority. Mismatch: ${mismatches.join('; ')}.`);
+  }
+  return current;
+}
+
+function nativeNoSendProven(fact) {
+  return fact.nativeNoSend?.state === 'available'
+    && fact.nativeNoSend.rangeComplete === true
+    && fact.nativeNoSend.eventCount === 0;
+}
+
+function rootHistory(input, pages) {
+  if (!Array.isArray(pages) || pages.length === 0 || !pages[0]) {
+    throw new Error('The observation history is empty or unavailable.');
+  }
+  const first = pages[0];
+  const binding = first.binding;
+  const expected = input.target;
+  if (first.contractVersion !== 2
+    || binding?.projectId !== expected.projectId
+    || binding?.runId !== expected.runId
+    || binding?.sessionId !== expected.sessionId
+    || binding?.isRoot !== true
+    || !Number.isInteger(binding?.currentExecutionFence)
+    || binding.currentExecutionFence !== binding.sessionExecutionFence
+    || !nonEmpty(binding.acceptedSelectionHash)) {
+    throw new Error('The observation binding does not match the selected root session and current fence.');
+  }
+  return { first, binding, facts: historyFacts(pages, first.history) };
+}
+
+function modelTurnEvidence(input, pages) {
+  const { first, binding, facts } = rootHistory(input, pages);
+  const sessionId = input.target.sessionId;
+  const limit = input.expectedMaxModelTurns;
+  if (first.acceptedLimits?.maxModelTurns !== limit) {
+    throw new Error('The accepted maxModelTurns value does not match the case input.');
+  }
+  const total = first.totals?.modelSlotsReserved;
+  if (total?.state !== 'available' || !Number.isInteger(total.value)) {
+    throw new Error('Run-wide model-turn reservations are not available.');
+  }
+  if (total.value > limit) {
+    throw new Error('Run-wide model-turn reservations exceed the configured test limit (over-admission).');
+  }
+  if (total.value < limit) {
+    throw new Error('Run-wide model-turn reservations do not reach the configured test limit.');
+  }
+  const reservations = facts.filter(fact => fact?.kind === 'modelTurnReserved' && fact.limitKind === 'modelTurns');
+  const currentReservations = reservations.filter(fact => authorityMismatch(fact, binding, sessionId) === null);
+  if (currentReservations.length < limit) {
+    throw new Error(`The history has ${currentReservations.length} model-turn reservations that match the current authority; the case needs ${limit}. ${reservations.length - currentReservations.length} other reservations fail the current-authority rule.`);
+  }
+  const denials = currentAuthorityFacts(
+    facts.filter(fact => fact?.kind === 'denied'
+      && fact.limitKind === 'modelTurns'
+      && fact.stage === 'rootAuthorization'
+      && fact.reasonCode === 'limit_reached'
+      && fact.ownerDecision?.state === 'available'
+      && isUuid(fact.attemptId)),
+    binding, sessionId, 'root model-turn denial',
+  );
+  const noSends = currentAuthorityFacts(
+    facts.filter(fact => fact?.kind === 'nativeNoSend'
+      && fact.limitKind === 'modelTurns'
+      && denials.some(denial => denial.attemptId === fact.attemptId)),
+    binding, sessionId, 'model-turn native no-send fact for a denied attempt',
+  );
+  const noSend = noSends.find(nativeNoSendProven);
+  if (!noSend) {
+    throw new Error('The model-turn native no-send section is not available with a complete range and zero events.');
+  }
+  const denial = denials.find(fact => fact.attemptId === noSend.attemptId);
+  return { binding, facts, denial, noSend, reservations: currentReservations, total };
+}
+
+function hardCreditEvidence(input, pages) {
+  const { first, binding, facts } = rootHistory(input, pages);
+  const sessionId = input.target.sessionId;
+  const limit = first.acceptedLimits?.copilotHardCreditLimit;
+  if (typeof limit !== 'number') {
+    throw new Error('The accepted copilotHardCreditLimit value is not set.');
+  }
+  const denials = currentAuthorityFacts(
+    facts.filter(fact => fact?.kind === 'denied'
+      && fact.limitKind === 'copilotHardCredits'
+      && fact.stage === 'nativeTurnBegin'
+      && fact.reasonCode === 'hard_credit_limit_reached'
+      && fact.unit === 'nanoAiu'
+      && fact.ownerDecision?.state === 'available'
+      && isUuid(fact.attemptId)
+      && isUuid(fact.dispatchId)),
+    binding, sessionId, 'hard-credit denial',
+  );
+  const configured = denials.filter(fact => fact.configuredValue === limit);
+  if (configured.length === 0) {
+    throw new Error('The current hard-credit denial has a configured value that is different from the accepted copilotHardCreditLimit. The denial is from an old configuration.');
+  }
+  const exceeded = configured.filter(fact => typeof fact.observedValue === 'number'
+    && fact.observedValue >= fact.configuredValue);
+  if (exceeded.length === 0) {
+    throw new Error('The hard-credit denial observed value is less than its configured value.');
+  }
+  const noSends = currentAuthorityFacts(
+    facts.filter(fact => fact?.kind === 'nativeNoSend'
+      && fact.limitKind === 'copilotHardCredits'
+      && exceeded.some(denial => denial.dispatchId === fact.dispatchId)),
+    binding, sessionId, 'hard-credit native no-send fact for a denied dispatch',
+  );
+  const sameConfiguration = noSends.filter(fact => exceeded.some(denial => denial.dispatchId === fact.dispatchId
+    && denial.configuredValue === fact.configuredValue));
+  if (sameConfiguration.length === 0) {
+    throw new Error('The hard-credit native no-send fact has a configured value that is different from the denial.');
+  }
+  const noSend = sameConfiguration.find(nativeNoSendProven);
+  if (!noSend) {
+    throw new Error('The hard-credit native no-send section is not available with a complete range and zero events.');
+  }
+  const denial = exceeded.find(fact => fact.dispatchId === noSend.dispatchId
+    && fact.configuredValue === noSend.configuredValue);
+  const guards = currentAuthorityFacts(
+    facts.filter(fact => fact?.kind === 'creditGuardChanged'),
+    binding, sessionId, 'credit-guard fact',
+  );
+  if (guards.some(fact => !Number.isInteger(fact.sequence) || typeof fact.observedValue !== 'number')) {
+    throw new Error('A credit-guard fact has no sequence or observed value.');
+  }
+  guards.sort((left, right) => left.sequence - right.sequence);
+  for (let index = 1; index < guards.length; index += 1) {
+    if (guards[index].observedValue < guards[index - 1].observedValue) {
+      throw new Error('The credit-guard floor decreased in sequence order.');
+    }
+  }
+  if (!guards.some(fact => fact.hardCapExhausted === true)) {
+    throw new Error('No current credit-guard fact shows that the hard cap is exhausted.');
+  }
+  if (input.expectedSoftWarning && !guards.some(fact => fact.softWarningEmitted === true)) {
+    throw new Error('No current credit-guard fact shows the expected soft warning.');
+  }
+  return { binding, facts, denial, noSend, guards, limit };
+}
+
+function requireExactNoSend(response, noSend, binding, sessionId, label) {
+  const items = response?.history?.items;
+  if (response?.history?.exactAttempt !== true || !Array.isArray(items)) {
+    throw new Error(`${label} did not return an exact attempt history.`);
+  }
+  const match = items.find(fact => fact?.factId === noSend.factId);
+  if (!match) throw new Error(`${label} did not return the native no-send fact.`);
+  const mismatch = authorityMismatch(match, binding, sessionId);
+  if (mismatch) {
+    throw new Error(`${label} returned a native no-send fact that does not match the current authority. Mismatch: ${mismatch}.`);
+  }
+  if (!isDeepStrictEqual(match, noSend)) {
+    throw new Error(`${label} returned a different native no-send fact.`);
+  }
+}
+
+function validateModelTurnObservation(input, pages, exact, restExact) {
+  const evidence = modelTurnEvidence(input, pages);
+  const sessionId = input.target.sessionId;
+  requireExactNoSend(exact, evidence.noSend, evidence.binding, sessionId, 'Exact attempt lookup');
+  requireExactNoSend(restExact, evidence.noSend, evidence.binding, sessionId, 'The REST exact lookup');
+  return {
+    attemptId: evidence.denial.attemptId,
+    dispatchId: evidence.denial.dispatchId,
+    factId: evidence.noSend.factId,
+    denialFactId: evidence.denial.factId,
+    executionFence: evidence.binding.currentExecutionFence,
+    pagesRead: pages.length,
+    totalFacts: evidence.facts.length,
+    currentModelTurnReservations: evidence.reservations.length,
+    runWideModelSlotsReserved: evidence.total.value,
+    conclusion: 'The owner recorded a root model-turn denial and a native no-send witness for the same attempt in the current execution fence and selection. This does not cover child sessions or prompt-token limits.',
+  };
+}
+
+function validateHardCreditObservation(input, pages, exact, restExact) {
+  const evidence = hardCreditEvidence(input, pages);
+  const sessionId = input.target.sessionId;
+  requireExactNoSend(exact, evidence.noSend, evidence.binding, sessionId, 'Exact attempt lookup');
+  requireExactNoSend(restExact, evidence.noSend, evidence.binding, sessionId, 'The REST exact lookup');
+  return {
+    attemptId: evidence.denial.attemptId,
+    dispatchId: evidence.denial.dispatchId,
+    factId: evidence.noSend.factId,
+    denialFactId: evidence.denial.factId,
+    executionFence: evidence.binding.currentExecutionFence,
+    pagesRead: pages.length,
+    totalFacts: evidence.facts.length,
+    hardCreditLimitNanoAiu: evidence.limit,
+    observedCreditsNanoAiu: evidence.denial.observedValue,
+    creditGuardFacts: evidence.guards.length,
+    softWarningObserved: evidence.guards.some(fact => fact.softWarningEmitted === true),
+    conclusion: 'The owner recorded a root hard-credit denial at native turn begin and a native no-send witness for the same dispatch in the current execution fence and selection. This does not prove the exact spend of other model turns.',
+  };
+}
+
+export function exactLookupFact(input, pages) {
+  if (input.caseId === MODEL_TURN_CASE_ID) return modelTurnEvidence(input, pages).noSend;
+  if (input.caseId === HARD_CREDIT_CASE_ID) return hardCreditEvidence(input, pages).noSend;
+  const facts = pages.flatMap(page => page.history.items ?? []);
+  const rejection = facts.find(fact => matchesToolLimitRejection(fact, input.target.sessionId));
+  if (!rejection?.attemptId) throw new Error('The selected session has no retained numeric tool-permission rejection.');
+  return rejection;
 }
 
 async function sha256(filePath) {
@@ -427,7 +693,7 @@ async function runCase(options, env = process.env) {
   if (options.dryRun) {
     return {
       status: 'validated-not-run',
-      caseId: CASE_ID,
+      caseId: input.caseId,
       sourceCommit: input.sourceCommit,
       targetCommit: input.targetCommit,
       apphostSha256: actualHash,
@@ -442,7 +708,7 @@ async function runCase(options, env = process.env) {
   const resultPath = path.join(evidencePath, 'result.json');
   const handle = await open(resultPath, 'wx', 0o600);
   const common = {
-    caseId: CASE_ID,
+    caseId: input.caseId,
     sourceCommit: input.sourceCommit,
     targetCommit: input.targetCommit,
     apphostSha256: actualHash,
@@ -500,20 +766,18 @@ async function runCase(options, env = process.env) {
       query = { cursor, pageSize: PAGE_SIZE };
     }
 
-    const facts = pages.flatMap(page => page.history.items ?? []);
-    const rejection = facts.find(fact => matchesToolLimitRejection(fact, input.target.sessionId));
-    if (!rejection?.attemptId) throw new Error('The selected session has no retained numeric tool-permission rejection.');
+    const target = exactLookupFact(input, pages);
 
     const exactResponse = await execute(
       'observation-exact-attempt',
-      observationArgs(input, { attemptId: rejection.attemptId }),
+      observationArgs(input, { attemptId: target.attemptId }),
     );
     const exact = apiResponseBody(exactResponse, 'observation-exact-attempt');
     const restUrl = new URL(
       `/api/v1/projects/${input.target.projectId}/runs/${input.target.runId}/coordination/sessions/${input.target.sessionId}/runtime-observation/v2`,
       input.target.gatewayUrl,
     );
-    restUrl.searchParams.set('attemptId', rejection.attemptId);
+    restUrl.searchParams.set('attemptId', target.attemptId);
     const restArgs = [
       'rest', '--method', 'GET', '--url', `${restUrl.pathname}${restUrl.search}`,
       '--scope', 'api.read', '--scope', 'projects.orchestrator', ...targetArgs(input.target),
