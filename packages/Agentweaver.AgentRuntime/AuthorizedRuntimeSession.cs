@@ -251,6 +251,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Reuses a stored answer only when both records exist, the prompt matches, and the SDK adds no events.</summary>
     private async Task<string?> ReadRecordedA2ATurnAsync(
         RuntimeSessionMaterialHttpClient material,
         Guid messageId,
@@ -622,6 +623,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 if (nativeCursor is null)
                     throw new RuntimeAuthorizationException("runtime_native_turn_no_send_invalid");
                 await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                // An owner denial proves no send only when the SDK cursor also shows an empty event range.
                 var range = await _session.RequireNoNativeEventsSinceAsync(nativeCursor, cancellationToken)
                     .ConfigureAwait(false);
                 var noSend = RuntimeNativeDenialContract.SealNoSend(new(

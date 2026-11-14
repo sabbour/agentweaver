@@ -193,6 +193,7 @@ public static class RuntimeAgentHostEndpoints
         }
         finally
         {
+            // The bearer is request-scoped, so invalidate it when Host processing ends, including on failure.
             bearer.Invalidate();
         }
     }

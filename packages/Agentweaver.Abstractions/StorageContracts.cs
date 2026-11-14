@@ -79,6 +79,7 @@ public enum WorkspaceVolumeTransitionKind
 public static class WorkspaceVolumeTransitionRules
 {
     /// <summary>Returns the resource generation expected after the requested operation.</summary>
+    /// <remarks>Only Provision creates a generation and Replace advances it; other operations keep the generation unchanged.</remarks>
     /// <exception cref="ArgumentException">The operation cannot run at the expected generation.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The operation or generation is invalid.</exception>
     public static long GetTargetResourceGeneration(
@@ -331,6 +332,7 @@ public sealed record WorkspaceVolumeSpec
             throw new ArgumentException("Authorized environments must be an initialized collection.",
                 nameof(authorizedEnvironmentIds));
 
+        // Sorting gives equivalent allowlists one stable representation before duplicate checks.
         var authorized = authorizedEnvironmentIds
             .Select(id => WorkspaceVolumeIdentity.Validate(id, nameof(authorizedEnvironmentIds)))
             .OrderBy(id => id, StringComparer.Ordinal)

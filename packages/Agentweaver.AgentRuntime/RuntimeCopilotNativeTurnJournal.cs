@@ -84,6 +84,7 @@ internal static class RuntimeCopilotNativeTurnJournal
         (await ReadWithCountsAsync(session, source, startCursor, nativeMessageId, response, cancellationToken)
             .ConfigureAwait(false)).Observation;
 
+    /// <summary>Reads forward in bounded pages and accepts the range only after a terminal page.</summary>
     internal static async Task<RuntimeNativeTurnJournalResult> ReadWithCountsAsync(
         CopilotSession session,
         SdkSessionFacts source,
