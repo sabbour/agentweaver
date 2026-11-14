@@ -34,7 +34,8 @@ internal static class MafMergeContract
 {
     internal static bool IsValidInput(SourceControlMergeStepInput? input)
     {
-        // A pull-request number and head must be supplied together; the workflow may derive both from an upstream receipt.
+        // True requires a defined method and either no PR target or a positive number with a valid head SHA; false otherwise.
+        // The number and head are paired because the workflow may derive both from an upstream receipt.
         if (input is null || !Enum.IsDefined(input.Method) ||
             (input.PullRequestNumber is null) != (input.ExpectedHeadSha is null))
             return false;
@@ -124,7 +125,8 @@ internal static class MafMergeContract
 
     internal static bool IsValidIntent(MafExecutionMergeIntent? intent)
     {
-        // Reject any checkpoint data that could redirect the request or change its replay identity.
+        // True requires bounded IDs, positive revisions, fence, and PR number, operation-derived idempotency and owner IDs,
+        // and a valid selection, repository, PR head, and method; false otherwise.
         return intent is not null &&
             intent.OperationId != Guid.Empty &&
             string.Equals(
@@ -172,7 +174,7 @@ internal static class MafMergeContract
         SourceControlRepositoryPin pin,
         long? ownerApprovalStateVersion = null)
     {
-        // Approval may advance the decision version once; the owner must bind that receipt to the current version.
+        // A completed approval may advance the decision; then a supplied owner version must match the current version.
         var accepted = pin.AcceptedRun;
         var matchesBinding =
             intent.Identity == identity &&
@@ -266,6 +268,7 @@ internal static class MafMergeContract
             mergeSha = receipt.MergeSha
         });
 
+    // Returns true only for a 40- or 64-character hexadecimal provider commit ID; false otherwise.
     internal static bool IsGitSha(string? value) =>
         value is { Length: 40 or 64 } && value.All(Uri.IsHexDigit);
 
@@ -293,7 +296,7 @@ internal static class MafMergeContract
         return openPullRequestIds.ToImmutable();
     }
 
-    // Every owner response must identify the exact persisted intent and immutable PR revision.
+    // True only when all saved IDs, PR number, and merge method match; repository and head compare without case. False otherwise.
     private static bool MatchesOwnerRequest(MafExecutionMergeIntent intent, MafMergeOwnerIntent owner) =>
         string.Equals(owner.IntentId, intent.OwnerIntentId, StringComparison.Ordinal) &&
         string.Equals(owner.ApprovalRequestId, intent.ApprovalRequestId, StringComparison.Ordinal) &&
@@ -302,7 +305,7 @@ internal static class MafMergeContract
         string.Equals(owner.HeadSha, intent.ExpectedHeadSha, StringComparison.OrdinalIgnoreCase) &&
         owner.Method == intent.Method;
 
-    // Only a completed typed approval by the accepted actor can advance the original decision version.
+    // True only when no gate is pending and the current decision has this actor's typed approval for the saved request, intent, and fence; false otherwise.
     private static bool HasCurrentApproval(
         MafExecutionMergeIntent intent,
         string actorId,
@@ -317,19 +320,19 @@ internal static class MafMergeContract
             receipt.ActorId == actorId &&
             receipt.Fence == intent.ExecutionFence);
 
-    // Repository identity is validated by bounded owner/name components before its full name is used.
+    // True only when both repository components are non-blank, at most 100 characters, and free of control characters; false otherwise.
     private static bool IsRepository(SourceControlRepositoryIdentity? repository) =>
         repository is not null &&
         IsMetadataValue(repository.Owner, 100) &&
         IsMetadataValue(repository.Name, 100);
 
-    // Persisted identifiers must stay bounded and cannot carry control characters into owner routes.
+    // True only when the value is non-blank, within the supplied length, and has no control characters; false otherwise.
     private static bool IsMetadataValue(string? value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= maximumLength &&
         !value.Any(char.IsControl);
 
-    // Selection hashes are SHA-256 hex values, unlike provider commit IDs which allow SHA-1 too.
+    // True only for a 64-character hexadecimal selection hash; provider commit IDs may also use SHA-1.
     private static bool IsHash(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
