@@ -185,10 +185,8 @@ internal sealed class GoTarReader(GoReader reader)
                 if (flag == TypeXGlobalHeader)
                 {
                     // A global PAX header is returned to the caller as its own entry (as Go does)
-                    // so the validator can reject it. Its records can change only the entry name, not later
-                    // entries. Unlike Go, which ignores a merge error here, an invalid record fails the read.
-                    if (MergePax(header, records!) is { } globalError)
-                        return globalError;
+                    // so the validator can reject it. Go ignores errors while merging global PAX values.
+                    _ = MergePax(header, records!);
                     result = new TarHeader { Name = header.Name, Typeflag = flag, ModTimeZero = true };
                     return null;
                 }

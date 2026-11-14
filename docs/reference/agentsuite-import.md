@@ -72,6 +72,8 @@ After native validation passes, Agentweaver refuses two more cases:
   (`agentsuite_reserved_role`). The platform coordinator is the team entry point.
 
 A rejected archive returns `422` with `code` and every error line in `errors`.
+`code` identifies the rejection, and `errors` gives diagnostic details. Diagnostic text can change
+when parity defects are corrected.
 
 ## Identity and retention
 
