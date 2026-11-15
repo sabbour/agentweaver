@@ -14,6 +14,7 @@ public sealed class BacklogPromotionContractsTests
         Assert.Equal(id, BacklogPlanPromotionIds.CreateTaskId("project", "run", "plan", "item"));
         Assert.NotEqual(id, BacklogPlanPromotionIds.CreateTaskId("project", "run-2", "plan", "item"));
         Assert.NotEqual(id, BacklogPlanPromotionIds.CreateTaskId("project", "run", "plan", "item-2"));
+        // Newlines in adjacent fields must not make distinct input tuples collide.
         Assert.NotEqual(
             BacklogPlanPromotionIds.CreateTaskId("a\nb", "c", "d", "e"),
             BacklogPlanPromotionIds.CreateTaskId("a", "b\nc", "d", "e"));

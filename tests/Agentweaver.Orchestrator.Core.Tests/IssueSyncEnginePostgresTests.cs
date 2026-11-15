@@ -87,6 +87,7 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
     public async Task LostCreateResponseRecoversMarkerWithoutDuplicatePost()
     {
         await AddTask("local", "Local");
+        // The fake records the remote issue before it loses the create response.
         _github.LoseCreateResponse = true;
         await Cycle();
         Assert.Equal(1, _github.Creates);

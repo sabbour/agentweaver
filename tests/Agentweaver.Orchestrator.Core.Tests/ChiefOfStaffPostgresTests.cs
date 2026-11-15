@@ -13,9 +13,8 @@ using Xunit;
 namespace Agentweaver.Orchestrator.Core.Tests;
 
 /// <summary>
-/// Verifies Chief of Staff conversations and Priorities against migrated owner tables. Each test maps to a
-/// proposal §8 scenario: reload and reconnect, duplicate input, conflicts, permission loss, cancelled work,
-/// and Priority edits that never change execution state.
+/// Verifies persisted Chief of Staff conversations and Priorities, including permission filtering
+/// and checks that Priority edits do not change execution state.
 /// </summary>
 [Collection("Coordination PostgreSQL")]
 public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
@@ -218,7 +217,7 @@ public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixtur
             """));
         Assert.Equal(PostgresErrorCodes.CheckViolation, partialIdentity.SqlState);
 
-        // Permission trimming removes both new identity fields as well as the old target fields.
+        // Permission loss hides the provider, repository, and issue number from each link.
         var hidden = ChiefOfStaffEndpoints.Redact(legacyRead, Authority(OtherProject));
         Assert.All(hidden.Links, link => {
             Assert.Equal("unavailable", link.Access);

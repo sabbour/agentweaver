@@ -54,7 +54,7 @@ public sealed class GuardrailsEvidenceStorePostgresTests(CoordinationPostgresFix
     {
         var evidence = Evidence(Guid.NewGuid());
 
-        // Both transient results report success without writing a row, so the final decision can still be stored.
+        // The test retries after both transient results and verifies that the allowed result is stored.
         Assert.Equal(GuardrailsJournalAppendStatus.Appended, await _store.AppendAsync(
             evidence with { ReasonCode = GuardrailsReasonCode.ClassifierTimedOut }, default));
         Assert.Equal(GuardrailsJournalAppendStatus.Appended, await _store.AppendAsync(
