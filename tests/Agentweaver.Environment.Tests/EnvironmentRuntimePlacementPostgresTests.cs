@@ -14,7 +14,7 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment.Tests;
 
-// Current authority is isolated here; the combined Broker/Core runtime proof is separate.
+// Placement reads use controlled Projects authority; this fixture does not compose Broker/Core.
 public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgresFixture fixture)
     : IClassFixture<EnvironmentPostgresFixture>, IDisposable
 {
@@ -434,6 +434,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         Assert.DoesNotContain("providerAttachmentDescriptor", responseJson);
         Assert.DoesNotContain("workspaceTreeSha256", responseJson);
         Assert.DoesNotContain("workspaceProviderCheckpointId", responseJson);
+        // Hold the projection callback so a concurrent detach must wait for the retained advisory lock.
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var read = manager.GetCurrentPlacementCoreAsync(
@@ -564,6 +565,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
         var retained = await restarted.GetCurrentAsync(lifecycle.Fence, timeout.Token);
         Assert.True(JsonElement.DeepEquals(recoveryIntent, retained!.ProvisionIntent.ProviderRequest));
+        // Hold the Sandbox observation so a concurrent retirement must wait for the retained advisory lock.
         var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new ReadinessSandboxProvider(async (request, token) =>

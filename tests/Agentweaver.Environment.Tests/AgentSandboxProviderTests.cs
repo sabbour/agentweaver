@@ -563,6 +563,7 @@ public sealed partial class AgentSandboxProviderTests
             {
                 RequireRuntimeEndpoint = true
             };
+            // Set the Pod IP at each read boundary to verify endpoint discovery sees a later assignment.
             foreach (var transition in new[] { "selected", "readback", "next-observation" })
             {
                 handler.SetPodAddress(null);
@@ -626,6 +627,7 @@ public sealed partial class AgentSandboxProviderTests
             handler.SetReceiverEndpoint(
                 "https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure");
 
+            // A changed Pod UID or foreign Service owner on the second claim read must stop endpoint discovery.
             foreach (var change in new[] { "pod", "service" })
             {
                 handler.SetPodAddress(null);
@@ -706,6 +708,7 @@ public sealed partial class AgentSandboxProviderTests
         Assert.False(omitted.PodObservation!.WorkspaceAttachment!.ReadOnly);
         if (agentHostProfile)
             Assert.NotNull(omitted.RuntimeEndpoint);
+        // A string value is malformed; it must not verify VM isolation.
         handler.PodSpec["hostNetwork"] = "false";
         Assert.False((await provider.DescribeAsync(omittedRequest)).VmIsolationVerified);
         handler.PodSpec.Remove("hostNetwork");
@@ -979,6 +982,7 @@ public sealed partial class AgentSandboxProviderTests
 
         public void AddReadySandbox(string claimUid, DateTimeOffset leaseCreatedAt)
         {
+            // Keep fake startup timestamps within the lease-relative budgets to avoid unrelated startup failures.
             _imageEventTime = leaseCreatedAt.AddSeconds(1);
             var claimPath = _resources.Keys.Single(path =>
                 path.Contains("/sandboxclaims/", StringComparison.Ordinal));

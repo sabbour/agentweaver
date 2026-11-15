@@ -94,6 +94,7 @@ public sealed class EnvironmentP1CreationLinkPostgresTests(EnvironmentPostgresFi
 
         Assert.Single(results, result => !result.Replayed);
         Assert.All(results, result => Assert.Equal(results[0].OperationId, result.OperationId));
+        // The first registration checks authority before writing and before commit; five replays check once each.
         Assert.Equal(7, callbacks);
         Assert.Equal(1, await CountLinksAsync(owner));
     }
