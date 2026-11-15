@@ -133,6 +133,21 @@
       ]
     },
     {
+      "name": "Checkpoint recovery observation",
+      "sourcePrefixes": [
+        "scripts/acceptance/api/checkpoint-recovery-observation.mjs",
+        "scripts/acceptance/api/tests/checkpoint-recovery-observation.test.mjs",
+        "scripts/acceptance/api/examples/checkpoint-recovery-child-join-observation.json",
+        "scripts/acceptance/api/examples/checkpoint-recovery-committed-effect-observation.json"
+      ],
+      "required": [
+        "docs/guide/checkpoint-recovery-observation-acceptance.md",
+        "docs/guide/testing.md",
+        "docs/reference/api.md",
+        "docs/deep-dive/orchestration.md"
+      ]
+    },
+    {
       "name": "Session material persistence and recovery contract",
       "sourcePrefixes": [
         "packages/Agentweaver.Abstractions/SessionMaterialContracts.cs",

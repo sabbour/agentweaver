@@ -1306,6 +1306,16 @@ plan-mismatched checkpoints, or checkpoint progress incompatible with the
 accepted plan, are marked unavailable, not safe or complete. The projection
 does not dispatch work or reconcile children.
 
+Pending child entries expose `associationId`, `childSessionId`, and
+`messageId`. The step projection identifies a saved result as
+`checkpointResultRecorded`. After child-join recovery, the retained
+OpenPullRequest operation reports `committedAwaitingReceipt` with
+`reconcileCommitted` before its receipt is recorded, then
+`terminalReceiptRecorded` with a succeeded step. The
+[recovery observation case](../guide/checkpoint-recovery-observation-acceptance.md)
+compares these fields with retained before reads. The projection does not
+expose the full plan, dependency edges, or a physical effect inventory.
+
 For a non-active coordinator session, the status response reports persisted
 owner state and returns `blockers: []`. It omits `executionRecovery` and does
 not read decisions or checkpoints. A cancelled lifecycle does not imply idle

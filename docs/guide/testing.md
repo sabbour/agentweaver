@@ -278,10 +278,11 @@ SDK and owner responses. Neither test proves a native AKS journey.
 ## Test checkpoint recovery
 
 Use the
-[pending-gate recovery observation case](./checkpoint-recovery-observation-acceptance.md)
+[checkpoint recovery observation case](./checkpoint-recovery-observation-acceptance.md)
 to compare a retained before-capture with normal status after recovery. Its
-before and after modes use finite native CLI reads. They do not invoke
-recovery, answer a gate, or prove committed recovery-event delivery.
+before and after modes use finite native CLI reads for a pending gate, saved
+child, or recorded OpenPullRequest receipt. Full plan, dependency graph,
+committed recovery-event, and physical no-duplicate evidence remain separate.
 
 Run its local regression tests from the repository root:
 
