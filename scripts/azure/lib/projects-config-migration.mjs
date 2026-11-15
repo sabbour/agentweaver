@@ -515,7 +515,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
       : 'projects-config-migration';
   const receiptPath = path.join(receiptDirectory, `${jobPrefix}-${runId}.json`);
   const receipt = {
-    // Keep migration receipts at v2 for rollout consumers; bootstrap receipts have a separate v1 contract.
+    // Use version 1 for bootstrap and inspection receipts; use version 2 for migration receipts.
     schemaVersion: adminOperation ? 1 : 2,
     runId,
     mode: inspectFirstPlatformAdmin ? 'read-only-inspection' : options.execute ? 'execute' : 'dry-run',
@@ -543,7 +543,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
   let jobCreated = false;
 
   const record = (name, detail = {}) => {
-    // The step name goes last so a detail field can never replace it; the rollout reads step names.
+    // Put the name last so a detail field cannot replace it.
     receipt.steps.push({ at: deps.now().toISOString(), ...detail, name });
     deps.log(`- ${name}`);
   };

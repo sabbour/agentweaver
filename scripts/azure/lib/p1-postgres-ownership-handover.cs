@@ -6,8 +6,9 @@
 // Hands ownership of the Environment, Core (orchestrator), and Events (events_sessions) schemas from the
 // operator's Entra role to the dedicated P1 migration role, so later migration Jobs can run
 // as that role with no operator connection. The database maintenance runner starts this
-// through its owned relay. Every step is idempotent: a second run changes nothing and only
-// repeats the readback. It never creates, drops, or alters data.
+// through its owned relay. A rerun reapplies the role and database settings, then reassigns only
+// schemas and objects that the migration role does not own. It commits after the final readback
+// passes and does not change application data.
 
 using Azure.Core;
 using Azure.Identity;
@@ -16,9 +17,8 @@ using Npgsql;
 if (args.Length != 1 || args[0] != "--execute")
     throw new ArgumentException("The P1 ownership handover requires the explicit --execute argument.");
 
-// All inputs are checked before any connection. The role is a fixed value and the host must be an
-// install target's Azure PostgreSQL server, so a wrong environment cannot point it at another role.
-// The relay supplies the host of the target whose cluster it tunnels through.
+// All inputs are checked before any connection. The role name is fixed, and the caller supplies
+// the target host; this utility checks that the host matches the expected Azure PostgreSQL pattern.
 var expectedHost = new System.Text.RegularExpressions.Regex(
     "^[a-z][a-z0-9]{2,23}-pg\\.postgres\\.database\\.azure\\.com$");
 const string ExpectedRole = "agentweaver-id-p1-postgres-migration";
@@ -107,9 +107,9 @@ if (!Equals(await Scalar("SELECT current_user = @admin AND current_database() = 
 if (!Equals(await Scalar("SELECT count(*) = 3 FROM pg_namespace WHERE nspname = ANY(@schemas)"), true))
     throw new InvalidOperationException("All three P1 schemas must already exist. The handover never creates or initializes them.");
 
-// The role gets login only. CONNECT lets it open the database. CREATE on the database is needed
-// because the migrators run CREATE SCHEMA IF NOT EXISTS, and PostgreSQL checks that privilege
-// before it checks whether the schema exists.
+// The service login must not be a superuser, create databases or roles, replicate, or inherit roles.
+// CONNECT lets it open the database. Database CREATE is needed because the migrators run
+// CREATE SCHEMA IF NOT EXISTS; PostgreSQL checks that privilege even when the schema already exists.
 await Execute($"ALTER ROLE {quotedRole} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT");
 await Execute($"GRANT CONNECT, CREATE ON DATABASE agentweaver TO {quotedRole}");
 
@@ -155,7 +155,7 @@ await using (var command = new NpgsqlCommand("""
     while (await reader.ReadAsync(cancellation.Token))
         statements.Add(reader.GetString(0));
 }
-// Schemas come first in the query, so the role owns each schema before its objects move.
+// UNION ALL has no explicit order, so this loop does not guarantee that schemas precede their objects.
 foreach (var statement in statements)
     await Execute(statement);
 
