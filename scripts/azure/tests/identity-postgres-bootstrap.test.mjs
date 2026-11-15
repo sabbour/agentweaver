@@ -267,7 +267,6 @@ test('bootstraps through the owned pod and loopback tunnel with the Entra token 
   assert.equal(existsSync(dirname(fakes.pathNames[0])), false);
 });
 
-/** Both database stages use the same ready loopback forward, which stays open until P1 completes. */
 test('combined Identity and P1 PostgreSQL bootstrap keeps the tunnel through P1 initialization', async () => {
   const fakes = dependencies({ assertTunnelActiveForP1: true });
   const p1Receipt = join(options.repoRoot, 'Temp', 'p1-postgres-123456789abc.jsonl');
@@ -296,7 +295,6 @@ test('combined Identity and P1 PostgreSQL bootstrap keeps the tunnel through P1 
   assert.deepEqual(fakes.resources, new Map());
 });
 
-/** A separate target passes its plan and Projects migration principal to the initializer through the environment. */
 test('separate-target P1 initialization passes the target and Projects migration principal', async () => {
   const principal = 'e'.repeat(8) + '-eeee-4eee-8eee-' + 'e'.repeat(12);
   const p1Initializer = {
@@ -365,7 +363,6 @@ test('separate-target P1 initialization passes the target and Projects migration
   }
 });
 
-/** Initialized-database modes verify Identity read-only, then run the bounded P1 mode on the same tunnel. */
 test('inspection, Projects CONNECT repair, and pending continuation never re-bootstrap Identity', async () => {
   const sourceSha = 'a'.repeat(40);
   const coreMergeSha = 'b'.repeat(40);
@@ -447,7 +444,6 @@ test('combined PostgreSQL bootstrap rejects a plan hash that differs from the lo
   assert.equal(fakes.portForwardOptions, undefined);
 });
 
-/** P1 failures remain visible and still remove the exact temporary transport resources. */
 test('combined PostgreSQL bootstrap reports P1 failure after cleanup', async () => {
   const fakes = dependencies({
     p1DotnetResult: { status: 1, stdout: '', stderr: 'P1 initialization failed' },
@@ -637,7 +633,6 @@ test('port-forward binds only the local loopback interface and exact PostgreSQL 
   assert.equal(child.exitCode, 0);
 });
 
-/** The ownership handover runs on the same owned tunnel after a read-only Identity check. */
 test('P1 ownership handover verifies Identity read-only, runs on the tunnel, and records the readback', async () => {
   const fakes = dependencies();
   const handoverPrincipal = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';

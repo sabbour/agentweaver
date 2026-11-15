@@ -13,7 +13,6 @@ import {
 } from '../lib/guardrails.mjs';
 import { fixture, source, tags, fakeAzure, deploymentOutputs } from './fixtures/target.mjs';
 
-/** Builds the shared preflight with the approved source and records every Azure command. */
 function targetGuard(overrides = {}, config = {}, calls = []) {
   const target = guardAzureTarget({ ...fixture, ...source, ...config }, fakeAzure(overrides, calls));
   return { target, calls };
