@@ -607,12 +607,32 @@ wins the create race, the helper leaves that object unchanged.
 ### Apply Environment RBAC before an upgrade
 
 The deployment preflight checks the Environment ServiceAccount's effective
-permissions but does not apply its Role. If a preflight reports that the
-ServiceAccount lacks a permission, stop and ask a Kubernetes administrator to
-apply the proposed manifest from the exact source commit. Before you apply it,
-confirm that your current `kubectl` context targets the approved cluster. From
-the repository root in PowerShell, use the same full 40-character commit SHA
-that you passed to `azure:deploy-from-commit`:
+permissions but does not apply RBAC. A missing permission and a failed
+permission check are different results. If the check cannot run or cannot
+impersonate the ServiceAccount, resolve the caller's authorization; installing
+an Environment Role does not fix that failure.
+
+If the preflight reports a missing permission, first identify which permission
+is missing:
+
+- If the only missing permission is the named provider grant
+  (`get`, `update`, and `patch` on
+  `CiliumNetworkPolicy/agenthost-platform-egress`), install the narrow bundle
+  only after the reviewed target configuration confirms Cilium as the selected
+  platform egress provider. The preflight checks Cilium permissions
+  unconditionally; a missing Cilium permission alone does not confirm
+  provider selection. Follow the [named platform-egress RBAC
+  procedure](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#install-the-named-platform-egress-role)
+  to inspect, compare, create missing objects, and record both objects. Stop if
+  Cilium selection is not confirmed or either object conflicts.
+- If Sandbox, BuildTest, or cluster-scoped permissions are missing, use the
+  broad proposed manifest below. The narrow bundle does not supply those
+  permissions.
+
+For the broad proposal path only, confirm that your current `kubectl` context
+targets the approved cluster. From the repository root in PowerShell, use the
+same full 40-character commit SHA that you passed to
+`azure:deploy-from-commit`:
 
 ```powershell
 kubectl config current-context
@@ -621,9 +641,7 @@ git show <source-sha>:deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml | 
 
 Review and approve this RBAC change before you run it. The command applies
 only the Role and bindings in the selected source manifest; do not add broader
-permissions. After the apply succeeds, rerun the deployment command. If the
-preflight says it could not check the permission or impersonate the ServiceAccount,
-resolve that caller authorization instead of treating it as a missing Role rule.
+permissions. After the broad apply succeeds, rerun the deployment command.
 
 ### Prepare the Broker migration resources
 
@@ -1212,11 +1230,10 @@ and `get pods/log`, in namespace `agentweaver`. The helper checks these
 permissions before it writes. The pod does not check `kubernetes.default.svc`,
 because the AgentHost network policies block the Kubernetes API by design.
 
-The proposed rules in
-`deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml` are not in the active
-Kustomize bundle and are not applied by the helper. The helper checks these
-permissions but does not update the Environment Role. For an existing
-installation, follow the
+The RBAC bundles in `deploy/k8s/proposed/` and
+`deploy/k8s/rbac/platform-egress/` are not in the active Kustomize bundle and
+are not applied by the helper. The helper checks permissions but does not
+update the Environment Role. For an existing installation, follow the
 [Environment RBAC upgrade procedure](#apply-environment-rbac-before-an-upgrade)
 when the deployment preflight reports a missing permission.
 

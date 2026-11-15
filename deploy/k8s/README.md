@@ -69,6 +69,7 @@ when that policy is missing.
 | `runtime-configs/` | Non-secret ConfigMap inputs for service hosts and Environment settings. |
 | `provider-catalogs/` | Projects & Config provider catalog snapshot and ConfigMap. |
 | `profiles/` | Optional runtime profiles, including the AgentHost runtime ConfigMap. |
+| `rbac/platform-egress/` | Separate, administrator-applied RBAC for the named Cilium platform egress policy; excluded from workload deployment. |
 | `proposed/` | Proposed Agent Sandbox RBAC rules, excluded from the active Kustomize bundle. |
 | `migrations/identity-broker/` | Separate Broker migration ServiceAccount, ConfigMap, egress policy, and one-shot Job. |
 | `migrations/p1-postgres/` | PostgreSQL migration resources applied by the database maintenance runner. |
@@ -379,3 +380,91 @@ git show <source-sha>:deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml | 
 This applies only the Role, RoleBinding, ClusterRole, and ClusterRoleBinding
 in that source manifest. The deployment command does not apply them or widen
 their permissions.
+
+### Install the named platform-egress Role
+
+The separate `rbac/platform-egress/` bundle grants the `environment`
+ServiceAccount `get`, `update`, and `patch` on only
+`CiliumNetworkPolicy/agenthost-platform-egress` in namespace `agentweaver`.
+It does not select or activate Cilium, and the workload deployment does not
+apply this bundle. The deployment preflight checks Cilium permissions
+unconditionally, so install this bundle only when the reviewed target
+configuration confirms that Cilium is the selected platform egress provider.
+A missing Cilium permission alone does not confirm that selection.
+
+Use the full source SHA selected for the intended upgrade. From the repository
+root in PowerShell:
+
+1. Confirm the approved cluster with `kubectl config current-context` and
+   confirm Cilium selection from the reviewed target configuration.
+2. Read the manifest at that source SHA and inspect both named objects before
+   applying anything:
+
+   ```powershell
+   git show <source-sha>:deploy/k8s/rbac/platform-egress/environment-platform-egress.yaml
+   kubectl get role environment-platform-egress --namespace agentweaver --ignore-not-found -o yaml
+   kubectl get rolebinding environment-platform-egress --namespace agentweaver --ignore-not-found -o yaml
+   ```
+
+   A successful get with empty output means the object is absent. Stop if
+   either get fails. Do not treat denied access as absence.
+3. Compare the Role's kind, name, namespace, and complete rules with the
+   reviewed manifest. Compare the RoleBinding's kind, name, namespace,
+   subjects, and `roleRef`. Ignore server-managed metadata when comparing,
+   preserve existing metadata and grants, and stop if either object differs.
+   Do not overwrite, delete, or recreate a conflict. A different `roleRef` is
+   a conflict because `roleRef` is immutable.
+4. Record each object's initial presence, UID, and reviewed content. Record
+   absent objects separately. Keep matching pre-existing objects. If either
+   object changes before creation, repeat the inspection and comparison.
+5. Create only the objects recorded as absent. Skip matching pre-existing
+   objects. Split the manifest into documents and create each absent object
+   separately; do not apply the full manifest to existing objects:
+
+   ```powershell
+   $sourceSha = '<source-sha>'
+   $missingKinds = @('Role') # List only object kinds recorded absent in step 4.
+   $manifest = git show "${sourceSha}:deploy/k8s/rbac/platform-egress/environment-platform-egress.yaml"
+   if ($LASTEXITCODE -ne 0) { throw 'Unable to read the manifest from the source SHA.' }
+   $documents = [regex]::Split(($manifest -join "`n"), '(?m)^---\s*$')
+   foreach ($document in $documents) {
+     if ($document -match '(?m)^kind:\s*(Role|RoleBinding)\s*$') {
+       $kind = $Matches[1]
+       if ($missingKinds -contains $kind) {
+         $document | kubectl create -f -
+         if ($LASTEXITCODE -ne 0) { throw "Create failed for $kind. Inspect both objects before retrying." }
+       }
+     }
+   }
+   ```
+
+   `kubectl create` does not change an existing object's metadata. Inspect both
+   objects after success or failure. Record an object's UID as created by this
+   installation only when `create` reports `created` and readback confirms the
+   object. Initial absence alone does not prove ownership. If creation or
+   ownership is uncertain, stop and resolve it before retry or rollback.
+6. Retry deployment only after readback confirms both reviewed objects. If
+   creation fails after creating one object, stop deployment, inspect both
+   objects, compare them with the recorded initial state and reviewed manifest,
+   then resolve the failure before retrying. Do not assume the grant is absent:
+   an existing binding or another Role can already provide effective access.
+
+For rollback after a separately approved installation:
+
+1. Inspect both objects. Preserve every pre-existing object and grant. Stop if
+   current ownership, UID, or content differs from the installation record.
+2. Delete the RoleBinding first, only when this installation created it and
+   its UID matches the recorded UID:
+
+   ```powershell
+   kubectl delete rolebinding environment-platform-egress --namespace agentweaver
+   ```
+3. Delete the Role only when this installation created it, its UID matches
+   the record, and no RoleBinding in `agentweaver` references it. Preserve
+   the Role and stop for review if a reference remains:
+
+   ```powershell
+   kubectl delete role environment-platform-egress --namespace agentweaver
+   ```
+4. If both objects existed before installation, delete neither. Preserve both
+   egress policy objects during rollback.
