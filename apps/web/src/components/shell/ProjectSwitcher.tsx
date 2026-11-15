@@ -6,9 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../api/types';
 import type { NavItemDef } from './navConfig';
-// Spec 011, FR-011/FR-012/FR-014 — switch-only project switcher. Lists existing
-// projects from the real projects API and navigates to the selected one. It does
-// NOT offer inline create/add (clarification C5); creation stays on the gallery.
+// Lists existing projects and navigates to a selected project. Project creation stays on the gallery.
 
 const RECENT_KEY = 'agentweaver:recent-project-ids';
 const MAX_RECENT = 5;
@@ -61,11 +59,7 @@ function currentCategorySegment(pathname: string, projectId: string | undefined)
   return null;
 }
 
-// Compute the path to navigate to when switching from the current page to a
-// target project. Preserves the page category where possible (mapping deep
-// sub-resource routes to their category root); otherwise lands on the target
-// project home.
-/** Chooses the destination route when the user changes the active project. */
+/** Keeps the current project section when possible and drops deeper route segments. */
 export function projectSwitchTarget(
   pathname: string,
   currentProjectId: string | undefined,

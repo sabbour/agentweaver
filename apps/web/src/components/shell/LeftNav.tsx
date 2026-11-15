@@ -26,11 +26,6 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
 import type { ReactNode, RefObject } from 'react';
-// Persistent left navigation. Native FluentUI rebuild — no copilot-fluent-system
-// kit imports. Copilot-style single rail: chrome (brand + collapse), a header
-// slot (project switcher), a scrollable nav area, and a bottom persona footer.
-// No top bar. "Start task" floats top-right of the content panel (see AppShell).
-// Visual styling via shell.css + agentweaverLightTheme.
 
 const NAV_WIDTH = '260px';
 const NAV_WIDTH_COLLAPSED = '64px';
@@ -121,7 +116,7 @@ export interface LeftNavViewProps extends LeftNavProps {
   showNewSession?: boolean;
 }
 
-/** Renders the 0.x rail unchanged; callers supply identity and project data. */
+/** Renders the shared navigation rail; callers supply identity and project data. */
 export function LeftNavView({
   projectId,
   activeKey,
@@ -149,9 +144,7 @@ export function LeftNavView({
       return false;
     }
   });
-  // Split the configured entries into the parts of the rail. When the caller
-  // passes visible keys, drop every entry not in the list, then drop sections
-  // left with no entries so no empty heading or divider is drawn.
+  // A shell must opt in to v1-only destinations; visible-key lists also filter items and empty sections.
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
     globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) =>
       item.key !== 'sessions'

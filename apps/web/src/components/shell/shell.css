@@ -1,8 +1,6 @@
 /* ==========================================================================
    Agentweaver Native App Shell
-   Token-driven layout + visual language using var(--color*), var(--spacing*),
-   var(--borderRadius*), var(--shadow*), var(--fontSize*) from the native Fluent
-   theme (agentweaverLightTheme). No hex color values — theme tokens only.
+   Layout uses Fluent theme tokens; translucent action surfaces use rgba colors.
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
@@ -104,7 +102,6 @@
   flex: 1;
 }
 
-/* Collapse toggle button — flush align right */
 .aw-rail-collapse-btn {
   flex-shrink: 0;
 }
@@ -432,9 +429,7 @@
   overflow: hidden;
 }
 
-/* --------------------------------------------------------------------------
-   Rail footer: persona + meta (always visible)
-   -------------------------------------------------------------------------- */
+/* Rail footer: identity control and metadata. */
 .aw-rail-footer {
   display: flex;
   flex-direction: column;
@@ -544,15 +539,7 @@
   background-clip: padding-box;
 }
 
-/* --------------------------------------------------------------------------
-   "Start task" pill (top-right of content panel)
-   Lives in normal flow ABOVE .aw-shell-scroll (a real row, not an overlay), so it
-   claims its own space and never sits on top of a page's own header actions —
-   it used to be position:absolute and would visually collide with PageHeader
-   action buttons that also anchor top-right (e.g. "Create from GitHub" on the
-   Projects gallery). It still never scrolls away because only .aw-shell-scroll
-   scrolls; this row is a sibling above it.
-   -------------------------------------------------------------------------- */
+/* This row reserves space above the scroll region, so it cannot cover page actions. */
 .aw-floating-actions {
   display: flex;
   justify-content: flex-end;
@@ -587,9 +574,7 @@
   transform: translateY(1px);
 }
 
-/* Primary / secondary buttons in the content canvas: active micro-nudge (M design model).
-   Scoped to .aw-shell-canvas so it doesn't affect nav items (which have their own rule)
-   or Operator-dock / overlay buttons outside the main panel. */
+/* Apply the pressed-state nudge to canvas buttons, not rail buttons. */
 .aw-shell-canvas .fui-Button:not(:disabled):not([aria-disabled="true"]):active {
   transform: translateY(1px);
 }

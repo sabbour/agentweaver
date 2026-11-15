@@ -180,9 +180,8 @@ function positionsMatch(left: CSSProperties, right: CSSProperties): boolean {
 }
 
 /**
- * Renders the guided first-run tour from the configured target elements.
- * Local refs/state and effects coordinate target discovery, focus, and completion; completion is
- * persisted through the first-run tour storage helpers.
+ * Renders a guided tour around configured page elements.
+ * Calls `onDismiss` when the user skips, finishes, or presses Escape.
  */
 export function FirstRunTour({
   open,
@@ -203,6 +202,7 @@ export function FirstRunTour({
   const step = STEPS[stepIndex];
   const target = targets[step.id];
   const dismiss = useCallback(() => {
+    // Restore focus to the prior connected, non-body element; otherwise try the supplied fallback.
     setStepIndex(0);
     setLayoutReady(false);
     const previousFocus = previousFocusRef.current;
@@ -236,6 +236,7 @@ export function FirstRunTour({
       setLayoutReady(true);
     };
 
+    // Use viewport edges on narrow screens, without a target, or when the panel does not fit vertically.
     if (viewportWidth <= 720 || panelHeight > viewportHeight - (VIEWPORT_MARGIN * 2) || !nextBox) {
       setPosition({
         left: VIEWPORT_MARGIN,
@@ -248,6 +249,7 @@ export function FirstRunTour({
     const maxLeft = viewportWidth - panelWidth - VIEWPORT_MARGIN;
     const maxTop = viewportHeight - panelHeight - VIEWPORT_MARGIN;
 
+    // The task step prefers below its target; other steps prefer the right side and flip when space is short.
     if (step.id === 'startTask') {
       const below = nextBox.bottom + TARGET_GAP;
       const top = below + panelHeight <= viewportHeight - VIEWPORT_MARGIN
