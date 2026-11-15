@@ -53,6 +53,7 @@ public sealed record NativeRepoAppSelectionIntent(
         ConnectionId == selection.ConnectionId &&
         RepositoryFullName == selection.RepositoryFullName &&
         OperationId == selection.OperationId &&
+        // Version 2 leaves the connection revision, installation ID, and repository ID for the Broker to resolve.
         (Version == 2 ||
             ConnectionRevision == selection.ConnectionRevision &&
             InstallationId == selection.InstallationId &&

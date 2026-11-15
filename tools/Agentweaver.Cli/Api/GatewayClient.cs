@@ -89,7 +89,7 @@ public sealed partial class GatewayClient : IGatewayClient
 
     public CliIdentity Identity { get; }
 
-    /// <summary>Returns sanitized diagnostic evidence for completed Gateway requests.</summary>
+    /// <summary>Returns redacted diagnostic evidence for completed Gateway requests.</summary>
     /// <remarks>Each read is a deep copy; this is not the raw response payload.</remarks>
     public IReadOnlyList<JsonObject> Calls
     {
@@ -228,7 +228,7 @@ public sealed partial class GatewayClient : IGatewayClient
     }
 
     /// <summary>
-    /// Sends a same-origin REST request after tenant-binding preflight, without OpenAPI discovery.
+    /// Sends a same-origin REST request after checking the selected authorization context, without OpenAPI discovery.
     /// </summary>
     /// <remarks>Uses only the primary tenant bearer and does not request project authority.</remarks>
     public async Task<GatewayResponse> InvokeRawAsync(
@@ -271,7 +271,7 @@ public sealed partial class GatewayClient : IGatewayClient
             requireOpaqueResponse: outputRequested).ConfigureAwait(false);
     }
 
-    /// <summary>Validates tenant binding for raw calls using the primary bearer, without OpenAPI discovery.</summary>
+    /// <summary>Validates the selected context for raw calls using the primary bearer, without OpenAPI discovery.</summary>
     private async Task<JsonObject> ReadRawAuthorizationContextAsync(string bearer, CancellationToken ct)
     {
         var response = await SendAsync(
@@ -938,7 +938,7 @@ public sealed partial class GatewayClient : IGatewayClient
                 evidence,
                 binaryBody)
             {
-                // A HEAD response has no body even when it advertises a nonzero representation length.
+                // Use received bytes, not HEAD's advertised representation length, to report a body.
                 HasBody = bytes.Length > 0,
             };
         }
@@ -973,7 +973,7 @@ public sealed partial class GatewayClient : IGatewayClient
         var decoder = Encoding.UTF8.GetDecoder();
         var isEventStream = onEventChunk is not null;
         var eventRedactor = isEventStream ? new SseEventRedactor(onEventChunk!) : null;
-        // Socket reads may split UTF-8 characters and SSE events; decode incrementally before redacting complete frames.
+        // Response reads may split UTF-8 characters and SSE events; decode incrementally before redacting event text.
         while (true)
         {
             var count = await stream.ReadAsync(bytes, ct).ConfigureAwait(false);
@@ -1010,7 +1010,7 @@ public sealed partial class GatewayClient : IGatewayClient
 
         public async ValueTask WriteAsync(string chunk)
         {
-            // Buffer through the SSE blank-line delimiter so a secret split across network reads is redacted as one event.
+            // Buffer through the SSE blank-line delimiter so a secret split across response reads is redacted as one event.
             foreach (var character in chunk)
             {
                 _event.Append(character);

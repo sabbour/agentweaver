@@ -2,9 +2,9 @@ using System.Text.Json.Nodes;
 
 namespace Agentweaver.Cli;
 
-/// <summary>Configured origins and OAuth resource selectors for one CLI sign-in.</summary>
-/// <param name="Gateway">HTTPS origin used for API requests.</param>
-/// <param name="Issuer">HTTPS origin of the Identity Broker.</param>
+/// <summary>Configured URLs and OAuth resource selectors for one CLI sign-in.</summary>
+/// <param name="Gateway">Gateway URL used for API requests. HTTPS is required except for loopback URLs.</param>
+/// <param name="Issuer">Identity Broker URL used for sign-in. Sign-in requires HTTPS.</param>
 /// <param name="ClientId">Registered public OAuth client identifier.</param>
 /// <param name="Audience">Configured API audience selector used to isolate the stored sign-in.</param>
 /// <param name="TenantId">Tenant selector; owners still determine current membership and authority.</param>
@@ -59,7 +59,7 @@ public sealed record GatewayInvocation(
     JsonNode? Body = null,
     IReadOnlyDictionary<string, string>? Headers = null)
 {
-    /// <summary>Receives complete SSE frames after best-effort redaction, not arbitrary network chunks.</summary>
+    /// <summary>Receives SSE text buffered to blank-line delimiters where present and passed through best-effort redaction.</summary>
     public Func<string, ValueTask>? OnEventChunk { get; init; }
 }
 
@@ -91,10 +91,10 @@ public interface IGatewayClient
     /// <summary>Discovers and validates the supported live Gateway contract.</summary>
     Task<JsonObject> DiscoverAsync(CancellationToken ct);
 
-    /// <summary>Checks the Gateway's current issuer, tenant, actor, and exact selection context.</summary>
+    /// <summary>Checks that the Gateway returns an issuer, tenant, actor, and the exact selected project/run context.</summary>
     Task<JsonObject> ValidateAuthorizationContextAsync(CancellationToken ct);
 
-    /// <summary>Invokes a live-contract operation after validating the selected authorization context.</summary>
+    /// <summary>Invokes a live-contract operation. It checks context before other operations and validates a successful context lookup.</summary>
     Task<GatewayResponse> InvokeAsync(
         string operationId,
         GatewayInvocation invocation,

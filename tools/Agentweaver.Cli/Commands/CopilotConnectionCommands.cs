@@ -366,6 +366,7 @@ internal static class CopilotConnectionCommands
             }
             finally
             {
+                // Completion requests can contain an authorization code; clear the serialized body after use.
                 if (bodyBytes is not null)
                     CryptographicOperations.ZeroMemory(bodyBytes);
             }
