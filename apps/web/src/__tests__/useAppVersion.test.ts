@@ -59,7 +59,6 @@ describe('useAppVersion', () => {
     } as Response);
 
     const { result } = renderHook(() => useAppVersion());
-    // Give it a tick to settle
     await new Promise(r => setTimeout(r, 0));
     expect(result.current).toBe('');
   });

@@ -440,7 +440,7 @@ describe('TeamSyncPanel', () => {
   it('exports the team at the shown revision', async () => {
     const createObjectURL = vi.fn(() => 'blob:team');
     const revokeObjectURL = vi.fn();
-    // jsdom has no object URLs, so provide them for the download.
+    // Stub object-URL creation so the download test does not depend on browser support.
     Object.assign(URL, { createObjectURL, revokeObjectURL });
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     api.exportProjectAgentSuite.mockResolvedValue({

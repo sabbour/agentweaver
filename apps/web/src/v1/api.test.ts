@@ -171,7 +171,7 @@ describe('Gateway API client', () => {
     }));
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
 
-    // History is a private, non-cacheable Projects read scoped to one path agent.
+    // Read one agent's history through the Projects route without using the cache.
     await expect(client.getProjectAgentHistory('token', 'p1', 'a1', 'tenant-1')).resolves.toEqual(history);
 
     const [url, init] = fetcher.mock.calls[0];
@@ -218,7 +218,7 @@ describe('Gateway API client', () => {
   });
 
   it('patches one proposal member role with its expected draft revision and title', async () => {
-    // Keep the catalog identifier and optional display title in the same fenced request.
+    // Send the catalog role ID and custom title in one revision-checked update.
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', {
       status: 200, headers: { 'Content-Type': 'application/json' },
     }));
@@ -374,7 +374,7 @@ describe('Gateway API client', () => {
     expect(init?.method).toBe('POST');
   });
 
-  // The revision the user saw is sent so the server can reject an edit based on stale data.
+  // Send the displayed revision so the owner can detect a stale edit.
   it('renames or archives a project with the displayed project revision', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),
@@ -389,8 +389,7 @@ describe('Gateway API client', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 4, name: 'Launch', state: 'archived' });
   });
 
-  // Revoke must send the assignment revision as `expectedRevision` so a changed
-  // assignment is not revoked by mistake.
+  // Send the displayed assignment revision so the owner can reject a stale revoke.
   it('lists, assigns and revokes project roles on the role-assignment contract', async () => {
     const assignment = {
       assignmentId: '7f8c1a2e-0000-4000-8000-000000000001', principalId: 'user-2', role: 'viewer',
@@ -815,7 +814,7 @@ describe('Gateway API client', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer broker-token');
     expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
     expect(init?.credentials).toBe('omit');
-    // window.fetch throws "Illegal invocation" unless it is called on the global object.
+    // Keep the global fetch receiver; a detached browser fetch can throw "Illegal invocation".
     expect(fetcher.mock.contexts[0]).toBe(globalThis);
   });
 
@@ -970,7 +969,7 @@ describe('Gateway API client', () => {
       'https://gateway.example.test/api/v1/projects/p1/runs/r1/source-control/sessions/s1/output-captures?limit=20');
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
 
-    // A half cursor is not sent; the service needs both parts together.
+    // Do not send a timestamp-only cursor when its capture ID is missing.
     await client.listRunOutputCaptures('t', 'p1', 'r1', 's1', { beforeCapturedAt: '2026-10-08T00:00:00Z', beforeCaptureId: null }, 'tenant-1');
     expect(String(fetcher.mock.calls[1][0])).toBe(
       'https://gateway.example.test/api/v1/projects/p1/runs/r1/source-control/sessions/s1/output-captures');

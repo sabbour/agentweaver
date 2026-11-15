@@ -52,7 +52,7 @@ for (const kind of ['issue', 'pull_request']) {
         await mkdir(evidence, { recursive: true });
         await form.screenshot({ path: join(evidence, `pr-${path}-picker-new-gateway-adapter.png`) });
       }
-      // A rolling-compatible owner stays ready before the schema update, but cannot lose identity.
+      // Simulate a temporary 503; retry must preserve the selected repository identity.
       app.gateway.failNext('POST', '/api/v1/chief-of-staff/priorities/pri-a/links', {
         status: 503, body: { error: 'database_update_pending' },
       });

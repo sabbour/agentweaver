@@ -3,8 +3,8 @@
  * like the real owner contracts.
  * Optional AGENTWEAVER_EVIDENCE_DIR keeps screenshots outside the repository.
  * The 0.x comparison renders the retained FilesTabPanel/FileViewer components,
- * not made-up legacy capture or Priority screens. No live services, work or
- * mutations are involved.
+ * not made-up legacy capture or Priority screens. No live services or runs are
+ * used; Gateway writes stay in memory.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -65,7 +65,7 @@ test('artifact: choose run/session/capture/file, link whole capture, reopen afte
         }
         return json(404, { error: 'output_capture_not_found' });
       }
-      // All other run routes (sessions, decisions, writes) come from the room.
+      // The room fixture handles the other run routes used by this test.
       return room.handle(method, path, url, binding);
     },
   });
