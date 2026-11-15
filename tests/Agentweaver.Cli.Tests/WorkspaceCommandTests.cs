@@ -113,6 +113,7 @@ public sealed class WorkspaceCommandTests
         Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(bytes)), file["sha256"]!.GetValue<string>());
         Assert.Equal(blobSha, file["gitBlobSha1"]!.GetValue<string>());
         Assert.Null(file["output"]);
+        // The CLI report exposes file hashes and metadata, not repository content.
         Assert.DoesNotContain(FileContent.Trim(), fileOutput, StringComparison.Ordinal);
 
         Assert.Equal(
