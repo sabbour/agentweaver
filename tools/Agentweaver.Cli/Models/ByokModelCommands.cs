@@ -300,6 +300,7 @@ internal static class ByokModelCommands
         string? next = $"{RetailPricesUrl}?currencyCode=USD&$filter={Uri.EscapeDataString(filter)}";
         for (var page = 0; next is not null; page++)
         {
+            // Validate each page URL against the expected Retail Prices endpoint before sending the request.
             if (page == 20 || !Uri.TryCreate(next, UriKind.Absolute, out var pageUri) ||
                 pageUri.Scheme != Uri.UriSchemeHttps || pageUri.Port != 443 || pageUri.UserInfo.Length != 0 ||
                 !pageUri.Host.Equals("prices.azure.com", StringComparison.OrdinalIgnoreCase) ||

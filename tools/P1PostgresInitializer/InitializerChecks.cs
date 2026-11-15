@@ -520,7 +520,7 @@ internal static class InitializerChecks
             throw new InvalidOperationException("The continuation receipt records work beyond the exact Projects-only prefix.");
     }
 
-    /// <summary>Verifies guard trigger shape, owner, source body, and runtime non-executability before grants.</summary>
+    /// <summary>Verifies guard trigger shape, owner, source body, and runtime non-executability.</summary>
     internal static void AssertMutationDenialGuards(ServicePlan service, MutationGuardState[] guards,
         uint ownerOid, uint runtimeOid)
     {
@@ -553,7 +553,7 @@ internal static class InitializerChecks
         }
     }
 
-    /// <summary>Rejects pre-existing public authority, incompatible defaults, or an operator unable to grant Connect.</summary>
+    /// <summary>Rejects incompatible PUBLIC or default privileges, and an operator unable to grant CONNECT.</summary>
     internal static void AssertPreflight(PreflightSnapshot state)
     {
         var boundary = state.Boundary;
@@ -770,8 +770,7 @@ internal sealed record FunctionState(
     string Signature,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OwnerOid,
     AclGrant[] Grants, bool RuntimeCanExecute);
-/// <summary>Source-generated target and exact per-service role, schema, relation, and function plan.</summary>
-/// <summary>Source-bound service grants and exact Core/Events migration versions requiring separate live approval.</summary>
+/// <summary>Source-bound target, service grants, and exact Core, Events, and Environment migration versions.</summary>
 internal sealed record PostgresPlan(
     int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions, int[] EventsVersions,
     int[] EnvironmentVersions);
