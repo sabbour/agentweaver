@@ -71,11 +71,15 @@ existing Memory selections through its private Knowledge-selection route.
 Gateway does not add an arbitrary proxy path or make the authorization
 decision.
 
-The canonical Platform Policy read, validate, and write operations are also
-fixed catalog routes. The Gateway forwards the optional tenant selector and
-exposes `Cache-Control`; each route has a 5 MiB response limit, and the two
-body routes have a 5 MiB request limit. All three are excluded from MCP.
-Projects & Config owns authorization, validation, and policy state. See the
+The canonical Platform Policy current-read, history, exact-revision, validate,
+and write operations are fixed catalog routes. The Gateway forwards the
+optional tenant selector and exposes `Cache-Control`; each route has a 5 MiB
+response limit, and the two body routes have a 5 MiB request limit. All five
+are excluded from MCP. History allows only `pageSize` and `cursor`; exact
+revision allows no query. The Gateway rejects undeclared query keys before
+dispatch and does not forward `Idempotency-Key` or `If-Match` for the two new
+read routes. Projects & Config owns authorization, validation, and policy
+state. See the
 [Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
 
 Gateway preserves the owner's response status and body. In particular,

@@ -62,11 +62,11 @@ do not bootstrap membership.
 
 ### Store one canonical ACS Policy source
 
-Projects & Config exposes Platform Policy read, validation, and compare-and-swap
-write routes. It uses one head per scope and keeps the Policy ID of an existing
-head. Only an empty scope gets the server-owned `canonical` Policy ID. Each
-artifact contains all policy domains; the API does not accept a
-scope or domain selector from the caller.
+Projects & Config exposes Platform Policy history, exact-revision, current
+read, validation, and compare-and-swap write routes. It uses one head per scope
+and keeps the Policy ID of an existing head. Only an empty scope gets the
+server-owned `canonical` Policy ID. Each artifact contains all policy domains;
+the API does not accept a scope or domain selector from the caller.
 
 The read route returns the current artifact only after the store checks its
 content hash. The validation route does not write state. Head writes are off by
@@ -83,8 +83,23 @@ or change a policy record.
 If `ACS_OPA_PATH` is missing, the service still starts. Policy validation then
 returns `503` and the other service functions continue.
 
-Reads require `api.read` and a current unbound PlatformAdmin grant. They do not
-require `projects.admin`. Writes also require `projects.admin` and the
+History returns revision, stored content hash, and creation time, newest first.
+Its `pageSize` defaults to 20 and ranges from 1 through 100. The opaque cursor
+binds the stable Policy ID, the first-page revision snapshot, page size, and
+last returned revision. New writes do not enter an active traversal. A cursor
+does not grant access; each page checks current authority again. Metadata does
+not verify stored file bytes.
+
+An exact-revision read loads only the requested member of the current head's
+lineage. It returns the retained manifest and every relative file, sorted by
+path, after recomputing the artifact hash. It returns the revision's original
+creation time. Missing or changed source bytes return
+`500 native_acs_policy_corrupt`; the owner does not return a partial artifact
+or substitute the head. No head or a revision beyond the head returns 404.
+
+History and exact reads require `api.read` and a current unbound PlatformAdmin
+grant. They do not require `projects.admin`. The owner checks authority before
+and after retrieval. Writes also require `projects.admin` and the
 `WritePlatformRuntimeDefaults` permission. This API stores source only; it
 does not activate ACS or change the v4 Policy path. The
 [native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)

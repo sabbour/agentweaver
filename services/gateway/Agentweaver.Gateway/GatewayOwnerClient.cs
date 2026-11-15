@@ -1871,6 +1871,19 @@ public sealed partial class GatewayOwnerClient(
         Stream? requestBody = null)
     {
         tenantSelector = null;
+        var isPlatformPolicyRevisionRead = route.OperationId is
+            "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision";
+        if (isPlatformPolicyRevisionRead &&
+            context.Request.Query.Keys.Any(key => !route.QueryParameters.Contains(key, StringComparer.Ordinal)))
+        {
+            var code = route.OperationId == "listPlatformNativeAcsPolicyRevisions"
+                ? "native_acs_policy_history_request_invalid"
+                : "native_acs_policy_revision_request_invalid";
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody(code, StatusCodes.Status400BadRequest));
+        }
         var path = ExpandOwnerPath(route.OwnerPath, context);
         var target = BuildOwnerUri(route.Owner, path + context.Request.QueryString);
         var request = new HttpRequestMessage(new HttpMethod(route.Method), target);
@@ -1878,8 +1891,11 @@ public sealed partial class GatewayOwnerClient(
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         if (route.ForwardTenantSelector)
             tenantSelector = CopyTenantSelector(context, request);
-        CopySingleRequestHeader(context, request, "Idempotency-Key");
-        CopySingleRequestHeader(context, request, "If-Match");
+        if (!isPlatformPolicyRevisionRead)
+        {
+            CopySingleRequestHeader(context, request, "Idempotency-Key");
+            CopySingleRequestHeader(context, request, "If-Match");
+        }
         if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)
         {
             foreach (var header in route.ForwardRequestHeaders)

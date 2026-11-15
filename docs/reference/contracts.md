@@ -229,16 +229,25 @@ policies independently, with hard-deny precedence.
 | Route | Contract |
 | --- | --- |
 | `GET /api/v1/policies/platform` | Read the current artifact and revision. Requires `api.read`, an active membership, an unbound request, and a current PlatformAdmin grant. Does not require `projects.admin`. Returns `404` when no head exists. |
+| `GET /api/v1/policies/platform/revisions?pageSize={n}&cursor={token}` | Return bounded revision metadata in descending order. `pageSize` defaults to 20 and ranges from 1 to 100. The versioned cursor binds the Platform lineage, snapshot revision, page size, and last returned revision. An empty scope returns an empty page with null lineage fields. Each page rechecks current authority. |
+| `GET /api/v1/policies/platform/revisions/{revision}` | Return the exact retained revision, full artifact bytes, verified hash, and original `createdAt`. The path value must be a canonical positive decimal Int64. No head or a future revision returns `404 native_acs_policy_not_found`; a missing committed revision or corrupt source returns `500 native_acs_policy_corrupt`. |
 | `POST /api/v1/policies/platform/validate` | Validate a complete artifact without changing policy state. Uses the same read authorization. A malformed request returns `400`. A proven invalid artifact returns `422` `native_acs_policy_invalid` with diagnostics. An unavailable, crashed, timed-out, or unconfigured native or OPA dependency returns `503` `native_acs_dependency_unavailable` with a typed dependency value. This includes the native validator codes `opa_timeout`, `opa_invalid_executable`, `opa_execution_error`, `rego_staging_error`, and `validation_internal_error`. Other native validator diagnostics return `422`. |
 | `PUT /api/v1/policies/platform` | Validate and append a complete artifact at `expectedRevision`. Requires `api.read`, `projects.admin`, an active membership, an unbound request, and a current PlatformAdmin grant with `WritePlatformRuntimeDefaults`. Head writes are off by default and return `503` `native_acs_policy_writes_unavailable` until `NativeAcsPolicy:HeadWritesEnabled` is `true`. A retry with the same key and request returns the saved receipt with `replayed: true` after a current authority check, before the write setting and validation checks. A stale revision or conflicting idempotency key returns `409`. |
 
-Reads return the exact manifest and file bytes only after the store verifies
-the artifact hash. Writes record an actor-scoped idempotency receipt,
+Current and exact-revision reads return the exact manifest and file bytes only
+after the store verifies the artifact hash. History returns metadata only; its
+stored hashes do not verify each artifact. Both new reads require `api.read`,
+active membership, an unbound request, and current PlatformAdmin authority,
+without `projects.admin`. The owner checks authority before and after each
+retrieval. History query keys are limited to `pageSize` and `cursor`; an exact
+revision accepts no query values. Writes record an actor-scoped idempotency receipt,
 append-only change audit, and outbox event in one database transaction. The
 store rechecks the membership and exact role-assignment revision before
 commit. All responses use `Cache-Control: no-store`; the Gateway applies a
 5 MiB request and response limit and returns `413` for an oversized body. The
-Gateway does not expose these routes through MCP.
+Gateway rejects undeclared query keys on history and exact-revision routes
+before owner dispatch. Those two routes do not forward `Idempotency-Key` or
+`If-Match`. The Gateway does not expose these routes through MCP.
 Validation and writes share a six-request-per-actor, per-minute limit and one
 active validation slot per Projects & Config process. A busy process returns
 `503` with retry guidance. These are source-level limits; they do not prove

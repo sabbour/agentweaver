@@ -422,6 +422,16 @@ public static class GatewayRouteCatalog
             "readPlatformNativeAcsPolicy", "Read the current canonical Platform Policy",
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/platform/revisions", "/api/policies/platform/revisions",
+            "listPlatformNativeAcsPolicyRevisions", "List Platform Policy revision history",
+            ["pageSize", "cursor"], forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/platform/revisions/{revision}",
+            "/api/policies/platform/revisions/{revision}",
+            "readPlatformNativeAcsPolicyRevision", "Read an exact Platform Policy revision",
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
         Add("POST", GatewayOwner.Projects, "/policies/platform/validate", "/api/policies/platform/validate",
             "validatePlatformNativeAcsPolicy", "Validate a complete Platform Policy artifact",
             body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,

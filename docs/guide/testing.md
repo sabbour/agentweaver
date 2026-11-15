@@ -135,18 +135,23 @@ not activate ACS or change the deployed v4 Policy path.
 
 ## Test the canonical Policy API
 
-Run the Projects & Config policy tests and the Gateway route-contract test from
-the repository root:
+Run the database-free selector tests and Gateway route/OpenAPI tests after the
+Release build:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --filter "FullyQualifiedName~NativeAcsPolicy"
-dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --filter "FullyQualifiedName~PlatformPolicyRoutesAreBoundedAndExcludedFromMcp"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicyHistoryRequestTests"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~PlatformPolicyRoutesAreBoundedAndExcludedFromMcp|FullyQualifiedName~PlatformPolicyHistory|FullyQualifiedName~PlatformPolicyRevisionRoutesEnforceQueryAndHeaderForwarding"
 ```
 
-The Projects & Config tests use a disposable PostgreSQL container. Docker must
-be available. These controlled tests check the source API and database state;
-they do not call a live API, activate policy, or prove that a deployed image
-contains the pinned ACS assets.
+Run the Projects & Config PostgreSQL tests in hosted CI:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicy|FullyQualifiedName~NativeAcsPlatformPolicy"
+```
+
+These controlled tests use disposable PostgreSQL. They check the source API and
+database state; they do not call a live API, activate policy, or prove that a
+deployed image contains the pinned ACS assets.
 
 ## Test project-wide Knowledge discovery
 

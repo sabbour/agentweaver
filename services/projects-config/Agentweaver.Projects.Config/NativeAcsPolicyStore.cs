@@ -1,7 +1,9 @@
 using System.Data;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -16,6 +18,8 @@ internal sealed class NativeAcsPolicyStore(
 {
     private const string PolicyRevisionEventType = "native_acs.policy_revision_committed.v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const int HistoryCursorVersion = 1;
+    private const string HistoryCursorOrder = "revision-descending";
 
     internal async Task<NativeAcsPolicyWriteReceipt> WriteAsync(
         ProjectAuthorizationContext caller,
@@ -279,10 +283,7 @@ internal sealed class NativeAcsPolicyStore(
                 item.Revision == head.CurrentRevision,
                 cancellationToken)
             .ConfigureAwait(false)
-            ?? throw new ProjectConfigException(
-                "native_acs_policy_corrupt",
-                "The current native ACS policy revision is unavailable.",
-                StatusCodes.Status500InternalServerError);
+            ?? throw Corrupt("The current native ACS policy revision is unavailable.");
         var storedFiles = await db.NativeAcsPolicyArtifactFiles.AsNoTracking()
             .Where(item =>
                 item.ScopeType == scopeType &&
@@ -291,23 +292,10 @@ internal sealed class NativeAcsPolicyStore(
                 item.Revision == head.CurrentRevision)
             .ToArrayAsync(cancellationToken)
             .ConfigureAwait(false);
-        var artifact = new NativeAcsArtifact(
-            revision.ManifestBytes.ToImmutableArray(),
-            storedFiles
-                .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
-                .Select(item => new NativeAcsArtifactFile(
-                    item.RelativePath,
-                    item.Bytes.ToImmutableArray()))
-                .ToImmutableArray(),
-            revision.ContentSha256);
-        if (!string.Equals(
-                NativeAcsArtifactHash.Compute(artifact),
-                revision.ContentSha256,
-                StringComparison.Ordinal))
-            throw new ProjectConfigException(
-                "native_acs_policy_corrupt",
-                "The current native ACS policy artifact failed its integrity check.",
-                StatusCodes.Status500InternalServerError);
+        var artifact = ReconstructArtifact(
+            revision,
+            storedFiles,
+            "The current native ACS policy artifact failed its integrity check.");
 
         return new NativeAcsPolicyReadResult(
             head.ScopeType,
@@ -318,6 +306,261 @@ internal sealed class NativeAcsPolicyStore(
             artifact,
             head.UpdatedAt);
     }
+
+    internal async Task<NativeAcsPolicyRevisionPage> ReadHistoryAsync(
+        int pageSize,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        if (pageSize is < 1 or > 100)
+            throw HistoryRequestInvalid();
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var head = await db.NativeAcsPolicyHeads.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (head is null)
+        {
+            if (cursor is not null)
+                throw HistoryRequestInvalid();
+            return new NativeAcsPolicyRevisionPage(
+                NativeAcsPolicyScopeType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                null,
+                null,
+                [],
+                null);
+        }
+
+        var snapshotRevision = head.CurrentRevision;
+        long? beforeRevision = null;
+        if (cursor is not null)
+        {
+            var decoded = DecodeHistoryCursor(cursor, pageSize);
+            if (decoded.PolicyId != head.PolicyId || decoded.SnapshotRevision > head.CurrentRevision)
+                throw HistoryRequestInvalid();
+            snapshotRevision = decoded.SnapshotRevision;
+            beforeRevision = decoded.LastRevision;
+        }
+
+        var query = db.NativeAcsPolicyRevisions.AsNoTracking()
+            .Where(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.PolicyId == head.PolicyId &&
+                item.Revision <= snapshotRevision);
+        if (beforeRevision is { } lastRevision)
+            query = query.Where(item => item.Revision < lastRevision);
+
+        var rows = await query.OrderByDescending(item => item.Revision)
+            .Select(item => new NativeAcsPolicyRevisionSummary(
+                item.Revision, item.ContentSha256, item.CreatedAt))
+            .Take(pageSize + 1)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var items = rows.Take(pageSize).ToImmutableArray();
+        var nextCursor = rows.Length > pageSize
+            ? EncodeHistoryCursor(
+                head.PolicyId,
+                snapshotRevision,
+                pageSize,
+                items[^1].Revision)
+            : null;
+        return new NativeAcsPolicyRevisionPage(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            head.PolicyId,
+            snapshotRevision,
+            items,
+            nextCursor);
+    }
+
+    internal async Task<NativeAcsPolicyRevisionReadResult?> ReadRevisionAsync(
+        long requestedRevision,
+        CancellationToken cancellationToken)
+    {
+        if (requestedRevision <= 0)
+            throw RevisionRequestInvalid();
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var head = await db.NativeAcsPolicyHeads.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (head is null || requestedRevision > head.CurrentRevision)
+            return null;
+
+        var revision = await db.NativeAcsPolicyRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.PolicyId == head.PolicyId &&
+                item.Revision == requestedRevision,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw Corrupt("The requested native ACS policy revision is unavailable.");
+        var storedFiles = await db.NativeAcsPolicyArtifactFiles.AsNoTracking()
+            .Where(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.PolicyId == head.PolicyId &&
+                item.Revision == requestedRevision)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var artifact = ReconstructArtifact(
+            revision,
+            storedFiles,
+            "The requested native ACS policy artifact failed its integrity check.");
+        return new NativeAcsPolicyRevisionReadResult(
+            head.ScopeType,
+            head.ScopeId,
+            head.PolicyId,
+            revision.Revision,
+            revision.ContentSha256,
+            artifact,
+            revision.CreatedAt);
+    }
+
+    internal static int ParseHistoryPageSize(string? value)
+    {
+        if (value is null)
+            return 20;
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var pageSize) ||
+            pageSize is < 1 or > 100)
+            throw HistoryRequestInvalid();
+        return pageSize;
+    }
+
+    internal static long ParseRevision(string value)
+    {
+        if (value.Length == 0 ||
+            value.Length > 1 && value[0] == '0' ||
+            value.Any(character => character is < '0' or > '9') ||
+            !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var revision) ||
+            revision <= 0)
+            throw RevisionRequestInvalid();
+        return revision;
+    }
+
+    internal static HistoryCursor DecodeHistoryCursor(string value, int pageSize)
+    {
+        if (value.Length is 0 or > 2048 ||
+            value.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_')))
+            throw HistoryRequestInvalid();
+        try
+        {
+            var base64 = value.Replace('-', '+').Replace('_', '/');
+            base64 += (base64.Length % 4) switch
+            {
+                0 => string.Empty,
+                2 => "==",
+                3 => "=",
+                _ => throw HistoryRequestInvalid(),
+            };
+            var payload = Convert.FromBase64String(base64);
+            using var document = JsonDocument.Parse(payload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw HistoryRequestInvalid();
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+                if (!names.Add(property.Name))
+                    throw HistoryRequestInvalid();
+            if (names.Count != 8 ||
+                !names.SetEquals(["version", "order", "scopeType", "scopeId", "policyId",
+                    "snapshotRevision", "pageSize", "lastRevision"]))
+                throw HistoryRequestInvalid();
+            var cursor = JsonSerializer.Deserialize<HistoryCursor>(payload, HistoryCursorJsonOptions);
+            if (cursor is null ||
+                cursor.Version != HistoryCursorVersion ||
+                cursor.Order != HistoryCursorOrder ||
+                cursor.ScopeType != "platform" ||
+                cursor.ScopeId != ProjectAuthorizationOwner.PlatformResourceId ||
+                string.IsNullOrEmpty(cursor.PolicyId) ||
+                cursor.SnapshotRevision <= 0 ||
+                cursor.PageSize != pageSize ||
+                cursor.LastRevision <= 0 ||
+                cursor.LastRevision > cursor.SnapshotRevision)
+                throw HistoryRequestInvalid();
+            return cursor;
+        }
+        catch (FormatException)
+        {
+            throw HistoryRequestInvalid();
+        }
+        catch (JsonException)
+        {
+            throw HistoryRequestInvalid();
+        }
+    }
+
+    private static readonly JsonSerializerOptions HistoryCursorJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+    };
+
+    internal static string EncodeHistoryCursor(string policyId, long snapshotRevision, int pageSize, long lastRevision)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            new HistoryCursor(
+                HistoryCursorVersion,
+                HistoryCursorOrder,
+                "platform",
+                ProjectAuthorizationOwner.PlatformResourceId,
+                policyId,
+                snapshotRevision,
+                pageSize,
+                lastRevision),
+            HistoryCursorJsonOptions);
+        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private static NativeAcsArtifact ReconstructArtifact(
+        NativeAcsPolicyRevisionRecord revision,
+        NativeAcsPolicyArtifactFileRecord[] storedFiles,
+        string integrityFailure)
+    {
+        var artifact = new NativeAcsArtifact(
+            revision.ManifestBytes.ToImmutableArray(),
+            storedFiles
+                .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
+                .Select(item => new NativeAcsArtifactFile(item.RelativePath, item.Bytes.ToImmutableArray()))
+                .ToImmutableArray(),
+            revision.ContentSha256);
+        if (!string.Equals(
+                NativeAcsArtifactHash.Compute(artifact),
+                revision.ContentSha256,
+                StringComparison.Ordinal))
+            throw Corrupt(integrityFailure);
+        return artifact;
+    }
+
+    private static ProjectConfigException Corrupt(string message) =>
+        new("native_acs_policy_corrupt", message, StatusCodes.Status500InternalServerError);
+
+    internal static ProjectConfigException HistoryRequestInvalid() =>
+        ProjectConfigException.Invalid(
+            "native_acs_policy_history_request_invalid",
+            "The Platform Policy history request is invalid.");
+
+    internal static ProjectConfigException RevisionRequestInvalid() =>
+        ProjectConfigException.Invalid(
+            "native_acs_policy_revision_request_invalid",
+            "The Platform Policy revision request is invalid.");
+
+    internal sealed record HistoryCursor(
+        int Version,
+        string Order,
+        string ScopeType,
+        string ScopeId,
+        string PolicyId,
+        long SnapshotRevision,
+        int PageSize,
+        long LastRevision);
 
     internal static IReadOnlyList<ProjectAuthorizationGrant> EnsureWriteAuthorized(
         ProjectAuthorizationContext caller,
