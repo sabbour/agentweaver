@@ -18,6 +18,7 @@ public sealed class AgentSuiteTarTests
     {
         var archive = MutateHeader(SingleEntryTar(), "entry", header =>
         {
+            // The fixture writer leaves device fields as NUL bytes, so seed octal text first.
             if (field.StartsWith("device", StringComparison.Ordinal))
                 "0000000\0"u8.CopyTo(header.AsSpan(offset, 8));
             Assert.True(header[offset] == (byte)'0', $"{field} starts with zero before mutation.");
@@ -56,6 +57,7 @@ public sealed class AgentSuiteTarTests
 
         var binaryUid = MutateHeader(SingleEntryTar(), "entry", header =>
         {
+            // The high bit marks base-256 form; the last byte carries the value 7.
             Array.Clear(header, 108, 8);
             header[108] = 0x80;
             header[115] = 7;
@@ -134,6 +136,7 @@ public sealed class AgentSuiteTarTests
                 Array.Copy(header, 0, result, offset, 512);
                 return result;
             }
+            // Each body is rounded up to 512-byte blocks before the next header.
             offset += 512 + checked((int)((size + 511) / 512) * 512);
         }
         throw new InvalidOperationException($"Tar entry {entryName} was not found.");
@@ -147,6 +150,7 @@ public sealed class AgentSuiteTarTests
 
     private static void RepairChecksum(byte[] header)
     {
+        // TAR computes the checksum with bytes 148 through 155 treated as spaces.
         var checksum = 0;
         for (var index = 0; index < header.Length; index++)
             checksum += index is >= 148 and < 156 ? (byte)' ' : header[index];
