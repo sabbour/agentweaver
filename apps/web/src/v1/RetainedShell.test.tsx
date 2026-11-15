@@ -29,7 +29,7 @@ vi.mock('./api', async (importOriginal) => ({
 }));
 vi.mock('./runAttention', async (importOriginal) => ({
   ...await importOriginal<typeof import('./runAttention')>(),
-  // Counts hook instances: each mounted instance would run its own poll.
+  // Counts mounted hook instances so the test can detect a duplicate hook.
   useRunAttention: () => {
     useEffect(() => { mocks.instances += 1; }, []);
     return mocks.useRunAttention();
@@ -83,7 +83,7 @@ describe('BrokerIdentity', () => {
 
     const trigger = screen.getByRole('button', { name: 'Account' });
     expect(within(trigger).getByText('Account')).toBeDefined();
-    // Expanded rail: avatar and label sit at the left, like the older persona row.
+    // The expanded account button keeps its contents left-aligned.
     expect(getComputedStyle(trigger).justifyContent).toBe('flex-start');
 
     // The menu footer shows the app version and a working Sign out button.
@@ -149,8 +149,7 @@ describe('RetainedShell', () => {
     renderShell('/overview', <AttentionReader onRead={onRead} />);
     await screen.findByText('Page');
     await waitFor(() => expect(mocks.apiCall).toHaveBeenCalled());
-    // One hook instance means one poll for the whole shell. The page gets the
-    // same state the bell gets.
+    // The shell mounts one hook, and the page receives its returned state.
     expect(mocks.instances).toBe(1);
     expect(onRead).toHaveBeenLastCalledWith(attention);
   });

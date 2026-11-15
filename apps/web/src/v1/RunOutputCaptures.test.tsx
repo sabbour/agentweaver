@@ -102,7 +102,7 @@ describe('RunOutputCapturesPanel', () => {
     expect(within(rows[1]).getByText(/patch 3\.0 MB$/)).toBeTruthy();
     expect(within(rows[0]).getByRole('button', { name: 'Show changes' })).toBeTruthy();
     expect(mocks.listRunOutputCaptures).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', { limit: 20 }, 'tenant-1');
-    // The read is bound to the run, so the service checks the caller owns it.
+    // The list read must carry the run's authorization binding.
     expect(mocks.bindings).toEqual([{ projectId: 'p1', runId: 'r1' }]);
   });
 
@@ -129,7 +129,6 @@ describe('RunOutputCapturesPanel', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show changes' }));
     const patch = await screen.findByLabelText('Changes on agentweaver/run-1');
-    // The retained diff viewer separates the addition marker, line numbers, and source text.
     expect(patch.textContent).toContain('Hello');
     expect(mocks.readRunOutputCaptureDiff).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'c1', 'tenant-1');
     expect(mocks.bindings.at(-1)).toEqual({ projectId: 'p1', runId: 'r1' });

@@ -47,7 +47,7 @@ describe('NewChatComposer', () => {
     expect(textbox().value).toBe('hello');
     await send();
     expect(onSubmit).toHaveBeenCalledTimes(2);
-    // Same key on retry, so the server can drop a duplicate if the first send did arrive.
+    // The same key lets the caller recognize this as a retry of the same send.
     expect(onSubmit.mock.calls[1][1]).toBe(onSubmit.mock.calls[0][1]);
     await waitFor(() => expect(screen.queryByText('Timed out')).toBeNull());
   });

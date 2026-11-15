@@ -136,9 +136,8 @@ describe('useRunAttention', () => {
     expect(result.current.error).toBeNull();
     expect(result.current.items.map((item) => item.notificationId)).toEqual(['n1', 'n2']);
     expect(result.current.count).toBe(7);
-    // No projectId: the list covers every project.
     expect(mocks.listNotifications).toHaveBeenCalledWith('token', { pageSize: ATTENTION_PAGE_SIZE }, 'tenant-1');
-    // A null binding selects the unbound token.
+    // Notifications require an unbound token; project- or run-bound tokens are rejected.
     expect(mocks.apiCall).toHaveBeenCalledWith(expect.any(Function), null);
   });
 

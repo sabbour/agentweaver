@@ -168,7 +168,9 @@ describe('WorkspaceRepositoryBrowser', () => {
 
   it('discards late tree and file responses after the selected commit changes', async () => {
     const user = userEvent.setup();
+    // Keep the first tree read open while the user selects another commit.
     let releaseFirstTree!: (value: SourceControlWorkspaceTree) => void;
+    // Keep the release file read open until the user switches back to main.
     let resolveFileContent!: (value: SourceControlWorkspaceFile) => void;
     const firstTree = new Promise<SourceControlWorkspaceTree>((resolve) => { releaseFirstTree = resolve; });
     const pendingFile = new Promise<SourceControlWorkspaceFile>((resolve) => { resolveFileContent = resolve; });

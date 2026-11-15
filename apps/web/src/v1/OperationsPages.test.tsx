@@ -679,7 +679,7 @@ describe('HeartbeatPage', () => {
     renderPage('heartbeat', <HeartbeatPage />);
     expect(await screen.findByText('You do not have permission to read run metrics in this project.')).toBeTruthy();
     expect(await screen.findByText('You do not have permission to read runs in this project.')).toBeTruthy();
-    // Tiles show dashes, not zeros, when metrics fail.
+    // Failed reads must not look like measured zeros.
     expect(screen.getByLabelText('Run summary').textContent).toContain('Not available');
   });
 
