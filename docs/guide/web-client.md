@@ -77,7 +77,7 @@ The client uses these routes:
 | `/projects` | Browse project tiles and create a project. The creator becomes its Owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. A quiet project offers **Start task**. |
 | `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
-| `/projects/:projectId/board` | Read the project **Board**: run counts and run lists above backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, reorder, queue, archive, and manage prerequisites; delete eligible tasks after confirmation. |
+| `/projects/:projectId/board` | Read the project **Board**: run counts and run lists above backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, reorder, queue, archive, and manage prerequisites; delete eligible tasks after confirmation; preview and promote confirmed work plans. |
 | `/projects/:projectId/team` | Read agents, edit an agent's role and charter, add a member, and export or import the team. |
 | `/projects/:projectId/team/cast` | Formulate a team from a goal, analyze read-only project signals, or start from a template; review a pending proposal before confirmation. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
@@ -211,6 +211,20 @@ the backlog graph and repository issues synced to tasks:
 - Select **Send all to Ready** to queue eligible Backlog tasks when you can
   change the project. The **Human review** and **Problems** run lists appear
   above the task columns; they are not task columns.
+- If you can change the project, select **Preview work-plan promotion** on a
+  run row with a root session. When the owner returns a confirmed plan, review
+  the task text and prerequisites, then select **Promote work plan**. Preview
+  does not change the backlog. Promotion adds the plan's tasks and
+  prerequisites to **Backlog**; it does not start a run. The Board refreshes
+  after success.
+- If the plan is no longer current or the backlog changed, the Board refreshes
+  and asks you to preview again. If the result is unavailable, select **Retry
+  promotion** to check the same confirmation. The Board keeps the original
+  request and idempotency key.
+- Automatic pickup settings are unavailable because v1 has no scheduler to
+  consume them. File decomposition is unavailable because v1 has no API to
+  turn a file into a work plan. Promotion uses an existing
+  confirmed work plan; it does not read a file, call a model, or create a plan.
 - Without read access, the Board says you don't have permission to view it.
   A failed read shows the reason and **Try again**.
 
