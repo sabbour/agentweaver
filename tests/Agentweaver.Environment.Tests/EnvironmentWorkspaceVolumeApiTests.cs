@@ -383,6 +383,7 @@ public sealed class EnvironmentWorkspaceVolumeManagerTests(EnvironmentPostgresFi
 
         var projects = new FakeProjectsConfigClient(
             Authorization(),
+            // Revoke on the provider preflight check, after reservation and before the provider call.
             call => call >= 5 ? Authorization(canWrite: false) : Authorization());
         var manager = new EnvironmentWorkspaceVolumeManager(projects, store, service);
 
@@ -427,6 +428,7 @@ public sealed class EnvironmentWorkspaceVolumeManagerTests(EnvironmentPostgresFi
 
         var projects = new FakeProjectsConfigClient(
             Authorization(),
+            // Revoke on the owner-commit check, after the provider returns a resource.
             call => call >= 6 ? Authorization(canWrite: false) : Authorization());
         var manager = new EnvironmentWorkspaceVolumeManager(projects, store, service);
 

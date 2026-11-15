@@ -510,6 +510,7 @@ public sealed class PlatformEgressReconcilerTests
     {
         var revoked = PlatformEgressFixtures.Snapshot(sourceHash: PlatformEgressFixtures.Hash("revoked"));
         var current = PlatformEgressFixtures.Snapshot(sourceHash: PlatformEgressFixtures.Hash("current"));
+        // The source changes after its first read; reconciliation must apply the current snapshot.
         _source.Next = [revoked, current, current];
 
         var result = await Reconciler().ReconcileAsync(CancellationToken.None);

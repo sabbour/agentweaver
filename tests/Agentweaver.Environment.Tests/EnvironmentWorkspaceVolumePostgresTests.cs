@@ -44,6 +44,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
                 intent.OptionsSnapshot, JsonSerializer.SerializeToElement(new { claim = planned.ResourceId })));
         var expectedLease = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
             leases, reservation.Lease.OperationId, fence, sandbox, true, timeout.Token);
+        // Hold the combined read open so the competing write must wait for its owner lock.
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
@@ -414,6 +415,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
         var firstLease = await store.ClaimWorkspaceVolumeCleanupAsync(
             fence, replacement.OperationId, TimeSpan.FromMilliseconds(1), CancellationToken.None);
         Assert.NotNull(firstLease);
+        // Let the short lease expire before claiming it again.
         await Task.Delay(TimeSpan.FromMilliseconds(25));
         var secondLease = await store.ClaimWorkspaceVolumeCleanupAsync(
             fence, replacement.OperationId, TimeSpan.FromSeconds(30), CancellationToken.None);
