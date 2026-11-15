@@ -84,7 +84,7 @@ describe('DecisionView', () => {
   });
 
   it('rereads decisions before approving and sends the latest state version', async () => {
-    // The screen shows version 4, but the server is at 7. No version was pinned, so 7 is sent.
+    // The opened snapshot is version 4; with no version pin, the action sends version 7 from the reread.
     mocks.getDecisions.mockResolvedValue(decisions('req-1', 7));
     mocks.resolveGate.mockResolvedValue(accepted);
     const { refresh } = renderView();
@@ -174,7 +174,6 @@ describe('DecisionView', () => {
     mocks.answerGate.mockResolvedValue(accepted);
     renderView({ blocker: question });
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement;
-    // Send stays off until a choice or text is given.
     expect(send.disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
     await click(send);
@@ -214,7 +213,7 @@ describe('DecisionView', () => {
   });
 
   it('shows other failures without refreshing', async () => {
-    // A non-409 failure (here the reread itself) shows the error but does not refresh.
+    // A failure while rereading decisions shows the error but does not refresh.
     mocks.getDecisions.mockRejectedValue(new Error('Network down'));
     const { refresh } = renderView();
     await click(screen.getByTestId('approval-gate-approve-btn'));

@@ -59,7 +59,7 @@ const browsePage: MarketplaceBrowsePage = {
   hasMore: false,
 };
 
-/** The candidate the package route returns for an uploaded sample skill. */
+/** The candidate returned by the mocked package action for an uploaded skill. */
 const packagedCandidate = {
   skillMarkdown: btoa('# Sample skill'),
   resources: [{ relativePath: 'README.md', content: btoa('Read me') }],
@@ -163,7 +163,6 @@ describe('Skills and marketplace panel', () => {
       />,
     );
 
-    // Reads the number shown next to a stat label in the strip.
     const metricValue = (label: string) =>
       screen.getByText(label).parentElement?.nextElementSibling?.textContent;
     expect(metricValue('Assigned')).toBe('2');
@@ -573,7 +572,7 @@ describe('Skills and marketplace panel', () => {
 
     expect(await screen.findByText('Skill A')).toBeTruthy();
     expect(screen.getByText('2 file(s) selected.')).toBeTruthy();
-    // The browser sends the raw files; the service builds the candidate.
+    // The browser passes raw files to the package action, which returns the candidate for preview.
     expect(actions.packageSkillContent).toHaveBeenCalledWith({
       files: [
         { relativePath: 'SKILL.md', content: btoa('# Skill A') },
@@ -706,7 +705,7 @@ describe('Skills and marketplace panel', () => {
       requestedRef: 'main',
       subpath: 'skills',
     });
-    // Both lists reload, so the suggestion now shows as added.
+    // The suggestions reload, so the added item no longer offers an Add button.
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Add Public skills' })).toBeNull());
     expect(listDefinitions).toHaveBeenCalledTimes(2);
   });

@@ -101,7 +101,7 @@ describe('OutputCaptureBrowser', () => {
   });
 
   it('does not display bytes whose hash or length differs from the manifest', async () => {
-    // The server returns different bytes than the manifest describes.
+    // Keep the reported hash unchanged so the browser must check the returned bytes.
     vi.mocked(gatewayClient.readSourceControlOutputCaptureFile).mockResolvedValue({
       bytes: new TextEncoder().encode('tampered bytes'), sha256: detail.manifest.files[0].sha256,
     });

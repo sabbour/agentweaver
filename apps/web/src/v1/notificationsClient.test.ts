@@ -39,8 +39,7 @@ describe('NotificationsClient', () => {
     expect(fetcher.mock.calls[0][1]?.method).toBe('POST');
   });
 
-  // A token bound to a project or run is rejected with 403. The UI needs the error code
-  // to explain this, so the client must surface it on GatewayError.
+  // The client must preserve this 403 code so the UI can explain a binding mismatch.
   it('keeps the error code of a bound-token rejection', async () => {
     const { notifications } = client(() => Response.json({ error: 'caller_binding_mismatch' }, { status: 403 }));
     const error = await notifications.list('bound-token').catch((reason: unknown) => reason);

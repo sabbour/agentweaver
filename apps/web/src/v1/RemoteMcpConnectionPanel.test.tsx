@@ -102,7 +102,7 @@ describe('Remote MCP settings connection', () => {
     expect(mocks.list).toHaveBeenCalledOnce();
   });
 
-  /** Loads owner status and supplies the saved setup digest before starting consent. */
+  /** Loads owner status and sets a configuration checksum before starting consent. */
   async function prepareAuthorization() {
     render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
     fireEvent.change(screen.getByLabelText('Remote MCP connection ID'), { target: { value: id } });
@@ -120,8 +120,7 @@ describe('Remote MCP settings connection', () => {
     expect(mocks.read).toHaveBeenCalledWith('token', id, 'tenant');
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect tool service' }));
     await screen.findByText('Disconnected');
-    // Disconnect must send the revisions it loaded, so the server can reject a
-    // stale change, and an idempotency key so a retry is safe.
+    // Revision checks reject stale changes; the idempotency key protects retries.
     expect(mocks.disconnect).toHaveBeenCalledWith('token', id, expect.objectContaining({
       expectedConnectionRevision: 2, expectedCredentialRevision: 1, expectedConfigurationRevision: 4,
       idempotencyKey: expect.any(String),

@@ -257,6 +257,7 @@ describe('OverviewPage metrics', () => {
       expect(intervalIndex).toBeGreaterThanOrEqual(0);
       const intervalId = setIntervalSpy.mock.results[intervalIndex]?.value;
 
+      // Keep one reload pending while the next interval fires to check for overlap.
       let finishPriorityReload: (() => void) | undefined;
       mocks.prioritiesReload.mockImplementationOnce(() => new Promise<void>((resolve) => {
         finishPriorityReload = resolve;
@@ -303,6 +304,7 @@ describe('OverviewPage metrics', () => {
       await waitFor(() => expect(
         (screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled,
       ).toBe(false));
+      // Hold the metrics reload open while the active project is archived.
       mocks.deferMetricsReload = true;
       const archivedProject = { ...activeProject, state: 'archived' };
       gatewayMocks.listProjects.mockImplementationOnce(async () => [archivedProject]);

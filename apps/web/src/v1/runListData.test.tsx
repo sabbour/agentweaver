@@ -54,7 +54,7 @@ describe('run display helpers', () => {
   it('uses title, then goal, then "Run" with the short run ID', () => {
     expect(runDisplayLabel(summary('r1', { title: 'Title', goal: 'Goal', rootSessionId: 's1' }))).toBe('Title');
     expect(runDisplayLabel(summary('r1', { title: '  ', goal: 'Goal', rootSessionId: 's1' }))).toBe('Goal');
-    // The root session ID is skipped: it is the same agent name for many runs.
+    // Without a title or goal, the label uses the run ID instead of the root session ID.
     expect(runDisplayLabel(summary('0123456789abcdef', { rootSessionId: 'coordinator' }))).toBe('Run 01234567');
     expect(runDisplayLabel(summary('r1'))).toBe('Run r1');
     expect(runDisplayLabel({ runId: 'r2' } as ProjectRunSummary)).toBe('Run r2');

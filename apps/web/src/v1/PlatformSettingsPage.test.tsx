@@ -7,7 +7,7 @@ import { PlatformSettingsPage } from './PlatformSettingsPage';
 
 const api = vi.hoisted(() => ({ getPlatformComponents: vi.fn() }));
 const calls = vi.hoisted(() => ({ bindings: [] as unknown[] }));
-// One stable apiCall, like the real provider. It records the project binding it was asked for.
+// One stable apiCall, like the real provider. It records the binding used for each call.
 const auth = vi.hoisted(() => ({
   apiCall: (operation: (token: string, tenant: string) => unknown, binding: unknown) => {
     calls.bindings.push(binding);

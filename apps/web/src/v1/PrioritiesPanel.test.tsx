@@ -13,7 +13,7 @@ vi.mock('./api', async () => {
   return { ...actual, gatewayClient: new actual.AgentweaverGatewayClient('https://gw.test/api/v1', (i, init) => hoisted.gateway!.fetch(i, init)) };
 });
 
-// The token tells which session a call used: 'bound' for a run binding, 'unbound' otherwise.
+// The token marks whether a call is run-bound: 'bound' or 'unbound'.
 vi.mock('./AuthContext', () => {
   const auth = { apiCall: (op: (token: string, tenant: null) => Promise<unknown>, binding: unknown) => op(binding ? 'bound' : 'unbound', null) };
   return { useAuth: () => auth };
@@ -53,7 +53,7 @@ beforeEach(() => {
 
 describe('PrioritiesPanel', () => {
   it('creates once per draft and reuses the Idempotency-Key on retry', async () => {
-    // The server saves the first create but the response is lost, as after a timeout.
+    // The fake applies the first create, then loses the response.
     hoisted.gateway!.failNext('POST', '/api/v1/chief-of-staff/priorities', 'lost');
     renderPanel();
     const form = await screen.findByRole('form', { name: 'Add a Priority' });
