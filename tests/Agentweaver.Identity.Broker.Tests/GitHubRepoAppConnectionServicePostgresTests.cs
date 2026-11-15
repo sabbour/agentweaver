@@ -23,7 +23,7 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
     [Fact]
     public async Task ConnectsBrowsesAndMintsRepositoryScopedTokensBoundToOneProject()
     {
-        // Verify real database selection binding while checking team-sync tokens stay contents-only.
+        // Verify database selection binding and that team-sync requests ask only for contents permission.
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
         var dbOptions = new DbContextOptionsBuilder<IdentityBrokerDbContext>()
@@ -463,6 +463,7 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
             secretRedemption,
             new EphemeralDataProtectionProvider(),
             time);
+        // Resume this earlier query only after disconnect revokes the connection.
         var browserTask = syncService.ListRepositoriesAsync(ownerId, CancellationToken.None);
         try
         {

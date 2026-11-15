@@ -41,7 +41,6 @@ public sealed class GatewayWebCorsTests
         Assert.Contains("x-agentweaver-tenant", allowedHeaders, StringComparison.OrdinalIgnoreCase);
         Assert.False(preflightResponse.Headers.Contains("Access-Control-Allow-Credentials"));
 
-        // Generated proposals need both the run bearer and the separate project-writer bearer.
         using var castingPreflight = new HttpRequestMessage(
             HttpMethod.Options,
             "/api/v1/projects/project-1/casting/proposals/analyze");

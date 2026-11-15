@@ -109,6 +109,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
         var adminBuilder = new NpgsqlConnectionStringBuilder(databaseConnectionString) { Database = "postgres" };
         await using var adminConnection = new NpgsqlConnection(adminBuilder.ConnectionString);
         await adminConnection.OpenAsync();
+        // Emulate the managed principal lookup because local PostgreSQL does not provide pgaadauth.
         var setup = $"""
             CREATE ROLE {QuoteIdentifier(adminRole)} LOGIN;
             CREATE ROLE azure_pg_admin NOLOGIN;

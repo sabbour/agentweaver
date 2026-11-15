@@ -446,7 +446,7 @@ public sealed class GatewayCastingRegressionTests
         var hash = new string('a', 64);
         RuntimeMaterialAcknowledgmentEvidence Material(long position, SessionMaterialKind kind) =>
             new(Guid.NewGuid(), position, kind, hash, hash);
-        // Orchestrator returns the genuine root-turn receipt with every completed casting turn.
+        // The stub supplies root-turn evidence for the request and content-hash checks.
         var nativeCompletion = new RuntimeRootTurnCompletionEvidence(
             1, requestId, promptSha256, outputSha256, Guid.NewGuid(), 1, hash, 1, hash, hash, hash,
             Guid.NewGuid(), 1, "model-selection-1", "model-1", "hostedCopilot", null, null,
@@ -479,7 +479,7 @@ public sealed class GatewayCastingRegressionTests
                 Assert.Equal(prompt, execution.RootElement.GetProperty("prompt").GetString());
                 if (firstExecution)
                 {
-                    // Simulate a lost response after Orchestrator accepted the exact request.
+                    // Simulate a lost response after the stub records the request.
                     firstExecution = false;
                     throw new TaskCanceledException("Simulated lost owner response.");
                 }

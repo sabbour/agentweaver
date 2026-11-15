@@ -192,6 +192,7 @@ public sealed class GatewayWorkspaceReadRegressionTests
     [Fact]
     public async Task TreeReadForwardsActualAdapterOutputAfterOwnerJsonExpansion()
     {
+        // Keep provider JSON under 8 MiB; owner JSON escaping expands it past 9 MiB.
         const int nodeCount = 13_001;
         const int pathLength = 470;
         const int escapedCharactersPerPath = 53;

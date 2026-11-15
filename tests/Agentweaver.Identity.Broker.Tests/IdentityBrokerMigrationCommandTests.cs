@@ -140,7 +140,7 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
             .Options;
         await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(runtimeDataSource, options);
 
-        // Reproduce the deployed failure without weakening the startup check or granting history writes.
+        // Revoke history-table SELECT to test the migration check without write grants.
         await using (var admin = new NpgsqlConnection(adminConnectionString))
         {
             await admin.OpenAsync();
