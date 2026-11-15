@@ -154,6 +154,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     services.AddSingleton(new ProjectsConfigIdentityOptions(TestIssuer));
                     services.AddScoped<ProjectAuthorizationOwner>();
                     services.AddScoped<ProjectsConfigService>();
+                    services.AddScoped<ModelProviderDraftService>();
                     services.AddScoped<ProjectSetupAuthorityAuditService>();
                     services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
                             client.BaseAddress = new Uri("https://knowledge.test/"))
@@ -224,9 +225,11 @@ public sealed partial class ProjectsConfigPostgresTests
 
             var scope = Request.Headers["X-Test-Scope"].ToString();
             var claims = new List<Claim> { new("sub", subject), new("scope", scope) };
-            if (Request.Headers.TryGetValue("X-Test-Project", out var projectId))
+            if (Request.Headers.TryGetValue("X-Test-Bound-Project", out var projectId) ||
+                Request.Headers.TryGetValue("X-Test-Project", out projectId))
                 claims.Add(new Claim("project_id", projectId.ToString()));
-            if (Request.Headers.TryGetValue("X-Test-Run", out var runId))
+            if (Request.Headers.TryGetValue("X-Test-Bound-Run", out var runId) ||
+                Request.Headers.TryGetValue("X-Test-Run", out runId))
                 claims.Add(new Claim("run_id", runId.ToString()));
             if (Request.Headers.TryGetValue("X-Test-Purpose", out var purpose))
                 claims.Add(new Claim("purpose", purpose.ToString()));

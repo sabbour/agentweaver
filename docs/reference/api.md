@@ -35,6 +35,32 @@ therefore does not provide complete browser or BFF parity. For the CLI
 commands, authorization, and current distribution status, see the
 [Agentweaver CLI guide](../guide/cli.md).
 
+## Model-provider Draft metadata
+
+These routes expose Draft metadata through the Gateway. Projects & Config owns
+the records and checks current authority on every request. Platform operations
+require an unbound current PlatformAdmin. Project operations require the exact
+project binding, no run binding, and a current project Owner or PlatformAdmin.
+Every operation requires `api.read` and `projects.admin`. All eight operations
+are excluded from MCP.
+
+| Gateway route | Native owner | Operation ID |
+| --- | --- | --- |
+| `GET /api/v1/platform/byok-providers` | Projects `GET /api/platform/byok-providers` | `listPlatformByokProviderDrafts` |
+| `GET /api/v1/platform/byok-providers/{providerId}` | Projects `GET /api/platform/byok-providers/{providerId}` | `readPlatformByokProviderDraft` |
+| `POST /api/v1/platform/byok-providers` | Projects `POST /api/platform/byok-providers` | `createPlatformByokProviderDraft` |
+| `PUT /api/v1/platform/byok-providers/{providerId}` | Projects `PUT /api/platform/byok-providers/{providerId}` | `updatePlatformByokProviderDraft` |
+| `GET /api/v1/projects/{projectId}/byok-providers` | Projects `GET /api/projects/{projectId}/byok-providers` | `listProjectByokProviderDrafts` |
+| `GET /api/v1/projects/{projectId}/byok-providers/{providerId}` | Projects `GET /api/projects/{projectId}/byok-providers/{providerId}` | `readProjectByokProviderDraft` |
+| `POST /api/v1/projects/{projectId}/byok-providers` | Projects `POST /api/projects/{projectId}/byok-providers` | `createProjectByokProviderDraft` |
+| `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}` | Projects `PUT /api/projects/{projectId}/byok-providers/{providerId}` | `updateProjectByokProviderDraft` |
+
+List routes accept only `pageSize` and `afterProviderId`. Saves use an
+operation ID and expected revision; create uses revision `0`, while update
+requires a positive revision. Save retries return the revision committed by
+the original operation. Delete, activation, and credential routes are not
+mapped.
+
 ## Periodic issue sync
 
 These routes do not require a run. They require an authenticated project Owner

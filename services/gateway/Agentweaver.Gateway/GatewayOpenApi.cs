@@ -94,6 +94,14 @@ internal static partial class GatewayOpenApi
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
             ["writePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyWriteRequest", "NativeAcsPolicyWriteReceipt", "200"),
+            ["listPlatformByokProviderDrafts"] = C(null, "ModelProviderDraftPage", "200"),
+            ["readPlatformByokProviderDraft"] = C(null, "ModelProviderDraft", "200"),
+            ["createPlatformByokProviderDraft"] = C("ModelProviderDraftSaveRequest", "ModelProviderDraft", "200"),
+            ["updatePlatformByokProviderDraft"] = C("ModelProviderDraftSaveRequest", "ModelProviderDraft", "200"),
+            ["listProjectByokProviderDrafts"] = C(null, "ModelProviderDraftPage", "200"),
+            ["readProjectByokProviderDraft"] = C(null, "ModelProviderDraft", "200"),
+            ["createProjectByokProviderDraft"] = C("ModelProviderDraftSaveRequest", "ModelProviderDraft", "200"),
+            ["updateProjectByokProviderDraft"] = C("ModelProviderDraftSaveRequest", "ModelProviderDraft", "200"),
             ["pinSourceControlRepository"] = C("SourceControlRepositoryPinRequest", "SourceControlRepositoryPinView", "200", "202"),
             ["createSourceControlIssue"] = C("SourceControlIssueRequest", "SourceControlIssue", "200"),
             ["createSourceControlPullRequest"] = C("SourceControlPullRequestRequest", "SourceControlPullRequest", "200"),
@@ -381,6 +389,13 @@ internal static partial class GatewayOpenApi
             ["502"] = ProblemResponse("The owner is unavailable, redirected, or returned an invalid contract."),
             ["504"] = ProblemResponse("The finite owner request timed out."),
         };
+        if (IsModelProviderDraftRoute(route.OperationId))
+        {
+            responses["401"] = DraftErrorResponse("The bearer token is missing, invalid, or expired.");
+            responses["403"] = DraftErrorResponse("The caller lacks current authority for this Draft scope.");
+            responses["502"] = DraftErrorResponse("Projects & Config is unavailable or returned an invalid response.");
+            responses["504"] = DraftErrorResponse("The Projects & Config request timed out.");
+        }
         foreach (var status in contract.SuccessStatuses)
         {
             responses[status] = status == "204"
@@ -396,14 +411,15 @@ internal static partial class GatewayOpenApi
                         status == "202"
                             ? "Accepted by the owner; this does not mean the requested work is complete."
                             : "Owner response; returned by the owning service.",
-                        (route.Owner == GatewayOwner.Environment && status is "200" or "202") ||
-                        (route.OperationId is "readRuntimeObservationV1" or "readRuntimeObservationV2" or
+                        (route.Owner == GatewayOwner.Environment && status is ("200" or "202")) ||
+                        ((route.OperationId is "readRuntimeObservationV1" or "readRuntimeObservationV2" or
                          "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
                         "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
                         "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
-                        "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy") && status == "200"
+                        "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy" ||
+                        IsModelProviderDraftRoute(route.OperationId)) && status == "200")
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
@@ -428,6 +444,8 @@ internal static partial class GatewayOpenApi
                                             "writePlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
                                             "readPlatformNativeAcsPolicyRevision" =>
                                                 "Platform Policy responses are not cacheable.",
+                                            _ when IsModelProviderDraftRoute(route.OperationId) =>
+                                                "Provider Draft responses are not cacheable.",
                                             _ => "Runtime evidence responses are not cacheable.",
                                         },
                                     schema = new { type = "string", example = "no-store" },
@@ -687,6 +705,25 @@ else if (route.OperationId is
             if (route.OperationId == "writePlatformNativeAcsPolicy")
                 responses["409"] = ProblemResponse(
                     "The expected revision is stale, a concurrent write conflicted, or the idempotency key conflicts.");
+        }
+        else if (IsModelProviderDraftRoute(route.OperationId))
+        {
+            responses["400"] = DraftErrorResponse(
+                "The request has an invalid body, URL, provider ID, or list query.");
+            responses["403"] = DraftErrorResponse(
+                "The caller lacks api.read, projects.admin, current membership, or the required current role and binding.");
+            if (route.OperationId is "readPlatformByokProviderDraft" or "readProjectByokProviderDraft" or
+                "listProjectByokProviderDrafts" or "createProjectByokProviderDraft" or
+                "updateProjectByokProviderDraft")
+                responses["404"] = DraftErrorResponse("No Draft exists in the requested scope.");
+            responses["409"] = DraftErrorResponse(
+                "The save conflicts or an existing Draft URL needs a safe revisioned update.");
+            if (route.HasJsonBody)
+            {
+                responses["413"] = DraftErrorResponse("The save body exceeds the 32768-byte limit.");
+                responses["415"] = DraftErrorResponse("The save request must use a JSON content type.");
+            }
+            responses["503"] = DraftErrorResponse("Projects & Config could not complete the Draft request.");
         }
 
         if (route.Owner == GatewayOwner.Environment)
@@ -1034,6 +1071,37 @@ else if (route.OperationId is
             },
         };
 
+    private static object DraftErrorResponse(string description)
+    {
+        var response = new Dictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["description"] = description,
+            ["content"] = new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                ["application/json"] = new { schema = Ref("ModelProviderDraftError") },
+                ["application/problem+json"] = new
+                {
+                    schema = Ref("Problem"),
+                },
+            },
+            ["headers"] = new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                ["Cache-Control"] = new
+                {
+                    description = "Provider Draft responses are not cacheable.",
+                    schema = new { type = "string", example = "no-store" },
+                },
+            },
+        };
+        return response;
+    }
+
+    private static bool IsModelProviderDraftRoute(string operationId) =>
+        operationId is "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
+            "createPlatformByokProviderDraft" or "updatePlatformByokProviderDraft" or
+            "listProjectByokProviderDrafts" or "readProjectByokProviderDraft" or
+            "createProjectByokProviderDraft" or "updateProjectByokProviderDraft";
+
     private static object EventStreamResponse() =>
         new
         {
@@ -1092,6 +1160,12 @@ else if (route.OperationId is
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId is "listPlatformByokProviderDrafts" or "listProjectByokProviderDrafts")
+            return name switch
+            {
+                "pageSize" => new { type = "integer", minimum = 1, maximum = 100, @default = 50 },
+                _ => new { type = "string", minLength = 1, maxLength = 128 },
+            };
         if (operationId is "listRunEnvironments" or "listEnvironmentWorkspaceVolumes")
             return name switch
             {
@@ -1992,6 +2066,31 @@ else if (route.OperationId is
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
             ("revision", Int()), ("contentSha256", Str()), ("auditId", Uuid()), ("outboxId", Uuid()),
             ("replayed", Bool())),
+        ["ModelProviderDraftSaveRequest"] = StrictObj(
+            ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
+            ("operationId", Uuid()), ("expectedRevision", Int()), ("name", Str()),
+            ("type", Enum("openai", "azure", "anthropic")), ("base_url", Str()), ("model", Str()),
+            ("wire_api", Nullable(Enum("completions", "responses"))),
+            ("azure_api_version", NullableStr()),
+            ("reasoning_efforts", BoundedArray(
+                Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
+            ("prompt_capacity_tokens", NullableInt())),
+        ["ModelProviderDraft"] = StrictObj(
+            ["id", "name", "type", "base_url", "model", "wire_api", "azure_api_version",
+                "reasoning_efforts", "prompt_capacity_tokens", "scope", "projectId", "state",
+                "revision", "configurationHash", "has_api_key", "is_active", "hasCredential"],
+            ("id", Str()), ("name", Str()), ("type", Enum("openai", "azure", "anthropic")),
+            ("base_url", Str()), ("model", Str()), ("wire_api", Nullable(Enum("completions", "responses"))),
+            ("azure_api_version", NullableStr()), ("reasoning_efforts", Arr(Enum("none", "minimal", "low", "medium", "high", "xhigh"))),
+            ("prompt_capacity_tokens", NullableInt()), ("scope", Enum("platform", "project")),
+            ("projectId", NullableStr()), ("state", Const("Draft")), ("revision", Int()),
+            ("configurationHash", Str()), ("has_api_key", Bool()), ("is_active", Bool()),
+            ("hasCredential", Bool())),
+        ["ModelProviderDraftPage"] = Obj(
+            ["providers", "nextAfterProviderId"],
+            ("providers", Arr(Ref("ModelProviderDraft"))), ("nextAfterProviderId", NullableStr())),
+        ["ModelProviderDraftError"] = Obj(
+            ["code"], ("code", Str()), ("id", NullableStr()), ("revision", NullableInt())),
         // Platform component report: identities, versions, and readiness only; no options or endpoints.
         ["PlatformComponentReport"] = Obj(["observedAt", "areas"],
             ("observedAt", Date()), ("areas", Arr(Ref("PlatformComponentAreaReport")))),

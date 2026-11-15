@@ -34,6 +34,41 @@ public sealed class ModelProviderDraftService(
         return drafts.Select(item => ToDraft(item.State, item.Revision)).ToArray();
     }
 
+    public async Task<ModelProviderDraftPage> ListPageAsync(
+        ProjectAuthorizationContext caller,
+        ModelProviderBindingScope scope,
+        string? projectId,
+        int pageSize,
+        string? afterProviderId,
+        CancellationToken cancellationToken)
+    {
+        await AuthorizeAsync(caller, scope, projectId, cancellationToken).ConfigureAwait(false);
+        if (pageSize is < 1 or > 100)
+            throw ModelProviderDraftException.InvalidRequest("Page size must be between 1 and 100.");
+        if (afterProviderId is not null)
+            ValidateProviderId(afterProviderId);
+
+        var drafts = await (
+                from head in db.ModelProviderDrafts.AsNoTracking()
+                join revision in db.ModelProviderDraftRevisions.AsNoTracking()
+                    on new { head.ProviderId, Revision = head.CurrentRevision }
+                    equals new { revision.ProviderId, Revision = revision.ProviderRevision }
+                where head.Scope == scope && head.ProjectId == projectId &&
+                    (afterProviderId == null || head.ProviderId.CompareTo(afterProviderId) > 0)
+                orderby head.ProviderId
+                select new { head.ProviderId, head.State, Revision = revision })
+            .Take(pageSize + 1)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var hasNextPage = drafts.Length > pageSize;
+        var providers = drafts.Take(pageSize)
+            .Select(item => ToDraft(item.State, item.Revision))
+            .ToArray();
+        return new ModelProviderDraftPage(
+            providers,
+            hasNextPage ? drafts[pageSize - 1].ProviderId : null);
+    }
+
     public async Task<ModelProviderDraft> ReadAsync(
         ProjectAuthorizationContext caller,
         ModelProviderBindingScope scope,

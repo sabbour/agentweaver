@@ -130,8 +130,12 @@ Every read and write requires `api.read` and `projects.admin`. Platform requests
 must be unbound and made by a PlatformAdmin. Project requests must match the
 exact project binding, have no run binding, and be made by a project Owner or
 PlatformAdmin. Draft metadata does not change model eligibility or accepted run
-selections. This source slice adds no HTTP route, activation, credentials, or
-rate-card data. See
+selections. Activation, credentials, and rate-card data remain separate.
+Public Gateway routes support list, read, create, and update for
+platform and project Drafts. They return a public metadata projection, not the
+full binding record. Lists use a bounded, provider-ID-ordered query over the
+current heads. Exact save retries return the immutable revision saved by the
+original operation. See
 [issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
 
 ### Accept a run selection

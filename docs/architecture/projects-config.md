@@ -12,13 +12,42 @@ resources. This page describes source, not a release or deployment. The
 [Projects deep dive](../deep-dive/projects-config.md) explains revision races
 and the acceptance transaction.
 
-Projects & Config also stores customer-provided model-provider metadata as
-Draft heads and immutable revisions. This owner-internal service does not add
-an HTTP route, activate a provider, or change deployment-owned model eligibility
-or accepted run selections. Every read and write requires `api.read` and
-`projects.admin`; platform requests must be unbound, and project requests must
-match the exact project binding with no run binding. See
+Projects & Config stores customer-provided model-provider metadata as Draft
+heads and immutable revisions. The public Gateway exposes list, read, create,
+and update routes for platform and project Drafts. Every operation requires
+`api.read` and `projects.admin`; platform requests must be unbound and made by a
+current PlatformAdmin. Project requests must match the exact project binding,
+have no run binding, and come from a current project Owner or PlatformAdmin.
+Drafts do not activate providers or change deployment-owned model eligibility
+or accepted run selections. See
 [issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
+
+The save response contains the immutable revision committed by that operation.
+An exact retry returns that revision, even if a later edit has advanced the
+head. The client reloads before it makes another edit.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant Gateway
+    participant Projects as Projects & Config
+    participant DB as PostgreSQL
+    Client->>Gateway: POST or PUT with operationId and expectedRevision
+    Gateway->>Projects: Forward bearer, tenant selector, and bounded metadata
+    Projects->>Projects: Check current scope, membership, role, and binding
+    Projects->>DB: Replay exact operation or append revision and advance head
+    DB-->>Projects: Committed immutable revision
+    Projects-->>Gateway: Saved revision, no-store
+    Gateway-->>Client: Save receipt
+    alt Client retries after a lost response
+        Client->>Gateway: Retry the same request
+        Gateway->>Projects: Forward unchanged
+        Projects->>DB: Find matching operation fingerprint
+        DB-->>Projects: Original saved revision
+        Projects-->>Client: Original receipt
+    end
+```
 
 ## Project creation authority
 

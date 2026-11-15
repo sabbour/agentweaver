@@ -1,0 +1,883 @@
+extern alias GatewayHost;
+extern alias ProjectsConfig;
+
+using Agentweaver.Abstractions;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using GatewayHost::Agentweaver.Gateway;
+using ProjectsConfig::Agentweaver.Projects.Config;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using Xunit;
+
+namespace Agentweaver.Identity.Broker.Tests;
+
+public sealed class GatewayModelProviderDraftTests
+{
+    private static readonly (string Method, string Path, string OperationId, string OwnerPath)[] DraftRoutes =
+    [
+        ("GET", "/api/v1/platform/byok-providers", "listPlatformByokProviderDrafts", "/api/platform/byok-providers"),
+        ("GET", "/api/v1/platform/byok-providers/{providerId}", "readPlatformByokProviderDraft", "/api/platform/byok-providers/{providerId}"),
+        ("POST", "/api/v1/platform/byok-providers", "createPlatformByokProviderDraft", "/api/platform/byok-providers"),
+        ("PUT", "/api/v1/platform/byok-providers/{providerId}", "updatePlatformByokProviderDraft", "/api/platform/byok-providers/{providerId}"),
+        ("GET", "/api/v1/projects/{projectId}/byok-providers", "listProjectByokProviderDrafts", "/api/projects/{projectId}/byok-providers"),
+        ("GET", "/api/v1/projects/{projectId}/byok-providers/{providerId}", "readProjectByokProviderDraft", "/api/projects/{projectId}/byok-providers/{providerId}"),
+        ("POST", "/api/v1/projects/{projectId}/byok-providers", "createProjectByokProviderDraft", "/api/projects/{projectId}/byok-providers"),
+        ("PUT", "/api/v1/projects/{projectId}/byok-providers/{providerId}", "updateProjectByokProviderDraft", "/api/projects/{projectId}/byok-providers/{providerId}"),
+    ];
+
+    [Fact]
+    public async Task DraftRoutesExposeTypedOpenApiContractsAndNoLifecycleOperations()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+
+        foreach (var route in DraftRoutes)
+        {
+            Assert.True(paths.TryGetProperty(route.Path, out var pathItem),
+                $"Missing {route.Path}: {string.Join(", ", paths.EnumerateObject().Select(item => item.Name))}");
+            var operation = pathItem.GetProperty(route.Method.ToLowerInvariant());
+            Assert.Equal(route.OperationId, operation.GetProperty("operationId").GetString());
+            Assert.Equal("Projects", operation.GetProperty("x-agentweaver-owner").GetString());
+            Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+            Assert.Equal(route.OwnerPath, operation.GetProperty("x-agentweaver-owner-path").GetString());
+            Assert.True(operation.GetProperty("responses").GetProperty("200")
+                .GetProperty("headers").TryGetProperty("Cache-Control", out _));
+            var responses = operation.GetProperty("responses");
+            foreach (var status in new[] { "400", "401", "403", "409", "503" })
+            {
+                var content = responses.GetProperty(status).GetProperty("content");
+                Assert.True(content.TryGetProperty("application/json", out _));
+                Assert.True(content.TryGetProperty("application/problem+json", out _));
+            }
+            if (route.OperationId is "readPlatformByokProviderDraft" or "readProjectByokProviderDraft" or
+                "listProjectByokProviderDrafts" or "createProjectByokProviderDraft" or
+                "updateProjectByokProviderDraft")
+                Assert.True(responses.TryGetProperty("404", out _));
+            if (route.Method is "POST" or "PUT")
+            {
+                var content = responses.GetProperty("413").GetProperty("content");
+                Assert.True(content.TryGetProperty("application/problem+json", out _));
+                Assert.True(content.TryGetProperty("application/json", out _));
+                Assert.True(responses.GetProperty("415").GetProperty("content")
+                    .TryGetProperty("application/json", out _));
+            }
+        }
+
+        Assert.False(schemas.GetProperty("ModelProviderDraftSaveRequest")
+            .GetProperty("additionalProperties").GetBoolean());
+        Assert.True(schemas.TryGetProperty("ModelProviderDraft", out var draftSchema),
+            string.Join(", ", schemas.EnumerateObject().Select(schema => schema.Name)));
+        Assert.False(draftSchema
+            .GetProperty("additionalProperties").GetBoolean());
+        Assert.Contains("hasCredential",
+            draftSchema.GetProperty("properties").EnumerateObject()
+                .Select(property => property.Name));
+        Assert.DoesNotContain("credentialVersion",
+            draftSchema.GetProperty("properties").EnumerateObject()
+                .Select(property => property.Name));
+        Assert.False(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}/activate", out _));
+        Assert.False(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}", out var item) &&
+            item.TryGetProperty("delete", out _));
+    }
+
+    [Theory]
+    [InlineData("/api/v1/platform/byok-providers?pageSize=1", "/api/platform/byok-providers?pageSize=1")]
+    [InlineData("/api/v1/platform/byok-providers/provider-a", "/api/platform/byok-providers/provider-a")]
+    [InlineData("/api/v1/projects/project-a/byok-providers?afterProviderId=one", "/api/projects/project-a/byok-providers?afterProviderId=one")]
+    [InlineData("/api/v1/projects/project-a/byok-providers/provider-a", "/api/projects/project-a/byok-providers/provider-a")]
+    public async Task BodyFreeDraftGetsForwardBearerTenantAndNoStore(
+        string publicPath,
+        string expectedOwnerPath)
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        var calls = 0;
+        GatewayOwner observedOwner = default;
+        string? observedPath = null;
+        string? observedBearer = null;
+        string? observedTenant = null;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key, () => new DraftOwnerHandler((request, _) =>
+            {
+                calls++;
+                observedOwner = GatewayOwner.Projects;
+                observedPath = request.RequestUri!.PathAndQuery;
+                observedBearer = request.Headers.Authorization?.Parameter;
+                observedTenant = request.Headers.GetValues("X-Agentweaver-Tenant").Single();
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"providers":[],"nextAfterProviderId":null}""",
+                        Encoding.UTF8, "application/json"),
+                };
+                response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+                return Task.FromResult(response);
+            }),
+            (_, _, _) => throw new InvalidOperationException("Draft metadata must call Projects."));
+        using var request = new HttpRequestMessage(HttpMethod.Get, publicPath);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.True(response.StatusCode == HttpStatusCode.OK,
+            await response.Content.ReadAsStringAsync());
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(1, calls);
+        Assert.Equal(GatewayOwner.Projects, observedOwner);
+        Assert.Equal(expectedOwnerPath, observedPath);
+        Assert.Equal(bearer, observedBearer);
+        Assert.Equal("tenant-a", observedTenant);
+    }
+
+    [Theory]
+    [InlineData("/api/v1/platform/byok-providers")]
+    [InlineData("/api/v1/platform/byok-providers/provider-a")]
+    [InlineData("/api/v1/projects/project-a/byok-providers")]
+    [InlineData("/api/v1/projects/project-a/byok-providers/provider-a")]
+    public async Task EveryDraftGetRejectsFixedLengthChunkedAndHeaderlessBodiesBeforeOwner(string path)
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        var ownerCalls = 0;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key, () => new DraftOwnerHandler((_, _) =>
+            {
+                ownerCalls++;
+                throw new InvalidOperationException("A Draft GET body must not reach Projects.");
+            }),
+            (_, _, _) => throw new InvalidOperationException("Draft GETs must use the Projects handler."));
+
+        foreach (var bodyKind in new[] { "fixed", "chunked", "headerless" })
+        {
+            using var request = CreateBodyRequest(path, bearer, bodyKind);
+            using var response = await gateway.Client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("model_provider_draft_invalid_request",
+                body.RootElement.GetProperty("title").GetString());
+            Assert.Equal(0, ownerCalls);
+        }
+    }
+
+    [Theory]
+    [InlineData("POST", "/api/v1/platform/byok-providers")]
+    [InlineData("PUT", "/api/v1/projects/project-a/byok-providers/provider-a")]
+    public async Task DraftSaveBodyLimitRejectsOversizedBodiesBeforeProjects(
+        string method,
+        string path)
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        var projectCalls = 0;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key,
+            () => new DraftOwnerHandler((_, _) =>
+            {
+                projectCalls++;
+                throw new InvalidOperationException("An oversized Draft save must not reach Projects.");
+            }),
+            (_, _, _) => throw new InvalidOperationException("Draft saves must use Projects."));
+        using var request = new HttpRequestMessage(new HttpMethod(method), path)
+        {
+            Content = new StringContent(
+                new string('x', 32 * 1024 + 1), Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(0, projectCalls);
+    }
+
+    [Fact]
+    public async Task DraftOwnerResponseLimitRejectsOversizedRows()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        var projectCalls = 0;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key,
+            () => new DraftOwnerHandler((_, _) =>
+            {
+                projectCalls++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        new string('x', 32 * 1024 + 1), Encoding.UTF8, "application/json"),
+                });
+            }),
+            (_, _, _) => throw new InvalidOperationException("Draft requests must use Projects."));
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, "/api/v1/platform/byok-providers/provider-a");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(1, projectCalls);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, "model_provider_draft_not_found")]
+    [InlineData(HttpStatusCode.UnsupportedMediaType, "model_provider_draft_unsupported_media_type")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "model_provider_draft_unavailable")]
+    public async Task DraftOwnerErrorStatusesAndBodiesPassThrough(
+        HttpStatusCode status,
+        string code)
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key,
+            () => new DraftOwnerHandler((_, _) => Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent($$"""{"code":"{{code}}"}""", Encoding.UTF8, "application/json"),
+            })),
+            (_, _, _) => throw new InvalidOperationException("Draft requests must use Projects."));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/platform/byok-providers")
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(status, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(code, JsonDocument.Parse(await response.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("code").GetString());
+    }
+
+    private static HttpRequestMessage CreateBodyRequest(string path, string bearer, string bodyKind)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, path);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+        switch (bodyKind)
+        {
+            case "fixed":
+                request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+                break;
+            case "chunked":
+                request.Version = HttpVersion.Version11;
+                request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
+                request.Content = new LengthlessContent();
+                break;
+            default:
+                request.Version = HttpVersion.Version20;
+                request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
+                request.Content = new LengthlessContent();
+                Assert.Null(request.Content.Headers.ContentLength);
+                Assert.False(request.Headers.Contains("Transfer-Encoding"));
+                break;
+        }
+        return request;
+    }
+
+    private static string CreateToken(SecurityKey key)
+    {
+        var token = new JwtSecurityToken(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            "https://api.test",
+            [new Claim("sub", "provider-draft-caller"), new Claim("scope", "api.read projects.admin")],
+            DateTime.UtcNow.AddMinutes(-1),
+            DateTime.UtcNow.AddMinutes(5),
+            new SigningCredentials(key, SecurityAlgorithms.RsaSha256));
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private sealed class LengthlessContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(Encoding.UTF8.GetBytes("{}")).AsTask();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class DraftOwnerHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) => send(request, cancellationToken);
+    }
+}
+
+[Collection("IdentityBrokerPostgres")]
+public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixture postgres)
+{
+    [Fact]
+    public async Task GatewayModelProviderDraftPostgresTestsCreatesAndReadsTheCommittedRevision()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(connectionString, signingKey);
+        var tenantId = "provider-draft-tenant-" + Guid.NewGuid().ToString("N");
+        var subject = "provider-draft-admin-" + Guid.NewGuid().ToString("N");
+        var dbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(projects.PrivilegedFixtureDataSource, options => options.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(dbOptions, TimeProvider.System);
+        var membership = await authorityStore.GrantMembershipAsync(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri, subject, tenantId, "fixture");
+        await authorityStore.AssignRoleAsync(
+            membership.MembershipId, ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin, "fixture");
+        var bearer = CreateToken(signingKey, subject, "api.read projects.admin");
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey, projects.CreateHandler,
+            (_, _, _) => throw new InvalidOperationException("Draft metadata must call Projects."));
+
+        using var create = OwnerRequest(
+            HttpMethod.Post, "/api/v1/platform/byok-providers", bearer, tenantId,
+            SaveBody(Guid.NewGuid(), 0, "Hosted model"));
+        using var created = await gateway.Client.SendAsync(create);
+        Assert.Equal(HttpStatusCode.OK, created.StatusCode);
+        Assert.True(created.Headers.CacheControl?.NoStore);
+        using var saved = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var providerId = saved.RootElement.GetProperty("id").GetString();
+        Assert.StartsWith("byok-", providerId);
+        Assert.Equal(1, saved.RootElement.GetProperty("revision").GetInt64());
+
+        using var read = OwnerRequest(
+            HttpMethod.Get, "/api/v1/platform/byok-providers?pageSize=1", bearer, tenantId);
+        using var listed = await gateway.Client.SendAsync(read);
+        Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+        Assert.True(listed.Headers.CacheControl?.NoStore);
+        using var page = JsonDocument.Parse(await listed.Content.ReadAsStringAsync());
+        var row = Assert.Single(page.RootElement.GetProperty("providers").EnumerateArray());
+        Assert.Equal(providerId, row.GetProperty("id").GetString());
+        Assert.Equal(1, row.GetProperty("revision").GetInt64());
+        Assert.Equal("Draft", row.GetProperty("state").GetString());
+        Assert.False(row.GetProperty("hasCredential").GetBoolean());
+    }
+
+    [Fact]
+    public async Task RestrictedOwnerDraftRoutesUseRealBearerAuthAndRecheckAuthority()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var logs = new DraftCapturedLogs();
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            connectionString, signingKey, loggerProvider: logs);
+        var tenantId = "draft-owner-tenant-" + Guid.NewGuid().ToString("N");
+        var suffix = Guid.NewGuid().ToString("N");
+        var adminSubject = "draft-owner-platform-" + suffix;
+        var revokedSubject = "draft-owner-revoked-" + suffix;
+        var ownerSubject = "draft-owner-project-" + suffix;
+        var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(projects.PrivilegedFixtureDataSource, config => config.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var platformMembership = await authorityStore.GrantMembershipAsync(issuer, adminSubject, tenantId, "fixture");
+        var platformGrant = await authorityStore.AssignRoleAsync(
+            platformMembership.MembershipId, ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin, "fixture");
+        var revokedMembership = await authorityStore.GrantMembershipAsync(issuer, revokedSubject, tenantId, "fixture");
+        await authorityStore.AssignRoleAsync(
+            revokedMembership.MembershipId, ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin, "fixture");
+        var projectMembership = await authorityStore.GrantMembershipAsync(issuer, ownerSubject, tenantId, "fixture");
+        await authorityStore.AssignRoleAsync(
+            projectMembership.MembershipId, ProjectAuthorityResourceType.Tenant, tenantId,
+            ProjectAuthorityRole.TenantAdmin, "fixture");
+
+        var tenantAdminToken = CreateToken(signingKey, ownerSubject, "api.read projects.admin");
+        string projectId;
+        using (var createProject = OwnerRequest(
+            HttpMethod.Post, "/api/projects/", tenantAdminToken, tenantId, """{"name":"Draft project"}"""))
+        using (var response = await projects.Client.SendAsync(createProject))
+        {
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            projectId = document.RootElement.GetProperty("projectId").GetString()!;
+        }
+        var projectToken = CreateToken(
+            signingKey, ownerSubject, "api.read projects.admin", projectId: projectId);
+        var platformToken = CreateToken(signingKey, adminSubject, "api.read projects.admin");
+        var platformRoute = "/api/platform/byok-providers";
+        var projectRoute = $"/api/projects/{projectId}/byok-providers";
+
+        var platformOperation = Guid.NewGuid();
+        var platformBody = SaveBody(platformOperation, 0, "Platform model");
+        using (var create = OwnerRequest(HttpMethod.Post, platformRoute, platformToken, tenantId, platformBody))
+        using (var response = await projects.Client.SendAsync(create))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            using var saved = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("byok-" + platformOperation.ToString("N"),
+                saved.RootElement.GetProperty("id").GetString());
+            Assert.Equal(1, saved.RootElement.GetProperty("revision").GetInt64());
+        }
+        using (var read = OwnerRequest(
+            HttpMethod.Get, platformRoute + "/byok-" + platformOperation.ToString("N"), platformToken, tenantId))
+        using (var response = await projects.Client.SendAsync(read))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using (var list = OwnerRequest(HttpMethod.Get, platformRoute + "?pageSize=10", platformToken, tenantId))
+        using (var response = await projects.Client.SendAsync(list))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using (var update = OwnerRequest(
+            HttpMethod.Put,
+            platformRoute + "/byok-" + platformOperation.ToString("N"),
+            platformToken, tenantId, SaveBody(Guid.NewGuid(), 1, "Platform update")))
+        using (var response = await projects.Client.SendAsync(update))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var saved = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(2, saved.RootElement.GetProperty("revision").GetInt64());
+        }
+
+        var projectOperation = Guid.NewGuid();
+        var projectBody = SaveBody(projectOperation, 0, "Project model");
+        using (var create = OwnerRequest(HttpMethod.Post, projectRoute, projectToken, tenantId, projectBody))
+        using (var response = await projects.Client.SendAsync(create))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var saved = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("project", saved.RootElement.GetProperty("scope").GetString());
+        }
+        var projectProviderId = "byok-" + projectOperation.ToString("N");
+        using (var read = OwnerRequest(
+            HttpMethod.Get, projectRoute + "/" + projectProviderId, projectToken, tenantId))
+        using (var response = await projects.Client.SendAsync(read))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using (var list = OwnerRequest(HttpMethod.Get, projectRoute + "?pageSize=10", projectToken, tenantId))
+        using (var response = await projects.Client.SendAsync(list))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var page = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(projectProviderId, Assert.Single(page.RootElement.GetProperty("providers")
+                .EnumerateArray()).GetProperty("id").GetString());
+        }
+        using (var update = OwnerRequest(
+            HttpMethod.Put, projectRoute + "/" + projectProviderId, projectToken, tenantId,
+            SaveBody(Guid.NewGuid(), 1, "Project update")))
+        using (var response = await projects.Client.SendAsync(update))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using (var wrongScope = OwnerRequest(
+            HttpMethod.Get, projectRoute + "/byok-" + platformOperation.ToString("N"), projectToken, tenantId))
+        using (var response = await projects.Client.SendAsync(wrongScope))
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using (var missing = OwnerRequest(
+            HttpMethod.Get, projectRoute + "/not-found", projectToken, tenantId))
+        using (var response = await projects.Client.SendAsync(missing))
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var missingProjectId = "missing-" + suffix;
+        var platformBoundMissingToken = CreateToken(
+            signingKey, adminSubject, "api.read projects.admin", projectId: missingProjectId);
+        using (var missingList = OwnerRequest(
+            HttpMethod.Get, $"/api/projects/{missingProjectId}/byok-providers",
+            platformBoundMissingToken, tenantId))
+        using (var response = await projects.Client.SendAsync(missingList))
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using (var missingSave = OwnerRequest(
+            HttpMethod.Post, $"/api/projects/{missingProjectId}/byok-providers",
+            platformBoundMissingToken, tenantId, SaveBody(Guid.NewGuid(), 0, "Missing project")))
+        using (var response = await projects.Client.SendAsync(missingSave))
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using (var missingUpdate = OwnerRequest(
+            HttpMethod.Put, $"/api/projects/{missingProjectId}/byok-providers/provider-a",
+            platformBoundMissingToken, tenantId, SaveBody(Guid.NewGuid(), 1, "Missing project")))
+        using (var response = await projects.Client.SendAsync(missingUpdate))
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        var beforeDeniedRequests = await DraftRevisionCountAsync(options);
+        var deniedRequests = new (HttpRequestMessage Request, HttpStatusCode Status)[]
+        {
+            (OwnerRequest(HttpMethod.Get, platformRoute, CreateToken(
+                signingKey, adminSubject, "api.read"), tenantId), HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, platformRoute, CreateToken(
+                signingKey, adminSubject, "api.read projects.admin", projectId: projectId), tenantId),
+                HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, platformRoute, platformToken, "foreign-tenant"),
+                HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, platformRoute, CreateToken(
+                signingKey, adminSubject, "api.read projects.admin", purpose: "test-purpose"), tenantId),
+                HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, projectRoute, CreateToken(
+                signingKey, ownerSubject, "api.read projects.admin"), tenantId), HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, projectRoute, CreateToken(
+                signingKey, ownerSubject, "api.read projects.admin", projectId: "other-project"), tenantId),
+                HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, projectRoute, CreateToken(
+                signingKey, ownerSubject, "api.read projects.admin", projectId: projectId, runId: "run-a"), tenantId),
+                HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, projectRoute, CreateToken(
+                signingKey, ownerSubject, "api.read projects.admin", projectId: projectId,
+                purpose: "test-purpose"), tenantId), HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, projectRoute, CreateToken(
+                signingKey, ownerSubject, "api.read", projectId: projectId), tenantId),
+                HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, projectRoute, projectToken, "foreign-tenant"), HttpStatusCode.Forbidden),
+            (OwnerRequest(HttpMethod.Get, platformRoute, CreateToken(
+                signingKey, adminSubject, "api.read projects.admin", audience: "https://wrong.test"), tenantId),
+                HttpStatusCode.Unauthorized),
+            (OwnerRequest(HttpMethod.Get, projectRoute, CreateToken(
+                signingKey, ownerSubject, "api.read projects.admin", audience: "https://wrong.test",
+                projectId: projectId), tenantId), HttpStatusCode.Unauthorized),
+        };
+        foreach (var (request, expectedStatus) in deniedRequests)
+        {
+            using (request)
+            using (var response = await projects.Client.SendAsync(request))
+            {
+                Assert.Equal(expectedStatus, response.StatusCode);
+                Assert.True(response.Headers.CacheControl?.NoStore);
+            }
+        }
+        Assert.Equal(beforeDeniedRequests, await DraftRevisionCountAsync(options));
+
+        var revokedPlatformOperation = Guid.NewGuid();
+        var revokedPlatformBody = SaveBody(revokedPlatformOperation, 0, "Revoked replay");
+        using (var create = OwnerRequest(
+            HttpMethod.Post, platformRoute, platformToken, tenantId, revokedPlatformBody))
+        using (var response = await projects.Client.SendAsync(create))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await authorityStore.RevokeRoleAssignmentAsync(
+            platformGrant.AssignmentId, platformGrant.Revision, adminSubject);
+        using (var replay = OwnerRequest(
+            HttpMethod.Post, platformRoute, platformToken, tenantId, revokedPlatformBody))
+        using (var response = await projects.Client.SendAsync(replay))
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        var revokedOperation = Guid.NewGuid();
+        var revokedBody = SaveBody(revokedOperation, 0, "Membership replay");
+        var revokedToken = CreateToken(signingKey, revokedSubject, "api.read projects.admin");
+        using (var create = OwnerRequest(HttpMethod.Post, platformRoute, revokedToken, tenantId, revokedBody))
+        using (var response = await projects.Client.SendAsync(create))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await authorityStore.RevokeMembershipAsync(
+            revokedMembership.MembershipId, revokedMembership.Revision, "fixture");
+        using (var replay = OwnerRequest(HttpMethod.Post, platformRoute, revokedToken, tenantId, revokedBody))
+        using (var response = await projects.Client.SendAsync(replay))
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RestrictedOwnerRejectsAndRedactsDraftHttpFailuresForBothScopes()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var logs = new DraftCapturedLogs();
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            connectionString, signingKey, loggerProvider: logs);
+        var tenantId = "draft-errors-tenant-" + Guid.NewGuid().ToString("N");
+        var suffix = Guid.NewGuid().ToString("N");
+        var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(projects.PrivilegedFixtureDataSource, config => config.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var platformSubject = "draft-errors-platform-" + suffix;
+        var platformMembership = await authorityStore.GrantMembershipAsync(
+            issuer, platformSubject, tenantId, "fixture");
+        await authorityStore.AssignRoleAsync(
+            platformMembership.MembershipId, ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin, "fixture");
+        var ownerSubject = "draft-errors-owner-" + suffix;
+        var ownerMembership = await authorityStore.GrantMembershipAsync(issuer, ownerSubject, tenantId, "fixture");
+        await authorityStore.AssignRoleAsync(
+            ownerMembership.MembershipId, ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin, "fixture");
+        var ownerToken = CreateToken(signingKey, ownerSubject, "api.read projects.admin");
+        string projectId;
+        using (var createProject = OwnerRequest(
+            HttpMethod.Post, "/api/projects/", ownerToken, tenantId, """{"name":"Draft error project"}"""))
+        using (var response = await projects.Client.SendAsync(createProject))
+        {
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            projectId = document.RootElement.GetProperty("projectId").GetString()!;
+        }
+        var routes = new[]
+        {
+            (Path: "/api/platform/byok-providers", Token: CreateToken(
+                signingKey, platformSubject, "api.read projects.admin")),
+            (Path: $"/api/projects/{projectId}/byok-providers", Token: CreateToken(
+                signingKey, ownerSubject, "api.read projects.admin", projectId: projectId)),
+        };
+        var disclosureSentinels = new List<string>();
+        var before = await DraftRevisionCountAsync(options);
+
+        foreach (var route in routes)
+        {
+            foreach (var bearer in new string?[] { null, "invalid-bearer" })
+            {
+                var sentinel = "draft-unauthorized-" + Guid.NewGuid().ToString("N");
+                var rawRequest = "raw-request-" + Guid.NewGuid().ToString("N");
+                disclosureSentinels.Add(sentinel);
+                var requestBody = $$"""{"name":"{{sentinel}}","raw":"{{rawRequest}}"}""";
+                using var request = new HttpRequestMessage(HttpMethod.Post, route.Path)
+                {
+                    Content = new StringContent(
+                        requestBody,
+                        Encoding.UTF8, "application/json"),
+                };
+                request.Headers.Add("X-Agentweaver-Tenant", tenantId);
+                if (bearer is not null)
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+                using var response = await projects.Client.SendAsync(request);
+                Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+                Assert.True(response.Headers.CacheControl?.NoStore);
+                Assert.Contains("Bearer", response.Headers.WwwAuthenticate.ToString());
+                AssertDraftErrorRedacted(await response.Content.ReadAsStringAsync(),
+                    sentinel, rawRequest, requestBody);
+            }
+
+            var malformedSentinel = "draft-malformed-json-" + Guid.NewGuid().ToString("N");
+            var malformedRawRequest = "raw-request-" + Guid.NewGuid().ToString("N");
+            disclosureSentinels.Add(malformedSentinel);
+            var secretSentinel = "draft-secret-" + Guid.NewGuid().ToString("N");
+            var secretRawRequest = "raw-request-" + Guid.NewGuid().ToString("N");
+            disclosureSentinels.Add(secretSentinel);
+            var unsupportedSentinel = "draft-unsupported-media-" + Guid.NewGuid().ToString("N");
+            var unsupportedRawRequest = "raw-request-" + Guid.NewGuid().ToString("N");
+            disclosureSentinels.Add(unsupportedSentinel);
+            var failureCases = new[]
+            {
+                (Body: "{\"sentinel\":\"" + malformedSentinel + "\",\"raw\":\"" + malformedRawRequest + "\"",
+                    Sentinel: malformedSentinel, RawRequest: malformedRawRequest,
+                    ContentType: "application/json", Status: HttpStatusCode.BadRequest,
+                    Code: "model_provider_draft_invalid_request"),
+                (Body: $$"""{"operationId":"ad451e41-9b48-412f-99dc-ad6a6cd4080c","expectedRevision":0,"name":"x","name":"{{secretSentinel}}","raw":"{{secretRawRequest}}","type":"openai","base_url":"https://api.openai.com/v1","model":"m"}""",
+                    Sentinel: secretSentinel, RawRequest: secretRawRequest,
+                    ContentType: "application/json", Status: HttpStatusCode.BadRequest,
+                    Code: "model_provider_draft_invalid_request"),
+                (Body: $$"""{"operationId":"ad451e41-9b48-412f-99dc-ad6a6cd4080c","expectedRevision":0,"name":"{{secretSentinel}}","raw":"{{secretRawRequest}}","type":"openai","base_url":"https://api.openai.com/v1","model":"m","vault_uri":"{{secretSentinel}}"}""",
+                    Sentinel: secretSentinel, RawRequest: secretRawRequest,
+                    ContentType: "application/json", Status: HttpStatusCode.BadRequest,
+                    Code: "model_provider_draft_invalid_request"),
+                (Body: $$"""{"sentinel":"{{unsupportedSentinel}}","raw":"{{unsupportedRawRequest}}"}""",
+                    Sentinel: unsupportedSentinel, RawRequest: unsupportedRawRequest,
+                    ContentType: "text/plain", Status: HttpStatusCode.UnsupportedMediaType,
+                    Code: "model_provider_draft_unsupported_media_type"),
+            };
+            foreach (var item in failureCases)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, route.Path)
+                {
+                    Content = new StringContent(item.Body, Encoding.UTF8, item.ContentType),
+                };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", route.Token);
+                request.Headers.Add("X-Agentweaver-Tenant", tenantId);
+                using var response = await projects.Client.SendAsync(request);
+                Assert.Equal(item.Status, response.StatusCode);
+                Assert.True(response.Headers.CacheControl?.NoStore);
+                Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+                var responseBody = await response.Content.ReadAsStringAsync();
+                Assert.Equal(item.Code, JsonDocument.Parse(responseBody).RootElement.GetProperty("code").GetString());
+                AssertDraftErrorRedacted(responseBody, item.Sentinel, item.RawRequest, item.Body);
+            }
+
+            var path = route.Path;
+            foreach (var bodyKind in new[] { "fixed", "chunked", "headerless" })
+            {
+                var sentinel = $"draft-oversized-{bodyKind}-" + Guid.NewGuid().ToString("N");
+                disclosureSentinels.Add(sentinel);
+                using var request = OversizedOwnerSave(path, route.Token, tenantId, bodyKind, sentinel);
+                using var response = await projects.Client.SendAsync(request);
+                Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+                Assert.True(response.Headers.CacheControl?.NoStore);
+                var responseBody = await response.Content.ReadAsStringAsync();
+                Assert.Equal("request_body_too_large",
+                    JsonDocument.Parse(responseBody)
+                        .RootElement.GetProperty("code").GetString());
+                AssertDraftErrorRedacted(responseBody, sentinel);
+            }
+        }
+
+        Assert.Equal(before, await DraftRevisionCountAsync(options));
+        await using (var transportLimitedOwner = await ProjectsConfigResourceServer.StartAsync(
+            connectionString, signingKey, useKestrel: true, loggerProvider: logs))
+        {
+            foreach (var route in routes)
+            {
+                var sentinel = "draft-kestrel-oversized-" + Guid.NewGuid().ToString("N");
+                disclosureSentinels.Add(sentinel);
+                using var request = OversizedOwnerSave(
+                    route.Path, route.Token, tenantId, "chunked", sentinel);
+                using var response = await transportLimitedOwner.Client.SendAsync(request);
+                Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+                Assert.True(response.Headers.CacheControl?.NoStore);
+                var responseBody = await response.Content.ReadAsStringAsync();
+                Assert.Equal("request_body_too_large",
+                    JsonDocument.Parse(responseBody).RootElement.GetProperty("code").GetString());
+                AssertDraftErrorRedacted(responseBody, sentinel);
+            }
+        }
+        Assert.Equal(before, await DraftRevisionCountAsync(options));
+        foreach (var sentinel in disclosureSentinels)
+            Assert.DoesNotContain(sentinel, logs.Text);
+        Assert.DoesNotContain("raw-request-", logs.Text);
+        Assert.DoesNotContain("vault_uri", logs.Text);
+        Assert.DoesNotContain("\"operationId\"", logs.Text);
+        Assert.DoesNotContain("JsonException", logs.Text);
+    }
+
+    private static async Task<int> DraftRevisionCountAsync(DbContextOptions<ProjectsConfigDbContext> options)
+    {
+        await using var db = new ProjectsConfigDbContext(options);
+        return await db.ModelProviderDraftRevisions.CountAsync();
+    }
+
+    private static HttpRequestMessage OversizedOwnerSave(
+        string path,
+        string bearer,
+        string tenantId,
+        string bodyKind,
+        string sentinel)
+    {
+        var body = sentinel + new string('x', 32 * 1024 + 1 - sentinel.Length);
+        var request = new HttpRequestMessage(HttpMethod.Post, path);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", tenantId);
+        if (bodyKind == "fixed")
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        else
+        {
+            request.Content = new LengthlessContent(body);
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            request.Version = bodyKind == "chunked" ? HttpVersion.Version11 : HttpVersion.Version20;
+            request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
+            Assert.Null(request.Content.Headers.ContentLength);
+            Assert.False(request.Headers.Contains("Transfer-Encoding"));
+        }
+        return request;
+    }
+
+    private static void AssertDraftErrorRedacted(string responseBody, params string[] protectedValues)
+    {
+        foreach (var value in protectedValues)
+            Assert.DoesNotContain(value, responseBody);
+        Assert.DoesNotContain("raw-request-", responseBody);
+        Assert.DoesNotContain("JsonException", responseBody);
+        Assert.DoesNotContain("BytePositionInLine", responseBody);
+        Assert.DoesNotContain("LineNumber", responseBody);
+    }
+
+    private static string CreateToken(
+        SecurityKey key,
+        string subject,
+        string scopes,
+        string audience = "https://api.test",
+        string? projectId = null,
+        string? runId = null,
+        string? purpose = null)
+    {
+        var claims = new List<Claim>
+        {
+            new("sub", subject),
+            new("scope", scopes),
+        };
+        if (projectId is not null)
+            claims.Add(new Claim("project_id", projectId));
+        if (runId is not null)
+            claims.Add(new Claim("run_id", runId));
+        if (purpose is not null)
+            claims.Add(new Claim("purpose", purpose));
+        var token = new JwtSecurityToken(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            audience,
+            claims,
+            DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
+            new SigningCredentials(key, SecurityAlgorithms.RsaSha256));
+        token.Header["typ"] = "at+jwt";
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private static HttpRequestMessage OwnerRequest(
+        HttpMethod method,
+        string path,
+        string bearer,
+        string tenantId,
+        string? body = null)
+    {
+        var request = new HttpRequestMessage(method, path);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", tenantId);
+        if (body is not null)
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return request;
+    }
+
+    private static string SaveBody(Guid operationId, long revision, string name) =>
+        $$"""{"operationId":"{{operationId:D}}","expectedRevision":{{revision}},"name":"{{name}}","type":"openai","base_url":"https://api.openai.com/v1","model":"test-model"}""";
+
+    private sealed class LengthlessContent(string value) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(Encoding.UTF8.GetBytes(value)).AsTask();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class DraftCapturedLogs : ILoggerProvider
+    {
+        private readonly StringBuilder _text = new();
+        public string Text => _text.ToString();
+        public ILogger CreateLogger(string categoryName) => new CapturedLogger(_text);
+        public void Dispose() { }
+
+        private sealed class CapturedLogger(StringBuilder text) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                lock (text)
+                {
+                    text.AppendLine(formatter(state, exception));
+                    if (exception is not null)
+                        text.AppendLine(exception.ToString());
+                }
+            }
+        }
+    }
+}

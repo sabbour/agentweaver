@@ -45,6 +45,16 @@ public sealed partial class GatewayOwnerClient(
         var probe = new byte[1];
         return await request.Body.ReadAsync(probe, cancellationToken).ConfigureAwait(false) > 0;
     }
+
+    private static bool IsModelProviderDraftGet(GatewayRoute route) =>
+        route.Method == "GET" && route.OperationId is
+            "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
+            "listProjectByokProviderDrafts" or "readProjectByokProviderDraft";
+    private static bool IsModelProviderDraftRoute(GatewayRoute route) =>
+        route.OperationId is "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
+            "createPlatformByokProviderDraft" or "updatePlatformByokProviderDraft" or
+            "listProjectByokProviderDrafts" or "readProjectByokProviderDraft" or
+            "createProjectByokProviderDraft" or "updateProjectByokProviderDraft";
     private const long MaximumOwnerErrorBytes = 64 * 1024;
     private const long MaximumRunEventPageBytes = 1024 * 1024;
     private const int MaximumSseCursorLength = 8192;
@@ -71,7 +81,8 @@ public sealed partial class GatewayOwnerClient(
     {
         try
         {
-            if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup")
+            if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" ||
+                IsModelProviderDraftRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(cancellationToken);
@@ -85,6 +96,16 @@ public sealed partial class GatewayOwnerClient(
                  await HasP1SetupBodyAsync(context.Request, timeout.Token).ConfigureAwait(false)))
             {
                 await WriteProblemAsync(context, "invalid_project_setup_request", StatusCodes.Status400BadRequest)
+                    .ConfigureAwait(false);
+                return;
+            }
+            if (IsModelProviderDraftGet(route) &&
+                (context.Request.ContentLength is > 0 ||
+                 context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+                 await HasP1SetupBodyAsync(context.Request, timeout.Token).ConfigureAwait(false)))
+            {
+                await WriteProblemAsync(
+                    context, "model_provider_draft_invalid_request", StatusCodes.Status400BadRequest)
                     .ConfigureAwait(false);
                 return;
             }
