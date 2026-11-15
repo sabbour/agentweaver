@@ -272,7 +272,7 @@ test('the workflow identity template trusts its environment and creates no Azure
   assert.match(source, /subject: 'system:serviceaccount:agentweaver:projects-config-migration'/);
   const result = spawnSync('az', ['bicep', 'build', '--file', 'infra/bicep/db-maintenance-ci-identity.bicep', '--stdout'],
     { encoding: 'utf8', shell: process.platform === 'win32' });
-  // The Bicep CLI is optional offline; when present verify it compiles to Azure role assignments only.
+  // If the Bicep build succeeds, check the expected assignments, no custom roles, and a federated credential.
   if (result.error || result.status !== 0) return;
   const template = JSON.parse(result.stdout);
   assert.ok(template.resources.every(resource => resource.type !== 'Microsoft.Authorization/roleDefinitions'));
