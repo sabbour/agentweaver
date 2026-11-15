@@ -41,6 +41,21 @@ SELECT format(
   'identity_broker', 'OpenIddictTokens',
   :'runtime_role') \gexec
 SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I FROM PUBLIC',
+  'identity_broker', 'model_provider_credentials',
+  'identity_broker', 'model_provider_credential_revisions') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I FROM %I',
+  'identity_broker', 'model_provider_credentials',
+  'identity_broker', 'model_provider_credential_revisions',
+  :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE ON TABLE %I.%I TO %I',
+  'identity_broker', 'model_provider_credentials', :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT ON TABLE %I.%I TO %I',
+  'identity_broker', 'model_provider_credential_revisions', :'runtime_role') \gexec
+SELECT format(
   'REVOKE ALL ON TABLE %I.%I FROM %I',
   'identity_broker', '__ef_migrations_history', :'runtime_role') \gexec
 SELECT format(

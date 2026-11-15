@@ -142,6 +142,9 @@ if (!Path.IsPathFullyQualified(identityOptions.SecretRedemption.WorkloadIdentity
 // Validate the vault URI and workload-identity settings before opening the database or
 // starting the host. The projected token file is read only when Key Vault is contacted.
 var vaultConfiguration = new AzureKeyVaultConfiguration(new Uri(identityOptions.SecretRedemption.VaultUri));
+var modelProviderCredentialVaults = ModelProviderCredentialVaults.Create(
+    identityOptions.SecretRedemption.VaultUri,
+    identityOptions.SecretRedemption.ByokVaultUri);
 var workloadIdentityOptions = new WorkloadIdentityCredentialOptions
 {
     TenantId = identityOptions.SecretRedemption.WorkloadIdentityTenantId,
@@ -201,9 +204,11 @@ builder.Services.AddScoped<BrokerClientSeeder>();
 builder.Services.AddScoped<BrokerScopeSeeder>();
 builder.Services.AddScoped<RefreshTokenFamilyRevoker>();
 builder.Services.AddScoped<IdentityGrantAuthority>();
+builder.Services.AddScoped<ModelProviderCredentialStore>();
 builder.Services.AddScoped<IGrantAuthority>(provider => provider.GetRequiredService<IdentityGrantAuthority>());
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(vaultConfiguration);
+builder.Services.AddSingleton(modelProviderCredentialVaults);
 builder.Services.AddSingleton(workloadIdentityOptions);
 builder.Services.AddSingleton(secretClientOptions);
 builder.Services.AddScoped<BrokerCliAuthorizationScopePermissionFilter>();

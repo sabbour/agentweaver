@@ -68,7 +68,8 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         "runtime_grant_operation_receipts", "copilot_connections", "copilot_connection_revisions",
         "repo_app_authorization_transactions",
         "repo_app_connections", "repo_app_installations", "repo_app_repository_selections",
-        "issue_sync_grants", "issue_sync_mint_audit"
+        "issue_sync_grants", "issue_sync_mint_audit",
+        "model_provider_credentials", "model_provider_credential_revisions"
     ];
 
     public static bool IsRequested(string[] args) => args.Length == 1 && args[0] == Argument;
@@ -215,7 +216,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         var grantsApplied = await ApplyRuntimeGrantsIfMigratedAsync(databaseConnection,
             options.RuntimeRole, options.MigrationRole, cancellationToken).ConfigureAwait(false);
         Console.WriteLine(grantsApplied
-            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=21 runtimeGrantDelete=FALSE repoAppDelete=FALSE copilotAuditUpdate=FALSE runtimeAuditUpdate=FALSE historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
+            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=23 runtimeGrantDelete=FALSE repoAppDelete=FALSE copilotAuditUpdate=FALSE runtimeAuditUpdate=FALSE credentialSlotDelete=FALSE credentialHistoryUpdate=FALSE credentialHistoryDelete=FALSE credentialHistoryTruncate=FALSE historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
             : "IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING migrationHistory=absent");
         Console.WriteLine($"IDENTITY_POSTGRES_BOOTSTRAP_OK database={options.DatabaseName} schema=identity_broker");
     }
@@ -249,7 +250,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         var statements = Regex.Matches(definition, @"SELECT format\([\s\S]*?\) \\gexec")
             .Select(match => match.Value.Replace(" \\gexec", "", StringComparison.Ordinal)).ToArray();
         if (!tables.ToHashSet(StringComparer.Ordinal).SetEquals(RuntimeTables) ||
-            statements.Length != 25)
+            statements.Length != 29)
             throw new InvalidOperationException("The canonical Identity runtime grant contract is malformed.");
 
         await VerifyTableOwnershipAsync(connection, transaction, migrationRole, cancellationToken).ConfigureAwait(false);
@@ -328,6 +329,8 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             var runtimeGrant = table.StartsWith("runtime_grant_", StringComparison.Ordinal);
             var copilotConnection = table.StartsWith("copilot_connection", StringComparison.Ordinal);
             var repoAppTable = table.StartsWith("repo_app_", StringComparison.Ordinal);
+            var credentialHead = table == "model_provider_credentials";
+            var credentialHistory = table == "model_provider_credential_revisions";
             await using var readback = new NpgsqlCommand("""
                 SELECT has_table_privilege(@runtimeRole, @relation, 'SELECT')
                   AND has_table_privilege(@runtimeRole, @relation, 'INSERT') = @insert
@@ -341,9 +344,11 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             readback.Parameters.AddWithValue("insert", !history);
             readback.Parameters.AddWithValue("update", !history && table != "issue_sync_mint_audit" &&
                 (!runtimeGrant || table == "runtime_grant_heads") &&
-                (!copilotConnection || table == "copilot_connections"));
+                (!copilotConnection || table == "copilot_connections") &&
+                (!credentialHistory || credentialHead));
             readback.Parameters.AddWithValue("delete",
                 !history && !runtimeGrant && !copilotConnection && !repoAppTable &&
+                !credentialHead && !credentialHistory &&
                 table is not ("issue_sync_grants" or "issue_sync_mint_audit"));
             if (await readback.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
                 throw new InvalidOperationException(

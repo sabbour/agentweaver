@@ -247,6 +247,207 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.ToTable("issue_sync_mint_audit", "identity_broker");
                 });
 
+            modelBuilder.Entity("Agentweaver.Identity.Broker.ModelProviderCredentialHead", b =>
+                {
+                    b.Property<Guid>("CredentialSlotId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("credential_slot_id");
+
+                    b.Property<string>("CurrentVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("current_version");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("SecretName")
+                        .IsRequired()
+                        .HasMaxLength(127)
+                        .HasColumnType("character varying(127)")
+                        .HasColumnName("secret_name");
+
+                    b.Property<DateTimeOffset>("SetAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("set_at");
+
+                    b.Property<string>("SetBy")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("set_by");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("VaultSource")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("vault_source");
+
+                    b.Property<string>("VaultUri")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("vault_uri");
+
+                    b.HasKey("CredentialSlotId");
+
+                    b.HasIndex("ProviderId")
+                        .IsUnique();
+
+                    b.ToTable("model_provider_credentials", "identity_broker", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_provider_credentials_byok_name", "vault_source <> 'Byok' OR secret_name = 'byok-' || lower(scope) || '-' || provider_id");
+
+                            t.HasCheckConstraint("ck_model_provider_credentials_revision", "revision > 0");
+
+                            t.HasCheckConstraint("ck_model_provider_credentials_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL AND length(project_id) > 0)");
+
+                            t.HasCheckConstraint("ck_model_provider_credentials_secret_name", "secret_name ~ '^[A-Za-z0-9-]{1,127}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credentials_secret_version", "current_version ~ '^[0-9A-Fa-f]{32}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credentials_state", "state IN ('Enabled', 'Disabled')");
+
+                            t.HasCheckConstraint("ck_model_provider_credentials_vault_source", "vault_source IN ('Existing', 'Byok')");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.ModelProviderCredentialRevision", b =>
+                {
+                    b.Property<Guid>("CredentialSlotId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("credential_slot_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("MutationKind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("mutation_kind");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("SecretName")
+                        .IsRequired()
+                        .HasMaxLength(127)
+                        .HasColumnType("character varying(127)")
+                        .HasColumnName("secret_name");
+
+                    b.Property<string>("SecretVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("secret_version");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("VaultSource")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("vault_source");
+
+                    b.Property<string>("VaultUri")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("vault_uri");
+
+                    b.HasKey("CredentialSlotId", "Revision");
+
+                    b.HasIndex("OperationId")
+                        .IsUnique();
+
+                    b.ToTable("model_provider_credential_revisions", "identity_broker", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_byok_name", "vault_source <> 'Byok' OR secret_name = 'byok-' || lower(scope) || '-' || provider_id");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_fingerprint", "request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_mutation_kind", "mutation_kind IN ('RecordReference', 'Disable')");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_revision", "revision > 0");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL AND length(project_id) > 0)");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_secret_name", "secret_name ~ '^[A-Za-z0-9-]{1,127}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_secret_version", "secret_version ~ '^[0-9A-Fa-f]{32}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_state", "state IN ('Enabled', 'Disabled')");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_revisions_vault_source", "vault_source IN ('Existing', 'Byok')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Identity.Broker.PendingAuthorization", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1421,6 +1622,15 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.HasOne("Agentweaver.Identity.Broker.CopilotConnectionRecord", null)
                         .WithMany()
                         .HasForeignKey("ConnectionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.ModelProviderCredentialRevision", b =>
+                {
+                    b.HasOne("Agentweaver.Identity.Broker.ModelProviderCredentialHead", null)
+                        .WithMany()
+                        .HasForeignKey("CredentialSlotId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
