@@ -109,8 +109,11 @@ CLI authorization context matches the selected actor, tenant, project, and run;
 the child session is bound to the selected run and current execution fence; the
 accepted tool-call limit and reservation count match the input; and the
 complete history contains an admitted tool reservation and a numeric
-`toolPermissionRejected` fact. The normal CLI and `rest` exact lookups must
-return the same fact.
+`toolPermissionRejected` fact. The reservation and rejection must match the
+child session's current execution fence and accepted selection. Every history
+page and both exact responses must carry the selected project, run, session,
+fence, and selection. The normal CLI and `rest` exact lookups must return the
+same current-authority fact.
 
 The rejection fact means the runtime recorded a rejection decision after the
 owner confirmed the numeric denial. It does not prove that the SDK received
@@ -154,6 +157,11 @@ The script applies this rule to each denial, native no-send, model-turn
 reservation, and credit-guard fact. It also applies the rule to the facts that
 the exact `api invoke` and `rest` lookups return. If no fact matches, the
 result is `blocked`, and the reason names the mismatch.
+
+The tool case applies the same rule to the child-session rejection and admitted
+reservation. Each history page and exact response must also match the selected
+project, run, session, execution fence, and accepted selection. Observation
+times do not grant execution authority.
 
 ### Model-turn result
 

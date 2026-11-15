@@ -258,12 +258,11 @@ export function childEnvironment(env) {
   return childEnv;
 }
 
-function matchesToolLimitRejection(fact, sessionId) {
+function matchesToolLimitRejection(fact) {
   return fact?.kind === 'toolPermissionRejected'
     && fact.limitKind === 'toolCalls'
     && fact.stage === 'toolPermission'
     && fact.reasonCode === TOOL_LIMIT_DENIAL
-    && fact.sessionId === sessionId
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fact.attemptId ?? '')
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fact.dispatchId ?? '')
     && fact.ownerDecision?.state === 'available'
@@ -304,7 +303,30 @@ export function validateObservation(input, pages, exact, restExact) {
   }
 }
 
-function validateToolObservation(input, pages, exact, restExact) {
+function responseBindingMismatch(response, binding, expected, isRoot) {
+  const actual = response?.binding;
+  if (!actual || typeof actual !== 'object') return 'binding is missing';
+  if (actual.projectId !== expected.projectId) return 'another project';
+  if (actual.runId !== expected.runId) return 'another run';
+  if (actual.sessionId !== expected.sessionId) return 'another session';
+  if (actual.isRoot !== isRoot) return 'another session type';
+  if (actual.currentExecutionFence !== binding.currentExecutionFence
+    || actual.sessionExecutionFence !== binding.sessionExecutionFence) return 'a stale or different execution fence';
+  if (actual.acceptedSelectionHash !== binding.acceptedSelectionHash) return 'another accepted selection';
+  return null;
+}
+
+function requireResponseBindings(responses, binding, expected, isRoot, label) {
+  for (const [index, response] of responses.entries()) {
+    const mismatch = responseBindingMismatch(response, binding, expected, isRoot);
+    if (mismatch) {
+      const name = responses.length > 1 ? `${label} ${index + 1}` : label;
+      throw new Error(`${name} response binding does not match the current authority. Mismatch: ${mismatch}.`);
+    }
+  }
+}
+
+function toolHistoryEvidence(input, pages) {
   if (!Array.isArray(pages) || pages.length === 0 || !pages[0]) {
     throw new Error('The observation history is empty or unavailable.');
   }
@@ -316,41 +338,59 @@ function validateToolObservation(input, pages, exact, restExact) {
     || first.binding?.runId !== expected.runId
     || first.binding?.sessionId !== expected.sessionId
     || first.binding?.isRoot !== false
-    || first.binding?.currentExecutionFence !== first.binding?.sessionExecutionFence) {
+    || !Number.isInteger(first.binding?.currentExecutionFence)
+    || first.binding?.currentExecutionFence !== first.binding?.sessionExecutionFence
+    || !nonEmpty(first.binding?.acceptedSelectionHash)) {
     throw new Error('The observation binding does not match the selected child session and current fence.');
   }
+  requireResponseBindings(pages, first.binding, expected, false, 'Observation page');
   if (first.acceptedLimits?.maxToolCalls !== input.expectedMaxToolCalls) {
     throw new Error('The accepted maxToolCalls value does not match the case input.');
   }
   const facts = historyFacts(pages, firstHistory);
-  const rejections = facts.filter(fact => matchesToolLimitRejection(fact, expected.sessionId));
-  if (rejections.length === 0) {
-    throw new Error('The selected session has no retained numeric tool-permission rejection.');
-  }
+  const rejections = currentAuthorityFacts(
+    facts.filter(matchesToolLimitRejection),
+    first.binding,
+    expected.sessionId,
+    'numeric tool-permission rejection',
+  );
   const rejection = rejections[0];
-  if (!facts.some(fact => fact.kind === 'toolInvocationReserved'
-    && fact.limitKind === 'toolCalls'
-    && fact.sessionId === expected.sessionId
-    && fact.attemptId !== rejection.attemptId)) {
-    throw new Error('The history does not show a separate admitted tool reservation.');
+  const reservations = currentAuthorityFacts(
+    facts.filter(fact => fact?.kind === 'toolInvocationReserved' && fact.limitKind === 'toolCalls'),
+    first.binding,
+    expected.sessionId,
+    'admitted tool reservation',
+  );
+  if (!reservations.some(fact => fact.attemptId !== rejection.attemptId)) {
+    throw new Error('The history does not show a separate admitted tool reservation under the current authority.');
   }
   const total = first.totals?.toolSlotsReserved;
   if (total?.state !== 'available' || total.value !== input.expectedMaxToolCalls) {
     throw new Error('Run-wide tool reservations do not match the configured test limit.');
   }
+  return { binding: first.binding, facts, rejection, total };
+}
+
+function validateToolObservation(input, pages, exact, restExact) {
+  const { binding, facts, rejection, total } = toolHistoryEvidence(input, pages);
+  const expected = input.target;
+  requireResponseBindings([exact], binding, expected, false, 'Exact attempt lookup');
   const exactItems = exact?.history?.items;
   if (exact?.history?.exactAttempt !== true
     || !Array.isArray(exactItems)
     || !exactItems.some(fact => isDeepStrictEqual(fact, rejection)
-      && matchesToolLimitRejection(fact, expected.sessionId))) {
-    throw new Error('Exact attempt lookup did not return the retained rejection fact.');
+      && matchesToolLimitRejection(fact)
+      && authorityMismatch(fact, binding, expected.sessionId) === null)) {
+    throw new Error('Exact attempt lookup did not return the retained rejection fact under the current authority.');
   }
+  requireResponseBindings([restExact], binding, expected, false, 'REST exact lookup');
   const restItems = restExact?.history?.items;
   if (restExact?.history?.exactAttempt !== true
     || !Array.isArray(restItems)
     || !restItems.some(fact => isDeepStrictEqual(fact, rejection)
-      && matchesToolLimitRejection(fact, expected.sessionId))) {
-    throw new Error('The REST exact lookup did not return the same rejection fact.');
+      && matchesToolLimitRejection(fact)
+      && authorityMismatch(fact, binding, expected.sessionId) === null)) {
+    throw new Error('The REST exact lookup did not return the same rejection fact under the current authority.');
   }
   return {
     attemptId: rejection.attemptId,
@@ -408,6 +448,7 @@ function rootHistory(input, pages) {
     || !nonEmpty(binding.acceptedSelectionHash)) {
     throw new Error('The observation binding does not match the selected root session and current fence.');
   }
+  requireResponseBindings(pages, binding, expected, true, 'Observation page');
   return { first, binding, facts: historyFacts(pages, first.history) };
 }
 
@@ -523,14 +564,15 @@ function hardCreditEvidence(input, pages) {
   return { binding, facts, denial, noSend, guards, limit };
 }
 
-function requireExactNoSend(response, noSend, binding, sessionId, label) {
+function requireExactNoSend(response, noSend, binding, expected, label) {
+  requireResponseBindings([response], binding, expected, true, label);
   const items = response?.history?.items;
   if (response?.history?.exactAttempt !== true || !Array.isArray(items)) {
     throw new Error(`${label} did not return an exact attempt history.`);
   }
   const match = items.find(fact => fact?.factId === noSend.factId);
   if (!match) throw new Error(`${label} did not return the native no-send fact.`);
-  const mismatch = authorityMismatch(match, binding, sessionId);
+  const mismatch = authorityMismatch(match, binding, expected.sessionId);
   if (mismatch) {
     throw new Error(`${label} returned a native no-send fact that does not match the current authority. Mismatch: ${mismatch}.`);
   }
@@ -541,9 +583,8 @@ function requireExactNoSend(response, noSend, binding, sessionId, label) {
 
 function validateModelTurnObservation(input, pages, exact, restExact) {
   const evidence = modelTurnEvidence(input, pages);
-  const sessionId = input.target.sessionId;
-  requireExactNoSend(exact, evidence.noSend, evidence.binding, sessionId, 'Exact attempt lookup');
-  requireExactNoSend(restExact, evidence.noSend, evidence.binding, sessionId, 'The REST exact lookup');
+  requireExactNoSend(exact, evidence.noSend, evidence.binding, input.target, 'Exact attempt lookup');
+  requireExactNoSend(restExact, evidence.noSend, evidence.binding, input.target, 'The REST exact lookup');
   return {
     attemptId: evidence.denial.attemptId,
     dispatchId: evidence.denial.dispatchId,
@@ -560,9 +601,8 @@ function validateModelTurnObservation(input, pages, exact, restExact) {
 
 function validateHardCreditObservation(input, pages, exact, restExact) {
   const evidence = hardCreditEvidence(input, pages);
-  const sessionId = input.target.sessionId;
-  requireExactNoSend(exact, evidence.noSend, evidence.binding, sessionId, 'Exact attempt lookup');
-  requireExactNoSend(restExact, evidence.noSend, evidence.binding, sessionId, 'The REST exact lookup');
+  requireExactNoSend(exact, evidence.noSend, evidence.binding, input.target, 'Exact attempt lookup');
+  requireExactNoSend(restExact, evidence.noSend, evidence.binding, input.target, 'The REST exact lookup');
   return {
     attemptId: evidence.denial.attemptId,
     dispatchId: evidence.denial.dispatchId,
@@ -582,10 +622,7 @@ function validateHardCreditObservation(input, pages, exact, restExact) {
 export function exactLookupFact(input, pages) {
   if (input.caseId === MODEL_TURN_CASE_ID) return modelTurnEvidence(input, pages).noSend;
   if (input.caseId === HARD_CREDIT_CASE_ID) return hardCreditEvidence(input, pages).noSend;
-  const facts = pages.flatMap(page => page.history.items ?? []);
-  const rejection = facts.find(fact => matchesToolLimitRejection(fact, input.target.sessionId));
-  if (!rejection?.attemptId) throw new Error('The selected session has no retained numeric tool-permission rejection.');
-  return rejection;
+  return toolHistoryEvidence(input, pages).rejection;
 }
 
 async function sha256(filePath) {

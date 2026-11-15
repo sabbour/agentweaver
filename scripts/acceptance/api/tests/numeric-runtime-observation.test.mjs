@@ -103,7 +103,10 @@ function modelTurnObservation() {
     { modelSlotsReserved: { state: 'available', value: 2 } },
     [...reservations, ...ignored, denial, noSend],
   );
-  const exact = { history: { exactAttempt: true, items: [structuredClone(denial), structuredClone(noSend)] } };
+  const exact = {
+    binding: structuredClone(body.binding),
+    history: { exactAttempt: true, items: [structuredClone(denial), structuredClone(noSend)] },
+  };
   return { body, exact, restExact: structuredClone(exact) };
 }
 
@@ -142,7 +145,10 @@ function hardCreditObservation() {
       noSend,
     ],
   );
-  const exact = { history: { exactAttempt: true, items: [structuredClone(denial), structuredClone(noSend)] } };
+  const exact = {
+    binding: structuredClone(body.binding),
+    history: { exactAttempt: true, items: [structuredClone(denial), structuredClone(noSend)] },
+  };
   return { body, exact, restExact: structuredClone(exact) };
 }
 
@@ -152,6 +158,8 @@ function observation() {
     kind: 'toolInvocationReserved',
     limitKind: 'toolCalls',
     sessionId: input.target.sessionId,
+    executionFence: 2,
+    acceptedSelectionHash: selectionHash,
     attemptId: '00000000-0000-4000-8000-000000000011',
   };
   const rejection = {
@@ -161,6 +169,8 @@ function observation() {
     stage: 'toolPermission',
     reasonCode: 'runtime_tool_call_limit_exhausted',
     sessionId: input.target.sessionId,
+    executionFence: 2,
+    acceptedSelectionHash: selectionHash,
     attemptId: '00000000-0000-4000-8000-000000000013',
     dispatchId: '00000000-0000-4000-8000-000000000014',
     ownerDecision: { state: 'available' },
@@ -177,6 +187,7 @@ function observation() {
       isRoot: false,
       currentExecutionFence: 2,
       sessionExecutionFence: 2,
+      acceptedSelectionHash: selectionHash,
     },
     acceptedLimits: { maxToolCalls: 1 },
     totals: { toolSlotsReserved: { state: 'available', value: 1 } },
@@ -189,6 +200,7 @@ function observation() {
     },
   };
   const exact = {
+    binding: structuredClone(body.binding),
     history: { exactAttempt: true, items: [rejection] },
   };
   return { body, exact, restExact: structuredClone(exact) };
@@ -319,6 +331,128 @@ test('case rejects a changed snapshot and repeated facts across history pages', 
   assert.throws(() => validateObservation(
     validateInput(input), [body, duplicate], exact, restExact,
   ), /duplicate fact/);
+});
+
+test('tool evidence rejects old fence or selection facts despite current run-wide totals', () => {
+  for (const [field, value, reason] of [
+    ['executionFence', 1, /stale or different execution fence/],
+    ['acceptedSelectionHash', otherSelectionHash, /another accepted selection/],
+    ['sessionId', 'other-child-session', /another session/],
+  ]) {
+    const { body, exact, restExact } = observation();
+    for (const fact of body.history.items) fact[field] = value;
+    assert.equal(body.totals.toolSlotsReserved.value, input.expectedMaxToolCalls);
+    assert.throws(
+      () => validateObservation(validateInput(input), [body], exact, restExact),
+      reason,
+      field,
+    );
+    assert.throws(
+      () => exactLookupFact(validateInput(input), [body]),
+      reason,
+      `${field} exact lookup selection`,
+    );
+  }
+});
+
+test('tool evidence rejects a current rejection when its admitted reservation is old', () => {
+  const { body, exact, restExact } = observation();
+  body.history.items[0].executionFence = 1;
+  assert.throws(
+    () => validateObservation(validateInput(input), [body], exact, restExact),
+    /admitted tool reservation.*current authority|stale or different execution fence/,
+  );
+});
+
+test('tool exact selection skips old facts and selects a later current pair', () => {
+  const { body } = observation();
+  const [reservation, rejection] = body.history.items;
+  const oldReservation = { ...structuredClone(reservation), executionFence: 1 };
+  const oldRejection = {
+    ...structuredClone(rejection),
+    factId: '00000000-0000-4000-8000-000000000016',
+    attemptId: '00000000-0000-4000-8000-000000000017',
+    dispatchId: '00000000-0000-4000-8000-000000000018',
+    executionFence: 1,
+  };
+  const currentReservation = {
+    ...structuredClone(reservation),
+    factId: '00000000-0000-4000-8000-000000000023',
+    attemptId: '00000000-0000-4000-8000-000000000019',
+  };
+  const currentRejection = {
+    ...structuredClone(rejection),
+    factId: '00000000-0000-4000-8000-000000000020',
+    attemptId: '00000000-0000-4000-8000-000000000021',
+    dispatchId: '00000000-0000-4000-8000-000000000022',
+  };
+  body.history.items = [oldReservation, oldRejection, currentReservation, currentRejection];
+  const exact = { binding: structuredClone(body.binding), history: { exactAttempt: true, items: [currentRejection] } };
+  const summary = validateObservation(validateInput(input), [body], exact, structuredClone(exact));
+  assert.equal(exactLookupFact(validateInput(input), [body]).attemptId, currentRejection.attemptId);
+  assert.equal(summary.attemptId, currentRejection.attemptId);
+});
+
+test('tool exact lookups reject stale and foreign bindings even when the fact matches', () => {
+  for (const [field, value, reason] of [
+    ['projectId', 'other-project', /binding.*current authority|response binding/i],
+    ['runId', 'other-run', /binding.*current authority|response binding/i],
+    ['currentExecutionFence', 1, /binding.*current authority|response binding/i],
+    ['acceptedSelectionHash', otherSelectionHash, /binding.*current authority|response binding/i],
+    ['sessionId', 'other-child-session', /binding.*current authority|response binding/i],
+  ]) {
+    const { body, exact, restExact } = observation();
+    exact.binding[field] = value;
+    assert.throws(
+      () => validateObservation(validateInput(input), [body], exact, restExact),
+      reason,
+      `API exact response ${field}`,
+    );
+
+    const rest = observation();
+    rest.restExact.binding[field] = value;
+    assert.throws(
+      () => validateObservation(validateInput(input), [rest.body], rest.exact, rest.restExact),
+      reason,
+      `REST exact response ${field}`,
+    );
+  }
+});
+
+test('tool history rejects mixed bindings even when snapshot and high-water match', () => {
+  const { body, exact, restExact } = observation();
+  const secondPage = structuredClone(body);
+  body.history.items = [body.history.items[0]];
+  body.history.nextCursor = 'opaque-cursor';
+  secondPage.history.items = [secondPage.history.items[1]];
+  secondPage.history.nextCursor = null;
+  secondPage.binding.currentExecutionFence += 1;
+  assert.equal(secondPage.history.snapshotId, body.history.snapshotId);
+  assert.equal(secondPage.history.highWatermark, body.history.highWatermark);
+  assert.throws(
+    () => validateObservation(validateInput(input), [body, secondPage], exact, restExact),
+    /binding.*current authority|response binding/i,
+  );
+});
+
+test('tool evidence allows model-turn reservations, later observations, and unavailable tool execution evidence', () => {
+  const { body, exact, restExact } = observation();
+  body.observedAt = '2026-11-14T00:00:00Z';
+  exact.observedAt = '2026-11-14T00:00:01Z';
+  restExact.observedAt = '2026-11-14T00:00:02Z';
+  body.history.items.push({
+    factId: '00000000-0000-4000-8000-000000000024',
+    kind: 'modelTurnReserved',
+    limitKind: 'modelTurns',
+    sessionId: input.target.sessionId,
+    executionFence: 2,
+    acceptedSelectionHash: selectionHash,
+    attemptId: '00000000-0000-4000-8000-000000000025',
+  });
+  assert.equal(body.history.items[1].nativeNoSend.state, 'unavailable');
+  assert.equal(body.history.items[1].toolExecution.state, 'unavailable');
+  assert.equal(validateObservation(validateInput(input), [body], exact, restExact).attemptId,
+    body.history.items[1].attemptId);
 });
 
 test('native CLI path must be absolute and name the apphost', () => {
@@ -476,6 +610,43 @@ test('no-send cases reject exact and REST lookups outside the current authority'
         `${caseInput.caseId} REST ${name}`,
       );
     }
+  }
+});
+
+test('no-send cases reject stale page and exact-response bindings', () => {
+  for (const [caseInput, factory] of [
+    [validateInput(modelTurnInput), modelTurnObservation],
+    [validateInput(hardCreditInput), hardCreditObservation],
+  ]) {
+    const pageCase = factory();
+    const firstPage = structuredClone(pageCase.body);
+    const secondPage = structuredClone(pageCase.body);
+    firstPage.history.items = firstPage.history.items.slice(0, 1);
+    firstPage.history.nextCursor = 'opaque-cursor';
+    secondPage.history.items = secondPage.history.items.slice(1);
+    secondPage.history.nextCursor = null;
+    secondPage.binding.acceptedSelectionHash = otherSelectionHash;
+    assert.throws(
+      () => validateObservation(caseInput, [firstPage, secondPage], pageCase.exact, pageCase.restExact),
+      /Observation page 2 response binding.*another accepted selection/,
+      `${caseInput.caseId} page binding`,
+    );
+
+    const exactCase = factory();
+    exactCase.exact.binding.runId = 'other-run';
+    assert.throws(
+      () => validateObservation(caseInput, [exactCase.body], exactCase.exact, exactCase.restExact),
+      /response binding.*another run/,
+      `${caseInput.caseId} exact binding`,
+    );
+
+    const restCase = factory();
+    restCase.restExact.binding.currentExecutionFence += 1;
+    assert.throws(
+      () => validateObservation(caseInput, [restCase.body], restCase.exact, restCase.restExact),
+      /response binding.*execution fence/,
+      `${caseInput.caseId} REST binding`,
+    );
   }
 });
 
