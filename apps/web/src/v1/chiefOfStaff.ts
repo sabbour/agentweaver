@@ -118,7 +118,6 @@ export function useStartChat() {
   }, [apiCall, ensureSession]);
 }
 
-/** Result of reading My conversations. */
 export interface ConversationListState {
   items: ChiefOfStaffConversation[];
   loading: boolean;
@@ -128,7 +127,6 @@ export interface ConversationListState {
   loadMore?: () => void;
 }
 
-/** Page size for conversation reads. */
 export const CONVERSATION_PAGE_SIZE = 50;
 
 /** Reads the caller's conversations, newest first, with the unbound session. */
@@ -137,7 +135,7 @@ export function useChiefOfStaffConversations(): ConversationListState {
   const [state, setState] = useState<{ items: ChiefOfStaffConversation[]; nextCursor: string | null; error: unknown; loaded: boolean }>(
     { items: [], nextCursor: null, error: null, loaded: false },
   );
-  // Each reload invalidates older reads, including a pending "load more" page.
+  // The generation lets successful load-more responses detect a reload that started while they were pending.
   const requestRef = useRef(0);
   const mountedRef = useRef(false);
 

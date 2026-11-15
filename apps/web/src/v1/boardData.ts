@@ -50,7 +50,6 @@ function assertBoardScope(
 /** Board column IDs. They match the 0.x column IDs so styles and anchors stay the same. */
 export type BoardColumnId = 'backlog' | 'ready' | 'active' | 'done';
 
-/** One rendered board column. */
 export interface BoardColumn {
   id: BoardColumnId;
   label: string;
@@ -227,7 +226,6 @@ export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | '
   return errorMessage(error);
 }
 
-/** Board load state for one project. */
 export interface ProjectBoardData {
   graph: BacklogGraph | null;
   /** Synced issues keyed by the task that tracks them. */
@@ -485,7 +483,7 @@ export function archiveTask(
     token, graph.projectId, task.reference.taskId, request, tenant), null);
 }
 
-/** Deletes one task using the graph and task revisions the user confirmed. */
+/** Deletes one task at the confirmed revisions, after rechecking the captured authorization scope. */
 export function deleteBacklogTask(
   apiCall: ApiCall,
   graph: BacklogGraph,
