@@ -325,6 +325,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
         var owner = new StorageOwner();
         var clock = new StorageClock();
+        // Keep the first delivery open so a concurrent retry can observe the pending operation.
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var pendingDelivery = new StorageDelivery { Clock = clock, DeliveryStarted = entered, ContinueDelivery = finish };
@@ -436,6 +437,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         Assert.NotNull(exchanged.Credential);
         var source = Proof(exchanged.Receipt.GrantId, exchanged.Receipt.Revision, RuntimeCredentialPurpose.Observe,
             owner.Registration.Binding.ObservationEndpoint, exchanged.Credential, owner, bootstrap.ConfigurationHash);
+        // Hold the grant row while the clock advances so verification resumes after the credential expires.
         await using var blocker = await dataSource.OpenConnectionAsync();
         await using var blockingTransaction = await blocker.BeginTransactionAsync();
         await using (var hold = new NpgsqlCommand("""

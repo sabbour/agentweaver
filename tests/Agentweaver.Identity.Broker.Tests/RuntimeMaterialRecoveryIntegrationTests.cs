@@ -73,7 +73,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(previous.Cache?.Material, recovery.Cache?.Material);
         Assert.Equal(previous.Cache?.Bytes, recovery.Cache?.Bytes);
 
-        // Recreate the SDK transport and consume only bytes returned by the authenticated owner.
+        // Use a fresh SDK transport with recovery data read from the authenticated owner.
         await using var replacement = new ControlledCopilotRuntime
         {
             Byok = originalSdk.Byok,
@@ -100,7 +100,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(missingCache ? "runtime_sdk_cache_missing" : null, session.RecoveryReason);
         if (missingCache)
         {
-            // An absent optional cache rebuilds only the existing bounded journal context, without resuming native state.
+            // A missing cache uses session.create with journal context and does not resume native state.
             var create = Assert.Single(replacement.Requests, request => request.Method == "session.create");
             var context = create.Parameters.GetProperty("systemMessage").GetProperty("content").GetString();
             Assert.Contains("A bounded user request.", context);
@@ -192,7 +192,7 @@ public sealed partial class RuntimeSessionRecoveryTests
     public async Task OwnerJournalTurnMustRemainCompleteAuthorizedAndBounded(
         string condition, string? expectedFailure)
     {
-        // Exercise the owner-read boundary with ordered events and real material acknowledgments,
+        // Exercise owner reads with ordered events and matching material records,
         // then vary one missing, damaged, revoked, rebound, or oversized condition.
         var registration = RuntimeCopilotSessionTests.Registration();
         var identity = new SessionIdentity(registration.Binding.ProjectId,

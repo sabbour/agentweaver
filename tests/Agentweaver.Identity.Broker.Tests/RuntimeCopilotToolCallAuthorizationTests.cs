@@ -369,6 +369,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     [Fact]
     public async Task AdmissionWaitCannotApproveAfterItsTurnHasEnded()
     {
+        // Pause owner authorization, end this turn, and start another before the old check returns.
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var turns = ActiveTurn();

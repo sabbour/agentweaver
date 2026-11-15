@@ -1134,7 +1134,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         startupBudgets: new AgentSandboxStartupBudgets(30, 30, 30, 60, 30, 120));
                         var leaseCreatedAt = childEnvironment.Lease.CreatedAt
                             ?? throw new InvalidOperationException("The native Sandbox lease has no creation timestamp.");
-                // The controlled Pod starts at lease + 2s; Host validates evidence against system time.
+                // Let the lease age before Host validates Pod evidence against system time.
                 await Task.Delay(TimeSpan.FromSeconds(2), token);
                         TraceNativeStage(failures,
                             $"Host {environmentId} Sandbox provisioned; phaseElapsed={phaseElapsed.Elapsed}, " +
@@ -1308,6 +1308,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"Starting public dispatch with the first Host Ready and the second ConfigureAsync in flight; " +
                 $"first={firstIntent.AssociationId}, second={secondIntent.AssociationId}.");
 
+            // Keep the second Host's catalog read pending so dispatch tests its not-ready path.
             var dispatchTask = StartPublicDispatch();
             if (await Task.WhenAny(secondHostNotReadyObserved.Task, dispatchTask).WaitAsync(token) ==
                 secondHostNotReadyObserved.Task)

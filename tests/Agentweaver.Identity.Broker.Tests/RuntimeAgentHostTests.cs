@@ -1377,6 +1377,7 @@ public sealed class RuntimeAgentHostTests
         var first = fixture.Message(proof);
         var queued = fixture.Message(proof);
         var immediate = fixture.Message(proof, AddressedMessageDeliveryMode.Immediate);
+        // Hold the first send until the normal and immediate messages are both queued.
         var active = fixture.Host.SendAsync(first, fixture.Actor, timeout.Token);
         await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
         var enqueue = fixture.Host.SendAsync(queued, fixture.Actor, timeout.Token);
@@ -1462,6 +1463,7 @@ public sealed class RuntimeAgentHostTests
         using var caller = new CancellationTokenSource();
         var disconnected = client.PostAsJsonAsync(
             "/runtime/v1/a2a/message:send", queued, HostFixture.Json, caller.Token);
+        // Cancel only after admission so the exact retry finds the copied actor and pending turn.
         Assert.True(SpinWait.SpinUntil(
             () => fixture.Host.HasAdmittedTurn(queued.Message.MessageId),
             TimeSpan.FromSeconds(10)));

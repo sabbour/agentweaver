@@ -494,6 +494,7 @@ public sealed class RuntimeCopilotSessionTests
     [Fact]
     public async Task CancellationDrainsActualNativeAbortBeforeAdmittingTheQueuedTurn()
     {
+        // Hold the send and its abort-idle signal until the queued turn is waiting.
         var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var heldTurn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var turns = 0;
@@ -533,6 +534,7 @@ public sealed class RuntimeCopilotSessionTests
     [InlineData(true)]
     public async Task FailedAbortOrMissingIdlePoisonsTheSessionRatherThanReleasingAnotherTurn(bool missingIdle)
     {
+        // Cover both an abort rejection and an accepted abort that never reaches idle.
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
@@ -562,6 +564,7 @@ public sealed class RuntimeCopilotSessionTests
     [Fact]
     public async Task DisposalCancelsAndDrainsTheActiveNativeTurnBeforeCompleting()
     {
+        // Keep the abort drain pending so both disposal calls must wait for it.
         var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));

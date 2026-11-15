@@ -490,6 +490,7 @@ public sealed class RuntimeOwnerHttpTransportTests
     [Fact]
     public async Task BoundedResponseBodyRetainsTheDeadlineAfterHeadersArrive()
     {
+        // Return headers at once and stall the body to check that the same deadline covers both.
         using var body = new WaitingBodyStream();
         var handler = new RecordingHandler(request =>
         {
