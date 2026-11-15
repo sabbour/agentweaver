@@ -137,7 +137,6 @@ test('the checked-in draft composition has a valid shape and references', () => 
   assert.equal(check(fixture).stage, 'draft');
 });
 
-/** Verifies that the fixture preserves the private owner transport dependency and its release pin. */
 test('Projects platform component collection requires the Identity project reference', () => {
   const owner = fixture.components.find(component => component.id === 'Agentweaver.Projects.Config');
   const project = projects.get(owner.project);
