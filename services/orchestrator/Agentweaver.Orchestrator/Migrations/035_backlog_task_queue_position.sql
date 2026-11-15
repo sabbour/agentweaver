@@ -1,7 +1,7 @@
--- Stores deterministic order within each project backlog queue.
 ALTER TABLE {schema}.backlog_tasks
     ADD COLUMN queue_position bigint;
 
+-- Backfill zero-based order per project and state, sorted by task ID.
 WITH ranked_tasks AS (
     SELECT project_id, task_id,
            row_number() OVER (PARTITION BY project_id, task_state ORDER BY task_id) - 1 AS queue_position

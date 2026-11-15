@@ -10,6 +10,7 @@ CREATE TABLE {schema}.runtime_observation_v2_cursors (
 CREATE INDEX ix_runtime_observation_v2_cursors_expiry
     ON {schema}.runtime_observation_v2_cursors (expires_at);
 
+-- This normal index build scans existing outbox rows and blocks writes until the migration commits.
 CREATE INDEX ix_runtime_observation_v2_attempt
     ON {schema}.outbox_events (stream_id, (payload->>'attemptId'), sequence)
     WHERE event_type = 'orchestrator.runtime_observation.fact' AND event_version = 1;

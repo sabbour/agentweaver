@@ -38,6 +38,7 @@ ALTER TABLE {schema}.maf_runtime_evidence_receipts
                  receipt_json->>'priorReceiptHash' ~ '^[0-9a-f]{64}$')
             )) IS TRUE));
 
+-- These partial indexes prevent one dispatch from reusing a destination fence or prior authority.
 CREATE UNIQUE INDEX uq_native_child_rebind_destination
     ON {schema}.maf_runtime_evidence_receipts
         (project_id, run_id, ((receipt_json->>'dispatchId')::uuid),

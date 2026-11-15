@@ -37,6 +37,7 @@ CREATE TABLE {schema}.workflow_generation_jobs (
 CREATE INDEX ix_workflow_generation_jobs_unresolved
     ON {schema}.workflow_generation_jobs (project_id, run_id, execution_phase, status);
 
+-- Lock the accepted run so job insertion and cancellation serialize on the same row.
 CREATE FUNCTION {schema}.guard_workflow_generation_job_insert()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -62,6 +63,7 @@ CREATE TRIGGER workflow_generation_job_active_run
     BEFORE INSERT ON {schema}.workflow_generation_jobs
     FOR EACH ROW EXECUTE FUNCTION {schema}.guard_workflow_generation_job_insert();
 
+-- Cancellation does not prove that a send-admitted native call has stopped.
 CREATE FUNCTION {schema}.close_workflow_generation_jobs_on_cancel()
 RETURNS trigger
 LANGUAGE plpgsql

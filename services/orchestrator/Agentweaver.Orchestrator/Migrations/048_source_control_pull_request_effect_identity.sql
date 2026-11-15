@@ -5,6 +5,7 @@ ALTER TABLE {schema}.source_control_pull_request_operations
     ADD COLUMN effect_state varchar(16),
     ADD COLUMN result_fingerprint char(64);
 
+-- Backfill tenant identity from the pin, copy the request hash, and derive state before requiring these fields.
 UPDATE {schema}.source_control_pull_request_operations AS operation
 SET tenant_id = pin.tenant_id,
     effect_fingerprint = operation.request_fingerprint,

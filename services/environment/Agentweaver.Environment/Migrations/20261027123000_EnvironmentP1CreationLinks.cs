@@ -8,6 +8,7 @@ namespace Agentweaver.Environment.Migrations;
 public sealed class EnvironmentP1CreationLinks : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder) =>
+        // A reserved link can only move once from Pending to a terminal state.
         migrationBuilder.Sql(
             """
             CREATE TABLE environment.p1_creation_links (

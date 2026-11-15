@@ -1,3 +1,4 @@
+-- Keep terminal run fences stable and block recovery after a matching cleanup receipt.
 CREATE FUNCTION {schema}.guard_terminal_cleanup_recovery()
 RETURNS trigger
 LANGUAGE plpgsql

@@ -1,6 +1,6 @@
 -- Preserve every link and its original receipt. Legacy rows keep a NULL identity.
 -- The migrator runs this forward-only change under its transaction and schema lock.
--- ALTER TABLE and index creation block link writes while validating existing rows.
+-- ALTER TABLE and index builds block writes until commit.
 ALTER TABLE {schema}.chief_of_staff_priority_links
     ADD COLUMN provider_id varchar(256),
     ADD COLUMN repository_owner varchar(256),
@@ -15,6 +15,7 @@ ALTER TABLE {schema}.chief_of_staff_priority_links
 
 -- Check the complete replacement key before removing any existing protection.
 -- A corrupt or conflicting history aborts the transaction instead of discarding rows.
+-- The CHECK validates existing rows; the preflight rejects duplicate keys before the replacement indexes are built.
 DO $$
 BEGIN
     IF EXISTS (

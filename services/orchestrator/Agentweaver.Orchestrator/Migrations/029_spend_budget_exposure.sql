@@ -95,7 +95,7 @@ BEGIN
 END
 $$;
 
--- Trigger functions run only from their triggers, so no role gets direct EXECUTE.
+-- PUBLIC cannot call this trigger function directly; its trigger still invokes it.
 REVOKE ALL ON FUNCTION {schema}.guard_spend_budget_reservation_mutation() FROM PUBLIC;
 
 -- Inserts are not guarded; the table constraints already validate new rows.

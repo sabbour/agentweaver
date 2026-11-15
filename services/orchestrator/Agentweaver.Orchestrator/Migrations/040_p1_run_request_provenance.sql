@@ -1,3 +1,4 @@
+-- Keep old requests unbound; this key permits one request per invocation within a project and run.
 ALTER TABLE {schema}.project_run_requests
     ADD COLUMN p1_setup_invocation_id uuid,
     ADD CONSTRAINT ck_project_run_request_p1_setup
