@@ -334,6 +334,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             storedOperation = CreatePublicBuildTestOperation(currentCommand, apiRequest, scenario == "failed", artifactBytes);
             if (scenario == "lost-acknowledgment" && reconcileCount == 0)
             {
+                // Retain the operation but drop its first response so the retry must reconcile it.
                 storedOperation = storedOperation with
                 {
                     Status = SandboxBuildTestOperationStatus.Running,

@@ -352,6 +352,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         Assert.Equal("controlled-model", ready.Facts.ModelId);
         var readyProof = ready.Proof();
         var refreshOperation = Guid.NewGuid();
+        // Reuse one operation ID concurrently so both calls must return the same refresh receipt.
         var refreshes = await Task.WhenAll(
             ready.RefreshAsync(refreshOperation, readyProof.Revision, timeout.Token),
             ready.RefreshAsync(refreshOperation, readyProof.Revision, timeout.Token));
