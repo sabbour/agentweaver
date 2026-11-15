@@ -6,7 +6,6 @@ import { AgentweaverClient } from '../api-harness/lib/client.mjs';
 import { McpHarnessClient } from '../mcp-harness/mcp-client/client.mjs';
 import { UiHarnessClient } from '../ui-harness/lib/client.mjs';
 
-/** Adapt injected, already-authorized credentials and browser pages to the three P1 harness surfaces. */
 /** Decode only the payload claims needed to bind a broker token to its authorized identity. */
 function decodeClaims(token) {
   try {
@@ -18,7 +17,7 @@ function decodeClaims(token) {
   }
 }
 
-/** Reject tokens that are missing, expired by shape, or bound to a different actor or selected run. */
+/** Require a numeric expiry claim and claims matching the authorized issuer, audience, actor, and run. */
 function requireToken(token, identity, binding) {
   if (typeof token !== 'string' || !token) {
     throw new Error('The authorized identity provider did not return a broker token.');
@@ -33,7 +32,7 @@ function requireToken(token, identity, binding) {
   return token;
 }
 
-/** Load an injected provider module and require its default async provider function. */
+/** Load a provider module and require its default export to be a function. */
 async function loadModule(path, label, importModule) {
   if (typeof path !== 'string' || !path.trim()) throw new Error(`A ${label} module path is required.`);
   let loaded;

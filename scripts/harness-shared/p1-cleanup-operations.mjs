@@ -75,7 +75,7 @@ function requireArchivedProject(value, {
   };
 }
 
-/** Revoke Orchestrator, archive the project, then revoke its last Owner exactly once per write. */
+/** Revoke Orchestrator, archive the project, then revoke its last Owner. */
 export async function runP1CleanupOperations({
   api,
   invocationId,

@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { appendRedactedJsonLine } from './safe-jsonl.mjs';
 import { redact } from './redaction.mjs';
 
-/** Construct and persist the final required-probe result for an API, MCP, or UI P1 run. */
 /** Probe names that require native owner evidence beyond the admitted API, MCP, and UI harnesses. */
 const REQUIRED_NATIVE_PROBES = [
   {

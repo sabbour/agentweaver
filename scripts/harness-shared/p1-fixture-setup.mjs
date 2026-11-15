@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { redact } from './redaction.mjs';
 import { runP1CleanupOperations } from './p1-cleanup-operations.mjs';
 
-/** Create invocation-bound API and Projects Config fixtures for a bounded P1 surface journey. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const runnerOwnedFixtureInputs = new WeakSet();
 const PROBLEM_CODE = /^[a-z][a-z0-9_]{0,63}$/;
@@ -341,10 +340,9 @@ function creationReceipt(resourceType, resourceId, invocationId, ownerFence, cre
 }
 
 /**
- * Create a setup project, accepted run selection, root session, and journey-specific owned resources.
- * Setup and cleanup use only the public Projects API with the signed-in tenant admin's setup client.
- * Any failure after a mutating setup or cleanup request is sent is indeterminate: it is never retried
- * and no cleanup runs, so an operator can review the invocation-named project first.
+ * Create an invocation-owned project, run selection, and journey fixtures.
+ * Do not retry a failed project or role setup step.
+ * Cleanup stays blocked until the project, Owner, and Orchestrator receipts are confirmed.
  */
 export async function createP1Fixture(plan, {
   api,
@@ -381,7 +379,7 @@ export async function createP1Fixture(plan, {
   const rootSessionId = idFor('root-session');
   const childSessionId = plan.journey === 'message' ? idFor('child-session') : null;
 
-  /** A failed setup step after creation leaves the fixture indeterminate and must not be cleaned up. */
+  /** An unverified setup step leaves the fixture indeterminate and blocks cleanup. */
   const setupStep = async (step, send) => {
     state.setupAttempted = true;
     try {
