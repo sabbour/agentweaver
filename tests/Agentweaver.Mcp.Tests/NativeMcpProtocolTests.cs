@@ -79,7 +79,7 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             @params = new { name = "agentweaver_addChiefOfStaffPriorityLink",
                 arguments = new { priorityId = "priority-a", body } }
         });
-        // The native product tool forwards the selected identity unchanged; no provider call is added.
+        // The repository identity reaches the Gateway unchanged.
         Assert.False(result.GetProperty("result").GetProperty("isError").GetBoolean(), JsonSerializer.Serialize(result));
         var request = Assert.Single(_gatewayFactory.OrchestratorRequests);
         Assert.Equal("/api/chief-of-staff/priorities/priority-a/links", request.PathAndQuery);
@@ -108,7 +108,7 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
         Assert.DoesNotContain(tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() is
                 "agentweaver_readProjectTeamSync" or "agentweaver_commitProjectTeamSync");
-        // MCP advertises the same repository identity fields as the Gateway, without a second DTO.
+        // The advertised schema includes the provider and repository identity fields.
         var priorityLinkTool = Assert.Single(tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_addChiefOfStaffPriorityLink");
         var linkFields = priorityLinkTool.GetProperty("inputSchema").GetProperty("properties")
@@ -177,7 +177,7 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
         Assert.DoesNotContain(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_streamRunEvents");
-        // Project reporting tools inherit owner query schemas without requiring a run ID.
+        // Project reporting tools require projectId and omit runId.
         foreach (var operation in new[] { "readProjectMetrics", "readProjectUsage" })
         {
             var reporting = Assert.Single(tools.EnumerateArray(),

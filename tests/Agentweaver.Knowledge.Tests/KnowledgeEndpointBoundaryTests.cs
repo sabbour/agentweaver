@@ -283,7 +283,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             Assert.Equal("pending", body.RootElement.GetProperty("items")[0]
                 .GetProperty("record").GetProperty("state").GetString()));
 
-        // The new filter must not bypass the unbound-token and current private-knowledge checks.
+        // Check that filtered search still rejects run-bound callers but does not require run-selection access for unbound callers.
         owner.ClearPaths();
         using var runBound = new HttpRequestMessage(HttpMethod.Get,
             "/api/projects/project-a/knowledge/records?kind=proposal&state=pending");
@@ -412,6 +412,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
         var now = DateTimeOffset.UtcNow;
+        // Place Cosmos records around the PostgreSQL writes to exercise one global page order.
         var cosmosRecords = new[]
         {
             SearchRecord("agent-b", "cosmos newest", now.AddMinutes(1), "origin-run"),
