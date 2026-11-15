@@ -106,6 +106,36 @@ rejects redirects. Projects requires absolute certificate and key paths and
 enabled. It accepts the private proof request only after a native TLS 1.2 or
 TLS 1.3 handshake. Forwarded HTTPS headers alone do not satisfy this check.
 
+## Model-provider credential references
+
+The Broker ledger stores exact Key Vault reference metadata for platform and
+project model providers. A transaction advances the current head and adds an
+immutable history row. It stores no credential value or credential-derived
+hash. Rotation keeps earlier exact versions. Disable is terminal: current
+reference reads deny use, while historical reads return references from
+history rows recorded while the slot was Enabled. A historical read returns
+reference metadata only. Key Vault must still contain the exact version for
+redemption.
+
+The store does not authenticate users or check Projects authority. A future
+management caller must obtain fresh Projects authority before a mutation.
+Runtime use must continue to check the exact run and purpose grant before and
+after Key Vault redemption.
+
+```mermaid
+sequenceDiagram
+    participant Owner as Trusted owner
+    participant Ledger as Identity Broker credential ledger
+    Note over Owner,Ledger: Owner-local reference lookup
+    Owner->>Ledger: Record exact reference
+    Ledger->>Ledger: Commit head and immutable history atomically
+    Ledger-->>Owner: Return reference metadata
+    Owner->>Ledger: Read current reference
+    Ledger-->>Owner: Deny current use when Disabled
+    Owner->>Ledger: Read exact historical reference
+    Ledger-->>Owner: Return retained Enabled-history reference
+```
+
 `POST /secrets/redeem` accepts a `SecretRef` identifier and exact version, purpose, and run ID. The bearer token supplies actor, project, and run claims. The broker does not accept caller-supplied identity claims.
 
 `AuthorizedSecretRedemption` checks the exact grant before and after backend acquisition. A changed, expired, revoked, missing, or ambiguous grant denies redemption. The broker invalidates an acquired credential after the response.

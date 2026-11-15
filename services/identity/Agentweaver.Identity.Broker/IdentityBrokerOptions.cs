@@ -162,6 +162,9 @@ public sealed class SecretRedemptionOptions
     [Required]
     public required string VaultUri { get; set; }
 
+    /// <summary>Optional distinct Key Vault root used by model-provider credential references.</summary>
+    public string? ByokVaultUri { get; set; }
+
     /// <summary>Tenant ID for the workload identity used to access Key Vault.</summary>
     [Required]
     public required string WorkloadIdentityTenantId { get; set; }

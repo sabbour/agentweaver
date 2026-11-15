@@ -28,6 +28,10 @@ public sealed class IdentityBrokerDbContext : DbContext
 
     public DbSet<SecretGrantOperation> SecretGrantOperations => Set<SecretGrantOperation>();
 
+    public DbSet<ModelProviderCredentialHead> ModelProviderCredentialHeads => Set<ModelProviderCredentialHead>();
+    public DbSet<ModelProviderCredentialRevision> ModelProviderCredentialRevisions =>
+        Set<ModelProviderCredentialRevision>();
+
     public DbSet<RuntimeGrantHead> RuntimeGrantHeads => Set<RuntimeGrantHead>();
     public DbSet<RuntimeGrantRevision> RuntimeGrantRevisions => Set<RuntimeGrantRevision>();
     public DbSet<RuntimeGrantOperation> RuntimeGrantOperations => Set<RuntimeGrantOperation>();
@@ -52,6 +56,7 @@ public sealed class IdentityBrokerDbContext : DbContext
         modelBuilder.ApplyConfiguration(new IssueSyncGrantModel());
         modelBuilder.ApplyConfiguration(new IssueSyncMintAuditModel());
         RuntimeGrantModel.Configure(modelBuilder);
+        ConfigureModelProviderCredentials(modelBuilder);
         CopilotConnectionModel.Configure(modelBuilder);
         RemoteMcpOAuthModel.Configure(modelBuilder);
 
@@ -278,5 +283,111 @@ public sealed class IdentityBrokerDbContext : DbContext
         // Registers OpenIddict's application/authorization/scope/token entity types;
         // they share this context's default schema set above.
         modelBuilder.UseOpenIddict();
+    }
+
+    private static void ConfigureModelProviderCredentials(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ModelProviderCredentialHead>(entity =>
+        {
+            entity.ToTable("model_provider_credentials", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_model_provider_credentials_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR " +
+                    "(scope = 'Project' AND project_id IS NOT NULL AND length(project_id) > 0)");
+                table.HasCheckConstraint("ck_model_provider_credentials_state", "state IN ('Enabled', 'Disabled')");
+                table.HasCheckConstraint("ck_model_provider_credentials_revision", "revision > 0");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credentials_secret_name",
+                    "secret_name ~ '^[A-Za-z0-9-]{1,127}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credentials_secret_version",
+                    "current_version ~ '^[0-9A-Fa-f]{32}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credentials_byok_name",
+                    "vault_source <> 'Byok' OR secret_name = 'byok-' || lower(scope) || '-' || provider_id");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credentials_vault_source",
+                    "vault_source IN ('Existing', 'Byok')");
+            });
+            entity.HasKey(head => head.CredentialSlotId);
+            entity.Property(head => head.CredentialSlotId).HasColumnName("credential_slot_id");
+            entity.Property(head => head.Scope).HasColumnName("scope").HasConversion<string>().HasMaxLength(16);
+            entity.Property(head => head.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(head => head.ProviderId).HasColumnName("provider_id").HasMaxLength(128).IsRequired();
+            entity.Property(head => head.VaultSource).HasColumnName("vault_source").HasConversion<string>()
+                .HasMaxLength(16);
+            entity.Property(head => head.VaultUri).HasColumnName("vault_uri").HasMaxLength(256).IsRequired();
+            entity.Property(head => head.SecretName).HasColumnName("secret_name").HasMaxLength(127).IsRequired();
+            entity.Property(head => head.CurrentVersion).HasColumnName("current_version")
+                .HasMaxLength(32).IsRequired();
+            entity.Property(head => head.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(head => head.Revision).HasColumnName("revision");
+            entity.Property(head => head.SetBy).HasColumnName("set_by").HasMaxLength(256).IsRequired();
+            entity.Property(head => head.SetAt).HasColumnName("set_at");
+            entity.HasIndex(head => head.ProviderId).IsUnique();
+        });
+
+        modelBuilder.Entity<ModelProviderCredentialRevision>(entity =>
+        {
+            entity.ToTable("model_provider_credential_revisions", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_revisions_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR " +
+                    "(scope = 'Project' AND project_id IS NOT NULL AND length(project_id) > 0)");
+                table.HasCheckConstraint("ck_model_provider_credential_revisions_state", "state IN ('Enabled', 'Disabled')");
+                table.HasCheckConstraint("ck_model_provider_credential_revisions_revision", "revision > 0");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_revisions_mutation_kind",
+                    "mutation_kind IN ('RecordReference', 'Disable')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_revisions_secret_name",
+                    "secret_name ~ '^[A-Za-z0-9-]{1,127}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_revisions_secret_version",
+                    "secret_version ~ '^[0-9A-Fa-f]{32}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_revisions_byok_name",
+                    "vault_source <> 'Byok' OR secret_name = 'byok-' || lower(scope) || '-' || provider_id");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_revisions_vault_source",
+                    "vault_source IN ('Existing', 'Byok')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_revisions_fingerprint",
+                    "request_fingerprint ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(revision => new { revision.CredentialSlotId, revision.Revision });
+            entity.Property(revision => revision.CredentialSlotId).HasColumnName("credential_slot_id");
+            entity.Property(revision => revision.Revision).HasColumnName("revision");
+            entity.Property(revision => revision.Scope).HasColumnName("scope").HasConversion<string>()
+                .HasMaxLength(16);
+            entity.Property(revision => revision.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(revision => revision.ProviderId).HasColumnName("provider_id")
+                .HasMaxLength(128).IsRequired();
+            entity.Property(revision => revision.VaultSource).HasColumnName("vault_source")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(revision => revision.VaultUri).HasColumnName("vault_uri")
+                .HasMaxLength(256).IsRequired();
+            entity.Property(revision => revision.SecretName).HasColumnName("secret_name")
+                .HasMaxLength(127).IsRequired();
+            entity.Property(revision => revision.SecretVersion).HasColumnName("secret_version")
+                .HasMaxLength(32).IsRequired();
+            entity.Property(revision => revision.State).HasColumnName("state")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(revision => revision.MutationKind).HasColumnName("mutation_kind")
+                .HasConversion<string>().HasMaxLength(32);
+            entity.Property(revision => revision.OperationId).HasColumnName("operation_id");
+            entity.Property(revision => revision.RequestFingerprint).HasColumnName("request_fingerprint")
+                .HasMaxLength(64).IsRequired();
+            entity.Property(revision => revision.ActorId).HasColumnName("actor_id")
+                .HasMaxLength(256).IsRequired();
+            entity.Property(revision => revision.RecordedAt).HasColumnName("recorded_at");
+            entity.HasIndex(revision => revision.OperationId).IsUnique();
+            entity.HasOne<ModelProviderCredentialHead>()
+                .WithMany()
+                .HasForeignKey(revision => revision.CredentialSlotId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 }

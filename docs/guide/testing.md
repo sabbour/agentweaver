@@ -69,6 +69,7 @@ To run named project suites after the Release build, use:
 dotnet test tests\Agentweaver.SourceControl.Tests\Agentweaver.SourceControl.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~GitHubRepoAppConnectionServicePostgresTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~ModelProviderCredentialContractTests
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~SourceControlSecretRedemptionClientTests
 dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --no-build --no-restore --configuration Release
@@ -91,6 +92,9 @@ PostgreSQL; none of these commands publishes packages or deploys a service.
 The AgentSessions suite checks export verification and replay behavior. The
 absence test confirms that the native provider stays the default and the
 platform works without the optional AgentSessions package.
+The model-provider credential contract selector uses no database, network, or
+Azure identity. Hosted GitHub CI runs the PostgreSQL store and bootstrap cases
+for this change.
 
 ## Test the Events & Sessions Azure Retail lookup
 

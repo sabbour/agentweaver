@@ -197,6 +197,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             "repo_app_authorization_transactions",
             "repo_app_connections", "repo_app_installations", "repo_app_repository_selections",
             "issue_sync_grants", "issue_sync_mint_audit",
+            "model_provider_credentials", "model_provider_credential_revisions",
         };
         foreach (var table in tables)
         {
@@ -265,6 +266,9 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             INSERT INTO identity_broker.issue_sync_grants VALUES (1);
             UPDATE identity_broker.issue_sync_grants SET id = 2;
             INSERT INTO identity_broker.issue_sync_mint_audit VALUES (1);
+            INSERT INTO identity_broker.model_provider_credentials VALUES (1);
+            UPDATE identity_broker.model_provider_credentials SET id = 2;
+            INSERT INTO identity_broker.model_provider_credential_revisions VALUES (1);
             """, connection))
             await permitted.ExecuteNonQueryAsync();
         await using (var forbidden = new NpgsqlCommand(
@@ -276,13 +280,15 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
         foreach (var table in tables.Where(table =>
             table.StartsWith("runtime_grant_", StringComparison.Ordinal) ||
             table.StartsWith("copilot_connection", StringComparison.Ordinal) ||
-            table.StartsWith("issue_sync_", StringComparison.Ordinal)))
+            table.StartsWith("issue_sync_", StringComparison.Ordinal) ||
+            table.StartsWith("model_provider_credential", StringComparison.Ordinal)))
         {
             foreach (var statement in new[]
             {
                 $"DELETE FROM identity_broker.{QuoteIdentifier(table)}",
                 $"TRUNCATE identity_broker.{QuoteIdentifier(table)}",
-            }.Concat(table is "runtime_grant_heads" or "copilot_connections" or "issue_sync_grants" ? [] :
+            }.Concat(table is "runtime_grant_heads" or "copilot_connections" or "issue_sync_grants" or
+                "model_provider_credentials" ? [] :
                 new[] { $"UPDATE identity_broker.{QuoteIdentifier(table)} SET id = 2" }))
             {
                 await using var forbidden = new NpgsqlCommand(statement, connection);
