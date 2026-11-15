@@ -43,7 +43,7 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
-/** Extracts the unique state only when the authorization URL targets the expected secure callback. */
+/** Extracts the unique state when an HTTPS authorization URL has the expected redirect URI. */
 export function expectedCopilotCallbackState(
   authorizationUri: string,
   callbackUri: string,

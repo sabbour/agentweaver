@@ -133,14 +133,13 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
   // 1. Show the spinner only on the first load. Reloads after a change keep the
   //    current table on screen so it does not flicker.
   // 2. 403: the caller may not read members. Explain who can, not a raw error.
-  // 3. 404, 405, or 501: the service does not offer this API yet. Say so plainly.
+  // 3. 404: the project may be missing or hidden.
   // 4. Any other error: show the error notice with its code.
   // 5. Otherwise show the table and, for administrators, the add form.
   let body;
   if (loading && !list) body = <Loading label="Loading members" />;
   else if (loadError instanceof GatewayError && loadError.status === 403)
     body = <Text>Only a tenant administrator or a project owner can see the member list.</Text>;
-  // 404 means the project does not exist or the caller cannot see it.
   else if (loadError instanceof GatewayError && loadError.status === 404)
     body = <Text>This project was not found. It may have been deleted.</Text>;
   else if (loadError != null)

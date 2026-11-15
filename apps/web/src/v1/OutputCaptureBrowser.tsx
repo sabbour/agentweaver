@@ -11,10 +11,10 @@ import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading } from './pageParts';
 
 /*
- * Browser for saved output captures of one run: pick a session, pick a capture,
- * then view its files. Every read uses a token bound to the run. Every response
- * is checked against the requested run, session and capture, and file bytes are
- * checked against the capture manifest before they are shown.
+ * Browses saved output captures for one run. Each read uses a token bound to
+ * that run; session, capture, and file reads also name their target. The browser
+ * checks the run status and session tree, validates capture details against the
+ * manifest, and checks file size and SHA-256 before display.
  */
 
 const useStyles = makeStyles({

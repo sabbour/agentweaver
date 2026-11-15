@@ -22,7 +22,7 @@ import {
 } from './copilotCallback';
 import type { CopilotCallbackMessage } from './copilotCallback';
 
-/** Maximum time a popup authorization attempt may remain pending. */
+/** Maximum time a started popup authorization flow may remain pending. */
 const POPUP_TIMEOUT_MS = 10 * 60 * 1000;
 const POPUP_POLL_INTERVAL_MS = 250;
 
@@ -76,16 +76,13 @@ function receiptForProject(
 }
 
 /**
- * Builds the address GitHub returns to after sign-in. It must be HTTPS on this
- * app's own site, because the Gateway checks a one-time cookie on that callback
- * and the browser only sends the cookie to the same site.
+ * Builds the HTTPS callback URI returned to GitHub. This browser flow requires
+ * the Gateway on the app's origin and uses a host-only callback cookie.
  */
 function copilotCallbackUri(): string {
   if (window.location.protocol !== 'https:') {
     throw new Error('Open project settings over HTTPS before connecting GitHub Copilot.');
   }
-  // The server sets a one-time cookie for the callback. Browsers only send it back
-  // to the same origin, so a Gateway on another origin cannot complete the flow.
   const gatewayUrl = new URL(copilotGatewayBaseUrl, window.location.origin);
   if (gatewayUrl.origin !== window.location.origin) {
     throw new Error('The GitHub Copilot connection must use the same site as this app.');
@@ -108,8 +105,9 @@ function stateLabel(state: CopilotConnectionReceipt['state']): string {
 
 /**
  * Connects project-scoped GitHub Copilot through a tracked popup.
- * Callback origin, popup identity, state, actor, project scope, and connection
- * ID are checked before the Gateway completion and status calls are accepted.
+ * It accepts only same-origin messages from that popup with the expected state.
+ * Before completion it rechecks the signed-in actor, then validates completion
+ * and status receipts against the selected project and connection ID.
  */
 export function CopilotUserConnectionPanel({ projectId }: { projectId: string }) {
   const { session, apiCall } = useAuth();
