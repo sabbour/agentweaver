@@ -17,7 +17,7 @@ import { readServiceImageRevision } from '../../release/registry.mjs';
 import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 import { installTarget } from './targets.mjs';
 
-/** The only environment this runner can touch. Every value is checked against the live account. */
+/** Default target for database maintenance; account checks require its subscription and tenant. */
 export const DB_MAINTENANCE_TARGET = Object.freeze({
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
   tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
@@ -89,7 +89,7 @@ const PERMISSIONS = [
     ['watch', 'deployments.apps', undefined, name],
   ]),
 ];
-// Apps-only needs the lock, the two Deployments, and the state ConfigMap for roll-forward.
+// Apps-only needs the lock, three Deployments, and the state ConfigMap for roll-forward.
 const APP_PERMISSIONS = [
   ['create', 'leases.coordination.k8s.io'], ['get', 'leases.coordination.k8s.io'],
   ['delete', 'leases.coordination.k8s.io'],
@@ -465,7 +465,6 @@ export function connectivityProbeJob({ name, workload, runId, host, namespace })
   };
 }
 
-/** Renders a kustomize directory to plain resources. */
 /**
  * Reads the P1 migration identity and its AKS federated credential without changing anything.
  * ready is true only when the identity exists and one credential binds it to the exact
@@ -503,6 +502,7 @@ function migrationIdentityName(target) {
   return `${target.resourceGroup}-id-p1-postgres-migration`;
 }
 
+/** Renders a kustomize directory to plain resources. */
 function render(exec, repoRoot, directory, pairs = []) {
   const result = exec('kubectl', ['kustomize', directory], { cwd: repoRoot });
   if (result.status !== 0) throw new Error(`Could not render ${directory}: ${result.stderr || result.stdout}`);
@@ -614,7 +614,7 @@ export async function runDbMaintenance(options, overrides = {}) {
     // the workflow's federated login alike.
     must(exec('kubelogin', ['convert-kubeconfig', '--login', 'azurecli', '--kubeconfig', kubeconfig]),
       'Could not configure kubelogin');
-    // The Role restricts Deployment access by name, so preflight each target with the same name.
+    // Check Deployment patch permissions by name to match the Role resourceNames rule.
     const required = options.appsOnly ? APP_PERMISSIONS
       : options.deployApps ? [...PERMISSIONS, ...['environment', 'orchestrator', 'events-and-sessions']
         .map(name => ['patch', 'deployments.apps', undefined, name])] : PERMISSIONS;
@@ -1097,8 +1097,8 @@ export async function runDbMaintenance(options, overrides = {}) {
       if (receipt.result === 'succeeded') receipt.result = 'failed';
     }
     receipt.finishedAt = deps.now().toISOString();
-    // Database maintenance changes only two schema owners; it cannot prove that the other
-    // services and the authenticated Gateway checks are current.
+    // This result covers database maintenance only; it does not prove that every service or
+    // authenticated Gateway check is current.
     receipt.installation = { status: 'partial' };
     // The receipt is written on every path, so a failed run leaves the same evidence as a good one.
     // Receipts live outside the checkout by default, so they never dirty the tree for the next run.

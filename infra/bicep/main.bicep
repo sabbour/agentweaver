@@ -1,10 +1,8 @@
 // P0 dedicated Azure integration environment for Agentweaver 1.0.
 //
-// This template DEFINES infrastructure only. It is validated with
-// `az deployment group validate` / `what-if` (read-only) by
-// scripts/azure/plan.mjs. Nothing in this repository executes a live
-// deployment; that requires an explicit, human-confirmed target and the
-// `scripts/azure/deploy.mjs --execute` path, which this phase does not run.
+// `scripts/azure/plan.mjs` validates it and runs a read-only what-if.
+// `scripts/azure/deploy.mjs --execute` applies it after its source, target,
+// and what-if checks pass.
 //
 // Deploy at resource-group scope into a resource group dedicated to this
 // environment (never a shared 0.x resource group). namePrefix must be

@@ -19,15 +19,11 @@ const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const POSTGRES_ADMIN_TYPES = new Set(['User', 'Group', 'ServicePrincipal']);
 
-/** Returns whether a value is a full lowercase-or-uppercase 40-character Git SHA. */
+/** Returns whether a value is a full lowercase 40-character Git SHA. */
 export function isFullSha(value) {
   return typeof value === 'string' && FULL_SHA_PATTERN.test(value);
 }
 
-/**
- * Returns { sha, branch } for HEAD in `cwd`, or throws if the tree is dirty
- * or HEAD cannot be resolved to a full 40-character SHA.
- */
 /**
  * Resolves HEAD only when the working tree is clean and the commit is a full SHA.
  * Returns the SHA and branch name; Git errors or uncommitted changes throw.
