@@ -11,6 +11,7 @@ public sealed class ProjectsConfigMigrationInventoryTests(
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
 
+        // The history table column is the quoted PascalCase "MigrationId", not snake_case migration_id, so this query fails with 42703.
         await using (var incorrect = new NpgsqlCommand(
             """SELECT migration_id FROM "projects_config"."__ef_migrations_history" """,
             connection))

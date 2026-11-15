@@ -1,6 +1,3 @@
-// Ported from the 0.x blueprint package contract tests. Assertions are kept exact to prove 0.x package parity.
-// Most tests follow one pattern: build a package source (a manifest plus payload files) in memory, run the
-// validator, then check the result is valid or holds the expected error text.
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;

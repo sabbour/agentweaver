@@ -305,6 +305,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var firstService = new ModelProviderDraftService(firstDb, TimeProvider.System);
         var secondService = new ModelProviderDraftService(secondDb, TimeProvider.System);
 
+        // Separate contexts avoid shared tracked state while both requests use the same expected revision.
         async Task<(ModelProviderDraft? Draft, ModelProviderDraftException? Error)> TrySaveAsync(
             ModelProviderDraftService service,
             string displayName)
@@ -381,6 +382,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var rejectedOperationId = Guid.NewGuid();
         var constraintName = "ck_provider_retry_" + suffix;
 
+        // Reject this operation in PostgreSQL so the save fails after the service has tracked draft rows.
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var addConstraint = new NpgsqlCommand(
             $"ALTER TABLE projects_config.model_provider_revisions " +
