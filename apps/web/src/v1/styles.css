@@ -627,7 +627,7 @@
   }
 }
 
-/* Data tables (members, platform components): 0.x list density, theme tokens only. */
+/* Data tables use 0.x list density and theme tokens. */
 .v1-table-wrap { overflow-x: auto; }
 .v1-table { width: 100%; border-collapse: collapse; font-size: var(--fontSizeBase300); }
 .v1-table caption { text-align: start; font-weight: var(--fontWeightSemibold); padding-block-end: var(--spacingVerticalS); }
