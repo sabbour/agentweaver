@@ -44,8 +44,8 @@ if (migrate)
     await CoordinationOwnerMigrator.MigrateAsync(migrationDataSource, schema);
     if (plannedGrants is not null)
     {
-        // The migrator skips versions already in its ledger, so a rerun only repeats the grants,
-        // which are idempotent. The marker carries the final ledger for the run receipt.
+        // If grant application fails, a retry skips migration versions already in the ledger; grants are idempotent.
+        // The marker carries the final ledger for the run receipt.
         await using var grantConnection = await migrationDataSource.OpenConnectionAsync();
         await PlannedRuntimeGrants.ApplyAndVerifyAsync(grantConnection, plannedGrants);
         var applied = await PlannedRuntimeGrants.ReadVersionsAsync(
@@ -398,18 +398,15 @@ app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
         ct));
 app.Run();
 
-// Reads a required non-blank configuration value or fails application startup.
 static string Required(IConfiguration configuration, string key) =>
     !string.IsNullOrWhiteSpace(configuration[key])
         ? configuration[key]!
         : throw new InvalidOperationException($"Missing required configuration '{key}'.");
 
-// Builds the empty provider catalog used when no catalog section is configured.
 static ProviderCatalog CreateEmptyProviderCatalog() =>
     ProviderCatalog.Create([], [], []).Value
     ?? throw new InvalidOperationException("An empty provider catalog could not be constructed.");
 
-// Loads optional Agent Governance policy settings and validates the configured provider options.
 static AgtPolicyProviderOptions? ReadAgentGovernancePolicyOptions(IConfiguration configuration)
 {
     const string sectionName = "AgentGovernance:Policy";

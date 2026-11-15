@@ -311,7 +311,7 @@ public static partial class CoordinationEndpoints
             });
 
     /// <summary>
-    /// Adds a task using the caller's expected graph revision.
+    /// Adds a task at the expected graph revision and rechecks current authority during the write transaction.
     /// </summary>
     private static Task<IResult> AddBacklogTaskAsync(
         string projectId,
