@@ -218,7 +218,7 @@ public sealed class GatewayBacklogOpenApiTests
 
     private static bool MatchesSchema(JsonElement value, JsonElement schema, JsonElement schemas)
     {
-        // Check the schema keywords used by the strict backlog response contracts.
+        // This helper supports the backlog contract's schema subset, not every JSON Schema keyword.
         if (schema.TryGetProperty("$ref", out var reference))
         {
             const string prefix = "#/components/schemas/";
@@ -389,7 +389,7 @@ public sealed class GatewayBacklogOpenApiTests
                 .Select(item => item.GetString()).ToArray());
         Assert.Contains("run-start verification",
             modelChoice.GetProperty("reasoningEfforts").GetProperty("description").GetString());
-        // The choice item carries eligibility fields only; provider and credential data stay with AgentHost.
+        // The choice schema lists source and reasoning fields, but no provider or credential fields.
         Assert.Equal(["reasoningEffortSource", "reasoningEfforts", "reference", "sourceMode"],
             modelChoice.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray());
 

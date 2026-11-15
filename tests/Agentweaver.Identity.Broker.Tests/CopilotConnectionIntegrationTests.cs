@@ -433,6 +433,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                    "/internal/connections/copilot-user/callback-relay",
                    new CopilotCallbackRelayRequest(state + "tampered")))
             await AssertStatusAsync(invalidRelay, HttpStatusCode.Forbidden);
+        // Missing or invalid callback state, cookie, or subject must fail before code exchange.
         foreach (var (token, callbackState, callbackCookie) in new[]
         {
             (ownerToken, state, (string?)null),
@@ -604,6 +605,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(1, transport.UserReads);
         if (fault.StartsWith("user-", StringComparison.Ordinal))
             Assert.Equal(2, transport.UserReads);
+        // Retry only a known transient response; the other cases do not prove the old refresh token is still valid.
         if (expectedState == CopilotConnectionState.TransientUnavailable)
         {
             transport.ExchangeStatus = HttpStatusCode.OK;
@@ -672,6 +674,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var broker = factory.CreateClient(new() { BaseAddress = new Uri("https://broker.test/") });
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Pause after the vault stores the new version but before the Broker receives its write response.
         transport.BeforeWriteResponse = async cancellationToken =>
         {
             held.TrySetResult();
@@ -684,11 +687,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await held.Task.WaitAsync(timeout.Token);
         try
         {
+            // The same revision must not start a second exchange while the first write is blocked.
             using var competing = await SendJsonAsync(
                 broker, HttpMethod.Post, "/internal/connections/copilot-user/refresh", ownerToken, request);
             await AssertStatusAsync(competing, HttpStatusCode.Forbidden);
             if (revokeDuringSqlPublication)
             {
+                // Hold the connection row so Core revocation commits while publication waits.
                 await using var publicationConnection = await _nativeDataSource.OpenConnectionAsync(timeout.Token);
                 await using var transaction = await publicationConnection.BeginTransactionAsync(timeout.Token);
                 await using var holdPublication = new Npgsql.NpgsqlCommand("""
@@ -704,6 +709,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
             else
             {
+                // This variant revokes Core authority before publication reaches PostgreSQL.
                 await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, role.AssignmentId, role.Revision);
             }
         }
