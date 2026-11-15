@@ -73,6 +73,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
             provider.FlushAsync(FlushRequest(spec, resource), (request, _) =>
             {
+                // Change the claim while the trusted flush runs so the final check rejects its receipt.
                 var key = client.Claims.Keys.Single();
                 client.Claims[key] = client.Claims[key] with { Uid = "replacement" };
                 return Task.FromResult(FlushReceipt(request));
@@ -800,6 +801,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             8,
             WorkspaceVolumeAccessMode.ReadWriteOnce);
         var getCount = 0;
+        // Model another client creating the claim between the initial 404 and this client's POST.
         var handler = new RecordingHandler((message, _) =>
         {
             if (message.Method == HttpMethod.Post)

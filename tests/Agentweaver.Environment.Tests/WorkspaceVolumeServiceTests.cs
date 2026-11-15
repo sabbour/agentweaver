@@ -193,6 +193,7 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
             setup.Specification.OwnerDeletionPolicy,
             pending.CurrentProviderBinding!,
             request.IdempotencyKey).Validate();
+        // The provider effect completes before the owner records its result.
         _ = await setup.Provider.ReleaseAsync(releaseRequest);
         var restarted = new WorkspaceVolumeService(setup.Store, setup.Provider);
 
@@ -678,6 +679,7 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         using var cancellation = new CancellationTokenSource();
         setup.Provider.BeforeReleaseAsync = _ =>
         {
+            // The fake has recorded the provider call and will return a receipt after cancellation.
             cancellation.Cancel();
             return Task.CompletedTask;
         };
@@ -716,6 +718,7 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
                 "provision-for-stale-release"));
         setup.Provider.BeforeReleaseAsync = async _ =>
         {
+            // Advance the owner fence after the fake records the call but before it returns a receipt.
             await setup.Store.TransitionAsync(
                 new(
                     setup.Owner,
@@ -753,6 +756,7 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         var setup = await CreateRequestedVolumeAsync();
         setup.Provider.BeforeProvisionAsync = async _ =>
         {
+            // Advance the owner fence after the fake records the call but before it returns a resource.
             await setup.Store.TransitionAsync(
                 new(
                     setup.Owner,
@@ -792,6 +796,7 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         using var cancellation = new CancellationTokenSource();
         setup.Provider.BeforeProvisionAsync = _ =>
         {
+            // The fake has recorded the provider call and will return a resource after cancellation.
             cancellation.Cancel();
             return Task.CompletedTask;
         };

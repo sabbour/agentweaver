@@ -58,7 +58,7 @@ public sealed partial class RuntimeResumeBootstrapTests
                 JsonSerializer.SerializeToElement(new
                 {
                     @namespace = "agentweaver", claimName = "claim-1", claimUid = "claim-uid",
-                    // Keep setup free of Kubernetes calls so denial tests can assert no provider traffic.
+                    // Pin the cluster identity directly; fixture setup does not call the Kubernetes API.
                     clusterIdentity = "6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75"
                 }, JsonOptions)));
         var lifecycle = new ProvisionLifecycle(fence, volume);
@@ -77,6 +77,7 @@ public sealed partial class RuntimeResumeBootstrapTests
         var manager = new EnvironmentSandboxManager(projects, lifecycle, leases, provider, options,
             kubernetes, EnvironmentEgressManagerTests.Options(), egress);
         var guardCalls = 0;
+        // Deny a different authorization check in each run to track which effects have started.
         var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => manager.ProvisionResumeAsync(
             caller, new("workspace", 1, 8, "/workspace/agentweaver/workspace", false, 2, "resume-placement"),
             resume, _ =>
