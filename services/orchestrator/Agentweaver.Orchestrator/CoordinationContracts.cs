@@ -874,6 +874,9 @@ public sealed record CheckpointRecoveryStatus(
     Guid PreviousRuntimeInstanceId,
     long PreviousRegistrationRevision)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? OperationId { get; init; }
+
     public string CurrentStep { get; init; } = "retirement";
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

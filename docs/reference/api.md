@@ -1332,6 +1332,14 @@ result returns `200`. `ready` means the Host restored the saved boundary. It
 leaves the gate pending and the run incomplete. A later gate answer uses the
 same request ID at the current fence and decision version.
 
+Normal run and root-session status include the selected durable
+`checkpointRecovery.operationId`. The owner selects the recovery with the
+highest execution fence. If multiple recovery operations compete at that
+fence, status returns `503 checkpoint_recovery_status_conflict` instead of
+choosing one by timestamp. Older stored status without `operationId` remains
+readable; the owner adds the operation ID to the returned projection without
+changing the stored request or supersession evidence.
+
 If Host activation fails after the Broker saves the bootstrap receipt with
 `runtime_delivery_unavailable`, `runtime_receiver_unavailable`,
 `runtime_source_credential_unavailable`, `runtime_configuration_conflict`, or

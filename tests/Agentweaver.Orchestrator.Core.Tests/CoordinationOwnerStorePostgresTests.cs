@@ -2346,6 +2346,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             selection, new MafExecutionCheckpointStore(checkpointStore, checkpointBinding),
             pending.State.PendingGate);
         Assert.Null(first.CheckpointRecovery!.DispatchHeld);
+        Assert.Equal(first.OperationId, first.CheckpointRecovery.OperationId);
         Assert.Equal("idle", first.PreviousState);
         Assert.Equal("active", first.State);
         Assert.Equal(runStatus.StateVersion, first.PreviousRunStateVersion);
@@ -2440,6 +2441,16 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
                 ?? throw new InvalidOperationException("The recovery progress row was not found.")));
             Assert.False(progress.RootElement.TryGetProperty("dispatchHeld", out _));
         }
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var makeLegacy = new NpgsqlCommand($$"""
+            UPDATE "{{_schema}}".coordination_execution_operations
+            SET result = result #- '{checkpointRecovery,operationId}'
+            WHERE operation_id = @operation
+            """, connection))
+        {
+            makeLegacy.Parameters.AddWithValue("operation", first.OperationId);
+            Assert.Equal(1, await makeLegacy.ExecuteNonQueryAsync());
+        }
         var beforeReplay = await RecoveryEvidenceAsync();
         var replay = await store.RecoverRunExecutionAsync(
             _actor, root.ProjectId, root.RunId, firstRequest, CancellationToken.None,
@@ -2447,6 +2458,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.True(replay.IsDuplicate);
         Assert.Equal(first.OperationId, replay.OperationId);
         Assert.Equal("blocked", replay.CheckpointRecovery!.Phase);
+        Assert.Equal(replay.OperationId, replay.CheckpointRecovery.OperationId);
         Assert.Equal(first.ExecutionFence, (await store.ReadOwnerRunStatusAsync(
             _actor, root.ProjectId, root.RunId, CancellationToken.None)).ExecutionFence);
         Assert.Equal(beforeReplay, await RecoveryEvidenceAsync());
@@ -2456,6 +2468,12 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             selection, nextCheckpointStore, currentAfterFirst.State.PendingGate);
         Assert.Equal(first.ExecutionFence + 1, second.ExecutionFence);
         Assert.NotEqual(first.OperationId, second.OperationId);
+        var supersededRunStatus = await store.ReadOwnerRunStatusAsync(
+            _actor, root.ProjectId, root.RunId, CancellationToken.None);
+        var supersededRootStatus = await store.ReadSessionStatusAsync(
+            _actor, root, CancellationToken.None);
+        Assert.Equal(second.OperationId, supersededRunStatus.CheckpointRecovery!.OperationId);
+        Assert.Equal(second.OperationId, supersededRootStatus.CheckpointRecovery!.OperationId);
         Assert.Equal(failedRuntimeId, second.CheckpointRecovery!.PreviousRuntimeInstanceId);
         Assert.Equal(2, second.CheckpointRecovery.PreviousRegistrationRevision);
         Assert.NotEqual(
@@ -2467,6 +2485,16 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(gateId, finalDecision.State.PendingGate!.RequestId);
         Assert.Equal(pending.State.PendingGate!.AllowedChoices.ToArray(),
             finalDecision.State.PendingGate.AllowedChoices.ToArray());
+        var historicalReplay = await store.RecoverRunExecutionAsync(
+            _actor, root.ProjectId, root.RunId, firstRequest, CancellationToken.None,
+            selection, nextCheckpointStore, currentAfterFirst.State.PendingGate);
+        Assert.True(historicalReplay.IsDuplicate);
+        Assert.Equal(first.OperationId, historicalReplay.OperationId);
+        Assert.Equal(first.OperationId, historicalReplay.CheckpointRecovery!.OperationId);
+        Assert.Equal(second.OperationId, (await store.ReadOwnerRunStatusAsync(
+            _actor, root.ProjectId, root.RunId, CancellationToken.None)).CheckpointRecovery!.OperationId);
+        Assert.Equal(second.OperationId, (await store.ReadSessionStatusAsync(
+            _actor, root, CancellationToken.None)).CheckpointRecovery!.OperationId);
     }
 
     [Fact]
@@ -2530,8 +2558,25 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             Assert.Equal(1, await insert.ExecuteNonQueryAsync());
         }
 
-        Assert.Equal(status, await _store.ReadCheckpointRecoveryStatusAsync(
+        var projectedStatus = status with { OperationId = operationId };
+        Assert.Equal(projectedStatus, await _store.ReadCheckpointRecoveryStatusAsync(
             _actor, _root, operationId, CancellationToken.None));
+        var legacyRunStatus = await _store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        var legacySessionStatus = await _store.ReadSessionStatusAsync(
+            _actor, _root, CancellationToken.None);
+        Assert.Equal(projectedStatus, legacyRunStatus.CheckpointRecovery);
+        Assert.Equal(projectedStatus, legacySessionStatus.CheckpointRecovery);
+        await using (var legacyConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var legacyCheck = new NpgsqlCommand($"""
+            SELECT result -> 'checkpointRecovery' ? 'operationId'
+            FROM "{_schema}".coordination_execution_operations
+            WHERE operation_id = @operation
+            """, legacyConnection))
+        {
+            legacyCheck.Parameters.AddWithValue("operation", operationId);
+            Assert.False((bool)(await legacyCheck.ExecuteScalarAsync())!);
+        }
 
         var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection).ToLowerInvariant();
         var intent = new RuntimeRunStartIntent(
@@ -2596,25 +2641,26 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         {
         }
 
-        var placement = status with { CurrentStep = "placement" };
+        var placement = projectedStatus with { CurrentStep = "placement" };
         var updated = await _store.UpdateCheckpointRecoveryProgressAsync(
             _actor, _root, operationId, placement, CancellationToken.None);
         Assert.Equal("placement", updated.CheckpointRecovery!.CurrentStep);
+        var projectedPlacement = placement with { OperationId = operationId };
 
         var restarted = new CoordinationOwnerStore(_fixture.DataSource, _schema);
         var replay = await restarted.UpdateCheckpointRecoveryProgressAsync(
             _actor, _root, operationId, placement, CancellationToken.None);
         Assert.Equal(updated.OperationId, replay.OperationId);
-        Assert.Equal(placement, replay.CheckpointRecovery);
+        Assert.Equal(projectedPlacement, replay.CheckpointRecovery);
 
         var runStatus = await restarted.ReadOwnerRunStatusAsync(
             _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
         var sessionStatus = await restarted.ReadSessionStatusAsync(
             _actor, _root, CancellationToken.None);
-        Assert.Equal(placement, runStatus.CheckpointRecovery);
-        Assert.Equal(placement, sessionStatus.CheckpointRecovery);
+        Assert.Equal(projectedPlacement, runStatus.CheckpointRecovery);
+        Assert.Equal(projectedPlacement, sessionStatus.CheckpointRecovery);
 
-        var bootstrapping = placement with { CurrentStep = "bootstrap" };
+        var bootstrapping = projectedPlacement with { CurrentStep = "bootstrap" };
         var progressed = await restarted.UpdateCheckpointRecoveryProgressAsync(
             _actor, _root, operationId, bootstrapping, CancellationToken.None);
         Assert.Equal(bootstrapping, progressed.CheckpointRecovery);
@@ -2643,8 +2689,9 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         };
         var completed = await restarted.UpdateCheckpointRecoveryProgressAsync(
             _actor, _root, operationId, ready, CancellationToken.None, readyIntent);
-        Assert.Equal(ready, completed.CheckpointRecovery);
-        Assert.Equal(ready, await restarted.ReadCheckpointRecoveryStatusAsync(
+        var projectedReady = ready with { OperationId = operationId };
+        Assert.Equal(projectedReady, completed.CheckpointRecovery);
+        Assert.Equal(projectedReady, await restarted.ReadCheckpointRecoveryStatusAsync(
             _actor, _root, operationId, CancellationToken.None));
         var persistedIntent = await new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema)
             .ReadIntentForStatusAsync(_root.ProjectId, _root.RunId, _root.SessionId, CancellationToken.None);
@@ -3034,6 +3081,227 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
                 return;
             await Task.Delay(20, timeout.Token);
         }
+    }
+
+    [Fact]
+    public async Task LatestCheckpointRecoveryUsesFenceAndRejectsCompetingOperationsAtThatFence()
+    {
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        {
+            await using var updateRun = new NpgsqlCommand($"""
+                UPDATE "{_schema}".accepted_runs SET execution_fence = 2
+                WHERE project_id = @project AND run_id = @run
+                """, connection);
+            updateRun.Parameters.AddWithValue("project", _root.ProjectId);
+            updateRun.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(1, await updateRun.ExecuteNonQueryAsync());
+            await using var updateRoot = new NpgsqlCommand($"""
+                UPDATE "{_schema}".coordination_sessions SET execution_fence = 2
+                WHERE project_id = @project AND run_id = @run AND session_id = @root
+                """, connection);
+            updateRoot.Parameters.AddWithValue("project", _root.ProjectId);
+            updateRoot.Parameters.AddWithValue("run", _root.RunId);
+            updateRoot.Parameters.AddWithValue("root", _root.SessionId);
+            Assert.Equal(1, await updateRoot.ExecuteNonQueryAsync());
+        }
+
+        async Task InsertRecoveryAsync(Guid operationId, string key, long executionFence)
+        {
+            var status = new CheckpointRecoveryStatus(
+                "ready", "checkpoint-" + executionFence, 1, executionFence - 1, executionFence,
+                Guid.NewGuid(), 1)
+            {
+                CurrentStep = "ready",
+                RecoveryMaterialMode = "nativeCache",
+                RuntimeInstanceId = Guid.NewGuid(),
+                RegistrationRevision = 1
+            };
+            var result = JsonSerializer.Serialize(
+                new { checkpointRecovery = status }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var insert = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".coordination_execution_operations
+                    (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
+                     operation_kind, idempotency_key, request_hash, result)
+                VALUES (@project, @run, @operation, @session, @issuer, @subject,
+                        'recovery', @key, @hash, @result)
+                """, connection);
+            insert.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
+            insert.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
+            insert.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            insert.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _root.SessionId);
+            insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, _actor.Issuer);
+            insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, _actor.Subject);
+            insert.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, key);
+            insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('b', 64));
+            insert.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, result);
+            Assert.Equal(1, await insert.ExecuteNonQueryAsync());
+        }
+
+        var historicalR1Operation = Guid.NewGuid();
+        var currentR2Operation = Guid.NewGuid();
+        await InsertRecoveryAsync(currentR2Operation, "current-recovery-r2", 2);
+        await InsertRecoveryAsync(historicalR1Operation, "historical-recovery-r1", 1);
+
+        var status = await _store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        Assert.Equal(2, status.ExecutionFence);
+        Assert.NotEqual(historicalR1Operation, currentR2Operation);
+        Assert.Equal(currentR2Operation, status.CheckpointRecovery!.OperationId);
+        var rootStatus = await _store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        Assert.Equal(currentR2Operation, rootStatus.CheckpointRecovery!.OperationId);
+
+        await InsertRecoveryAsync(Guid.NewGuid(), "competing-recovery", 2);
+        var conflict = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadOwnerRunStatusAsync(
+                _actor, _root.ProjectId, _root.RunId, CancellationToken.None));
+        Assert.Equal("checkpoint_recovery_status_conflict", conflict.Code);
+        Assert.Equal(503, conflict.StatusCode);
+    }
+
+    [Fact]
+    public async Task SessionStatusReadCompletesDuringConcurrentAdmissionMutation()
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var admissionMutation = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET state_version = state_version + 1
+            WHERE project_id = @project AND run_id = @run
+            """, connection, transaction))
+        {
+            admissionMutation.Parameters.AddWithValue("project", _root.ProjectId);
+            admissionMutation.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(1, await admissionMutation.ExecuteNonQueryAsync());
+        }
+
+        var statusRead = Task.Run(() => _store.ReadSessionStatusAsync(
+            _actor, _root, CancellationToken.None));
+        Assert.Same(statusRead, await Task.WhenAny(statusRead, Task.Delay(TimeSpan.FromSeconds(5))));
+        var status = await statusRead;
+        Assert.Equal(_root, status.Identity);
+        Assert.Equal(_acceptedRoot.ExecutionFence, status.ExecutionFence);
+        await transaction.RollbackAsync();
+    }
+
+    [Fact]
+    public async Task SessionStatusKeepsFenceAndRecoveryFromOneSnapshotAcrossRecoveryCommit()
+    {
+        var initialFence = _acceptedRoot.ExecutionFence;
+        var nextFence = initialFence + 1;
+        var r1OperationId = Guid.NewGuid();
+        var r2OperationId = Guid.NewGuid();
+
+        async Task InsertRecoveryAsync(Guid operationId, string key, long fence)
+        {
+            var status = new CheckpointRecoveryStatus(
+                "ready", "snapshot-checkpoint-" + fence, 1, fence - 1, fence,
+                Guid.NewGuid(), 1)
+            {
+                CurrentStep = "ready",
+                RecoveryMaterialMode = "nativeCache",
+                RuntimeInstanceId = Guid.NewGuid(),
+                RegistrationRevision = 1
+            };
+            var result = JsonSerializer.Serialize(
+                new { checkpointRecovery = status }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var insert = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".coordination_execution_operations
+                    (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
+                     operation_kind, idempotency_key, request_hash, result)
+                VALUES (@project, @run, @operation, @session, @issuer, @subject,
+                        'recovery', @key, @hash, @result)
+                """, connection);
+            insert.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
+            insert.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
+            insert.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            insert.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _root.SessionId);
+            insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, _actor.Issuer);
+            insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, _actor.Subject);
+            insert.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, key);
+            insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('c', 64));
+            insert.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, result);
+            Assert.Equal(1, await insert.ExecuteNonQueryAsync());
+        }
+
+        await InsertRecoveryAsync(r1OperationId, "snapshot-recovery-r1", initialFence);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var tableLock = new NpgsqlCommand(
+            $"LOCK TABLE \"{_schema}\".coordination_execution_operations IN ACCESS EXCLUSIVE MODE",
+            connection,
+            transaction))
+            await tableLock.ExecuteNonQueryAsync();
+        await using var backendPid = new NpgsqlCommand("SELECT pg_backend_pid()", connection, transaction);
+        var blockerProcessId = (int)(await backendPid.ExecuteScalarAsync())!;
+
+        await using (var updateRun = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET execution_fence = @fence, state_version = state_version + 1
+            WHERE project_id = @project AND run_id = @run
+            """, connection, transaction))
+        {
+            updateRun.Parameters.AddWithValue("fence", nextFence);
+            updateRun.Parameters.AddWithValue("project", _root.ProjectId);
+            updateRun.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(1, await updateRun.ExecuteNonQueryAsync());
+        }
+        await using (var updateRoot = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_sessions SET execution_fence = @fence
+            WHERE project_id = @project AND run_id = @run AND session_id = @root
+            """, connection, transaction))
+        {
+            updateRoot.Parameters.AddWithValue("fence", nextFence);
+            updateRoot.Parameters.AddWithValue("project", _root.ProjectId);
+            updateRoot.Parameters.AddWithValue("run", _root.RunId);
+            updateRoot.Parameters.AddWithValue("root", _root.SessionId);
+            Assert.Equal(1, await updateRoot.ExecuteNonQueryAsync());
+        }
+        var r2Status = new CheckpointRecoveryStatus(
+            "ready", "snapshot-checkpoint-" + nextFence, 1, initialFence, nextFence,
+            Guid.NewGuid(), 1)
+        {
+            CurrentStep = "ready",
+            RecoveryMaterialMode = "nativeCache",
+            RuntimeInstanceId = Guid.NewGuid(),
+            RegistrationRevision = 1
+        };
+        var r2Result = JsonSerializer.Serialize(
+            new { checkpointRecovery = r2Status }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await using (var insertR2 = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_execution_operations
+                (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
+                 operation_kind, idempotency_key, request_hash, result)
+            VALUES (@project, @run, @operation, @session, @issuer, @subject,
+                    'recovery', @key, @hash, @result)
+            """, connection, transaction))
+        {
+            insertR2.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
+            insertR2.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
+            insertR2.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, r2OperationId);
+            insertR2.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _root.SessionId);
+            insertR2.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, _actor.Issuer);
+            insertR2.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, _actor.Subject);
+            insertR2.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, "snapshot-recovery-r2");
+            insertR2.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('d', 64));
+            insertR2.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, r2Result);
+            Assert.Equal(1, await insertR2.ExecuteNonQueryAsync());
+        }
+
+        var statusRead = Task.Run(() => _store.ReadSessionStatusAsync(
+            _actor, _root, CancellationToken.None));
+        await using (var observer = await _fixture.DataSource.OpenConnectionAsync())
+            await WaitUntilBlockedAsync(observer, blockerProcessId, "coordination_execution_operations");
+        await transaction.CommitAsync();
+
+        var snapshot = await statusRead;
+        Assert.Equal(initialFence, snapshot.ExecutionFence);
+        Assert.Equal(r1OperationId, snapshot.CheckpointRecovery!.OperationId);
+        var current = await _store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        Assert.Equal(nextFence, current.ExecutionFence);
+        Assert.Equal(r2OperationId, current.CheckpointRecovery!.OperationId);
     }
 
     private static CoordinationSessionForkRequest NewForkRequest(
