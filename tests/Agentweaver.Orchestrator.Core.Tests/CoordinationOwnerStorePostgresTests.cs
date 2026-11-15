@@ -2023,6 +2023,63 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(1, reader.GetInt64(1));
     }
 
+    [Fact]
+    public async Task StalePublicRecoveryRequestLeavesRecoveredOwnerTablesUnchanged()
+    {
+        var beforeFailure = await _store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        var active = await StartActiveTurnAsync(_root, beforeFailure.StateVersion);
+        var failed = await _store.ReportRunFailureAsync(
+            _actor,
+            _root,
+            new ReportRunFailureRequest(
+                _acceptedRoot.ExecutionFence,
+                beforeFailure.StateVersion,
+                active.StateVersion,
+                "stale-fence-fixture-failure",
+                OwnerRunFailureState.Indeterminate,
+                "runtime_lost",
+                "stale-fence-fixture"),
+            CancellationToken.None);
+        var recovered = await _store.RecoverRunExecutionAsync(
+            _actor,
+            _root.ProjectId,
+            _root.RunId,
+            new RecoverRunExecutionRequest(
+                failed.ExecutionFence,
+                failed.RunStateVersion,
+                "stale-fence-successful-recovery",
+                "operator_recovery",
+                "stale-fence-fixture"),
+            CancellationToken.None);
+        var current = await _store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        Assert.NotEqual(Guid.Empty, recovered.OperationId);
+        Assert.Equal(recovered.ExecutionFence, current.ExecutionFence);
+        Assert.Equal(recovered.RunStateVersion, current.StateVersion);
+        Assert.Equal("idle", current.ExecutionState);
+        Assert.True(current.ExecutionFence > recovered.PreviousExecutionFence);
+
+        var before = await RecoveryEvidenceAsync();
+        var staleRequest = new RecoverRunExecutionRequest(
+            recovered.PreviousExecutionFence,
+            current.StateVersion,
+            "stale-fence-negative-request",
+            "stale_recovery_fence_case",
+            "stale-fence-fixture");
+        Assert.Null(staleRequest.CheckpointRecovery);
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RecoverRunExecutionAsync(
+                _actor,
+                _root.ProjectId,
+                _root.RunId,
+                staleRequest,
+                CancellationToken.None));
+        Assert.Equal("execution_recovery_stale", error.Code);
+        Assert.Equal(409, error.StatusCode);
+        Assert.Equal(before, await RecoveryEvidenceAsync());
+    }
+
     private async Task RunWithGateContentionAsync(
         SessionIdentity root,
         string gateId,
