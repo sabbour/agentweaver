@@ -45,7 +45,6 @@ public sealed class ByokModelCommandsTests : IDisposable
         var files = plan["files"]!.AsArray().ToDictionary(
             file => file!["path"]!.GetValue<string>(), file => file!["content"]!.GetValue<string>());
 
-        // Load the planned files the same way AgentHost and Events bind them.
         var agentHostJson = files[ByokModelCommands.AgentHostFile].Split('\n')
             .SkipWhile(line => !line.StartsWith("  appsettings.json", StringComparison.Ordinal)).Skip(1)
             .Select(line => line.TrimEnd('\r')).Select(line => line.Length >= 4 ? line[4..] : line);
