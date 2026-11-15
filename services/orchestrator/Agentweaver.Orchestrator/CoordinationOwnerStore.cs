@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -1725,12 +1726,13 @@ internal sealed partial class CoordinationOwnerStore
     {
         ArgumentNullException.ThrowIfNull(actor);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, cancellationToken);
         var run = await ReadAcceptedRunAsync(
-            connection, transaction, identity.ProjectId, identity.RunId, forUpdate: true, cancellationToken)
+            connection, transaction, identity.ProjectId, identity.RunId, forUpdate: false, cancellationToken)
             .ConfigureAwait(false);
         var session = await ReadSessionAsync(
-            connection, transaction, identity, forUpdate: true, cancellationToken).ConfigureAwait(false);
+            connection, transaction, identity, forUpdate: false, cancellationToken).ConfigureAwait(false);
         RequireWriter(session, actor);
         if (session.ExecutionFence != run.Fence)
             throw new CoordinationException("execution_fence_stale", StatusCodes.Status409Conflict);
@@ -1795,7 +1797,8 @@ internal sealed partial class CoordinationOwnerStore
     {
         ArgumentNullException.ThrowIfNull(actor);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, cancellationToken);
         var run = await ReadAcceptedRunAsync(
             connection, transaction, projectId, runId, forUpdate: false, cancellationToken)
             .ConfigureAwait(false);
@@ -1831,20 +1834,35 @@ internal sealed partial class CoordinationOwnerStore
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT result -> 'checkpointRecovery'
+            SELECT operation_id, result -> 'checkpointRecovery',
+                (result -> 'checkpointRecovery' ->> 'executionFence')::bigint
             FROM {_executionOperations}
             WHERE project_id = @project AND run_id = @run
                 AND operation_kind = 'recovery'
                 AND result ? 'checkpointRecovery'
-            ORDER BY created_at DESC
-            LIMIT 1
+            ORDER BY (result -> 'checkpointRecovery' ->> 'executionFence')::bigint DESC,
+                operation_id DESC
+            LIMIT 2
             """, connection, transaction);
         AddRunScope(command, projectId, runId);
-        var json = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return json is null or DBNull
-            ? null
-            : JsonSerializer.Deserialize<CheckpointRecoveryStatus>(
-                json is string value ? value : json.ToString()!, JsonOptions);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+
+        var operationId = reader.GetGuid(0);
+        var status = JsonSerializer.Deserialize<CheckpointRecoveryStatus>(reader.GetString(1), JsonOptions)
+            ?? throw new CoordinationException(
+                "checkpoint_recovery_status_unavailable", StatusCodes.Status503ServiceUnavailable);
+        if (status.OperationId is { } storedOperationId && storedOperationId != operationId)
+            throw new CoordinationException(
+                "checkpoint_recovery_status_conflict", StatusCodes.Status503ServiceUnavailable);
+        status = status with { OperationId = operationId };
+        var executionFence = reader.GetInt64(2);
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false) &&
+            reader.GetInt64(2) == executionFence)
+            throw new CoordinationException(
+                "checkpoint_recovery_status_conflict", StatusCodes.Status503ServiceUnavailable);
+        return status;
     }
 
     /// <summary>
@@ -3899,6 +3917,16 @@ internal sealed partial class CoordinationOwnerStore
         {
             replay = await ApplyCheckpointRecoverySupersessionOverlayAsync(
                 connection, transaction, replay, cancellationToken).ConfigureAwait(false);
+            if (replay.CheckpointRecovery is { } recovery)
+            {
+                if (recovery.OperationId is { } storedOperationId && storedOperationId != replay.OperationId)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_status_conflict", StatusCodes.Status503ServiceUnavailable);
+                replay = replay with
+                {
+                    CheckpointRecovery = recovery with { OperationId = replay.OperationId }
+                };
+            }
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return replay;
         }
@@ -4212,6 +4240,7 @@ internal sealed partial class CoordinationOwnerStore
                     checkpointRecovery.RuntimeInstanceId,
                     checkpointRecovery.RegistrationRevision)
                 {
+                    OperationId = operationId,
                     CurrentStep = childBoundary ? "child-recovery-unavailable" : "retirement",
                     BoundaryKind = childBoundary ? "childJoin" : null,
                     DispatchHeld = childBoundary ? true : null,
@@ -4898,7 +4927,11 @@ internal sealed partial class CoordinationOwnerStore
         stored = await ApplyCheckpointRecoverySupersessionOverlayAsync(
             connection, transaction, stored, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return stored.CheckpointRecovery!;
+        if (stored.CheckpointRecovery!.OperationId is { } storedOperationId &&
+            storedOperationId != operationId)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        return stored.CheckpointRecovery with { OperationId = operationId };
     }
 
     private async Task RequireNoPendingCheckpointRecoveryAsync(
@@ -5528,6 +5561,10 @@ internal sealed partial class CoordinationOwnerStore
         ChildCheckpointRecoveryManifest? completedUnjoinedManifest = null,
         AuthorizedRunSelection? selection = null)
     {
+        if (status.OperationId is { } statusOperationId && statusOperationId != operationId)
+            throw new CoordinationException(
+                "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
+        status = status with { OperationId = operationId };
         var imports = completedUnjoinedMaterials ??
             ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
                 .WithComparers(StringComparer.Ordinal);

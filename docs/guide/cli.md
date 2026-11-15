@@ -201,7 +201,10 @@ schema. The optional `checkpointRecovery` field supports Host recovery at a
 pending gate and admission of a saved child join. A `202` response means the
 operation is still pending. Retry it with the same idempotency key. For a
 pending gate, a `ready` response means the Host restored the saved boundary.
-The gate remains pending, and the run remains incomplete. For a child join,
+The gate remains pending, and the run remains incomplete. Read
+`checkpointRecovery.operationId` from normal run or root-session status to
+identify the selected durable recovery operation. The owner selects it; the
+caller cannot select a different operation through a status request. For a child join,
 the owner keeps `dispatchHeld` set while it restores saved, unsent children.
 It registers the root and all required children before it starts any bootstrap.
 The final owner transaction imports a completed-but-unjoined result only when

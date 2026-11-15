@@ -32,6 +32,7 @@
     "docs/guide/testing.md",
     "docs/guide/api-acceptance-migration.md",
     "docs/guide/numeric-runtime-observation-acceptance.md",
+    "docs/guide/checkpoint-recovery-observation-acceptance.md",
     "docs/guide/gateway.md",
     "docs/guide/identity-scopes.md",
     "docs/guide/notifications.md",
@@ -125,6 +126,7 @@
       ],
       "required": [
         "docs/guide/api-acceptance-migration.md",
+        "docs/guide/checkpoint-recovery-observation-acceptance.md",
         "docs/guide/testing.md",
         "docs/guide/cli.md"
       ]
@@ -206,6 +208,8 @@
         "docs/architecture/design/services-and-release.md",
         "docs/architecture/events-sessions.md",
         "docs/reference/contracts.md",
+        "docs/reference/api.md",
+        "docs/guide/cli.md",
         "docs/guide/testing.md",
         "docs/guide/environment-sandbox-testing.md",
         "docs/diagrams/src/flagship/v1-sessions-journal.json",

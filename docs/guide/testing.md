@@ -251,6 +251,21 @@ SDK and owner responses. Neither test proves a native AKS journey.
 
 ## Test checkpoint recovery
 
+Use the
+[pending-gate recovery observation case](./checkpoint-recovery-observation-acceptance.md)
+to compare a retained before-capture with normal status after recovery. Its
+before and after modes use finite native CLI reads. They do not invoke
+recovery, answer a gate, or prove committed recovery-event delivery.
+
+Run its local regression tests from the repository root:
+
+```powershell
+node --test scripts\acceptance\api\tests\checkpoint-recovery-observation.test.mjs
+```
+
+The owner-store status tests use PostgreSQL and run in hosted CI. Local checks
+can build those tests, but cannot run them without Docker/PostgreSQL.
+
 Run the recovery boundary and progress tests from the repository root:
 
 ```powershell
