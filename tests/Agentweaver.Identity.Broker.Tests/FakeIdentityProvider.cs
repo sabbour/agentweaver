@@ -14,13 +14,12 @@ using Microsoft.IdentityModel.Tokens;
 namespace Agentweaver.Identity.Broker.Tests;
 
 /// <summary>
-/// A real, in-process OpenID Connect authorization server used as the broker's external
-/// federation provider in tests, backed by <see cref="TestServer"/> — not a hand-waved stub.
-/// It auto-approves every authorization request (there is no human in a test) but otherwise
-/// performs a real code exchange and signs real JWT id_tokens with a real RSA key, so the
-/// broker's own OIDC middleware (not test code) is what validates issuer, signature, audience,
-/// and expiry. Each test controls exactly one axis of malice via <see cref="IdTokenTampering"/>
-/// to prove the broker's real-middleware validation fails closed.
+/// A real, in-process OpenID Connect authorization server for Broker tests, hosted by
+/// <see cref="TestServer"/>. It approves requests by default and can return an authorization error.
+/// It exchanges authorization codes and signs JWT ID tokens with RSA keys.
+/// The Broker's OIDC middleware validates issuer, signature, audience, and expiry.
+/// The <see cref="IdTokenTampering"/> enum lets tests select one token defect at a time.
+/// This exercises Broker middleware validation, not test-side token validation.
 /// </summary>
 public sealed class FakeIdentityProvider : IAsyncDisposable
 {
