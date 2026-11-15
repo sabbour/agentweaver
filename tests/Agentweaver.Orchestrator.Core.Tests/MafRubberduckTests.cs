@@ -176,6 +176,7 @@ public sealed class MafRubberduckTests
     private static (WorkPlanSnapshot Plan, MafExecutionCheckpoint State,
         RuntimeRegistration Owner, SessionIdentity Identity) CreateFixture()
     {
+        // Seed completed independent-review evidence because RubberDuck depends on that gate.
         var workflow = WorkflowTestData.Definition(
             WorkflowDefinitionOrigin.BuiltIn,
             WorkflowTestData.Open("implement", 0, []),
