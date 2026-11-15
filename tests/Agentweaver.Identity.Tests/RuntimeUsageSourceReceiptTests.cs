@@ -877,7 +877,7 @@ public sealed class RuntimeUsageSourceReceiptTests
         };
     }
 
-    /// <summary>Builds a test card from GitHub-published rates for the two configured Copilot models.</summary>
+    /// <summary>Builds a rate card for the selected test model, with an optional placeholder content hash.</summary>
     private static CostRateCard PublishedCard(string modelId, bool includeContentHash = true)
     {
         var tokenRates = modelId switch
@@ -1627,8 +1627,7 @@ public sealed class RuntimeUsageSourceReceiptTests
         // The empty GUID isn't a dispatch ID.
         Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(
             Reseal(receipt with { Usage = receipt.Usage with { A2AMessageId = Guid.Empty } })));
-        // Usage without a dispatch ID passes the source check, which lets Events record it as Unpriced,
-        // but it fails the dispatch-level check that pricing requires.
+        // Source-level provenance accepts a missing dispatch ID; the trusted-dispatch check rejects it.
         var uncorrelated = Reseal(receipt with { Usage = receipt.Usage with { A2AMessageId = null } });
         RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(uncorrelated);
         Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>

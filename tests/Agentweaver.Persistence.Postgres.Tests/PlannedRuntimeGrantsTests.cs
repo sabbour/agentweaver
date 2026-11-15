@@ -6,7 +6,7 @@ using Xunit;
 
 namespace Agentweaver.Persistence.Postgres.Tests;
 
-// Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
+// Pure tests of plan validation; no database is needed.
 public sealed class PlannedRuntimeGrantsTests
 {
     private const string ReviewedPlanSha256 = "1e209db35e95aeb8bc1b38169bbe49d4f47f8cd4b3dae31b693d1ceef4a0ae9c";
@@ -139,7 +139,7 @@ public sealed class PlannedRuntimeGrantsTests
     [Fact]
     public void RejectsACatalogThatAddsOrDropsAMigration()
     {
-        // A compiled migrator that omits reviewed 032 must stop before applying a different plan.
+        // The plan gate rejects a compiled migration catalog that omits reviewed version 032.
         int[] without032 = [.. CoreVersions.Where(version => version != 32)];
         var error = Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
             "orchestrator", "orchestrator", "agentweaver-id-orchestrator", ReviewedPlanSha256, without032));
@@ -154,8 +154,7 @@ public sealed class PlannedRuntimeGrantsTests
     [Fact]
     public void RejectsColumnScopedUpdatesForAMigrationJobService()
     {
-        // These Jobs never apply column-scoped UPDATE grants, so a plan that names them must not load
-        // as if they were granted. The changed plan is re-hashed so only this gate can reject it.
+        // Add a column-scoped UPDATE grant and re-hash so the plan gate is the rejection cause.
         var plan = System.Text.Json.Nodes.JsonNode.Parse(PlannedRuntimeGrants.ReadEmbeddedPlan())!;
         var orchestrator = plan["services"]!.AsArray()
             .Single(service => service!["service"]!.GetValue<string>() == "orchestrator")!;

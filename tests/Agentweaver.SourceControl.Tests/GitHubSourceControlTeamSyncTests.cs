@@ -59,7 +59,7 @@ public sealed partial class GitHubSourceControlAdapterTests
     [Fact]
     public async Task TeamSyncCommitWritesOnlySquadPathAndUpdatesBranchWithoutForce()
     {
-        // A successful commit creates immutable Git objects, then performs one non-forced ref update.
+        // Keep the branch unchanged until all Git objects exist; the non-forced update protects concurrent work.
         var original = Encoding.UTF8.GetBytes("old");
         var changed = Encoding.UTF8.GetBytes("new");
         var originalSha = GitBlobSha(original);
@@ -343,7 +343,7 @@ public sealed partial class GitHubSourceControlAdapterTests
     [Fact]
     public async Task TeamSyncRejectsTraversalAndSymlinksBeforeWriting()
     {
-        // Invalid paths and remote symlinks must never reach a GitHub write endpoint.
+        // Reject traversal before a write request and reject symlinks in returned trees.
         var calls = 0;
         var adapter = CreateAdapter(new StubHandler((request, _) =>
         {

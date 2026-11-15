@@ -31,6 +31,7 @@ public sealed partial class GitWorkspaceManagerTests
             var waiting = manager.AcquireWorkspaceRevisionLeaseAsync(
                 runId, workspaceId, cancellation.Token);
 
+            // Give the competing call time to queue behind the held lease before checking it is pending.
             await Task.Delay(75);
             Assert.False(waiting.IsCompleted);
             await held.DisposeAsync();
@@ -168,6 +169,7 @@ public sealed partial class GitWorkspaceManagerTests
                 manager.PrepareBuildTestSeedAsync(changed, fixture.Seed.Bytes, CancellationToken.None));
             Assert.Equal(GitWorkspaceFailureCode.PathConflict, exception.Code);
             var lockPath = Directory.GetFiles(preparationRoot, "*.lock").Single();
+            // Hold the on-disk lock to model a second preparation already in progress.
             using var held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
             exception = await Assert.ThrowsAsync<GitWorkspaceException>(() =>
                 manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None));

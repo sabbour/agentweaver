@@ -83,6 +83,7 @@ try
             new { action_id = "allowed", messages = new[] { new { role = "user", content = "timeout" } } },
             cancellationToken: watchdog.Token);
         stopwatch.Stop();
+        // The marker proves the slow OPA script started before the result is treated as a timeout.
         Require(File.Exists(startedMarkerPath), "OPA timeout script did not start.");
         Require(stopwatch.Elapsed < TimeSpan.FromSeconds(30), "OPA timeout exceeded the probe watchdog.");
         Require(timedOut.Verdict.Decision == Decision.Deny, "OPA timeout did not deny.");

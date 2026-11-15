@@ -100,7 +100,7 @@ public sealed class GitHubAppInstallationTokenIssuerTests
         bool writeRequested,
         string expectedPermission)
     {
-        // Both read and commit credentials must exclude issue and pull-request scopes.
+        // The read and write variants each request only the contents permission.
         var handler = new StubHandler(async (request, _) =>
         {
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
@@ -129,7 +129,7 @@ public sealed class GitHubAppInstallationTokenIssuerTests
     [InlineData("\"issues\":\"write\",")]
     public async Task TeamSyncMintRejectsPermissionsOutsideContents(string extraPermission)
     {
-        // Treat any unexpected GitHub grant as an unusable, non-retryable token response.
+        // Treat any unexpected GitHub grant as an unusable, uncertain token result.
         var handler = new StubHandler((_, _) => Task.FromResult(JsonResponse(
             "{\"token\":\"team-sync-token\",\"expires_at\":\"2026-10-08T09:47:00Z\",\"permissions\":{" +
             "\"contents\":\"write\"," + extraPermission + "\"metadata\":\"read\"}}")));

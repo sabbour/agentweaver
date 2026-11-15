@@ -7,7 +7,6 @@ using Xunit;
 
 namespace Agentweaver.Providers.Tests;
 
-/// <summary>Tests the platform component catalog, report builder, readiness probe, and owner reporting.</summary>
 public sealed class PlatformComponentReportTests
 {
     private static readonly Version Adapter = new(1, 2, 0);

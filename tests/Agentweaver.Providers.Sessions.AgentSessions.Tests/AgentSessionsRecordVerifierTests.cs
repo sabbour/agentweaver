@@ -113,7 +113,7 @@ public sealed class AgentSessionsRecordVerifierTests
         Assert.NotEmpty(start.ExecutionStart.HarnessVersion);
         Assert.Contains(parent.Records.Select(Decode), ev => ev.Kind == EventKind.EventEnd);
 
-        // Producer context stays outside the hashed records.
+        // Producer metadata is preserved, but only records carry hashed data.
         Assert.Equal("agentweaver", child.Producer?.System);
         Assert.Equal("fixture-child-run", child.Producer?.References?["runId"]);
     }
@@ -326,7 +326,7 @@ public sealed class AgentSessionsRecordVerifierTests
     [Fact]
     public void TailTruncationVerifiesWithoutAnExternalAnchor()
     {
-        // The chain is unkeyed: a consistently truncated export verifies. Only a separately held head detects it.
+        // The export supplies its own head, so a consistent truncation still passes without an external anchor.
         var parent = Load("parent.json");
         var truncated = parent.Records.Take(5).ToList();
         var result = AgentSessionsRecordVerifier.Verify(parent with
@@ -368,6 +368,7 @@ public sealed class AgentSessionsRecordVerifierTests
 
     private static byte[] Encode(Action<CodedOutputStream> write)
     {
+        // Raw field writes let tests construct protobuf wire forms the generated model API cannot express.
         using var stream = new MemoryStream();
         using var output = new CodedOutputStream(stream);
         write(output);
