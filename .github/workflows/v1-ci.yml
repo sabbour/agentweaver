@@ -2,6 +2,7 @@ name: v1 foundation CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches: [v1, sabbour-v1-opentelemetry-core]
   push:
     branches: [v1]

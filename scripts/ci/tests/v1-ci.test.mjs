@@ -2,11 +2,29 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
+import { parse } from 'yaml';
 import { classify } from '../v1-changes.mjs';
 import { brokerShardCount, environmentP1RequiredMethods, loadBrokerWeights, measureWeights, nativeAcsRequiredMethods, partitionMethods, testMatrix, verifyRequiredMethods, verifyTrx } from '../v1-test-plan.mjs';
 import { suites } from '../../coverage/dotnet.mjs';
 
 const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
+
+test('v1 required workflows retain their PR triggers and job gates', () => {
+  const foundation = parse(workflow);
+  const docs = parse(readFileSync(new URL('../../../.github/workflows/v1-docs-ci.yml', import.meta.url), 'utf8'));
+  const types = ['opened', 'synchronize', 'reopened', 'edited'];
+
+  assert.deepEqual(foundation.on.pull_request, { types, branches: ['v1', 'sabbour-v1-opentelemetry-core'] });
+  assert.deepEqual(docs.on.pull_request, { types, branches: ['v1'] });
+  assert.deepEqual(foundation.on.push, { branches: ['v1'] });
+  assert.deepEqual(docs.on.push, { branches: ['v1'] });
+  assert.equal(foundation.on.workflow_dispatch, null);
+  assert.deepEqual(foundation.on.workflow_call, { inputs: { collect_coverage: { type: 'boolean', default: false } } });
+  assert.deepEqual(foundation.jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package']);
+  assert.equal(foundation.jobs.foundation.if, '${{ always() }}');
+  assert.ok(docs.jobs.docs);
+  assert.equal(Object.hasOwn(docs.jobs.docs, 'if'), false);
+});
 
 test('metadata-only and unrelated workflows skip expensive validation; unknown inputs fail safe', () => {
   assert.deepEqual(classify(['docs/guide/testing.md', 'README.md']), { dotnet: false, web: false, node: false, images: false, cli: false });
