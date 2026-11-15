@@ -1,6 +1,6 @@
 namespace Agentweaver.Cli.Tests;
 
-// Tests that set or depend on process-wide AGENTWEAVER_* variables must not run beside each other or other tests.
+// Keep CLI tests that change process-wide AGENTWEAVER_* variables out of parallel runs.
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class CliEnvironmentCollection
 {

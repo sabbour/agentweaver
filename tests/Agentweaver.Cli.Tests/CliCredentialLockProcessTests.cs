@@ -56,6 +56,7 @@ public sealed class CliCredentialLockProcessTests
             await Task.WhenAll(
                 WaitForFileAsync(Path.Combine(directory, firstId + ".ready"), first),
                 WaitForFileAsync(Path.Combine(directory, secondId + ".ready"), second));
+            // The child that gets the lock waits until the release file exists, so the parent can check that only one child entered.
             await WaitForFileAsync(Path.Combine(directory, firstId + ".entered"), first,
                 Path.Combine(directory, secondId + ".entered"));
             await Task.Delay(300);
@@ -131,6 +132,7 @@ public sealed class CliCredentialLockProcessTests
         var process = StartInFlightRefreshProbe(directory, account);
         try
         {
+            // The child writes this marker when it starts reading the token response body; the read then blocks, so the parent kills the child during the read.
             await WaitForFileAsync(Path.Combine(directory, "refresh-body-reading"), process);
             process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
