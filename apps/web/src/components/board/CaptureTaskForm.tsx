@@ -39,12 +39,9 @@ export interface CaptureTaskFormProps {
   disabled?: boolean;
 }
 
-// Capture a task into Backlog (FR-001/002). Empty/whitespace titles are rejected
-// client-side; the server is the backstop. On success, refetch the board.
 /**
- * Renders a form for capturing a new task and submits it through the board/task API.
- * Local state holds the draft and submit feedback; props identify the project and report success
- * or dismissal to the parent.
+ * Renders a project task-capture form.
+ * It trims the title, submits through the optional handler or board API, and awaits `onCaptured` after success.
  */
 export function CaptureTaskForm({ projectId, onCaptured, capture, disabled = false }: CaptureTaskFormProps) {
   const styles = useStyles();

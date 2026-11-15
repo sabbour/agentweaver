@@ -17,10 +17,7 @@ import {
   Stethoscope24Regular,
 } from '@fluentui/react-icons';
 import type { ReactElement } from 'react';
-// Web app shell information architecture (locked IA, 2026-06-22).
-// Project-scoped sections: WORK / SQUAD / OPERATIONS / SYSTEM. Above them sit
-// global destinations: Overview ("Now"), the v1 Chief of Staff shortcut, the
-// Projects gallery, and the user-wide Sessions hub.
+// Global destinations appear above the project-scoped navigation sections.
 export interface NavItemDef {
   // Stable key used as the NavItem value and for active-state matching.
   key: string;
@@ -53,10 +50,7 @@ export interface NavSectionDef {
   anchorBottom?: boolean;
 }
 
-// Global (project-independent) destinations rendered above the project sections.
-// Chief of Staff is a v1-only shortcut to a section of Overview; Overview is the
-// live "Now" page, Projects is the gallery, and Sessions is the cross-project hub.
-// A chat opened at /assistant also highlights Sessions.
+// The Sessions entry also matches the `/assistant` route.
 /** Route definitions for navigation entries that are not scoped to a project. */
 export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'overview', label: 'Overview', icon: <Home24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
@@ -72,7 +66,7 @@ export const NEW_SESSION_NAV_KEY = 'new-session';
 /** Active key that highlights the Settings menu button. */
 export const SETTINGS_NAV_KEY = 'settings';
 
-// WORK / SQUAD / OPERATIONS / SYSTEM.
+// Project-scoped sections: WORK, SQUAD, OPERATIONS, OBSERVABILITY, and SYSTEM.
 /** Section and item definitions used to construct the main navigation. */
 export const NAV_SECTIONS: NavSectionDef[] = [
   {
@@ -80,7 +74,6 @@ export const NAV_SECTIONS: NavSectionDef[] = [
     items: [
       // Dashboard is the project home (index) route at /projects/:projectId.
       { key: 'dashboard', label: 'Dashboard', icon: <DataPie24Regular />, segment: '' },
-      // Board moved to its own /board segment.
       { key: 'board', label: 'Board', icon: <Board24Regular />, segment: 'board' },
       // Flow — live "what each agent is working on" view.
       { key: 'flow', label: 'Flow', icon: <People24Regular />, segment: 'flow' },
@@ -103,7 +96,6 @@ export const NAV_SECTIONS: NavSectionDef[] = [
   {
     heading: 'OPERATIONS',
     items: [
-      // Workflows (formerly the "Flow" item) — route unchanged at /workflows.
       { key: 'workflows', label: 'Workflows', icon: <Flowchart24Regular />, segment: 'workflows' },
     ],
   },
@@ -129,15 +121,14 @@ export const NAV_SECTIONS: NavSectionDef[] = [
 export const NAV_ITEMS: NavItemDef[] = NAV_SECTIONS.flatMap((s) => s.items);
 
 // Build the absolute route for a project-scoped nav item.
-/** Builds the route path for an item, substituting the selected project when required. */
+/** Builds a project-scoped route for one navigation item. */
 export function navItemPath(projectId: string, item: NavItemDef): string {
   const base = `/projects/${projectId}`;
   return item.segment ? `${base}/${item.segment}` : base;
 }
 
-// Resolve which nav item is active for the given pathname. Returns the matching
-// item key. When no project is in scope, global keys are resolved first;
-// project-scoped routes fall back to the Dashboard home.
+// Resolve global routes when no project is selected. Within a project, unknown routes use Dashboard;
+// paths outside that project use Overview.
 /** Resolves which configured navigation item matches the current pathname. */
 export function resolveActiveKey(pathname: string, projectId: string | undefined): string {
   if (!projectId) {

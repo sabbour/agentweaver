@@ -96,13 +96,10 @@ export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHub
     };
   }, []);
 
-  // Load the project's Copilot connection only while the menu is open and a
-  // project is selected. The `active` flag drops a late result after the menu
-  // closes or the project changes, so an old project's status is never shown.
+  // Load only while the menu is open and a project is selected.
+  // Cleanup ignores late results after close, project change, or unmount.
   useEffect(() => {
     let active = true;
-    // Load the project connection only while the menu is open and a project is selected.
-    // `active` turns false on close, project change, or unmount, so a late response is ignored.
     if (!open || !projectId) return () => { active = false; };
 
     // Defer the state updates out of the effect body so React does not see a synchronous

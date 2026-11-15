@@ -54,8 +54,8 @@ export function clearRequiredSetupPending(): void {
 }
 
 /**
- * Stores a safe same-site return path for after required setup.
- * Rejects external-looking paths and the platform-settings route; storage failures are ignored.
+ * Stores a path that starts with one slash, except `//` paths and the exact `/platform-settings` route.
+ * Storage failures are ignored.
  */
 export function rememberRequiredSetupReturnTo(returnTo: string): void {
   if (!returnTo.startsWith('/') || returnTo.startsWith('//')) return;
@@ -68,7 +68,7 @@ export function rememberRequiredSetupReturnTo(returnTo: string): void {
   }
 }
 
-/** Returns a stored same-site return path, or `null` when absent, invalid, or unreadable. */
+/** Returns a stored path with one leading slash, or null when absent, rejected, or unreadable. */
 export function getRequiredSetupReturnTo(): string | null {
   try {
     const returnTo = sessionStorage.getItem(REQUIRED_SETUP_RETURN_TO_KEY);

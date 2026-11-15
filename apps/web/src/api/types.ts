@@ -276,20 +276,15 @@ export interface RunDetail {
   // the backend surfaces it on the run detail.
   workflow_id?: string | null;
   workflow_name?: string | null;
-  // Short human-readable explanation of why the coordinator selected the workflow it planned this
-  // run against (#167). Optional — null for runs with no captured reasoning.
+  // Short explanation for the selected workflow; null when the server captured no reason.
   workflow_selection_reason?: string | null;
-  // Feature 008 Phase 3 — orchestration lifecycle string surfaced on a coordinator
-  // run (dispatching | awaiting_assembly | assembling | in_review | complete | failed).
-  // Added by the backend concurrently; treat as optional and degrade gracefully.
+  // Optional lifecycle state for coordinator orchestration runs.
   coordinator_status?: string | null;
   coordinator_status_reason?: string | null;
   // Backend contract: true for coordinator runs that can accept steering/messages.
   // Includes awaiting_review while the assembly human-review gate is parked.
   coordinator_steerable?: boolean;
-  // Per-run options (live-toggleable). auto_approve_tools auto-grants non-dangerous tool HITLs;
-  // autopilot (coordinator only) auto-answers clarifying questions via the coordinator model.
-  // Both cascade to a coordinator's children. Optional — default false when absent.
+  // Optional controls for automatic tool approval and coordinator autopilot.
   auto_approve_tools?: boolean;
   autopilot?: boolean;
 }
@@ -779,8 +774,7 @@ export interface WorkflowRunDto {
   model_id?: string;
   total_tokens?: number | null;
   total_nano_aiu?: number | null;
-  // Feature 008 Phase 3 — orchestration lifecycle for a coordinator run. Optional;
-  // present only once the backend adds it, so render the bare status as a fallback.
+  // Optional lifecycle state for coordinator orchestration runs.
   coordinator_status?: string;
   coordinator_status_reason?: string;
   archived_at?: string | null;
@@ -949,10 +943,7 @@ export interface RunDto {
   workflow_run_id?: string;
 }
 
-// --- Feature 008 Phase 3 — Dynamic graph descriptor ---
-// GET /api/runs/{id}/graph returns a descriptor that replaces hardcoded executor
-// lists. The client renders it as-is; node ids equal the logical
-// step keys already used by the status reducer (agent/rai/review/merge/scribe/assemble-ready).
+// Dynamic graph descriptor returned by the coordinator API.
 
 /** Distinguishes a coordinator node backed by a run from a planned task node. */
 export type GraphNodeKind = 'live' | 'planned';
@@ -961,8 +952,7 @@ export type GraphEdgeCardinality = 'direct' | 'fanout' | 'fanin';
 /** Graph projection tailored to a full run, child run, or coordinator view. */
 export type GraphVariant = 'full' | 'child' | 'coordinator';
 
-// node_type — self-declared structural category separate from `role` and `kind`.
-// Drives card shape and size in the generic renderer.
+// Node shape category, separate from its role and graph kind.
 export type GraphNodeType = 'agent' | 'action' | 'gate' | 'terminal' | 'subtask';
 
 /** Node in the coordinator graph, with either live-run or planned-task identity. */
@@ -1439,7 +1429,7 @@ export interface TopologyNode {
   childRunId?: string;
   workflowBranchNodeId?: string;
   workflowBranchOrdinal?: number;
-  /** Pod name for the execution environment of this specific node (spec-018). Null today — all agents share the API pod; set per-node after distributed phases. */
+  /** Pod name for this node's execution environment, when available. */
   executionPodName?: string | null;
 }
 
@@ -1565,10 +1555,8 @@ export interface SteerCoordinatorResponse {
   status: 'queued' | 'applied' | string;
 }
 
-// ─── Assistant (operator) run endpoints (#346) ──────────────────────────────
-// MCP-driven operator assistant types (#346).
-// POST /api/assistant/runs + POST /api/assistant/runs/{id}/messages.
-// The transcript streams over the existing run-stream endpoints (GET /api/runs/{id}/stream + /events).
+// Assistant run request and response contracts.
+// Transcripts use the existing run-event stream.
 export interface CreateAssistantRunRequest {
   /** Optional opening message used for the conversation title and, by default, the first turn. */
   message?: string;
@@ -1617,8 +1605,6 @@ export interface SendAssistantMessageResponse {
   effective_model_provider?: EffectiveModelProvider | null;
 }
 
-// GET /api/assistant/runs?limit=50 (#346 follow-up — Tank's caller-scoped list endpoint).
-// Newest-first; `title` is the first user message truncated to 80 chars by the backend.
 export interface AssistantRunSummary {
   run_id: string;
   status: string;
@@ -2317,9 +2303,7 @@ export interface WorkflowGraphDto {
   edges: WorkflowGraphEdgeDto[];
 }
 
-// ── Metrics: Dashboard + Overview (web IA reorg) ─────────────────────────────
-// Mirrors Agentweaver.Api.Metrics DTOs (snake_case over the wire). All values are
-// sourced from live stores; cost and per-workflow health are intentionally absent.
+// Dashboard and overview metric DTOs.
 
 // Per-project dashboard headline counters.
 export interface DashboardSummaryDto {
@@ -2551,15 +2535,10 @@ export interface OverviewDto {
   recent_activity: RecentActivityDto[];
 }
 
-// ── #247 — Global notification center ─────────────────────────────────────────
-// GET /api/notifications — the signed-in user's pending Human Review and Tool Approval requests
-// across every project/run they own. The server emits the exact CTA path to open, including
-// assistant-session approvals that must resume /assistant rather than a project orchestration page.
+// Global notifications include an action path supplied by the API.
 export interface NotificationDto {
   id: string;
-  // Widened with `(string & {})` so the union still autocompletes known values while
-  // remaining forward-compatible with any new/unrecognized type the backend may emit
-  // (see #319 — the UI must never break on an unknown value).
+  // Known values remain in editor suggestions while allowing new server values.
   type: 'human_review' | 'tool_approval' | (string & {});
   run_id: string;
   project_id: string | null;
@@ -2577,7 +2556,7 @@ export interface NotificationsResponseDto {
 }
 
 // ── Feature 014 — Spec-to-Backlog decomposition ───────────────────────────────
-// GET /api/projects/{id}/workspace/files — scoped file tree for the project sandbox.
+// Project-scoped file tree used by spec decomposition.
 export interface WorkspaceFileNode {
   name: string;
   relative_path: string;
@@ -2618,7 +2597,7 @@ export interface PortForwardSessionDto {
   keepaliveUrl?: string | null;
 }
 
-// ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
+// Per-project skill catalog and agent assignments.
 /** Source that supplied a skill to the project. */
 export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync' | 'marketplace';
 /** Availability of a skill's stored definition and resources. */

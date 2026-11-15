@@ -246,11 +246,7 @@ function isBlueprint(value: unknown): value is Blueprint {
     && typeof value.sandbox_profile === 'string';
 }
 
-/** Builds pagination query parameters without overriding server defaults when options are absent. */
-// Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `page`/`page_size`
-// query params, 1-based page, page_size default 25 / max 100 (server-clamped). Builds the query
-// string for a paged list request; returns '' when no paging options were supplied so callers that
-// haven't opted into paging get the server's own default page/page_size.
+/** Builds pagination query parameters; absent options leave the server's defaults in place. */
 function pagingQuery(options?: PagedRequestOptions): string {
   const query = new URLSearchParams();
   if (options?.page != null) query.set('page', String(options.page));
@@ -1208,7 +1204,7 @@ export class AgentweaverApiClient {
     );
   }
 
-  // Skills (issues #51/#56) — per-project catalog + agent assignments.
+  // Project skill catalog and agent assignments.
   /** Lists and validates the project's skill catalog. */
   listSkills(projectId: string): Promise<import('./types').SkillDto[]> {
     return this.request<unknown>('GET', `/projects/${encodeURIComponent(projectId)}/skills`).then(parseSkillList);
@@ -1444,8 +1440,6 @@ export class AgentweaverApiClient {
     );
   }
 
-  // Coordinator steering (Feature 008 Phase 2). The /steer endpoint is added by the
-  // backend team in parallel; this codes against the agreed contract.
   /** Sends an owner steering instruction to an active coordinator run. */
   steerCoordinator(coordinatorRunId: string, req: SteerCoordinatorRequest, providerKey?: string): Promise<SteerCoordinatorResponse> {
     return this.request<SteerCoordinatorResponse>(
@@ -1457,29 +1451,6 @@ export class AgentweaverApiClient {
     );
   }
 
-  // ─── Assistant (operator) run (#346) ──────────────────────────────────────
-  // MCP-driven operator assistant (#346). The first composer submit creates the run;
-  // subsequent submits append messages. The transcript streams over the EXISTING
-  // run-stream endpoints (getRunEvents + useRunStream), so no new stream client is
-  // needed here.
-  //
-  // POST /api/assistant/runs → 201 {run_id, status:"in_progress", message?, tools_invoked?}
-  //   429 with error:"operator_run_limit" when the per-user concurrency cap is reached.
-  //   Accepts optional `resume_from_run_id`: auto-seeds the new run's model context with a
-  //   prior run's full history so a genuinely-gone conversation (see below — NOT plain idle
-  //   timeout, which now wakes the same run transparently) can continue seamlessly in a new
-  //   run (the old run itself is never modified/revived). 404 run_not_found / 403
-  //   forbidden if that referenced run doesn't exist or isn't owned by the caller.
-  // POST /api/assistant/runs/{id}/messages → 200 {run_id, role:"assistant", message, status, tools_invoked}
-  //   Idle timeout is no longer terminal: an idle run goes dormant server-side and wakes as
-  //   the SAME run (same run id, full history intact) on the next message, with a normal
-  //   200 — no error, nothing for the frontend to special-case.
-  //   404 with error:"run_not_found" for a foreign/nonexistent run id, or a legacy pre-fix
-  //   zombie row from before idle runs stopped being terminal.
-  //   409 with error:"operator_run_closed" when the run's durable event stream is already
-  //   sealed with a genuinely terminal run.completed event (a real end-of-conversation, not
-  //   mere inactivity) — the server refuses to revive a sealed run instead of silently
-  //   flipping it back to in-progress.
   /** Creates a durable operator-assistant run; the server enforces ownership and concurrency limits. */
   createAssistantRun(req: CreateAssistantRunRequest, providerKey?: string): Promise<CreateAssistantRunResponse> {
     return this.request<CreateAssistantRunResponse>(
@@ -1506,17 +1477,12 @@ export class AgentweaverApiClient {
     );
   }
 
-  // GET /api/assistant/runs?limit=50 — the caller's own assistant conversations,
-  // newest-first (Tank's #346 follow-up endpoint). Powers the Sessions page.
   /** Lists the current user's assistant conversations, newest first. */
   listAssistantRuns(limit = 50): Promise<ListAssistantRunsResponse> {
     return this.request<ListAssistantRunsResponse>(
       'GET', `/assistant/runs?limit=${encodeURIComponent(String(limit))}`);
   }
 
-  // Coordinator topology REST seed (Feature 008 Phase 2). The SSE topology snapshot is
-  // emitted before the stream connects, so the page seeds nodes/edges from these on mount,
-  // then applies SSE deltas on top (snapshot-race fix). 404 when the run has no plan yet.
   /** Reads a coordinator's work plan as the initial topology snapshot. */
   getWorkPlan(coordinatorRunId: string): Promise<WorkPlanResponse> {
     return this.request<WorkPlanResponse>('GET', `/runs/${encodeURIComponent(coordinatorRunId)}/work-plan`);
@@ -1527,10 +1493,7 @@ export class AgentweaverApiClient {
     return this.request<CoordinatorChildResponse[]>('GET', `/runs/${encodeURIComponent(coordinatorRunId)}/children`);
   }
 
-  // Collective human review over the assembled integration output (Feature 008 Phase 3).
-  // Posts the backend AssemblyReviewRequest shape ({ approved, request_changes, feedback }) derived
-  // from a friendlier decision verb. approve -> merge/scribe/complete; request_changes -> re-dispatch;
-  // decline -> assembly_declined.
+  // Map the UI decision to the boolean flags required by the endpoint.
   /** Converts the owner decision into the assembly review contract and submits it. */
   reviewAssembly(coordinatorRunId: string, decision: AssemblyReviewDecision, comment?: string, providerKey?: string): Promise<void> {
     const body: AssemblyReviewRequest = {
@@ -1608,8 +1571,6 @@ export class AgentweaverApiClient {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/shell-denials`, { command_hash: commandHash });
   }
 
-  // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller
-  // can fall back to the hardcoded executor graph until the backend endpoint ships.
   /** Reads the run graph, returning null on 404 so callers can use their fallback graph. */
   async getRunGraph(runId: string): Promise<GraphDescriptor | null> {
     try {
@@ -1620,8 +1581,6 @@ export class AgentweaverApiClient {
     }
   }
 
-  // Backlog & Workflow Kanban board (Feature 009). Thin pass-throughs to the
-  // snake_case backlog endpoints — all ordering/claim/validation logic lives server-side.
   /** Reads the project board and optionally includes terminal task history. */
   getBoard(projectId: string, includeTerminalHistory = false): Promise<BoardDto> {
     const query = includeTerminalHistory ? '?include_terminal_history=true' : '';
@@ -1729,10 +1688,7 @@ export class AgentweaverApiClient {
     return (text ? JSON.parse(text) : null) as ReviewResponse;
   }
 
-  // Lightweight API-reachability probe for the shell status dot (Spec 011, FR-013).
-  // Prefers a dedicated /api/health endpoint when present; falls back to the root
-  // ("Agentweaver API") endpoint. Returns true when the API responds, false on a
-  // network error. Reachability is "the API answered", so any HTTP response counts.
+  // A 404 or request failure falls back to the root; each probe is healthy only for an OK response.
   async checkHealth(): Promise<boolean> {
     const headers = this.authHeaders();
     try {
@@ -1749,13 +1705,11 @@ export class AgentweaverApiClient {
     }
   }
 
-  // System diagnostics snapshot (Spec 011, FR-016).
   getDiagnostics(): Promise<SystemDiagnosticsDto> {
     return this.request<SystemDiagnosticsDto>('GET', '/diagnostics');
   }
 
-  // Detailed system diagnostics (spec-018 capacity visibility). Returns null when the
-  // endpoint is not yet deployed (404), so callers can fall back gracefully.
+  // Treat HTTP 404 as an unavailable optional endpoint; rethrow other request errors.
   async getDetailedDiagnostics(): Promise<DetailedSystemDiagnosticsDto | null> {
     try {
       return await this.request<DetailedSystemDiagnosticsDto>('GET', '/diagnostics/detailed');
@@ -1765,8 +1719,7 @@ export class AgentweaverApiClient {
     }
   }
 
-  // Cluster diagnostics (spec-018, GET /api/diagnostics/cluster). Returns null when
-  // the endpoint is not yet deployed (404) so ClusterPage can show a placeholder.
+  // Treat HTTP 404 as an unavailable optional endpoint; rethrow other request errors.
   async getClusterDiagnostics(): Promise<ClusterDiagnosticsDto | null> {
     try {
       return await this.request<ClusterDiagnosticsDto>('GET', '/diagnostics/cluster');
@@ -1792,20 +1745,14 @@ export class AgentweaverApiClient {
     }
   }
 
-  // Project-scoped diagnostics (Spec 011, FR-016). Owner-authorized.
   getProjectDiagnostics(projectId: string): Promise<import('./types').ProjectDiagnosticsDto> {
     return this.request<import('./types').ProjectDiagnosticsDto>('GET', `/projects/${encodeURIComponent(projectId)}/diagnostics`);
   }
 
-  // Heartbeat service status (Spec 011, FR-017).
   getHeartbeatStatus(): Promise<HeartbeatStatusDto> {
     return this.request<HeartbeatStatusDto>('GET', '/diagnostics/heartbeat');
   }
 
-  // Workflow definitions (Spec 010, FR-039). Project-scoped, owner-authorized.
-  // List discovered workflows + validation status; Sync re-reads .agentweaver/
-  // workflows/ from disk and returns the refreshed set; Get returns one full
-  // definition.
   getWorkflowGrammar(): Promise<import('./types').WorkflowGrammar> {
     return this.request<import('./types').WorkflowGrammar>('GET', '/workflows/grammar');
   }
@@ -1825,14 +1772,12 @@ export class AgentweaverApiClient {
     return this.request<import('./types').WorkflowDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`);
   }
 
-  // Set the project's default workflow (Feature 010, FR-041). A null id clears back
-  // to the built-in default. Returns the refreshed list (with default_workflow_id).
+  // Pass null to clear the project default.
   setDefaultWorkflow(projectId: string, workflowId: string | null): Promise<import('./types').WorkflowListResponse> {
     return this.request<import('./types').WorkflowListResponse>('PUT', `/projects/${encodeURIComponent(projectId)}/workflows/default`, { workflow_id: workflowId });
   }
 
-  // Set a per-task workflow override (Feature 010, FR-042). A null id clears it.
-  // Throws ApiError 409 (body { error: 'task_claimed' }) if the task is already claimed.
+  // Pass null to clear the task-level workflow override.
   setTaskWorkflowOverride(projectId: string, taskId: string, workflowId: string | null): Promise<import('./types').WorkflowOverrideResponse> {
     return this.request<import('./types').WorkflowOverrideResponse>('PUT', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/workflow-override`, { workflow_id: workflowId });
   }
@@ -1955,15 +1900,6 @@ export class AgentweaverApiClient {
     );
   }
 
-  // Review policies (Spec 010, FR-025/027/033). Project-scoped, owner-authorized.
-  // List discovered policies + active selection; Get returns one policy's steps;
-  // SetActive selects the active policy by name (null clears to the built-in
-  // default); Sync re-reads .agentweaver/review-policies/ and returns the set.
-  // Metrics (web IA reorg) — per-project dashboard + global "Now" overview.
-  // `includeMetrics=false` (#208 point 4): skip the server's own internal metrics fan-out when the
-  // caller (e.g. DashboardPage) already fetches the full metrics DTO separately via `getProjectMetrics`.
-  // `signal` (#208 point 5): forwarded to `fetch` so callers can abort in-flight requests on
-  // unmount/range-change instead of leaving them to complete and update unmounted state.
   /** Reads project dashboard data, optionally skipping its metrics fan-out and supporting abort. */
   getProjectDashboard(projectId: string, options?: { includeMetrics?: boolean; signal?: AbortSignal }): Promise<import('./types').ProjectDashboardDto> {
     const query = new URLSearchParams();
@@ -1996,7 +1932,6 @@ export class AgentweaverApiClient {
     return this.request<import('./types').OverviewDto>('GET', '/overview', undefined, signal);
   }
 
-  // #247 — global notification center: pending Human Review (+ future Tool Approval) requests.
   /** Reads pending notifications for the signed-in user. */
   getNotifications(signal?: AbortSignal): Promise<import('./types').NotificationsResponseDto> {
     return this.request<import('./types').NotificationsResponseDto>('GET', '/notifications', undefined, signal);
@@ -2007,7 +1942,6 @@ export class AgentweaverApiClient {
     return this.request<void>('POST', `/notifications/${encodeURIComponent(notificationId)}/dismiss`);
   }
 
-  // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).
   /** Lists workspace paths available for spec decomposition. */
   getWorkspaceFiles(projectId: string): Promise<WorkspaceFileNode[]> {
     return this.request<WorkspaceFileNode[]>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/files`);
@@ -2052,7 +1986,6 @@ export class AgentweaverApiClient {
     return Array.isArray(response) ? response : (response.sessions ?? []);
   }
 
-  // System runtime info — kubernetes context and pod name (Spec 006).
   /** Reads the current Kubernetes context and runtime pod information. */
   getSystemRuntime(): Promise<RuntimeInfo> {
     return this.request<RuntimeInfo>('GET', '/system/runtime');
