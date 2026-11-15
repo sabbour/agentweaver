@@ -155,7 +155,6 @@ public sealed partial class ProjectsConfigPostgresTests
                     services.AddScoped<ProjectAuthorizationOwner>();
                     services.AddScoped<ProjectsConfigService>();
                     services.AddScoped<ProjectSetupAuthorityAuditService>();
-                    // The route client uses the test handler so endpoint tests never contact a live owner.
                     services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
                             client.BaseAddress = new Uri("https://knowledge.test/"))
                         .ConfigurePrimaryHttpMessageHandler(

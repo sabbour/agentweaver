@@ -406,7 +406,6 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         Assert.All(definitions, item => Assert.Equal(JsonValueKind.Null, item.GetProperty("sourceId").ValueKind));
         var awesome = definitions[1];
 
-        // Add the suggested marketplace with the values the definition returned, as the UI does.
         using var created = await SendAsync(owner, HttpMethod.Post, sourcesPath, new
         {
             name = awesome.GetProperty("name").GetString(),
