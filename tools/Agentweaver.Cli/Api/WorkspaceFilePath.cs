@@ -30,6 +30,7 @@ internal static class WorkspaceFilePath
             HasUnsafeSegment(path))
             return false;
         var candidate = path;
+        // Check each decoded form before the owner routes the catch-all path.
         for (var depth = 0; depth < MaximumDecodeDepth; depth++)
         {
             var decoded = Uri.UnescapeDataString(candidate);

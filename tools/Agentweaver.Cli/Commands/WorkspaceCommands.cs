@@ -62,6 +62,7 @@ internal static partial class WorkspaceCommands
         var (connectionId, repositoryFullName) = await ReadProjectRepositoryAsync(
             gateway, request.ProjectId, ct).ConfigureAwait(false);
 
+        // Bind the selection to the project's current GitHub App connection and repository.
         var intent = NativeRepoAppSelectionIntent.ForProjectRepository(
             actorId, tenantId, request.ProjectId, connectionId, repositoryFullName, request.OperationId);
         await error.WriteLineAsync(
@@ -86,6 +87,7 @@ internal static partial class WorkspaceCommands
         GatewayResponse response;
         JsonObject selectionSummary;
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Keep the single-use code in this request only; clear the header before disposing the selection.
         using (selection)
         {
             try
@@ -332,6 +334,7 @@ internal static partial class WorkspaceCommands
         if (bytes.Length != size)
             throw UnexpectedResponse();
 
+        // Git blob IDs include the byte length in a header before the file content.
         var header = Encoding.ASCII.GetBytes(string.Create(CultureInfo.InvariantCulture, $"blob {bytes.Length}\0"));
         var blob = new byte[header.Length + bytes.Length];
         header.CopyTo(blob, 0);
@@ -368,6 +371,7 @@ internal static partial class WorkspaceCommands
         }
         catch
         {
+            // Close the stream before deleting the partial output file.
             await stream.DisposeAsync().ConfigureAwait(false);
             File.Delete(path);
             throw;
