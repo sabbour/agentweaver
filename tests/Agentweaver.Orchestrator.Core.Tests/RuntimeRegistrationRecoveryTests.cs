@@ -243,6 +243,7 @@ public sealed class RuntimeRegistrationRecoveryTests
         var continuation = new RuntimeRunStartContinuation(
             null!, null!, null!, null!, null!, null!);
 
+        // A blocked result must return before the continuation needs any of its dependencies.
         var replay = await continuation.ContinueCheckpointRecoveryAsync(
             null!, null!, null!, result, null!, null!, null!, null!, null!, null!, CancellationToken.None);
 

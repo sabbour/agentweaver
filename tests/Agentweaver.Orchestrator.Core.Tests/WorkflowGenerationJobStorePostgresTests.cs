@@ -60,6 +60,7 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
         await using (var blocker = await fixture.DataSource.OpenConnectionAsync())
         await using (var transaction = await blocker.BeginTransactionAsync())
         {
+            // Hold the run lock until multiple retries are blocked, then release them to race on one key.
             await using (var lockRun = new NpgsqlCommand($"""
                 SELECT 1 FROM "{_schema}".accepted_runs
                 WHERE project_id = @project AND run_id = @run FOR UPDATE
@@ -281,6 +282,7 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
+        // Commit cancellation while holding the run row so a waiting acceptance must recheck the run.
         await using (var cancel = new NpgsqlCommand($"""
             SELECT 1 FROM "{_schema}".accepted_runs
             WHERE project_id = @project AND run_id = @run FOR UPDATE;

@@ -185,6 +185,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 current.StateVersion,
                 CreateCaptureDocument(identity, pin, "capture waiting on a decision"),
                 CancellationToken.None);
+            // Hold the run and session rows while admission waits; advance the decision version before releasing them.
             await using var blocker = await fixture.DataSource.OpenConnectionAsync();
             await using var blockerTransaction = await blocker.BeginTransactionAsync();
             await using var blockerPidCommand = new NpgsqlCommand(
@@ -639,6 +640,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
         var otherRepository = new SourceControlRepositoryIdentity("octo", "other");
         Task<SourceControlRepositoryMergeLock> waitingForSameRepository;
 
+        // A different repository must proceed while the second request for this repository waits.
         await using (await store.AcquireRepositoryMergeLockAsync(repository, CancellationToken.None))
         {
             await using var independent =

@@ -129,7 +129,7 @@ public sealed class SpendBudgetAdmissionTests
     [Fact]
     public void HardProjectBudgetWithoutACoveringPeriodBlocksWhileSoftOnlyDoesNot()
     {
-        // Now is in September, but the only hard project budget covers October, so admission throws.
+        // The hard project budget has no period for September, so selection fails before admission.
         var hard = new SpendBudgetAdmissionContext([],
             new("project-1", 1, 1, [Copilot("oct", SpendBudgetScopes.Project, null, 100m, 1m) with { Period = October }]));
         Assert.Equal(SpendBudgetAdmissionMath.PeriodUncovered,
@@ -150,7 +150,7 @@ public sealed class SpendBudgetAdmissionTests
         var budget = Copilot("run", SpendBudgetScopes.Run, null, 10m, 4m);
         var nothingAccounted = new UsageSpendTotal(0m, 0, 0);
 
-        // Without exposure, both of these would be admitted while Events still reports 0.
+        // With Events still reporting 0, the first two dispatches fit when outstanding reserves are included.
         // First dispatch: 0 + 0 + 4 = 4 <= 10. Second: 0 + 4 + 4 = 8 <= 10.
         Assert.True(SpendBudgetAdmissionMath.Decide(budget, nothingAccounted, 0m).Admitted);
         Assert.True(SpendBudgetAdmissionMath.Decide(budget, nothingAccounted, 4m).Admitted);
@@ -245,7 +245,7 @@ public sealed class SpendBudgetAdmissionTests
         var first = Guid.NewGuid();
         var second = Guid.NewGuid();
         var scope = new UsageDispatchAccountingScope("tenant", "project", "run", SdkMeterSources.CopilotNanoAiu, "AIC", null);
-        // Builds an Events witness that lists exactly the given receipt IDs.
+        // Builds an Events witness with the given source-receipt IDs and fresh usage-event IDs.
         UsageDispatchAccountingWitness Witness(params Guid[] receipts)
         {
             var items = receipts.Select(id => new UsageDispatchSourceReceiptIdentity(id, Guid.NewGuid(), new string('a', 64)))

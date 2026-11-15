@@ -209,6 +209,7 @@ public sealed class RuntimeReplacementComparisonTests(
         Assert.Equal("runtime_replacement_comparison_conflict", absentError.Code);
 
         var revokedDuringProjectsWait = 0;
+        // Revoke before the Projects selection response returns to test the later registration recheck.
         using var projectsHttp = new HttpClient(new ProjectsHandler(
             _selection,
             async () =>

@@ -344,6 +344,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         var execution = ExecuteAsync(reader.Current);
         try
         {
+            // Cancel after the Host admits the turn but before the test releases its lost response.
             await _host.TurnAdmitted.Task.WaitAsync(deadline.Token);
             await _sessions.CancelProjectRunAsync(
                 _actor, cancellation, "cancel-lost-response", new CancelProjectRunRequest(),
@@ -463,8 +464,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             var quiesced = await _jobs.ReadAsync(Project, jobId, deadline.Token);
             Assert.Equal("cancelled", quiesced!.Status);
             Assert.Equal("quiesced", quiesced.ExecutionPhase);
-            // The seeded intent has no placement link, so cleanup cannot prove that it owns the fixture
-            // registration. It refuses to complete while that registration is active.
+            // No placement link ties the intent to this fixture registration, so revoke it before retrying cleanup.
             await _registrationOwner.RevokeAfterPlacementReleaseAsync(_registration, deadline.Token);
             await cleanup.ContinueAsync(cleanupWork, deadline.Token);
             Assert.Equal(1, environmentCalls);

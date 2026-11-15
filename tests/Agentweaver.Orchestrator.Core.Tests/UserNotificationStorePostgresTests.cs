@@ -123,7 +123,7 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
         await SeedPromotionAsync("project-a", "run-e", "plan-e", now.AddMinutes(-2), tasks: 1, tenant: "tenant-b");
         await SeedOrdinaryTaskAsync("project-a", "captured");
         var page = await _store.ListAsync(UserNotificationContractTests.Authority(), 100, null, default);
-        // Count tasks, not notices, and keep gate-only fields empty for this source.
+        // One notice carries two unarchived tasks; promotion notices leave gate fields empty.
         Assert.Equal(1, page.Count);
         var item = Assert.Single(page.Items);
         Assert.Equal(UserNotificationSources.BacklogPromoted, item.Source);
