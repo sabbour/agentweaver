@@ -88,6 +88,8 @@ internal static partial class GatewayOpenApi
             ["updatePlatformRuntimeDefaults"] = C("UpdatePlatformRuntimeDefaultsRequest", "VersionedPlatformRuntimeDefaults", "200"),
             ["getPlatformComponents"] = C(null, "PlatformComponentReport", "200"),
             ["readPlatformNativeAcsPolicy"] = C(null, "NativeAcsPolicyReadResult", "200"),
+            ["listPlatformNativeAcsPolicyRevisions"] = C(null, "NativeAcsPolicyRevisionPage", "200"),
+            ["readPlatformNativeAcsPolicyRevision"] = C(null, "NativeAcsPolicyRevisionReadResult", "200"),
             ["validatePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
             ["writePlatformNativeAcsPolicy"] = C(
@@ -292,7 +294,15 @@ internal static partial class GatewayOpenApi
                 name = match.Groups["name"].Value,
                 @in = "path",
                 required = true,
-                schema = PathParameterSchema(match.Groups["constraint"].Value),
+                schema = route.OperationId == "readPlatformNativeAcsPolicyRevision" &&
+                    match.Groups["name"].Value == "revision"
+                    ? new
+                    {
+                        type = "string",
+                        pattern = "^[1-9][0-9]{0,18}$",
+                        description = "Canonical positive decimal Int64 value.",
+                    }
+                    : PathParameterSchema(match.Groups["constraint"].Value),
             })
             .Concat(route.QueryParameters.Select(name => (object)new
             {
@@ -392,6 +402,7 @@ internal static partial class GatewayOpenApi
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
                         "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
+                        "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
                         "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
@@ -414,7 +425,8 @@ internal static partial class GatewayOpenApi
                                             "readProjectTeamSync" or "commitProjectTeamSync" =>
                                                 "Private repository team-sync responses are not cacheable.",
                                             "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
-                                            "writePlatformNativeAcsPolicy" =>
+                                            "writePlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
+                                            "readPlatformNativeAcsPolicyRevision" =>
                                                 "Platform Policy responses are not cacheable.",
                                             _ => "Runtime evidence responses are not cacheable.",
                                         },
@@ -648,13 +660,19 @@ else if (route.OperationId is
             responses["503"] = ProblemResponse(
                 "Project role assignment is not enabled because the runtime database grants are not applied.");
         }
-        else if (route.OperationId is "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
+        else if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
+            "readPlatformNativeAcsPolicyRevision" or "validatePlatformNativeAcsPolicy" or
             "writePlatformNativeAcsPolicy")
         {
-            responses["400"] = ProblemResponse("The request includes query parameters or an invalid policy request.");
+            responses["400"] = ProblemResponse("The request includes an undeclared query value or invalid policy selector.");
             responses["403"] = ProblemResponse("The caller lacks current Platform administrator authority.");
-            if (route.OperationId == "readPlatformNativeAcsPolicy")
+            if (route.OperationId is "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision")
                 responses["404"] = ProblemResponse("No Platform Policy revision exists.");
+            if (route.OperationId is "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision")
+            {
+                responses["500"] = ProblemResponse("The retained Platform Policy source failed its integrity check.");
+                responses["503"] = ProblemResponse("The Platform Policy source is unavailable.");
+            }
             if (route.HasJsonBody)
             {
                 responses["413"] = ProblemResponse(
@@ -813,6 +831,23 @@ else if (route.OperationId is
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId == "listPlatformNativeAcsPolicyRevisions")
+        {
+            description +=
+                " Requires api.read, active membership, an unbound request, and current PlatformAdmin authority; " +
+                "projects.admin is not required. Returns newest-first metadata for the stable Platform Policy " +
+                "lineage. pageSize defaults to 20 and ranges from 1 to 100. The opaque cursor binds the page size, " +
+                "Policy ID, and starting revision. Each page rechecks current authority. The response is no-store; " +
+                "history hashes do not verify artifact bytes.";
+        }
+        else if (route.OperationId == "readPlatformNativeAcsPolicyRevision")
+        {
+            description +=
+                " Requires api.read, active membership, an unbound request, and current PlatformAdmin authority; " +
+                "projects.admin is not required. revision is a canonical positive decimal Int64. The owner returns " +
+                "the complete retained artifact only after checking its content hash, with the original creation " +
+                "time. The response is no-store. This source read does not validate or activate the policy.";
         }
         else if (route.OperationId is "readProjectMetrics" or "readProjectUsage")
         {
@@ -1104,6 +1139,15 @@ else if (route.OperationId is
         if (operationId == "listProjectCastingProposals" && name == "limit")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 50 };
 
+        if (operationId == "listPlatformNativeAcsPolicyRevisions")
+        {
+            return name switch
+            {
+                "pageSize" => new { type = "integer", minimum = 1, maximum = 100, @default = 20 },
+                "cursor" => new { type = "string", minLength = 1, maxLength = 2048 },
+                _ => new { type = "string" },
+            };
+        }
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
         if (operationId == "listUserNotifications" && name == "pageSize")
@@ -1930,6 +1974,19 @@ else if (route.OperationId is
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
             ("revision", Int()), ("contentSha256", Str()), ("artifact", Ref("NativeAcsArtifact")),
             ("updatedAt", Date())),
+        ["NativeAcsPolicyRevisionSummary"] = StrictObj(
+            ["revision", "contentSha256", "createdAt"],
+            ("revision", Int()), ("contentSha256", Str()), ("createdAt", Date())),
+        ["NativeAcsPolicyRevisionPage"] = StrictObj(
+            ["scopeType", "scopeId", "policyId", "snapshotRevision", "items", "nextCursor"],
+            ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", NullableStr()),
+            ("snapshotRevision", NullableInt()), ("items", Arr(Ref("NativeAcsPolicyRevisionSummary"))),
+            ("nextCursor", NullableStr())),
+        ["NativeAcsPolicyRevisionReadResult"] = StrictObj(
+            ["scopeType", "scopeId", "policyId", "revision", "contentSha256", "artifact", "createdAt"],
+            ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
+            ("revision", Int()), ("contentSha256", Str()), ("artifact", Ref("NativeAcsArtifact")),
+            ("createdAt", Date())),
         ["NativeAcsPolicyWriteReceipt"] = Obj(
             ["scopeType", "scopeId", "policyId", "revision", "contentSha256", "auditId", "outboxId", "replayed"],
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),

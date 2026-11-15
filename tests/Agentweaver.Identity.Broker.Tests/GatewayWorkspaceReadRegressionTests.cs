@@ -27,6 +27,8 @@ public sealed class GatewayWorkspaceReadRegressionTests
         var routes = new[]
         {
             ("GET", "/api/v1/policies/platform", "readPlatformNativeAcsPolicy"),
+            ("GET", "/api/v1/policies/platform/revisions", "listPlatformNativeAcsPolicyRevisions"),
+            ("GET", "/api/v1/policies/platform/revisions/{revision}", "readPlatformNativeAcsPolicyRevision"),
             ("POST", "/api/v1/policies/platform/validate", "validatePlatformNativeAcsPolicy"),
             ("PUT", "/api/v1/policies/platform", "writePlatformNativeAcsPolicy"),
         };
@@ -42,10 +44,138 @@ public sealed class GatewayWorkspaceReadRegressionTests
             Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
             Assert.Equal(5 * 1024 * 1024, route.MaximumResponseBytes);
             Assert.Equal(method != "GET", route.HasJsonBody);
+            Assert.True(route.ForwardRequestHeaders.IsDefaultOrEmpty);
             Assert.Equal(
                 method == "GET" ? null : 5 * 1024 * 1024,
                 route.MaximumRequestBodyBytes);
         }
+        Assert.Equal(
+            new[] { "pageSize", "cursor" },
+            Assert.Single(GatewayRouteCatalog.Routes, item =>
+                item.OperationId == "listPlatformNativeAcsPolicyRevisions").QueryParameters);
+        Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "readPlatformNativeAcsPolicyRevision").QueryParameters);
+    }
+
+    [Fact]
+    public async Task PlatformPolicyRevisionRoutesEnforceQueryAndHeaderForwarding()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var bearer = CreateBearer(signingKey);
+        var forwarded = new List<(
+            string Path,
+            string? Tenant,
+            bool Bearer,
+            bool Accept,
+            bool Idempotency,
+            bool IfMatch,
+            bool CallerHeader,
+            bool HasBody)>();
+        Task<HttpResponseMessage> RespondAsync(
+            GatewayOwner owner,
+            HttpRequestMessage request,
+            CancellationToken _)
+        {
+            Assert.Equal(GatewayOwner.Projects, owner);
+            request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenantValues);
+            forwarded.Add((
+                request.RequestUri!.PathAndQuery,
+                tenantValues?.SingleOrDefault(),
+                request.Headers.Authorization?.Scheme == "Bearer",
+                request.Headers.Accept.Any(value => value.MediaType == "application/json"),
+                request.Headers.Contains("Idempotency-Key"),
+                request.Headers.Contains("If-Match"),
+                request.Headers.Contains("X-Caller-Header"),
+                request.Content is not null));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            });
+        }
+
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new CallbackHttpMessageHandler((request, cancellationToken) =>
+                RespondAsync(GatewayOwner.Projects, request, cancellationToken)),
+            RespondAsync);
+
+        using (var history = CreateRequest(
+            bearer, "/api/v1/policies/platform/revisions?pageSize=7&cursor=opaque"))
+        {
+            history.Headers.Add("Idempotency-Key", "not-forwarded");
+            history.Headers.Add("If-Match", "\"not-forwarded\"");
+            history.Headers.Add("X-Caller-Header", "not-forwarded");
+            history.Headers.Remove("X-Agentweaver-Tenant");
+            history.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+            history.Content = new StringContent("ignored");
+            using var response = await gateway.Client.SendAsync(history);
+            Assert.True(
+                response.StatusCode == HttpStatusCode.OK,
+                await response.Content.ReadAsStringAsync());
+            Assert.True(response.Headers.CacheControl?.NoStore);
+        }
+
+        using (var exact = CreateRequest(bearer, "/api/v1/policies/platform/revisions/3"))
+        {
+            exact.Headers.Add("Idempotency-Key", "not-forwarded");
+            exact.Headers.Add("If-Match", "\"not-forwarded\"");
+            exact.Headers.Add("X-Caller-Header", "not-forwarded");
+            exact.Headers.Remove("X-Agentweaver-Tenant");
+            exact.Headers.Add("X-Agentweaver-Tenant", "tenant-b");
+            using var response = await gateway.Client.SendAsync(exact);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        using (var invalidHistory = CreateRequest(
+            bearer, "/api/v1/policies/platform/revisions?pageSize=7&unknown=value"))
+        using (var rejected = await gateway.Client.SendAsync(invalidHistory))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+            Assert.True(rejected.Headers.CacheControl?.NoStore);
+            using var body = JsonDocument.Parse(await rejected.Content.ReadAsStringAsync());
+            Assert.Equal(
+                "native_acs_policy_history_request_invalid",
+                body.RootElement.GetProperty("code").GetString());
+        }
+
+        using (var invalidExact = CreateRequest(
+            bearer, "/api/v1/policies/platform/revisions/3?pageSize=7"))
+        using (var rejected = await gateway.Client.SendAsync(invalidExact))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+            using var body = JsonDocument.Parse(await rejected.Content.ReadAsStringAsync());
+            Assert.Equal(
+                "native_acs_policy_revision_request_invalid",
+                body.RootElement.GetProperty("code").GetString());
+        }
+
+        using (var existing = CreateRequest(bearer, "/api/v1/policies/platform"))
+        {
+            existing.Headers.Add("Idempotency-Key", "existing-key");
+            existing.Headers.Add("If-Match", "\"4\"");
+            using var response = await gateway.Client.SendAsync(existing);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        Assert.Equal(3, forwarded.Count);
+        Assert.Equal(
+            "/api/policies/platform/revisions?pageSize=7&cursor=opaque",
+            forwarded[0].Path);
+        Assert.Equal("/api/policies/platform/revisions/3", forwarded[1].Path);
+        Assert.Equal("tenant-a", forwarded[0].Tenant);
+        Assert.Equal("tenant-b", forwarded[1].Tenant);
+        Assert.All(forwarded.Take(2), request =>
+        {
+            Assert.True(request.Bearer);
+            Assert.True(request.Accept);
+            Assert.False(request.Idempotency);
+            Assert.False(request.IfMatch);
+            Assert.False(request.CallerHeader);
+            Assert.False(request.HasBody);
+        });
+        Assert.True(forwarded[2].Idempotency);
+        Assert.True(forwarded[2].IfMatch);
     }
 
     [Fact]
@@ -94,6 +224,55 @@ public sealed class GatewayWorkspaceReadRegressionTests
                     parameter.GetProperty("in").GetString() == "header" &&
                     parameter.GetProperty("required").GetBoolean());
         }
+    }
+
+    [Fact]
+    public async Task PlatformPolicyHistoryPublishesTypedOpenApiContracts()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa),
+            () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call an owner."));
+
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+        var history = paths.GetProperty("/api/v1/policies/platform/revisions").GetProperty("get");
+        Assert.Equal(
+            "listPlatformNativeAcsPolicyRevisions",
+            history.GetProperty("operationId").GetString());
+        Assert.Equal(
+            "#/components/schemas/NativeAcsPolicyRevisionPage",
+            history.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var historyParameters = history.GetProperty("parameters").EnumerateArray().ToArray();
+        Assert.Contains(historyParameters, parameter =>
+            parameter.GetProperty("name").GetString() == "pageSize" &&
+            parameter.GetProperty("schema").GetProperty("minimum").GetInt32() == 1 &&
+            parameter.GetProperty("schema").GetProperty("maximum").GetInt32() == 100);
+        Assert.Contains(historyParameters, parameter =>
+            parameter.GetProperty("name").GetString() == "cursor" &&
+            parameter.GetProperty("schema").GetProperty("maxLength").GetInt32() == 2048);
+
+        var exact = paths.GetProperty("/api/v1/policies/platform/revisions/{revision}").GetProperty("get");
+        Assert.Equal(
+            "readPlatformNativeAcsPolicyRevision",
+            exact.GetProperty("operationId").GetString());
+        Assert.Equal(
+            "#/components/schemas/NativeAcsPolicyRevisionReadResult",
+            exact.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Contains(exact.GetProperty("parameters").EnumerateArray(), parameter =>
+            parameter.GetProperty("name").GetString() == "revision" &&
+            parameter.GetProperty("schema").GetProperty("pattern").GetString() == "^[1-9][0-9]{0,18}$");
+        Assert.DoesNotContain(history.GetProperty("responses").EnumerateObject(),
+            item => item.Name == "404");
+        Assert.True(GatewayRouteCatalog.Routes
+            .Where(route => route.OperationId is
+                "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision")
+            .All(route => route.ExcludeFromMcp));
     }
 
     [Fact]
@@ -332,6 +511,15 @@ public sealed class GatewayWorkspaceReadRegressionTests
             DateTime.UtcNow.AddMinutes(5),
             new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private sealed class CallbackHttpMessageHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            send(request, cancellationToken);
     }
 
     private sealed class WorkspaceProviderHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)

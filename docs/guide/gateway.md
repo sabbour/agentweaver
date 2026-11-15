@@ -561,10 +561,12 @@ endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
 3 MiB.
 
 The canonical Platform Policy validation and write routes accept request
-bodies up to 5 MiB. All three routes have a 5 MiB response limit. They forward
-the optional tenant selector, expose `Cache-Control`, and are not available
-as MCP tools. The owner performs policy authorization and validation. Route
-presence in source does not prove deployment or policy activation; see the
+bodies up to 5 MiB. All five Policy routes have a 5 MiB response limit. They
+forward the optional tenant selector, expose `Cache-Control`, and are not
+available as MCP tools. History accepts only `pageSize` and `cursor`; an exact
+revision accepts no query values. The Gateway rejects other query keys before
+owner dispatch and does not forward `Idempotency-Key` or `If-Match` for these
+two reads. The owner performs policy authorization and validation. See the
 [API reference](../reference/api.md#catalog-and-platform-routes).
 
 The Gateway does not expose journal object-content reads. It exposes

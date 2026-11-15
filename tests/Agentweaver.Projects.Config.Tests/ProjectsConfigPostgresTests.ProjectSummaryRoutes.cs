@@ -223,8 +223,14 @@ public sealed partial class ProjectsConfigPostgresTests
                 return Task.FromResult(AuthenticateResult.NoResult());
 
             var scope = Request.Headers["X-Test-Scope"].ToString();
-            var identity = new ClaimsIdentity(
-                [new Claim("sub", subject), new Claim("scope", scope)], Scheme.Name);
+            var claims = new List<Claim> { new("sub", subject), new("scope", scope) };
+            if (Request.Headers.TryGetValue("X-Test-Project", out var projectId))
+                claims.Add(new Claim("project_id", projectId.ToString()));
+            if (Request.Headers.TryGetValue("X-Test-Run", out var runId))
+                claims.Add(new Claim("run_id", runId.ToString()));
+            if (Request.Headers.TryGetValue("X-Test-Purpose", out var purpose))
+                claims.Add(new Claim("purpose", purpose.ToString()));
+            var identity = new ClaimsIdentity(claims, Scheme.Name);
             return Task.FromResult(AuthenticateResult.Success(
                 new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name)));
         }

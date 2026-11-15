@@ -644,15 +644,18 @@ revision, actor, and timestamp. They never include access tokens or secrets.
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | GET | `/api/platform/components` | `api.read`, unbound, current TenantAdmin for the caller's tenant or PlatformAdmin | Read active platform components and readiness for every area. See [Platform components](../guide/platform-components.md). | `/api/v1/platform/components` |
 | GET | `/api/policies/platform/` | `api.read`, active membership, unbound PlatformAdmin | Read the hash-verified current canonical ACS Policy artifact. Does not require `projects.admin`. | `/api/v1/policies/platform` |
+| GET | `/api/policies/platform/revisions?pageSize={n}&cursor={token}` | `api.read`, active membership, unbound PlatformAdmin | Read bounded, newest-first metadata. `pageSize` defaults to 20 and ranges from 1 to 100. Each page rechecks authority. | `/api/v1/policies/platform/revisions` |
+| GET | `/api/policies/platform/revisions/{revision}` | `api.read`, active membership, unbound PlatformAdmin | Read the exact revision's complete artifact and original creation time after a hash check. `revision` must be a canonical positive decimal Int64. | `/api/v1/policies/platform/revisions/{revision}` |
 | POST | `/api/policies/platform/validate` | `api.read`, active membership, unbound PlatformAdmin | Validate a complete artifact without changing policy state. | `/api/v1/policies/platform/validate` |
 | PUT | `/api/policies/platform/` | `api.read`, `projects.admin`, active membership, unbound PlatformAdmin with `WritePlatformRuntimeDefaults` | Append a validated complete artifact at its expected revision. Off by default: returns `503` unless head writes are enabled. A retry of a saved request returns its receipt. | `/api/v1/policies/platform` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
 
 The Policy API uses the one existing head for the Platform scope and keeps its
 Policy ID. Only an empty scope gets the server-owned `canonical` Policy ID.
-Each artifact contains every policy domain. Reads and writes use the canonical
-source only;
-the API does not activate ACS or change the v4 Policy path. See the
+Each artifact contains every policy domain. History returns revision, stored
+hash, and creation time without loading artifact files. Exact-revision reads
+return all retained bytes only after a hash check. The API does not activate
+ACS or change the v4 Policy path. See the
 [native ACS contract](./contracts.md#native-acs-artifact-and-evaluation-contract)
 for request limits, validation outcomes, and write behavior.
 

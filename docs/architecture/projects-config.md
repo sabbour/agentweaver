@@ -135,11 +135,13 @@ reads only existing Memory provider selections through the private
 Knowledge-selection route. This does not grant access to general run selections
 or create a provider pin.
 
-The Platform Policy API reads, validates, and writes the canonical ACS source.
-It stores one complete artifact and one head for the Platform scope. The
-artifact contains all policy domains, but this API does not activate it or
-change the v4 Policy path. See the [Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
-for authorization, limits, and error behavior.
+The Platform Policy API reads current and retained ACS source, validates
+artifacts, and has a disabled-by-default head-write route. It stores one
+complete artifact and one head for the Platform scope. History returns bounded
+revision metadata; exact reads return all retained bytes after a hash check.
+These reads do not activate policy or change the v4 Policy path. See the
+[Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
+for authorization, paging, limits, and errors.
 
 The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 
@@ -181,6 +183,8 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
 | `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
 | `GET /api/policies/platform` | Read the current canonical ACS Policy artifact as a complete, hash-verified source. Requires `api.read` and a current unbound PlatformAdmin; it does not require `projects.admin`. |
+| `GET /api/policies/platform/revisions?pageSize={n}&cursor={token}` | Read newest-first revision metadata for the stable Platform lineage. `pageSize` defaults to 20 and ranges from 1 to 100. Every page rechecks current PlatformAdmin authority. |
+| `GET /api/policies/platform/revisions/{revision}` | Read the complete, hash-verified artifact and its original creation time from the exact retained revision. The revision is a canonical positive decimal Int64. |
 | `POST /api/policies/platform/validate` | Validate a complete Platform Policy artifact without changing stored policy state. |
 | `PUT /api/policies/platform` | Append a validated complete Platform Policy artifact at an expected revision. Requires `api.read`, `projects.admin`, and a current unbound PlatformAdmin. Off by default: returns `503` unless head writes are enabled. A retry of a saved request returns its receipt. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |

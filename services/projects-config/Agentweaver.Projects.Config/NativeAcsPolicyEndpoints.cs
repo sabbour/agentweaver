@@ -1,9 +1,12 @@
 using System.Collections.Immutable;
+using System.Net.Sockets;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Policy.Acs;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Caching.Memory;
+using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
@@ -66,6 +69,91 @@ public static class NativeAcsPolicyEndpoints
                 return ToProblem(exception);
             }
         }).WithName("ReadPlatformNativeAcsPolicy");
+
+        platform.MapGet("/revisions", async (
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Keys.Any(key => key is not ("pageSize" or "cursor")) ||
+                    context.Request.Query["pageSize"].Count > 1 ||
+                    context.Request.Query["cursor"].Count > 1)
+                    throw NativeAcsPolicyStore.HistoryRequestInvalid();
+                EnsureNoReadBody(context, NativeAcsPolicyStore.HistoryRequestInvalid);
+                var pageSize = NativeAcsPolicyStore.ParseHistoryPageSize(
+                    context.Request.Query.TryGetValue("pageSize", out var sizes) ? sizes[0] : null);
+                var cursor = context.Request.Query.TryGetValue("cursor", out var cursors)
+                    ? cursors[0] ?? string.Empty
+                    : null;
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
+                    .ConfigureAwait(false);
+                var page = await policyStore.ReadHistoryAsync(pageSize, cursor, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(page);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable();
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable();
+            }
+        }).WithName("ListPlatformNativeAcsPolicyRevisions");
+
+        platform.MapGet("/revisions/{revision}", async (
+            string revision,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw NativeAcsPolicyStore.RevisionRequestInvalid();
+                EnsureNoReadBody(context, NativeAcsPolicyStore.RevisionRequestInvalid);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
+                    .ConfigureAwait(false);
+                var result = await policyStore.ReadRevisionAsync(
+                    NativeAcsPolicyStore.ParseRevision(revision),
+                    cancellationToken).ConfigureAwait(false);
+                await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
+                    .ConfigureAwait(false);
+                return result is null
+                    ? Results.NotFound(new { code = "native_acs_policy_not_found" })
+                    : Results.Ok(result);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable();
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable();
+            }
+        }).WithName("ReadPlatformNativeAcsPolicyRevision");
 
         platform.MapPost("/validate", async (
             NativeAcsPolicyValidationRequest request,
@@ -245,6 +333,15 @@ public static class NativeAcsPolicyEndpoints
                 "Policy routes do not accept query parameters.");
     }
 
+    private static void EnsureNoReadBody(HttpContext context, Func<ProjectConfigException> invalidRequest)
+    {
+        if (context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true ||
+            context.Request.ContentLength is > 0 ||
+            context.Request.ContentType is not null ||
+            context.Request.Headers.ContainsKey("Transfer-Encoding"))
+            throw invalidRequest();
+    }
+
     private static Task<ProjectAuthorizationContext> ResolveCallerAsync(
         HttpContext context,
         ProjectAuthorizationOwner authorizationOwner,
@@ -260,6 +357,23 @@ public static class NativeAcsPolicyEndpoints
             detail: exception.Message,
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    private static IResult SourceUnavailable() =>
+        Results.Problem(
+            title: "native_acs_policy_source_unavailable",
+            detail: "The Platform Policy source is unavailable.",
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            extensions: new Dictionary<string, object?>
+            {
+                ["code"] = "native_acs_policy_source_unavailable",
+            });
+
+    internal static bool IsSourceUnavailable(InvalidOperationException exception) =>
+        exception.InnerException is NpgsqlException providerException && IsSourceUnavailable(providerException);
+
+    private static bool IsSourceUnavailable(NpgsqlException exception) =>
+        exception.InnerException is IOException or SocketException or TimeoutException ||
+        exception is PostgresException { SqlState: "57P01" or "57P02" or "57P03" };
 }
 
 internal sealed class NativeAcsPolicyRequestGate(

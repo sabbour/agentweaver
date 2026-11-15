@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.Projects.Config;
@@ -36,6 +37,28 @@ public sealed record NativeAcsPolicyReadResult(
     string ContentSha256,
     NativeAcsArtifact Artifact,
     DateTimeOffset UpdatedAt);
+
+public sealed record NativeAcsPolicyRevisionSummary(
+    long Revision,
+    string ContentSha256,
+    DateTimeOffset CreatedAt);
+
+public sealed record NativeAcsPolicyRevisionPage(
+    NativeAcsPolicyScopeType ScopeType,
+    string ScopeId,
+    string? PolicyId,
+    long? SnapshotRevision,
+    ImmutableArray<NativeAcsPolicyRevisionSummary> Items,
+    string? NextCursor);
+
+public sealed record NativeAcsPolicyRevisionReadResult(
+    NativeAcsPolicyScopeType ScopeType,
+    string ScopeId,
+    string PolicyId,
+    long Revision,
+    string ContentSha256,
+    NativeAcsArtifact Artifact,
+    DateTimeOffset CreatedAt);
 
 public sealed class NativeAcsPolicyHeadRecord
 {
