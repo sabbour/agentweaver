@@ -7,7 +7,7 @@ import type {
   ProjectConfigurationChoices,
 } from './contracts';
 
-/** A complete configuration with unrelated exact references to preserve during edits. */
+/** Populate unrelated settings to catch accidental changes during model edits. */
 function fixture(): ProjectConfiguration {
   return {
     modelSelection: { reference: 'model-default', reasoningEffort: 'high', credentialReference: { id: 'credential', version: '3' } },
@@ -57,8 +57,6 @@ describe('readable project configuration', () => {
     render(<ConfigurationFields configuration={configuration} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText('Code writing model'), { target: { value: 'writer' } });
     const changed = onChange.mock.calls[0][0] as ProjectConfiguration;
-    // The new task is appended; the existing planning override and every other
-    // part of the configuration must be unchanged.
     expect(changed.modelTaskOverrides).toEqual([
       ...configuration.modelTaskOverrides!, { taskKind: 'codeWriting', selection: { reference: 'writer', reasoningEffort: null } },
     ]);

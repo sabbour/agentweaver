@@ -243,7 +243,7 @@ describe('CastTeamPage', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('tab', { name: 'Template' }));
     fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));
-    // Reserved roles are never offered.
+    // The reserved Coordinator role is not offered.
     expect(screen.queryByRole('checkbox', { name: 'Coordinator' })).toBeNull();
     expect((screen.getByRole('checkbox', { name: 'Tester' }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));

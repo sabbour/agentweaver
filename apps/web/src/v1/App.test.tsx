@@ -485,7 +485,6 @@ function knowledgeTransferBundle(projectId = 'p1', agentId = 'a1') {
 
 describe('v1 web project scoping', () => {
   beforeEach(() => {
-    // Most tests here cover GitHub connections, which now live in their own Settings section.
     window.history.replaceState({}, '', '/projects/p1/settings?section=connections');
     window.name = '';
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
@@ -508,7 +507,7 @@ describe('v1 web project scoping', () => {
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
     mocks.listProjectRuns.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, items: [], nextCursor: null }));
-    // Metrics and usage start empty so the dashboard and overview render without data.
+    // Metrics show zero activity and usage lists no models, so the pages start without activity data.
     mocks.getProjectMetrics.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', activeRuns: 0, blockedRuns: 0, runsInRange: 0, runsTotal: 0, completedRuns: 0, succeededRuns: 0, sessionHistoryRecordsTotal: null, series: [] }));
     mocks.getProjectUsage.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', usageByModel: [], usageByAgent: [] }));
     mocks.createProject.mockReset();
@@ -654,7 +653,6 @@ describe('v1 web project scoping', () => {
       ...projectConfiguration('p9', 17),
       configuration: storedConfiguration,
     });
-    // Saving the configuration returns the next revision, like the real owner.
     mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) =>
       projectConfiguration(projectId, revision + 1));
     window.history.replaceState({}, '', '/projects');
@@ -663,7 +661,6 @@ describe('v1 web project scoping', () => {
     fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
     fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
     const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
-    // Text that is not owner/name or a GitHub URL keeps the submit button disabled.
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'not a repo' } });
     expect(submit.disabled).toBe(true);
     // A full clone URL is accepted and reduced to owner and name.
@@ -1027,7 +1024,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/cluster');
     render(<App />);
     expect(await screen.findByText('Only tenant or platform administrators can view platform components.')).toBeTruthy();
-    // The web version does not depend on the admin-only report.
+    // The web app version remains visible when this admin-only report returns 403.
     expect(screen.getByTestId('web-app-version').textContent).toMatch(/^Web app version v\d+\.\d+\.\d+/);
   });
 
@@ -1831,7 +1828,6 @@ describe('v1 web project scoping', () => {
       fireEvent.click(tab);
       await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
     }
-    // Wait for the last tab's data so any late error would have rendered.
     await waitFor(() => expect(mocks.getRunUsage).toHaveBeenCalled());
     // The happy path shows no alerts and no "different run" binding warning.
     expect(screen.queryAllByRole('alert')).toHaveLength(0);
@@ -2504,13 +2500,11 @@ describe('v1 web project scoping', () => {
     const rail = await screen.findByRole('navigation', { name: 'Settings sections' });
     const links = within(rail).getAllByRole('link');
     expect(links.length).toBeGreaterThan(0);
-    // Every section link has an icon, matching the 0.x settings layout.
     for (const link of links) {
       expect(link.querySelector('.v1-settings-rail__icon svg')).not.toBeNull();
     }
     // The section from the URL is marked as the current page.
     expect(within(rail).getByRole('link', { name: 'Advanced' }).getAttribute('aria-current')).toBe('page');
-    // Danger zone carries a visible Risk badge so it is not opened by accident.
     const danger = within(rail).getByRole('link', { name: /Danger zone/ });
     expect(within(danger).getByText('Risk')).toBeTruthy();
   });
@@ -2572,8 +2566,7 @@ describe('v1 web project scoping', () => {
     expect((screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement).value)
       .toContain('"projectMarker": "p2"');
     const shown = screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement;
-    // Save is enabled only after an edit. Re-entering the same JSON without
-    // spaces makes the form dirty without changing the configuration.
+    // Re-entering the same JSON without spaces makes the form dirty without changing the configuration.
     fireEvent.change(shown, { target: { value: JSON.stringify(JSON.parse(shown.value)) } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
