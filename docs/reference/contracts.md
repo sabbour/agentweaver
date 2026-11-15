@@ -30,6 +30,48 @@ The Web client uses these values to label project tiles and headers. The role
 labels do not authorize actions or replace permission checks. Every protected
 operation continues to check current owner authority.
 
+## Model-provider Draft metadata
+
+The public Gateway supports Draft list, read, create, and update operations for
+platform and project scopes. Every route requires `api.read` and
+`projects.admin`. Platform routes require an unbound current PlatformAdmin.
+Project routes require the exact project binding, no run binding, and a current
+project Owner or PlatformAdmin. Projects & Config checks current membership and
+role assignments before each read or save, including retries.
+
+Create and update requests contain `operationId`, `expectedRevision`, `name`,
+`type`, `base_url`, and `model`. Optional fields are `wire_api`,
+`azure_api_version`, `reasoning_efforts`, and `prompt_capacity_tokens`.
+Unknown or duplicate fields fail with `400 model_provider_draft_invalid_request`.
+Credential values, headers, vault references, and rate-card references are not
+accepted. Create requires revision `0`; update requires a revision greater
+than `0`. Create derives a stable provider ID from the operation ID.
+
+The owner requires an absolute HTTPS `base_url` on port 443. It rejects user
+information, queries, fragments, IP addresses, and hosts rejected by
+`PlatformEgressHostValidator`. Azure URLs must not contain a path. This check
+does not resolve DNS or approve runtime egress.
+
+A saved row contains `id`, `name`, `type`, `base_url`, `model`, `wire_api`,
+`azure_api_version`, `reasoning_efforts`, `prompt_capacity_tokens`, `scope`,
+nullable `projectId`, `state`, `revision`, and `configurationHash`. It also
+contains `has_api_key: false`, `is_active: false`, and `hasCredential: false`.
+The response omits credentials, rate-card references, and audit identities.
+A save returns the immutable revision written by that operation. An exact
+retry returns the same revision, including after a later edit.
+
+List requests accept `pageSize` (default `50`, range `1`–`100`) and
+`afterProviderId`. The response is `{ providers, nextAfterProviderId }`.
+Results contain only Drafts in the requested scope and use provider-ID order.
+The Gateway limits save bodies to 32 KiB, single-row responses to 32 KiB, and
+list responses to 4 MiB. Draft GET routes reject request bodies.
+
+Invalid requests return `400`; missing Drafts return `404`; stale revisions,
+operation conflicts, and unsafe stored URLs return `409`. An unsafe stored
+URL error contains only the provider `id` and `revision`, so the caller can
+repair the Draft with a new operation ID. Owner responses use
+`Cache-Control: no-store`.
+
 <span id="p1-invocation-setup-receipt"></span>
 
 ## Invocation setup receipt

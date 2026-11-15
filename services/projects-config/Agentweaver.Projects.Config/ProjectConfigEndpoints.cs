@@ -1217,6 +1217,7 @@ public static class ProjectConfigEndpoints
         }
 
         app.MapNativeAcsPolicyEndpoints();
+        app.MapModelProviderDraftEndpoints();
         return app;
     }
 

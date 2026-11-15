@@ -84,6 +84,10 @@ public sealed record ModelProviderDraft(
     ModelProviderDraftState State,
     ModelProviderBindingRevision Binding);
 
+public sealed record ModelProviderDraftPage(
+    IReadOnlyList<ModelProviderDraft> Providers,
+    string? NextAfterProviderId);
+
 public sealed class ModelProviderDraftException(string code, string message) : Exception(message)
 {
     public string Code { get; } = code;

@@ -418,6 +418,52 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/platform/components", "/api/platform/components",
             "getPlatformComponents", "Read active platform components",
             forwardTenantSelector: true);
+        const long ModelProviderDraftSaveLimit = 32 * 1024;
+        const long ModelProviderDraftRowLimit = 32 * 1024;
+        const long ModelProviderDraftPageLimit = 4 * 1024 * 1024;
+        Add("GET", GatewayOwner.Projects, "/platform/byok-providers", "/api/platform/byok-providers",
+            "listPlatformByokProviderDrafts", "List platform BYOK provider drafts",
+            ["pageSize", "afterProviderId"], forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftPageLimit,
+            excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/platform/byok-providers/{providerId}",
+            "/api/platform/byok-providers/{providerId}", "readPlatformByokProviderDraft",
+            "Read a platform BYOK provider draft", forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
+            excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/platform/byok-providers", "/api/platform/byok-providers",
+            "createPlatformByokProviderDraft", "Create a platform BYOK provider draft", body: true,
+            maximumRequestBodyBytes: ModelProviderDraftSaveLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
+            excludeFromMcp: true);
+        Add("PUT", GatewayOwner.Projects, "/platform/byok-providers/{providerId}",
+            "/api/platform/byok-providers/{providerId}", "updatePlatformByokProviderDraft",
+            "Update a platform BYOK provider draft", body: true,
+            maximumRequestBodyBytes: ModelProviderDraftSaveLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
+            excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/byok-providers",
+            "/api/projects/{projectId}/byok-providers", "listProjectByokProviderDrafts",
+            "List project BYOK provider drafts", ["pageSize", "afterProviderId"],
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: ModelProviderDraftPageLimit, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/byok-providers/{providerId}",
+            "/api/projects/{projectId}/byok-providers/{providerId}", "readProjectByokProviderDraft",
+            "Read a project BYOK provider draft", forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
+            excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/byok-providers",
+            "/api/projects/{projectId}/byok-providers", "createProjectByokProviderDraft",
+            "Create a project BYOK provider draft", body: true,
+            maximumRequestBodyBytes: ModelProviderDraftSaveLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
+            excludeFromMcp: true);
+        Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/byok-providers/{providerId}",
+            "/api/projects/{projectId}/byok-providers/{providerId}", "updateProjectByokProviderDraft",
+            "Update a project BYOK provider draft", body: true,
+            maximumRequestBodyBytes: ModelProviderDraftSaveLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
+            excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/policies/platform", "/api/policies/platform/",
             "readPlatformNativeAcsPolicy", "Read the current canonical Platform Policy",
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],

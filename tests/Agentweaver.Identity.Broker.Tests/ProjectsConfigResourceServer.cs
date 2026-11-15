@@ -20,6 +20,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 
@@ -72,7 +73,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         string? brokerRunBindingAudience = null,
         X509Certificate2? brokerRunBindingServerCertificate = null,
         bool grantRoleAssignmentWrites = true,
-        bool useKestrel = false)
+        bool useKestrel = false,
+        ILoggerProvider? loggerProvider = null)
     {
         if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))
             throw new ArgumentException(
@@ -168,6 +170,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 services.AddSingleton(TimeProvider.System);
                 services.AddPlatformComponentCollector(new ConfigurationBuilder().Build());
                 services.AddScoped<ProjectsConfigService>();
+                services.AddScoped<ModelProviderDraftService>();
                 services.AddScoped<ProjectRoleAssignmentService>();
                 services.AddScoped<ProjectSetupAuthorityAuditService>();
                 // Preserve service binding while failing fast if the test host reaches a remote Knowledge owner.
@@ -241,11 +244,18 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                                 .RequireAuthenticatedUser()));
                 }
             });
+            web.ConfigureLogging(logging =>
+            {
+                if (loggerProvider is not null)
+                    logging.AddProvider(loggerProvider);
+            });
             web.Configure(app =>
             {
                 app.UseRouting();
+                app.UseModelProviderDraftNoStore();
                 app.UseAuthentication();
                 app.UseAuthorization();
+                app.UseModelProviderDraftBodyLimit();
                 app.UseEndpoints(endpoints =>
                 {
                     endpoints.MapProjectConfigEndpoints(

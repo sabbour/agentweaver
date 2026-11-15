@@ -25,6 +25,27 @@ Run commands from the repository root unless a procedure says otherwise.
 3. Record the command, result, and exact source SHA. Mark unrun tests as not
    run; do not count a compile-only or older-source result as a pass.
 
+## Test model-provider Draft routes
+
+Run the database-free request-contract and Gateway route tests locally after
+building the solution:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~ModelProviderDraftHttpContractTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~GatewayModelProviderDraftTests
+```
+
+The endpoint and Gateway-to-owner tests use disposable PostgreSQL databases.
+CI runs those tests with its database fixture:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~PublicModelProviderDraft
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~GatewayModelProviderDraftPostgresTests
+```
+
+The local database-free tests do not prove owner persistence or current
+authorization against PostgreSQL.
+
 ## Run the standard test suites
 
 Run the following commands to restore, build, and test the main .NET and Node.js

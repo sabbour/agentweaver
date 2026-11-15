@@ -111,9 +111,9 @@ resolve new defaults; an existing run keeps its pinned choices.
 
 Projects & Config stores customer-provided model provider metadata as a Draft head and an immutable revision
 ledger. A draft can have Platform or Project scope. Each revision records the provider type, HTTPS base URL,
-deployment, supported reasoning efforts, optional prompt capacity, and a configuration hash. Draft metadata
-does not enable a provider or change run-time model selection. This source slice adds persistence, not an HTTP
-route, activation, credentials, or rate-card data.
+deployment, supported reasoning efforts, optional prompt capacity, and a configuration hash. Public Gateway
+routes support list, read, create, and update in both scopes. Draft metadata does not enable a provider or
+change run-time model selection. Activation, credentials, and rate-card data remain separate.
 
 Every read and write requires both `api.read` and `projects.admin`. Platform drafts require an unbound
 PlatformAdmin request. Project drafts require a request bound to that exact project, with no run binding, and

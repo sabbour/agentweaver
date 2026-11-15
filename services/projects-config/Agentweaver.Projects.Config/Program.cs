@@ -325,8 +325,11 @@ var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 var dbOptions = app.Services.GetRequiredService<DbContextOptions<ProjectsConfigDbContext>>();
 await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
 await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
+app.UseRouting();
+app.UseModelProviderDraftNoStore();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseModelProviderDraftBodyLimit();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken cancellationToken) =>
     await db.Database.CanConnectAsync(cancellationToken)
