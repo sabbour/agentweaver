@@ -296,6 +296,7 @@ function requireEnvironmentCreation(creation, provenance, binding, clusterIdenti
     created: timestampTicks(receipt.createdAt),
     completed: timestampTicks(receipt.completedAt),
   }));
+  // The receipts must follow the creation path: Environment, metadata, workspace, then Sandbox.
   requireValue(instants[0].completed <= instants[1].created &&
     instants[1].completed <= instants[2].created &&
     instants[2].completed <= instants[3].created,
@@ -401,6 +402,7 @@ function requireCurrentSource(sourceReceipt, registration, host) {
       acceptedPin.modelId === source.modelId &&
       acceptedPin.sourceMode === binding.modelSourceMode &&
       acceptedPin.reasoningEffort === binding.reasoningEffort) &&
+    // Without a resolved pin, accept only an unpinned binding at the default high reasoning effort.
     validModelPin(resolvedPin) &&
     (resolvedPin === null
       ? acceptedPin === null && binding.reasoningEffort === 'high'
@@ -525,6 +527,7 @@ export function createP1NativeProviders({ input }, trusted) {
     requireCurrentSource(sourceReceipt, before, evidence.host);
     const fixedCreditPair = requireFixedCreditSelection(
       selection, before, evidence.host, sourceReceipt);
+    // Owner APIs do not share a transaction; closing reads reject evidence assembled across changing bindings.
     const afterCreation = await environment(creationPath);
     requireEnvironmentCreation(afterCreation, provenance, binding, clusterIdentity);
     requireValue(isDeepStrictEqual(withoutPodObservedAt(creation), withoutPodObservedAt(afterCreation)),

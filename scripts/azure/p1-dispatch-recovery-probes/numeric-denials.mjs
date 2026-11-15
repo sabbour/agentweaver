@@ -73,8 +73,7 @@ function validateIdentity(value) {
   }
 }
 
-// Preserve all seven .NET fractional digits and the offset; Date.toISOString would
-// lose ticks and change the bytes hashed by the producer.
+// Preserve sub-millisecond ticks and non-zero offsets so receipt hashes match the .NET producer.
 function timestamp(value) {
   const match = typeof value === 'string' &&
     /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.(\d{1,7}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
