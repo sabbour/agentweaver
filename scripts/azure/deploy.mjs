@@ -38,7 +38,7 @@ import {
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-/** Builds source-bound CLI args; only full-foundation creation submits a node-pool count. */
+/** Builds source-bound CLI args; only infrastructure-only deployments submit a node-pool count. */
 export function buildDeployArgs({
   resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash,
   scope = 'infrastructure-only', nodePoolCount, newFoundation = false, nodeResourceGroup,
@@ -336,7 +336,7 @@ export async function deploy(config, {
     config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
     ? readIdentityPostgresBootstrapValues({ ...config, ...source }, boundAz)
     : undefined;
-  // Only full-foundation creation owns the pool count; AKS-only reads the cluster without updating it.
+  // Infrastructure-only deployments submit the autoscaler minimum; AKS-only deploys leave pool count unchanged.
   const nodePoolCount = source.scope === 'infrastructure-only' ? source.nodePoolMinCount : undefined;
   args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount,

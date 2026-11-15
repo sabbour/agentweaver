@@ -84,7 +84,8 @@ export function setupScopes(target = DB_MAINTENANCE_TARGET) {
 export function workflowAuthorizationResources(principalObjectId, projectsConfigMigrationClientId) {
   if (!GUID.test(principalObjectId ?? '') || !GUID.test(projectsConfigMigrationClientId ?? ''))
     throw new Error('Workflow authorization requires the exact maintenance principal and Projects & Config migration client IDs.');
-  // Job list/watch keeps cleanup reliable; Deployment access is limited to the v1 rollout names.
+  // Job list/watch supports cleanup. Deployment create has no name filter;
+  // other Deployment verbs name the v1 rollout targets.
   const namespace = DB_MAINTENANCE_TARGET.namespace;
   const roleName = SETUP_TARGET.kubernetesRole;
   return [
@@ -213,7 +214,7 @@ export function readSetupState(exec) {
   const notFound = result => result.status !== 0 && /not ?found|could not be found|HTTP 404/i.test(`${result.stderr}${result.stdout}`);
 
   // The cluster template enables both authorizers: Azure RBAC handles Azure roles, and Kubernetes
-  // RBAC evaluates the narrow Role/RoleBinding that this setup applies for the maintenance identity.
+  // RBAC evaluates the Role/RoleBinding that this setup applies for the maintenance identity.
   const authorization = json(exec('az', ['aks', 'show', '--resource-group', target.resourceGroup,
     '--name', target.clusterName, '--subscription', target.subscriptionId,
     '--query', '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac,oidcIssuer:oidcIssuerProfile.issuerUrl}', '-o', 'json']),

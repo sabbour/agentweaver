@@ -127,10 +127,6 @@ function spawnPlatformSafe(command, args, spawnOptions) {
  * `preserveProjectedJson` retains exact identifiers only after an explicit
  * projection excludes credential-bearing fields. Ordinary output stays redacted.
  */
-/**
- * Runs one executable with a literal argument array and returns its normalized process result.
- * With check enabled, launch or nonzero-exit failures throw with redacted diagnostics.
- */
 export function run(command, args, options = {}) {
   const {
     check = true, cwd, env, input, timeout, projectJson, preserveProjectedJson = false,

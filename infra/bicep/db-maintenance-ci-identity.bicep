@@ -1,8 +1,8 @@
 // Create the identity that the v1 database maintenance workflow signs in as, and give it only
 // what a routine run needs. GitHub Actions gets a token for it through OIDC, and only for jobs that
 // use the v1-db-maintenance environment. It can read the resource group and get cluster credentials.
-// The setup script applies a narrow Kubernetes Role and RoleBinding for maintenance objects in the
-// agentweaver namespace. This template creates no Azure custom role definition. The identity cannot
+// The setup script applies a namespace-scoped Kubernetes Role and RoleBinding for maintenance
+// operations in the agentweaver namespace. This template creates no Azure custom role definition. The identity cannot
 // deploy Azure resources, change role assignments, or reach PostgreSQL itself.
 targetScope = 'resourceGroup'
 
@@ -48,8 +48,7 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
   })
 }
 
-// Only a job that names the environment gets a token. Branch rules on the environment then limit
-// it to v1, so a pull request or another branch cannot use this identity.
+// The OIDC subject is limited to this GitHub environment. Its branch rules decide which refs can use it.
 resource githubCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = if (githubWorkflow) {
   parent: identity
   name: 'github-${githubEnvironment}'

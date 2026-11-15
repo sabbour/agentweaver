@@ -152,6 +152,7 @@ function sourceFiles(repoRoot, pairs = []) {
 }
 
 function orderedHash(value) {
+  // Sort object keys recursively so hashes do not depend on property order.
   function ordered(item) {
     if (Array.isArray(item)) return item.map(ordered);
     return isRecord(item)
@@ -343,6 +344,7 @@ function renderPlan(input, repoRoot = process.cwd(), source = sourceFiles(repoRo
   };
 }
 
+// YAML parsing rejects duplicate keys; JSON parsing then restricts input to JSON.
 export function parseIdentityBrokerProviderInput(sourceText) {
   try {
     parseYaml(sourceText, { uniqueKeys: true });
@@ -578,6 +580,8 @@ function deploymentParts(deployment, field = 'Deployment') {
   return { container, containerIndex: matches[0].index, configRefs };
 }
 
+// Compare the Deployment spec after brokerObjectHash strips selected fields.
+// Also allow runtime image, provider env, active map name, and setup marker differences.
 function normalizeForSourceComparison(live, source, currentMapName, providerEnv) {
   const actual = structuredClone(live);
   const baseline = structuredClone(source);
@@ -687,6 +691,7 @@ function sameEntries(left, right) {
 }
 
 function sameProviderEntries(left, right) {
+  // Kubernetes can reorder secretKeyRef keys; ignore that order, but compare every value.
   const normalizeSecretKeyRefOrder = entry => {
     const ref = entry?.valueFrom?.secretKeyRef;
     if (!isRecord(ref)) return entry;
