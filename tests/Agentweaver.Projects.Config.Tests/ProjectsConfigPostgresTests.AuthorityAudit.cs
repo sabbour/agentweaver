@@ -91,6 +91,7 @@ public sealed partial class ProjectsConfigPostgresTests
         Migration039AuditFixture? legacy = null;
         try
         {
+            // Start from the schema before migration 039 so the test exercises the legacy-row backfill.
             await migrator.MigrateAsync(beforeInvocationAudit);
             legacy = await SeedMigration039LegacyRowsAsync("valid", tenantId);
             var eventIds = legacy.EventIds
@@ -186,6 +187,7 @@ public sealed partial class ProjectsConfigPostgresTests
             var migrationError = await Assert.ThrowsAsync<PostgresException>(
                 () => migrator.MigrateAsync(invocationAudit));
             Assert.Contains(expectedError, migrationError.MessageText, StringComparison.Ordinal);
+            // A rejected backfill must roll back its schema, migration-history row, and audit-row changes.
             await AssertMigration039WasRolledBackAsync(invocationAudit);
             Assert.Equal(
                 beforeColumns.OrderBy(pair => pair.Key),
@@ -209,6 +211,7 @@ public sealed partial class ProjectsConfigPostgresTests
         string scenario,
         string? tenantId = null)
     {
+        // Seed setup and cleanup history, P1 events, and an unrelated event; the scenario selects a link conflict.
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
         var now = DateTimeOffset.UtcNow;

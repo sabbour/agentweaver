@@ -229,7 +229,7 @@ public sealed class AgentSuiteBlueprintConverterTests
         // Act: conversion fails instead of producing a package.
         var error = Assert.Throws<AgentSuiteConversionException>(() => AgentSuiteBlueprintConverter.Convert(blueprint, inputs));
 
-        // Assert: one error for each broken input, so the converter collects errors rather than stopping at the first.
+        // The error list includes an entry for each invalid input in this request.
         Assert.Contains(error.Errors, item => item.StartsWith("BuildProfileId", StringComparison.Ordinal));
         Assert.Contains(error.Errors, item => item.StartsWith("SourceEpoch", StringComparison.Ordinal));
         Assert.Contains(error.Errors, item => item.Contains("no tag", StringComparison.Ordinal));

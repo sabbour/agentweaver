@@ -22,6 +22,7 @@ public sealed class ProjectsConfigPlatformAdminBootstrapTests(
         var subject = "approved-platform-subject-" + suffix;
         var tenantId = "platform-bootstrap-tenant-" + suffix;
 
+        // Both calls race for the first-admin slot; only one may create the membership and grant.
         var concurrentResults = await Task.WhenAll(
             store.BootstrapFirstPlatformAdminAsync(TestIssuer, subject, tenantId),
             store.BootstrapFirstPlatformAdminAsync(TestIssuer, subject, tenantId));

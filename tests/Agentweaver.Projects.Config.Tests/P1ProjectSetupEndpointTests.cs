@@ -56,6 +56,7 @@ public sealed partial class ProjectsConfigPostgresTests
         using var client = app.GetTestClient();
         var before = await CountsAsync();
 
+        // The endpoint returns the issued receipt only for the exact run, caller, tenant, scope, and request shape.
         using (var request = BoundRequest(invocationId))
         {
             using var response = await client.SendAsync(request);
@@ -380,6 +381,7 @@ public sealed partial class ProjectsConfigPostgresTests
 
         try
         {
+            // This login can call the functions, but cannot read or insert setup rows or insert projects directly.
             await ExecuteOwnerSqlAsync(
                 $"CREATE ROLE \"{roleName}\" LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT");
             roleCreated = true;
@@ -512,6 +514,7 @@ public sealed partial class ProjectsConfigPostgresTests
             grant.Role == ProjectAuthorityRole.TenantAdmin));
         var invocationId = Guid.NewGuid();
 
+        // Fail the audit insert after setup begins; verify that no setup operation or project remains.
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         {
             await using var dbTransaction = await connection.BeginTransactionAsync();
@@ -561,6 +564,7 @@ public sealed partial class ProjectsConfigPostgresTests
             operation => operation.InvocationId == invocationId));
         Assert.Equal(0, await db.Projects.CountAsync(project => project.Name == $"p1-{invocationId:D}"));
 
+        // Retrying one invocation concurrently must return one receipt and write one setup operation.
         var concurrentIssues = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ =>
             P1ProjectSetupEndpoints.IssueAsync(
                 fixture.DataSource, caller, invocationId, adminGrant, CancellationToken.None)));
@@ -624,6 +628,7 @@ public sealed partial class ProjectsConfigPostgresTests
             request.RequestUri = new Uri(
                 $"/internal/projects/project-a/runs/run-a/p1-setup/{Guid.NewGuid():D}", UriKind.Relative);
         }
+        // The body never completes; the endpoint must time out instead of waiting for the client.
         request.Content = new StalledContent();
         request.Version = HttpVersion.Version20;
         request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;

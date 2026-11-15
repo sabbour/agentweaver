@@ -540,7 +540,7 @@ public sealed partial class ProjectsConfigPostgresTests
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
         var project = await service.CreateProjectAsync(owner, "Suite conflict", CancellationToken.None);
 
-        // A suite that fails validation is rejected with the validator's error messages.
+        // The profile rejects this suite because its config blob is not the exact bytes "{}".
         var rejected = await Assert.ThrowsAsync<AgentSuiteImportRejectedException>(() => service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(project.ConfigurationRevision, "config-not-empty"), store,
             CancellationToken.None));

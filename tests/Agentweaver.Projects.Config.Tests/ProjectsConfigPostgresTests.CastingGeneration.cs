@@ -160,6 +160,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var project = await service.CreateProjectAsync(owner, "Casting generation concurrency", CancellationToken.None);
         var start = StartRequest(project.ConfigurationRevision, "concurrent-" + suffix, "casting-run-" + suffix);
 
+        // The same idempotency key and digest must keep the original run ID when a retry names another run.
         var starts = await Task.WhenAll(
             service.StartCastingGenerationAsync(owner, project.ProjectId, start, CancellationToken.None),
             service.StartCastingGenerationAsync(
