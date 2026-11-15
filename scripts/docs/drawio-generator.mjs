@@ -30,6 +30,7 @@ function cell(id, role, style, geometry, { value='', parent='1', source, target,
 function document(name,title,width,height,cells,bounds) {
   if(bounds) {
     width=bounds.width;height=bounds.height;
+    // Shift only top-level cells; child coordinates are parent-relative and would otherwise shift twice.
     cells=cells.map(c=>c.includes('parent="1"')?c.replace(/\bx="([^"]+)" y="([^"]+)"/g,
       (_,x,y)=>`x="${Number(x)-bounds.x}" y="${Number(y)-bounds.y}"`):c);
   }
