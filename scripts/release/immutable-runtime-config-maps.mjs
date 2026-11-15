@@ -60,7 +60,7 @@ export function findImmutableRuntimeConfigMapReplacements(installationManifest, 
     }
   }
 
-  // Inspect every immutable source map so a dry run cannot hide drift outside the allow-list.
+  // Compare every immutable source map so the replacement allow-list cannot hide an unapproved change.
   for (const desired of desiredMaps) {
     const name = desired.metadata?.name;
     if (typeof name !== 'string' || desired.metadata?.namespace !== namespace) {

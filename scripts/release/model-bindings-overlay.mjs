@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
-// Environment BYOK model bindings that an operator keeps outside product source (#2616).
+// Environment BYOK model bindings that an operator keeps outside product source.
 // The deploy helper merges them into the rendered runtime ConfigMaps, so product defaults stay clean.
 export const MODEL_BINDINGS_OVERLAY_KIND = 'agentweaver.model-bindings-overlay';
 
@@ -189,7 +189,7 @@ function azureCostKeys(overlay) {
   return keys;
 }
 
-// Adds binding keys after the last existing binding key and sets the revision, as `models byok plan` does.
+// Insert after the last existing binding key, or at the start if none exist, so other keys keep their order.
 function mergeFlatKeys(data, bindingKeys, revision, extraKeys = []) {
   const entries = Object.entries(data);
   let last = -1;

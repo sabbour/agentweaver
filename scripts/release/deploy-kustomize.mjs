@@ -327,8 +327,9 @@ function readClusterResourceAsEnvironment(exec, context, root, kind, name) {
 }
 
 /**
- * Checks, before any write, the cluster-scoped prerequisites that Environment needs at run time:
- * the workspace StorageClass, a Ready node for the sandbox RuntimeClass, and the smoke check permissions.
+ * Checks smoke-check permissions, the workspace StorageClass, and sandbox RuntimeClass before cluster writes.
+ * Also checks Azure Monitor readiness. If the RuntimeClass has a node selector, at least one matching Ready,
+ * schedulable node is required.
  * Returns the product StorageClass to create when it is missing.
  */
 function verifyClusterPrerequisites(exec, context, root, resources, log) {
@@ -404,9 +405,9 @@ const AZURE_MONITOR_REMEDY = 'Run the infrastructure deployment (node scripts/az
 const REGION_LABEL = 'topology.kubernetes.io/region';
 
 /**
- * Requires the Azure Monitor add-on agent, which forwards container and network logs, to be ready on every node.
- * A missing agent is accepted only when every node is in a canary (EUAP) region, where the installer skips the add-on.
- * Unready agent pods are accepted, with a warning, only on sandbox RuntimeClass nodes (see sandboxOnlyUnreadyNodes).
+ * Requires DaemonSet/ama-logs to be settled and ready unless it is missing on a non-empty cluster whose nodes
+ * all have region labels matching `^[a-z0-9]+euap$` (case-insensitive), or it is settled with the desired
+ * number of owned pods and at least one unready pod, all on sandbox nodes. The sandbox-node exception logs a warning.
  */
 function verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames) {
   const permission = exec('kubectl', ['auth', 'can-i', 'get', 'daemonsets.apps/ama-logs',
@@ -578,7 +579,7 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, p
     '[ "$(stat -c %u /workspace/smoke.txt)" = 1000 ] || fail storage-owner',
     // Keyless HTTPS GET for each BYOK URL (positional arguments). git has no credential or prompt here.
     // The trailing "#" makes libcurl drop the "/info/refs?service=..." suffix that git appends,
-    // so the endpoint receives exactly GET <url> and answers 401 or 403 before routing.
+    // so libcurl sends GET <url>; any HTTP response confirms DNS, egress, and TLS.
     'for url in "$@"; do',
     '  host="${url#https://}"; host="${host%%/*}"',
     '  status="$(GIT_TRACE_CURL=1 GIT_TRACE_CURL_NO_DATA=1 GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false ' +
@@ -1512,7 +1513,7 @@ const AGENTHOST_PLATFORM_EGRESS_SEED = {
   },
 };
 
-/** Creates the provider-owned DNS seed only when the exact policy is absent. */
+/** Creates the provider-owned DNS seed when absent; it does not compare an existing policy spec. */
 export function ensureAgentHostPlatformEgressSeed(exec, context, root) {
   const existing = kubectl(exec, context, [
     'get', 'ciliumnetworkpolicies.cilium.io', AGENTHOST_PLATFORM_EGRESS_POLICY,

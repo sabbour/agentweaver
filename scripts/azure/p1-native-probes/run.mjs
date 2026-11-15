@@ -878,6 +878,7 @@ async function runP1NativeProbesCore(input, dependencies) {
     return { status: response.status, body: await readBody(response) };
   };
   const api = (owner, method, suffix, body) => apiAs(owner, owner, method, suffix, body);
+  // Re-read lifecycle and placement and re-check fixture authority before each mutating request.
   const authorizeMutation = async (action, owner) => {
     const now = typeof dependencies.now === 'function' ? dependencies.now() : Date.now();
     if (input.pins.fixtureScope.status !== 'ready' ||
@@ -1296,6 +1297,7 @@ async function runP1NativeProbesCore(input, dependencies) {
     }
   };
 
+  // Complete both owner snapshots before running any acceptance probe.
   const ownerReads = await Promise.allSettled(owners.map(readOwner));
   const failedOwnerRead = ownerReads.find(result => result.status === 'rejected');
   if (failedOwnerRead) {
@@ -2735,6 +2737,7 @@ function validateCurrentCreditContext(pin, readback, now) {
   return { registration, sourceGrant, sourceReceipt };
 }
 
+// A zero-limit denial must prove that no native events were emitted and the cursor did not move.
 function validateFixedZeroCreditRead(pin, readback, now) {
   const current = validateCurrentCreditContext(pin, readback, now);
   const { result } = readback;
@@ -2794,6 +2797,7 @@ function validateFixedZeroCreditRead(pin, readback, now) {
   };
 }
 
+// A positive-limit denial advances the guard revision but preserves the prepared dispatch and emits no events.
 function validatePositiveCreditDenialRead(pin, readback, now) {
   const current = validateCurrentCreditContext(pin, readback, now);
   const { result } = readback;

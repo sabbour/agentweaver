@@ -156,7 +156,6 @@ export function readInitialBaseline(manifest, {
  * a `Map<file, {entries, summary}>` preserving per-component bump severity, for release planning.
  * This does not consume/archive anything; it is a read-only view used by `plan.mjs`.
  */
-/** Loads and validates all pending changeset entries from the repository changeset directory. */
 export function collectChangesetEntries(root, componentIds, { readdirSync: readdir = readdirSync, readFileSync: readFile = readFileSync } = {}) {
   const directory = path.join(root, '.changeset');
   let filenames;
@@ -187,7 +186,6 @@ export function collectChangesetEntries(root, componentIds, { readdirSync: readd
  * release receipt's claimed `sourceSha` to this same ancestor, rather than trusting the receipt's
  * own say-so.
  */
-/** Resolves and validates the common ancestor used for a source-change comparison. */
 export function resolveMergeBase(root, base, comparisonHead = 'HEAD') {
   if (!sha.test(base)) fail('base', 'expected a full lowercase 40-character commit SHA');
   if (comparisonHead !== 'HEAD' && !sha.test(comparisonHead)) {
