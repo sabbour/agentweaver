@@ -12,6 +12,7 @@ import {
 describe('Copilot user callback contract', () => {
   const indexHtml = readFileSync(resolve(process.cwd(), 'index.html'), 'utf8');
 
+  // Run the inline script from index.html to test the production callback capture behavior.
   function captureProductionCallback(search: string): unknown {
     const script = indexHtml.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
     if (!script) throw new Error('The production callback capture script was not found.');

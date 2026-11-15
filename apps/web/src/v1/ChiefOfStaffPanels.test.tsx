@@ -166,7 +166,7 @@ describe('New chat', () => {
     expect(stored).not.toContain('flaky');
     first.unmount();
 
-    // "Reload" after sign-in: a new mount resumes the saved chat on its own.
+    // A new mount with an available run session resumes the saved chat on its own.
     hoisted.ensureSession.mockResolvedValue(true);
     renderPage();
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/runs/run-1'));
@@ -195,7 +195,7 @@ describe('New chat', () => {
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/runs/run-1'));
     const start = hoisted.gateway!.requests.find((request) => request.url.pathname.endsWith('/start'))!;
     const cos = hoisted.gateway!.requests.filter((request) => request.url.pathname.includes('/chief-of-staff/'));
-    // Start uses the run-bound token; every Chief of Staff route uses the unbound one.
+    // Keep Chief of Staff requests on the unbound session; only run start uses the run-bound session.
     expect(start.headers.get('Authorization')).toBe('Bearer bound');
     expect(cos.length).toBeGreaterThan(0);
     expect(cos.every((request) => request.headers.get('Authorization') === 'Bearer unbound')).toBe(true);

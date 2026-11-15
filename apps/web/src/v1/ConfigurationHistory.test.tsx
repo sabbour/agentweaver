@@ -23,7 +23,6 @@ describe('configuration history', () => {
     fireEvent.change(screen.getByLabelText('Configuration revision'), { target: { value: '2' } });
     fireEvent.click(screen.getByRole('button', { name: 'View revision' }));
     await screen.findByRole('heading', { name: 'Configuration revision 2' });
-    // The revision number must be passed through, and the fields must be read-only with no save button.
     expect(read).toHaveBeenCalledWith('token', 'project', 'tenant', 2);
     expect((screen.getByLabelText('Default model reference') as HTMLInputElement).readOnly).toBe(true);
     expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
@@ -46,7 +45,7 @@ describe('configuration history', () => {
   });
 
   it('ignores a historical response after unmount', async () => {
-    // Hold the read open, unmount, then finish it. The late response must not render.
+    // The model field must stay absent when the deferred read resolves after unmount.
     let complete!: (value: typeof snapshot) => void;
     read.mockReturnValue(new Promise((resolve) => { complete = resolve; }));
     const { unmount } = render(<ConfigurationHistory projectId="project" currentRevision={2} />);
