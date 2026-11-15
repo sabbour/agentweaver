@@ -97,6 +97,7 @@ public sealed class ChildCheckpointRecoveryManifestTests
                 }
             ]
         };
+        // Hold the final member registration to prove bootstrap waits for every member.
         var lastRegistrationStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var finishLastRegistration = new TaskCompletionSource(
@@ -217,6 +218,7 @@ public sealed class ChildCheckpointRecoveryManifestTests
     {
         var first = CreateNativeChildRebindReceipt();
 
+        // A recovery gap of 255 is accepted, but a gap of 256 exceeds the bound.
         Assert.Equal(2, NativeChildRebindReceipt.ValidateChain(
             [first, CreateNativeChildRebindSuccessor(first, recoveryGap: 255)],
             first.DispatchId).Length);
