@@ -170,6 +170,7 @@ public sealed class ProjectsRunSelectionSkillContentTests
     [Fact]
     public async Task RevocationDuringTheContentWaitPreventsRelease()
     {
+        // Hold the content response during revocation; recheck authority before returning bytes.
         var skill = Skill("skill-a");
         var selection = Selection(Assignment(skill, 0));
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

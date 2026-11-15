@@ -140,6 +140,7 @@ public sealed class P1RuntimeRoleBacklogPostgresTests(CoordinationPostgresFixtur
     [Fact]
     public async Task ConcurrentRuntimeCapturesBlockOnProjectMutexAndRejectTheStaleRevision()
     {
+        // Hold the first write after it takes the project lock, then verify the second write waits.
         string project = "runtime-capture-" + Guid.NewGuid().ToString("N");
         await CreateEmptyProjectAsync(project);
         var firstTask = new BacklogTaskReference(project, "first");
@@ -210,6 +211,7 @@ public sealed class P1RuntimeRoleBacklogPostgresTests(CoordinationPostgresFixtur
     [Fact]
     public async Task ConcurrentFirstRuntimeCapturesSerializeInitializationOfAnAbsentProject()
     {
+        // Keep the first project insert uncommitted while the competing insert runs.
         await AssertRuntimeIdentityAndDependencyUpdateDeniedAsync();
 
         string project = "runtime-first-capture-" + Guid.NewGuid().ToString("N");
@@ -288,6 +290,7 @@ public sealed class P1RuntimeRoleBacklogPostgresTests(CoordinationPostgresFixtur
     [Fact]
     public async Task CancellingBlockedRuntimeCapturesDrainsBothWritesBeforeTeardown()
     {
+        // Cancel only after the second write blocks, then drain both before teardown.
         string project = "runtime-capture-cancel-" + Guid.NewGuid().ToString("N");
         await CreateEmptyProjectAsync(project);
         var firstTask = new BacklogTaskReference(project, "first");
@@ -358,6 +361,7 @@ public sealed class P1RuntimeRoleBacklogPostgresTests(CoordinationPostgresFixtur
     [Fact]
     public async Task ConcurrentDependencyAdditionAndTaskDeletionPreserveTheCommittedEdge()
     {
+        // Hold edge insertion on the project lock while task deletion tries the same lock.
         string project = "runtime-edge-delete-" + Guid.NewGuid().ToString("N");
         var task = new BacklogTaskReference(project, "task");
         var prerequisite = new BacklogTaskReference(project, "prerequisite");

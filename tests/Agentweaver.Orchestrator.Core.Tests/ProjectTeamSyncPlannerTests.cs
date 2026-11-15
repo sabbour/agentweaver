@@ -47,7 +47,7 @@ public sealed class ProjectTeamSyncPlannerTests
             Assert.Single(plan.Changes, change => change.Path == ".squad/team.md").Content!));
         Assert.Equal(64, plan.ChangeSetHash.Length);
 
-        // The same preview binds exact files, revision, repository ref, and branch head on every retry.
+        // The hash repeats for identical inputs and changes with configuration revision, commit, installation, or repository ID.
         var repeated = ProjectTeamSyncPlanner.CreatePlan(projection, snapshot, RepositoryBinding);
         Assert.Equal(plan.ChangeSetHash, repeated.ChangeSetHash);
         Assert.NotEqual(plan.ChangeSetHash, ProjectTeamSyncPlanner.CreatePlan(

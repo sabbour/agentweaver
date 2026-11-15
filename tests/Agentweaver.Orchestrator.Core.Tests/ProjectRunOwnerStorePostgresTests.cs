@@ -896,6 +896,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     [Fact]
     public async Task TerminalCleanupBlocksNewAndStaleSnapshotRecoveryWithoutAStartupIntent()
     {
+        // Keep the pre-cleanup snapshot open so a stale write tests PostgreSQL's repeatable-read conflict.
         var row = await CreateFailedRunAsync("cleanup-recovery");
         var before = await ReadExecutionAsync(row.RunId);
         await using var staleConnection = await _fixture.DataSource.OpenConnectionAsync();

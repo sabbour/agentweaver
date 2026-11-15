@@ -474,6 +474,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     [InlineData(true)]
     public async Task CoordinatorRootAdmissionAndGrantLockRunBeforeSession(bool issueGrant)
     {
+        // Hold the run row while cancellation waits on selection and grant admission waits for a shared lock; cancellation wins.
         var rootRequestContext = new DefaultHttpContext
         {
             User = new ClaimsPrincipal(new ClaimsIdentity(
