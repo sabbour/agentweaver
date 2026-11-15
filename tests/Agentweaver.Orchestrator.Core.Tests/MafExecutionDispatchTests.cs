@@ -499,7 +499,7 @@ public sealed class MafExecutionDispatchTests
             RuntimeUsageSourceStore.EvaluateObservedCreditLimits(binding, milliCredits / 1000m));
     }
 
-    /// <summary>Ensures an explicit Unpriced event contributes no amount to the priced subtotal.</summary>
+    /// <summary>Ensures an unpriced Copilot snapshot has no priced subtotal.</summary>
     [Fact]
     public void UnpricedCopilotSnapshotHasNoPricedSubtotal()
     {
@@ -536,7 +536,7 @@ public sealed class MafExecutionDispatchTests
         var observed = RuntimeUsageCostSnapshotContract.ValidatePricedCopilotSnapshot(
             costBinding, quote, totals, "unknown-model",
             scope.TenantId, scope.ProjectId, scope.RunId);
-        // Snapshot validation reports only the known subtotal; owner-side hard-cap admission rejects unknown pricing.
+        // The unpriced quote returns no known subtotal, so observed-credit limits do not trigger here.
         var limitedBinding = scope with
         {
             CopilotSoftCreditLimit = 1m,
