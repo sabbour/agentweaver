@@ -186,7 +186,12 @@ the session journal, addressed messages, project facts, and explicit session for
 The migration preserves admitted version-4 schemas and the earlier version-2 project-fact layout.
 Runtime rate cards use the existing card ID/version key and retain validated
 manual or Azure Retail provenance with the canonical `CostRateCard`. Events
-reads these cards locally; this slice adds no Gateway route or retail lookup.
+reads these cards locally. The owner-local `AzureRetailPriceLookup` searches
+the fixed Azure Retail endpoint for USD consumption meters. It normalizes
+positive tier-zero `1K` and `1M` prices to USD per million tokens; unsupported
+or unavailable prices remain null. The lookup does not save cards, fetch prices
+at startup, or expose a public route. The configured Azure Cost provider and
+immutable card store remain separate.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
 receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`

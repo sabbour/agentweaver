@@ -92,6 +92,23 @@ The AgentSessions suite checks export verification and replay behavior. The
 absence test confirms that the native provider stays the default and the
 platform works without the optional AgentSessions package.
 
+## Test the Events & Sessions Azure Retail lookup
+
+The Azure Retail lookup tests use an in-memory HTTP handler. They do not call
+the live Azure Retail API. The lookup has no startup registration or public
+route.
+
+Run the focused lookup and configured-cost tests from the repository root:
+
+```powershell
+dotnet build services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj --configuration Release
+dotnet build tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~AzureRetailPriceLookupTests|FullyQualifiedName~AzureCostProviderTests"
+```
+
+PostgreSQL-backed rate-card and hard-budget regressions run in hosted GitHub CI.
+They need the CI test database and are not part of this offline lookup test.
+
 ## Test the native ACS profile
 
 The shared ACS library validates a complete manifest and its relative Rego and
