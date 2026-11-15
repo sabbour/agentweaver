@@ -92,6 +92,7 @@ namespace Agentweaver.Environment.Migrations
                 nullable: false,
                 defaultValue: 30);
 
+            // Keep the stored transport profile and its pinned options in one constraint.
             migrationBuilder.AddCheckConstraint(
                 name: "ck_environment_remote_mcp_connection_configurations_transport",
                 schema: "environment",

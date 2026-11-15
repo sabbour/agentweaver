@@ -19,6 +19,7 @@ ALTER TABLE {schema}.maf_runtime_evidence_receipts
             receipt_json->>'supersedesOperationId' = attempt_id::text AND
             receipt_json->>'supersedesOperationId' <> receipt_json->>'successorOperationId'));
 
+-- These partial indexes reject a second supersession for the same source or successor within one run.
 CREATE UNIQUE INDEX uq_checkpoint_recovery_supersession_source
     ON {schema}.maf_runtime_evidence_receipts
         (project_id, run_id, ((receipt_json->>'supersedesOperationId')::uuid))

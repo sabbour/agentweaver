@@ -18,6 +18,7 @@ namespace Agentweaver.Projects.Config.Migrations
                 type: "uuid",
                 nullable: true);
 
+            // Validate old audit links before backfilling the invocation ID and restoring audit immutability.
             migrationBuilder.Sql(
                 """
                 DO $$

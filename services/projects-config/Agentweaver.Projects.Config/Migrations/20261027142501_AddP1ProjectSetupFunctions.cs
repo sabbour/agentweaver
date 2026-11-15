@@ -10,6 +10,7 @@ namespace Agentweaver.Projects.Config.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // Serialize retries by invocation before rechecking authority and writing the setup receipt.
             migrationBuilder.Sql(
                 """
                 CREATE FUNCTION projects_config.read_p1_project(

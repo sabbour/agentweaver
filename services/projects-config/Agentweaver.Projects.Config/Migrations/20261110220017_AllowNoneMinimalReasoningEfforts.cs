@@ -25,6 +25,7 @@ namespace Agentweaver.Projects.Config.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Remove the new values before restoring the narrower check.
             migrationBuilder.Sql(
                 "UPDATE projects_config.hosted_model_reasoning_catalog " +
                 "SET supported_reasoning_efforts = array_remove(array_remove(supported_reasoning_efforts, " +

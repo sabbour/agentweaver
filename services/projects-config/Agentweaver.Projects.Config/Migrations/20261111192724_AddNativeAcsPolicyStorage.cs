@@ -173,6 +173,7 @@ namespace Agentweaver.Projects.Config.Migrations
                 table: "native_acs_policy_outbox",
                 column: "created_at");
 
+            // Recheck authority under row locks before a policy write.
             migrationBuilder.Sql(
                 """
                 CREATE TRIGGER native_acs_policy_revisions_immutable
