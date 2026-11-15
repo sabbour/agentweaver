@@ -6,7 +6,7 @@ export function componentImageRepository(componentId) {
   return componentId.toLowerCase();
 }
 
-/** Builds the legacy version-and-commit tag used by historical P1 evidence. */
+/** Builds the legacy version-and-source-SHA image tag. */
 export function componentImageTag(version, sourceSha) {
   return `${version.replaceAll('+', '_')}-${sourceSha}`;
 }
