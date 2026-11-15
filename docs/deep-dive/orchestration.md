@@ -720,6 +720,11 @@ the dispatch hold remains active through the normal readiness checks. Other
 platform-effect history remains unsupported at this boundary. See the
 [committed pull request recovery flow](../architecture/environment-sandbox.md#reconcile-a-committed-pull-request).
 
+The [checkpoint recovery observation case](../guide/checkpoint-recovery-observation-acceptance.md)
+compares saved child identities and the original pull request operation using
+normal read-only status. A recorded receipt is a checkpoint observation;
+physical no-duplicate evidence requires separate effect and native-call records.
+
 If a child-join recovery is blocked at Host activation after the replacement
 registration set is complete, a new operation can supersede it. The owner
 requires exact retirement and registration receipts, the same saved child and

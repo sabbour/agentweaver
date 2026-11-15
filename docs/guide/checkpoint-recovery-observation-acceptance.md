@@ -1,14 +1,15 @@
-# Observe pending-gate recovery
+# Observe checkpoint recovery
 
-Use this read-only case to check that Host recovery restored a pending gate
-without changing its request, authorized actor, choices, or freeform setting.
+Use this read-only case to observe a pending gate, saved child work, or an
+OpenPullRequest receipt after Host recovery.
 The case does not start recovery, answer the gate, send a message, or call a
 model.
 
-A `passed` result confirms the selected durable recovery operation is ready,
-uses restored runtime material, and keeps the captured gate pending. The
-committed recovery-event proof remains **Blocked** because the public session
-journal has no recovery-progress projection.
+A `passed` result applies to the selected observation. A gate remains pending;
+saved child identities remain pending or have a recorded checkpoint result;
+or the original OpenPullRequest operation has a recorded receipt. The public
+session journal has no recovery-progress projection, so committed recovery-event
+proof remains `blocked`.
 
 ## Before you begin
 
@@ -18,15 +19,21 @@ in through the supported CLI flow as the expected actor with `api.read` and
 `projects.orchestrator` scopes. The script does not sign in, launch a browser,
 accept a bearer token, or create fixtures.
 
-Prepare a root session with the expected gate pending. Run the before-capture
-mode before recovery. Recover the Host through the normal owner operation
-outside this case. Then run after-observation mode with the returned recovery
-operation ID and the before-capture file.
+Prepare a root session with the gate or child work to observe. For
+`committed-effect`, also select a running OpenPullRequest intent without a
+checkpoint receipt. Run before-capture before recovery. Recover the Host through
+the normal owner operation outside this case. Then use the returned recovery
+operation ID and the before-capture file for after-observation.
 
 ## Prepare the input
 
-Copy `scripts/acceptance/api/examples/checkpoint-recovery-observation.json`
-to a local JSON file outside the repository. Set these fields:
+Copy the example for your observation to a local JSON file outside the repository:
+
+- Gate: `scripts/acceptance/api/examples/checkpoint-recovery-observation.json`
+- Child: `scripts/acceptance/api/examples/checkpoint-recovery-child-join-observation.json`
+- Pull request receipt: `scripts/acceptance/api/examples/checkpoint-recovery-committed-effect-observation.json`
+
+Set these fields:
 
 - `sourceCommit`: the full 40-character source commit for the apphost.
 - `targetCommit`: the full source commit recorded for the Gateway target.
@@ -35,14 +42,17 @@ to a local JSON file outside the repository. Set these fields:
 - `expectedActorId`: the actor authorized for this case.
 - `expectedRecoveryOperationId`: a valid UUID. The before-capture mode does
   not use this value. Set it to the recovery operation ID for after-observation.
-- `expectedGateRequestId`: the pending gate request to preserve.
+- `expectedGateRequestId`: the pending gate request for `pending-gate`.
+- `expectedEffectOperationId`: the OpenPullRequest operation UUID for
+  `committed-effect`. This is distinct from the recovery operation UUID.
+- For child and effect cases, operation UUIDs must not be all zero.
 - `target`: the Gateway origin, Broker issuer, client ID, API audience, tenant,
   project, run, and root session.
 
 The input rejects credentials, unknown fields, arbitrary commands and routes,
 provider URLs, and unsafe target identifiers.
 
-## Capture the gate before recovery
+## Capture the state before recovery
 
 Set `AGENTWEAVER_CLI_PATH` to the absolute path of the exact native apphost.
 Use a new evidence directory for this capture.
@@ -56,9 +66,10 @@ node scripts\acceptance\api\checkpoint-recovery-observation.mjs --input $caseInp
 
 Keep the input in `before-capture` mode. The script records the apphost,
 script, and input hashes; actor and target; status and decision reads; and all
-pages from the run's session journal. The capture records the pending gate
-request, authorized actor, choices, and freeform setting from both decision
-and session-status surfaces.
+pages from the run's session journal. The gate case records the request, actor,
+choices, and freeform setting. The child cases record visible pending
+association, child-session, and message identities from the checkpoint
+projection and the original session tree.
 
 The result reports `capturePath` and `captureSha256`. Keep `capture.json`,
 `case-input.json`, and `commands.jsonl` together in the before-capture
@@ -86,11 +97,29 @@ status through `api invoke` and `rest`. It reads status and decision bindings
 again after the journal pages. The script does not use caller-selected
 operation status or an Orchestrator outbox event.
 
-The case passes only when the selected operation is `ready`, the new runtime
-differs from the prior runtime, the recovery fence is the next source fence,
-and the run, root, and decisions report that fence. The case also requires
-`nativeCache` or `journalRebuild` recovery material and the same pending gate
-request, actor, choices, and freeform setting.
+The selected operation must be `ready`, use a different runtime and the next
+source fence, and report `nativeCache` or `journalRebuild` material. The gate
+case requires the same request, actor, choices, and freeform setting.
+
+The child cases also require a released dispatch hold, a stable authorization
+context, and the same source checkpoint captured before recovery. A later
+checkpoint is accepted when the decision version is unchanged and the observed
+child or receipt state is explained. If recovery used a different source
+checkpoint, take a new before capture before a later recovery attempt.
+
+For `child-join`, each captured child remains pending with the same association,
+session, and message, or the original child is complete with a recorded
+checkpoint result. For `committed-effect`, a matching
+`committedAwaitingReceipt` / `reconcileCommitted` operation is `blocked`
+until reconciliation records its receipt. A matching
+`terminalReceiptRecorded` operation and succeeded step pass the receipt
+observation. `intentOnly` / `mayRepeat` does not establish a Source Control
+commit, so that after state is `blocked`.
+
+The child and receipt results leave full plan content and dependency graph
+proof `blocked`. The receipt result also leaves physical no-duplicate proof
+`blocked`. The public reads do not expose those inventories. Missing runtime
+identity blocks; equal old and new runtime IDs fail.
 
 ## Validate and read the result
 
@@ -104,10 +133,10 @@ each new evidence directory. The before-capture directory also contains
 
 | Result | Meaning |
 | --- | --- |
-| `captured` | The script retained a complete before-recovery gate and journal observation. |
-| `passed` | The selected recovery is ready and the captured gate remains pending. |
-| `blocked` | The sign-in, target, before capture, status, material, or journal evidence is missing or incomplete. |
-| `failed` | The recovery, runtime, fence, gate, or API/REST responses contradict the expected state. |
+| `captured` | The script retained the selected before-recovery observation and journal. |
+| `passed` | The selected gate, child, or receipt observation meets its checks. |
+| `blocked` | The sign-in, target, before capture, status, material, or journal evidence is missing or incomplete. For child and effect cases, changing or unbound API and REST reads are also blocked. |
+| `failed` | The recovery, runtime, fence, or gate contradicts the expected state. Differing API and REST reads fail for the pending-gate case. For child and effect cases, they fail when each source repeats the same different body with complete, stable binding. |
 | `validated-not-run` | Dry-run validation passed; the script used no network and wrote no evidence. |
 
 Exit codes are `0` for `captured`, `passed`, or `validated-not-run`, `1` for
