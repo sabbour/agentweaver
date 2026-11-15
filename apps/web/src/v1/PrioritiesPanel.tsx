@@ -1,9 +1,10 @@
 /**
- * Chief of Staff Priorities on Overview: the caller's ordered outcomes with
- * notes, a manual checklist, and typed links. Every write sends the revision the
- * user saw. On a conflict the panel rereads, shows a short notice, and keeps the
- * user's draft. Priority writes only call `/chief-of-staff/priorities` routes;
- * they never call run or gate endpoints.
+ * Chief of Staff Priorities on Overview: ordered outcomes with notes, a manual
+ * checklist, and typed links. Edits and link changes use the Priority revision;
+ * reorders use the order revision, and creates use an idempotency key. On an
+ * stale update or reorder conflict, the panel rereads the list and shows a notice.
+ * Edit drafts stay local during that reread. Writes use only
+ * `/chief-of-staff/priorities` routes; they never call run or gate endpoints.
  */
 import {
   Badge,
@@ -83,7 +84,7 @@ const useStyles = makeStyles({
   inline: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
-/** True for a 409 that means the caller saw an old revision. */
+/** True for a 409 other than the known duplicate-link and limit errors. */
 function isRevisionConflict(error: unknown): boolean {
   if (!(error instanceof GatewayError) || error.status !== 409) return false;
   const code = errorCode(error);
@@ -305,7 +306,7 @@ type WriteFn = (
   projectId?: string,
 ) => Promise<boolean>;
 
-/** One Priority with its edit form, checklist, and links. Drafts survive a conflict reread. */
+/** One Priority with its edit form, checklist, and links. Edit drafts stay in local state during a reread. */
 function PriorityItem({ priority, index, count, notice, orderBusy, projects, projectNames, conversations, write, move }: {
   priority: ChiefOfStaffPriority;
   index: number;

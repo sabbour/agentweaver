@@ -122,8 +122,7 @@ function ScopedDecisionView({
           idempotencyKey, tenantSelector,
         ), binding);
       if (!result.accepted) {
-        // The server answered but rejected the content (for example an invalid
-        // answer). List its validation issues so the user can fix them.
+        // The service rejected the response. Show its issues when it provides them.
         const details = result.issues.map((issue) => `${issue.message} (${issue.path})`).join(' ');
         setNotice(`The service did not accept this response.${details ? ` ${details}` : ''}`);
       } else {

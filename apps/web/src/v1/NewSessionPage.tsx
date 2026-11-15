@@ -83,7 +83,7 @@ export function NewSessionPage() {
         setPhase('sign-in');
         return false;
       }
-      // Started, or already ended: the run page shows the current state either way.
+      // Started, still starting, or already ended: the run page shows its current state.
       setPending(null);
       setPhase('idle');
       navigate(runChatPath(run.projectId, run.runId));

@@ -47,8 +47,8 @@ export function savePendingRun(run: PendingRun): void {
 }
 
 /**
- * Reads the pending run. Bad, unreadable, or expired entries count as none;
- * bad and expired entries are also removed.
+ * Reads the pending run. Missing or unreadable storage returns null; malformed
+ * or expired entries are removed when possible.
  */
 export function readPendingRun(now: number = Date.now()): PendingRun | null {
   let raw: string | null;

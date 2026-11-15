@@ -18,7 +18,7 @@ export function flowGroup(state: string | null): FlowGroup | null {
     // A blocked run is still in progress, so it is grouped with Working.
     case 'active':
     case 'blocked': return 'working';
-    // Every finished state goes to Done, including failure and unknown outcome.
+    // Completed, failed, cancelled, and indeterminate runs go to Done.
     // The row's own state badge still shows which one it was.
     case 'completed':
     case 'failed':

@@ -56,7 +56,7 @@ const CARDINALITY: Record<PlatformComponentCardinality, string> = {
   perCanvas: 'One per canvas',
 };
 
-/** Readable name for an area key such as `networkPolicy`. Unknown keys show as sent. */
+/** Formats a camel-case area key as a readable label, such as `networkPolicy`. */
 function areaLabel(key: string): string {
   const words = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim();
   return words ? words[0].toUpperCase() + words.slice(1).toLowerCase() : key;

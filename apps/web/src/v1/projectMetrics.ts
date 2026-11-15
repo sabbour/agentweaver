@@ -50,12 +50,12 @@ export function successRate(metrics: Pick<ProjectMetrics, 'completedRuns' | 'suc
   return metrics.completedRuns > 0 ? metrics.succeededRuns / metrics.completedRuns : null;
 }
 
-/** Formats a count. Null means "not measured" and shows a dash, never 0. */
+/** Formats a count. Null or missing means "not measured" and shows a dash, never 0. */
 export function formatCount(value: number | null | undefined): string {
   return value == null ? NOT_MEASURED : value.toLocaleString();
 }
 
-/** Formats a duration in milliseconds as ms, s, m, or h. Null shows a dash. */
+/** Formats a duration in milliseconds as ms, s, m, or h. Null or missing values show a dash. */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms == null) return NOT_MEASURED;
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -181,8 +181,8 @@ export function useProjectMetrics(projectId: string | null, range: MetricsRangeK
   // slow reply for an old project or range cannot replace newer data.
   const requestRef = useRef(0);
   const invalidateRequestRef = useRef<(() => void) | null>(null);
-  // The project the shown data belongs to. Data from another project is
-  // cleared before the new load, so it is never shown under the wrong name.
+  // The project the shown data belongs to. A load for another project clears
+  // the old data before applying the new response.
   const loadedProjectRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {

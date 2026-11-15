@@ -2049,7 +2049,6 @@ export interface SessionEventEnvelope {
   objectReferences: unknown[];
 }
 
-/** Persisted event page with a cursor for continued replay. */
 /** Run-bound text resolved from a persisted turn event; storage keys never reach the browser. */
 export interface SessionTurnContent {
   eventId: string;
@@ -2057,6 +2056,7 @@ export interface SessionTurnContent {
   text: string;
 }
 
+/** Persisted event page with a cursor for continued replay. */
 export interface SessionEventPage {
   events: SessionEventEnvelope[];
   nextCursor?: string | null;

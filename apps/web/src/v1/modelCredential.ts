@@ -1,8 +1,10 @@
 import type { ModelSelectionSettings, ProjectConfiguration } from './contracts';
 
 /**
- * True when the saved default model had a credential pin and the draft model needs a new one.
- * A credential pin belongs to one model, so a changed model must not reuse it.
+ * True when a model other than hosted Copilot is selected, the saved selection
+ * had a credential pin, and the current pin is incomplete. When a saved pin
+ * exists, ConfigurationFields clears it for a different model and restores it
+ * for the saved model.
  */
 export function needsModelCredential(
   configuration: ProjectConfiguration,

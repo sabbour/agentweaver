@@ -1,9 +1,7 @@
 /**
- * Table of the platform components a run may use and the implementations it
- * was allowed to choose from, read from the run's accepted selection. It shows
- * allowed choices, not which implementation is running: the service does not
- * report active implementations yet. When it does, the platform settings page
- * can reuse this table with an "Active" column.
+ * Shows the candidates from a run's accepted selection, not the implementation
+ * used at runtime. Platform settings reads active implementations from a
+ * separate report.
  */
 import { Badge } from '@fluentui/react-components';
 import type { EffectiveProviderSelection } from './contracts';
