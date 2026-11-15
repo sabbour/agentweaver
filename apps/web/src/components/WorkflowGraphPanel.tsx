@@ -109,7 +109,6 @@ export interface ExecutorState {
   completedAt?: number;
   /** Short human-readable status line from the backend workflow.step payload.message field. */
   message?: string;
-  /** Per-step execution pod name from workflow.step SSE (spec-018). Null today; non-null per-agent after distributed phases. */
   executionPodName?: string | null;
 }
 
@@ -138,7 +137,6 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   reviewedBy?: string;
   runOutcome?: { achieved: boolean; reason: string };
   runDegraded?: { toolName: string; reason: string };
-  /** Per-node execution pod name (spec-018). Null today (global fallback used); non-null per-agent after distributed phases. */
   executionPodName?: string | null;
   /** Layout direction for handle placement. 'LR' = left/right; 'TB' = top/bottom; 'GRID' exposes all sides for routed grid edges. */
   dir?: 'LR' | 'TB' | 'GRID';
@@ -252,8 +250,6 @@ export const useNodeStyles = makeStyles({
     borderRadius: '8px',
     cursor: 'default',
   },
-  // Colored top-accent strip keyed to status. A thin 2px line flush with the card's rounded
-  // top corners — retires the heavier accent bar.
   accentBar: {
     position: 'absolute',
     top: 0,
@@ -711,8 +707,6 @@ function statusLabel(s: StepStatus): string {
   return s;
 }
 
-/** Pick the colored top-accent class for a node given its status flags. */
-/** Maps a workflow status or role to its graph accent styling class. */
 export function accentClass(
   s: ReturnType<typeof useNodeStyles>,
   status: StepStatus,
@@ -1293,6 +1287,7 @@ export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, da
         ? preferredSide
         : sourceY <= targetY ? 'top' : 'bottom'))
     : preferredSide;
+  // Join the continuation route so the return junction lies on both edges.
   const joinX = continuationJoin?.point.x ?? targetX;
   const joinY = continuationJoin?.point.y ?? targetY;
   const nodeBounds = allNodes.reduce(
@@ -1510,10 +1505,7 @@ export function loopbackEdge(id: string, source: string, target: string, label: 
   return { id, source, target, type: 'loopback', label };
 }
 
-// Derive a human-readable label for a coordinator-level loopback back-edge from the SOURCE
-// node's role (falling back to its id) so it is robust across descriptor id schemes. Tank adds
-// two coordinator loopbacks: rai→coordinator (re-dispatch on RAI flags) and review→coordinator
-// (request changes). GraphEdge carries no label field, so the renderer computes it here.
+// GraphEdge has no label field, so derive this return label from the source role or ID.
 /** Builds the user-facing label for a coordinator return edge. */
 export function coordinatorLoopbackLabel(sourceRole: string | undefined, sourceId: string | undefined): string {
   const role = (sourceRole ?? '').toLowerCase();
@@ -1595,13 +1587,8 @@ export function buildWorkflowDefinitionGraph(
 }
 
 /**
- * Fetches the static graph descriptor for a workflow definition and renders a
- * read-only ReactFlow graph. Intended for inline expansion in WorkflowsPage.
- */
-/**
- * Renders a workflow definition in an inline interactive graph panel.
- * Definition data and execution callbacks come from props; graph state and detail UI use React
- * Flow and the panel's local state.
+ * Loads and renders a read-only workflow definition graph for inline expansion.
+ * The panel fetches by project and workflow ID, then lays out the graph for pan and zoom.
  */
 export function WorkflowDefinitionInlinePanel({
   projectId,
@@ -1617,6 +1604,7 @@ export function WorkflowDefinitionInlinePanel({
 
   useEffect(() => {
     let cancelled = false;
+    // Ignore results after the project or workflow changes, or after the panel unmounts.
     const loadGraph = async () => {
       setLoading(true);
       setError(null);

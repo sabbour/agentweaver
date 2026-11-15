@@ -463,7 +463,7 @@ export function ProjectSettingsPage() {
     return () => { cancelled = true; };
   }, [projectId]);
 
-  // Authentication configuration is optional for project settings and is cached locally.
+  // Load optional auth settings separately so their failure does not block project settings.
   useEffect(() => {
     let cancelled = false;
     void apiClient.getAuthConfig()
