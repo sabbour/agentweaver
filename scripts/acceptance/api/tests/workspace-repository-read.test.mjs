@@ -60,6 +60,7 @@ function workspaceDocument(operation, result) {
   };
 }
 
+// Journey tests use this runner to supply controlled replies instead of launching the native apphost.
 function fakeApphost(caseInput, overrides = {}) {
   const calls = [];
   const runner = (cliPath, args, env, timeoutMs) => {
