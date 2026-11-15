@@ -1297,8 +1297,9 @@ dependencies, and the current pending decision blocker. RubberDuck operations
 also expose `failureCode` for a retryable owner failure or invalid verdict.
 External-effect intents without receipts are marked `mayRepeat`; unresolved
 running effects are `indeterminate`. At a recovered child join, the one
-supported committed OpenPullRequest effect is reported as `reconcileCommitted`
-until its original intent receives a saved receipt. This state means recovery
+supported committed OpenPullRequest effect is reported in
+`executionRecovery.steps[].effectRecoveryState` as `reconcileCommitted` until
+its original intent receives a saved receipt. This state means recovery
 must read and verify the already stored pull request; it does not mean the
 effect can be repeated or is complete. A saved terminal receipt is reported only
 as recorded evidence, not as proof of physical exactly-once execution. Missing or
@@ -1309,7 +1310,10 @@ does not dispatch work or reconcile children.
 Pending child entries expose `associationId`, `childSessionId`, and
 `messageId`. The step projection identifies a saved result as
 `checkpointResultRecorded`. After child-join recovery, the retained
-OpenPullRequest operation reports `committedAwaitingReceipt` with
+OpenPullRequest operation reports
+`executionRecovery.platformGateOperations[].evidenceState` as
+`committedAwaitingReceipt` and
+`executionRecovery.platformGateOperations[].effectRecoveryState` as
 `reconcileCommitted` before its receipt is recorded, then
 `terminalReceiptRecorded` with a succeeded step. The
 [recovery observation case](../guide/checkpoint-recovery-observation-acceptance.md)
