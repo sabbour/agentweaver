@@ -170,7 +170,6 @@ public sealed class GatewayProjectRunRegressionTests
             .GetProperty(status).GetProperty("content").GetProperty("application/json")
             .GetProperty("schema").GetProperty("$ref").GetString());
 
-        // The persisted first message is never echoed by create or start.
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
         Assert.False(schemas.GetProperty(responseSchema).GetProperty("properties")
             .TryGetProperty("firstMessage", out _));

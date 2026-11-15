@@ -85,7 +85,6 @@ public sealed class GatewayUserNotificationTests
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
         var item = schemas.GetProperty("UserNotification");
         Assert.False(item.GetProperty("additionalProperties").GetBoolean());
-        // Both sources keep the same required keys, with source-specific values allowed to be null.
         Assert.Equal(
             ["createdAt", "gateKind", "kind", "notificationId", "projectId", "promotionId", "prompt", "requestId",
                 "runId", "sessionId", "source", "stateVersion", "taskCount", "updatedAt"],

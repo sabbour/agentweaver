@@ -516,8 +516,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         var firstUseBody = await firstUse.Content.ReadFromJsonAsync<JsonElement>();
         var secondRefreshToken = firstUseBody.GetProperty("refresh_token").GetString()!;
 
-        // Replaying the already-redeemed first refresh token must fail AND burn the
-        // whole family, so the still-unused second refresh token must also now fail.
+        // Replaying the first token must also make its still-unused successor unusable.
         var replay = await BrokerFlowDriver.RefreshAsync(_broker, IdentityBrokerWebApplicationFactory.TestClientId, firstRefreshToken);
         Assert.NotEqual(HttpStatusCode.OK, replay.StatusCode);
 
@@ -631,7 +630,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
             consentAuthorizationId = (await authorizations.GetIdAsync(consent))!;
             Assert.NotEqual(consentAuthorizationId, sessionAuthorizationId);
 
-            // Exercise the deterministic family-revocation path used after a lost redemption claim.
+            // Revoke this session family directly, then check that the separate saved consent remains valid.
             await services.GetRequiredService<RefreshTokenFamilyRevoker>()
                 .RevokeAsync(sessionAuthorizationId, CancellationToken.None);
         }
@@ -755,7 +754,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
             _broker, _fakeIdpClient, IdentityBrokerWebApplicationFactory.TestClientId,
             IdentityBrokerWebApplicationFactory.TestClientRedirectUri, "openid", challenge);
 
-        // The middleware must reject the invalid token, then return a safe error through the one-use continuation.
+        // The middleware rejects the tampered token and returns a safe error through the continuation route.
         Assert.Equal(HttpStatusCode.Redirect, callbackResponse.StatusCode);
         var resumeUri = new Uri(new Uri("https://broker.test.local"), callbackResponse.Headers.Location!);
         var resumeQuery = QueryHelpers.ParseQuery(resumeUri.Query);

@@ -83,6 +83,7 @@ internal sealed class HostedModelCatalogCredentialTlsTestSupport : IDisposable
 
     public void ConfigureContext(HttpContext context)
     {
+        // Set TLS features on the test context; no handshake runs.
         context.Request.Scheme = "https";
         context.Connection.LocalPort = ListenerPort;
         context.Features.Set<ITlsHandshakeFeature>(new Handshake());

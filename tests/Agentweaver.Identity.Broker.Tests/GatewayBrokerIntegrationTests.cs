@@ -177,6 +177,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     HttpStatusCode.OK,
                     GatewayEventsJournalFixture.SerializePage(new SessionEventPage(
                         [events.FirstEvent], "gateway-cursor-invalid-owner", HasMore: false)));
+            // Hold the next page so Gateway must recheck the revoked role before writing SSE.
             if (cursor == events.FirstCursor && revocationPageArmed.Task.IsCompleted)
             {
                 revocationPageRequested.TrySetResult();

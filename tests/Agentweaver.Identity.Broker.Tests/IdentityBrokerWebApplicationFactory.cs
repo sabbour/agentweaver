@@ -11,11 +11,9 @@ using Npgsql;
 namespace Agentweaver.Identity.Broker.Tests;
 
 /// <summary>
-/// Boots the real broker host (<c>Program.cs</c>, unmodified) against: a fresh, isolated,
-/// explicitly pre-migrated Postgres database; a freshly generated signing certificate (never a baked-in test cert
-/// shared across tests); and a <see cref="FakeIdentityProvider"/> wired in as the external
-/// OIDC backchannel so discovery/token calls are dispatched in-process rather than over the
-/// network. One operator-seeded test client ("test-client", public, PKCE) is configured.
+/// Boots the real broker host (<c>Program.cs</c>) with the supplied PostgreSQL connection string,
+/// a generated signing certificate unless the caller supplies one, and an in-process
+/// <see cref="FakeIdentityProvider"/> for OIDC discovery and token calls.
 /// </summary>
 /// <remarks>
 /// Configuration is supplied via process environment variables, set in the constructor,

@@ -66,7 +66,6 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
-        // Both sides use the canonical repository contract, so callers can retain the exact selected target.
         foreach (var name in new[] { "AddChiefOfStaffPriorityLinkRequest", "ChiefOfStaffPriorityLink" })
         {
             var schema = schemas.GetProperty(name);
@@ -134,7 +133,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     public async Task RuntimeObservationOpenApiEnumsMatchOwnerWireSerialization()
     {
         var ownerJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        // Match Orchestrator Program.cs ConfigureHttpJsonOptions, including its property-level status override.
+        // Match Orchestrator's JSON enum settings for this comparison.
         ownerJsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         using var rsa = RSA.Create(2048);
         await using var gateway = await GatewayResourceServer.StartAsync(
@@ -268,7 +267,6 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             .GetProperty("Cache-Control");
         Assert.Equal("no-store", cacheControl.GetProperty("schema").GetProperty("example").GetString());
 
-        // The Gateway bound and OpenAPI schema keep the drawer response small and exclude owner-only metadata.
         var route = Assert.Single(
             GatewayHost::Agentweaver.Gateway.GatewayRouteCatalog.Routes,
             item => item.OperationId == "getProjectAgentHistory");
