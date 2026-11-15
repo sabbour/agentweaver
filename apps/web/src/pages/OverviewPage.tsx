@@ -309,8 +309,8 @@ export function OverviewPage() {
 
   /**
    * Loads the published project and notification reads, then enriches recent projects.
-   * Each supplementary owner read can fail independently without concealing the
-   * other panels; a stale response never replaces a newer poll.
+   * Supplementary reads can fail independently. The abort check prevents stale results
+   * from replacing overview data or its error message.
    */
   const load = useCallback(async (abortSignal?: AbortSignal) => {
     if (mountedRef.current) setRefreshing(true);
@@ -391,18 +391,15 @@ export function OverviewPage() {
         setError(null);
       }
     } catch (err) {
-      // #208 point 5: an aborted fetch (unmount/range change/overlapping-poll guard) is expected
-      // control flow, not a user-facing error — don't surface it.
+      // Ignore failures from a superseded load and explicit AbortError responses.
       if (abortSignal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
       if (mountedRef.current) setError(formatError(err));
     }
     finally { if (mountedRef.current) { setLoading(false); setRefreshing(false); } }
   }, [apiCall, range]);
 
-  // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
-  // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
-  // (interval firing while a manual refresh is pending, or vice versa) can't stack.
-  /** Replaces any active fan-out before a manual refresh or retry. */
+  // Manual refresh and retry use this entry point; the poll effect has its own loop.
+  // The signal marks the prior load stale; load checks it before applying overview data and errors.
   const runLoad = useCallback(() => {
     inFlightRef.current?.abort();
     const controller = new AbortController();

@@ -69,20 +69,8 @@ type PendingSessionAuthRequest = {
 const pendingSessionAuthRequests = new Map<string, PendingSessionAuthRequest>();
 let sessionAuthChannel: BroadcastChannel | null | undefined;
 
-// SECURITY (accepted residual risk, tracked separately): the session token is stored
-// only in sessionStorage and is therefore readable by any
-// same-origin script. There is no confirmed XSS sink in this app today (LLM/tool
-// output is escaped/sanitized — see .security findings-frontend-web.md, Alert 1),
-// but this remains a JS-readable secret and would become higher severity the moment
-// an XSS vector is introduced elsewhere. Full remediation (migrating to a
-// short-lived HttpOnly/Secure/SameSite session cookie, which also requires adding
-// CSRF protection since cookies are attached automatically) is a larger auth-flow
-// change tracked as a follow-up, not attempted in this pass. In the meantime, the
-// CSP `script-src 'self'` (no `unsafe-inline`/`unsafe-eval`) added alongside this
-// comment narrows the practical avenues for third-party script injection. Same-origin
-// tabs transfer the token transiently through BroadcastChannel only in response to a
-// nonce-bearing request; the token is never copied to localStorage, a JS-readable
-// cookie, URLs, or durable cross-tab storage.
+// Tokens are JS-readable in per-tab sessionStorage; peers receive one only in
+// response to a request that does not name the same token as rejected.
 /** Opens the shared tab channel once and caches `null` when the browser blocks or lacks it. */
 function getSessionAuthChannel(): BroadcastChannel | null {
   if (sessionAuthChannel !== undefined) return sessionAuthChannel;
@@ -174,7 +162,7 @@ export function getSessionLogin(): string | null {
   }
 }
 
-/** Saves credentials locally and announces availability to other tabs; blocked storage is ignored. */
+/** Saves credentials locally and best-effort announces availability to other tabs. */
 export function setSessionAuth(token: string, login?: string | null): void {
   try {
     storeSessionAuth(token, login);
@@ -242,7 +230,7 @@ export async function captureSessionAuthFromUrl(): Promise<void> {
   const stripAuthParams = () => {
     params.delete('code');
     params.delete('auth');
-    // Remove legacy raw-token params that must never appear in URLs going forward.
+    // Remove legacy token and login parameters.
     params.delete('session_token');
     params.delete('sessionToken');
     params.delete('login');

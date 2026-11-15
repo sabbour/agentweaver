@@ -1,8 +1,7 @@
 /**
- * 0.x Agents page controls on v1 casting: Add member, Sync (team export and
- * import), and the list of pending team proposals. Every change becomes a
- * pending proposal first; nothing changes until someone confirms it on the
- * Cast a team page.
+ * Retained Agents controls on v1 casting: add a member, sync team data, and
+ * review pending proposals. Casting proposals apply only after confirmation;
+ * repository sync uses its own preview and commit.
  */
 import { Button, Field, Input, Select, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowDownloadRegular, ArrowUploadRegular, PersonAddRegular } from '@fluentui/react-icons';
@@ -203,7 +202,6 @@ export function TeamMemberActions({ projectId, configuration, configurationRevis
 
 /** Starts a browser download of the exported AgentSuite content archive. */
 function downloadAgentSuite(projectId: string, result: AgentSuiteExport) {
-  // Convert the response's base64 archive in bounded chunks to avoid a large argument list.
   const binary = atob(result.archive);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
@@ -625,7 +623,6 @@ export function PendingProposals({ projectId }: { projectId: string }) {
   }, [apiCall, projectId]);
 
   useEffect(() => {
-    // Load on the next tick so state updates stay out of the effect body.
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);

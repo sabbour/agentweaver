@@ -45,7 +45,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 // render a readable startup error instead of leaving the user with a blank page.
 const root = createRoot(document.getElementById('root')!);
 void import('./App.tsx').then(({ default: App }) => {
-  // Component failures after startup still use the existing render error boundary.
+  // Render errors from the loaded app are handled by the existing error boundary.
   root.render(<StrictMode><ErrorBoundary><App /></ErrorBoundary></StrictMode>);
 }).catch((reason: unknown) => {
   // Show only the known configuration message; other import failures need a generic reload prompt.

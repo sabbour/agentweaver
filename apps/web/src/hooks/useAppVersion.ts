@@ -14,11 +14,11 @@ export interface AppVersionInfo {
   version: string;
   /** Commit the running web image was built from, or null when the host does not know it. */
   gitSha: string | null;
-  /** True when the image was built for a published version rather than a local build. */
+  /** True when the version has no prerelease suffix. */
   isRelease: boolean;
 }
 
-/** Builds the badge text: the plain version for releases, otherwise version plus commit. */
+/** Shows the plain version for releases or when no commit is known; otherwise appends the commit. */
 function displayVersion(version: string, gitSha: string | null, isRelease: boolean): string {
   if (isRelease || !gitSha) return version;
   // Keep an existing prerelease suffix instead of adding a second "-dev".
