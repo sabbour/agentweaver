@@ -40,6 +40,7 @@ function mutateAuthority(fact, mutation) {
   return reason;
 }
 
+// This fact starts with the current root binding; tests override fields for each case.
 function rootFact(sessionId, factId, fields) {
   return {
     factId: `00000000-0000-4000-8000-0000000001${factId}`,
