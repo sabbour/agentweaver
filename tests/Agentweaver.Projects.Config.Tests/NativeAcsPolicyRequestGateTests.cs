@@ -48,6 +48,6 @@ public sealed class NativeAcsPolicyRequestGateTests
 
         var endpoints = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).ToList();
 
-        Assert.Equal(3, endpoints.Count);
+        Assert.Equal(5, endpoints.Count);
     }
 }
