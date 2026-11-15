@@ -1,9 +1,6 @@
 /**
- * Lists the signed-in user's notifications across all projects. Overview and the
- * notification bell use it; later the attention inbox and Chief of Staff
- * Priorities reuse it. A pending gate opens the run's Approvals tab, where the
- * shared decision view handles the response. A backlog promotion opens the
- * project Board. Each item can be dismissed.
+ * Renders the supplied attention items. Pending gates open the run's Approvals
+ * tab; backlog promotions open the project Board. Each item can be dismissed.
  */
 import {
   Button,
@@ -72,7 +69,7 @@ export function AttentionList({
   onNavigate?: () => void;
 }) {
   const styles = useStyles();
-  // A failed dismiss is shown above the list or state line.
+  // Dismiss failures appear only after loading succeeds; loading and load errors take precedence.
   const dismissFailure = attention.dismissError
     ? <Caption1 className={styles.empty} role="alert">Could not dismiss the notification. {errorMessage(attention.dismissError)}</Caption1>
     : null;

@@ -311,7 +311,6 @@ function ProjectsPage() {
           message += ` The repository was not saved. Add it later in Settings > Repository.`;
         }
       }
-      // Reset the form, close the dialog, and reload so the new tile appears.
       setProjectName('');
       setRepositoryInput('');
       setStartFrom('blank');
@@ -409,7 +408,7 @@ function ProjectsPage() {
   );
 }
 
-/** Manages a project's GitHub App installation and repository connection. */
+/** Manages the signed-in user's GitHub Repo App connection and repository list. */
 function ProjectRepoAppConnectionPanel({
   onStatusChange,
   disabled = false,
@@ -445,6 +444,7 @@ function ProjectRepoAppConnectionPanel({
 
   const loadConnection = useCallback(async () => {
     const generation = ++statusGenerationRef.current;
+    // Ignore responses from an earlier refresh or after cleanup invalidates this generation.
     onStatusChange?.(null);
     setStatusLoading(true);
     try {
@@ -525,6 +525,7 @@ function ProjectRepoAppConnectionPanel({
     onStatusChange?.(null);
     const generation = ++connectGenerationRef.current;
     const requestId = `agentweaver-repo-app-${generation}-${window.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
+    // Open before awaiting the Broker to preserve the user gesture for popup blockers.
     const popup = window.open(
       'about:blank',
       requestId,
@@ -689,7 +690,8 @@ function ProjectRepoAppConnectionPanel({
 /**
  * Edits project configuration and reports rejected or stale updates.
  * One component serves three routes: Settings (sectioned form), Skills, and Agents.
- * All three share one loaded configuration, one draft, and one save path.
+ * All three load the current configuration. Settings and Agents save the shared
+ * draft; Skills writes assignment changes through its own route.
  */
 function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | 'skills' | 'agents' }) {
   const { projectId = '' } = useParams();
@@ -1024,7 +1026,6 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     </>
   );
 
-  // Settings view: a side rail of section links plus the selected section.
   // Some sections own their own data and saving (General, Access, Danger zone,
   // Connections, History). The sections in CONFIGURATION_SECTIONS edit the
   // shared configuration document and use the shared form and Save button.
@@ -1169,7 +1170,7 @@ function assertKnowledgeTransferBundleScope(
     throw new Error('Knowledge transfer bundle contains records or revisions outside its exact scope.');
 }
 
-/** Discovers project-wide records and manages records within a selected run and agent. */
+/** Searches project-wide Knowledge and shows revision history for selected records. */
 function ProjectKnowledgeDiscovery({
   projectId,
   onRefreshCounts,
@@ -1764,7 +1765,7 @@ function KnowledgePage() {
   }, [binding, agentId, correctlyScoped, load, projectId, requestScope]);
 
   const refreshSummaryCounts = (mutationProjectId: string) => {
-    // List filters can change while a project-wide mutation is in flight.
+    // Ignore a mutation refresh if the user has switched to another project.
     if (activeProjectId.current === mutationProjectId)
       setSummaryRefreshKey((current) => current + 1);
   };
@@ -2748,7 +2749,7 @@ function SelectionView({ selection }: { selection: EffectiveRunSelection | null 
   );
 }
 
-/** Displays run-level and per-agent usage, preserving missing measurements as unavailable. */
+/** Displays run-level and per-agent usage, keeping missing values as “not reported.” */
 function UsageView({ usage }: { usage: UsageRunTotals | null }) {
   if (!usage) return <p className="v1-muted">No usage was reported for this run.</p>;
   const measurement = (value: number | null | undefined) => value == null ? 'not reported' : String(value);
@@ -3554,7 +3555,7 @@ function formatElapsed(milliseconds: number): string {
 function useTickingNow(enabled: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    // No timer while disabled, so a hidden or unauthorized page does not re-render every second.
+    // No timer while disabled, so an unauthorized run page does not re-render every second.
     if (!enabled) return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     // Stop the timer when disabled or unmounted.
@@ -3586,8 +3587,8 @@ function RunSignInAction({ binding }: { binding: RunBinding }) {
 }
 
 /**
- * Gets a session for this exact run without a prompt, once per binding.
- * Returns 'pending' while the attempt runs and 'failed' when the user must sign in.
+ * Tries to get a session for this run without prompting.
+ * Returns 'failed' after the silent session attempt resolves to `false`.
  */
 function useSilentRunSession(
   binding: RunBinding | null,
@@ -3609,7 +3610,7 @@ function useSilentRunSession(
       if (!ok) setFailedKey(key);
     });
   }, [authorized, binding, ensureSession, failedKey, key]);
-  // Leaving the run makes the unbound session active again for project pages.
+  // On cleanup, activate or silently restore the unbound session used by project pages.
   useEffect(() => () => { void ensureSession(null); }, [ensureSession]);
   // 'pending' also covers "already authorized"; callers check `authorized` first.
   return failedKey === key ? 'failed' : 'pending';
@@ -3914,7 +3915,7 @@ function CallbackPage() {
   );
 }
 
-/** Sends a validated Broker callback from a popup or hidden frame to its same-origin parent. */
+/** Selects the popup opener or embedded parent for a sign-in callback. */
 function identityCallbackTarget(): { target: Window; closeAfterSend: boolean } | null {
   const opener = window.opener;
   if (opener && opener !== window) return { target: opener, closeAfterSend: true };
@@ -3922,6 +3923,7 @@ function identityCallbackTarget(): { target: Window; closeAfterSend: boolean } |
   return null;
 }
 
+/** Forwards parsed callback parameters to a same-origin popup opener or parent. */
 function IdentityPopupCallbackPage() {
   const [callback] = useState(() => {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
@@ -3959,7 +3961,7 @@ function IdentityPopupCallbackPage() {
   );
 }
 
-/** Relays GitHub App callback status from the redirect URL to the initiating popup. */
+/** Relays GitHub App callback status from the redirect URL to its opener. */
 function RepoAppCallbackRelay() {
   const [searchParams] = useSearchParams();
   const authorizationOutcome = searchParams.get('repo_app_auth');

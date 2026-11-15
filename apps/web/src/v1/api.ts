@@ -153,8 +153,8 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
   const detail = typeof problem.detail === 'string' ? problem.detail : undefined;
   const title = typeof problem.title === 'string' ? problem.title : undefined;
   const code = typeof problem.code === 'string' ? problem.code : undefined;
-  // Backlog writes reject with `{ issues: [{ code, path, message }] }` instead of a
-  // problem document, so fall back to the first issue message when no detail exists.
+  // Backlog write errors can return `{ issues: [{ code, path, message }] }` instead of a
+  // problem document. Use the first issue message only when detail, title, and code are absent.
   const issues = Array.isArray(problem.issues) ? problem.issues : [];
   const firstIssue = issues.find((issue): issue is { message: string } =>
     !!issue && typeof issue === 'object' && typeof (issue as { message?: unknown }).message === 'string');
@@ -166,7 +166,7 @@ export function encodeSegments(...segments: string[]): string {
   return segments.map((part) => encodeURIComponent(part)).join('/');
 }
 
-/** Accepts only a pending proposal whose stored generation mode matches the requested operation. */
+/** Checks the exact proposal and generation keys, project, base revision, allowed state, and completed generation mode. */
 function isGeneratedCastingProposalResponse(
   value: unknown,
   projectId: string,
@@ -210,8 +210,8 @@ export function withoutProviderOverrides(configuration: ProjectConfiguration): P
 
 /**
  * Sends one JSON request to `url` with a Broker token and preserves structured
- * error details in {@link GatewayError}. Requests omit ambient credentials, skip
- * the cache, and send the tenant selector only when one is given.
+ * error details in {@link GatewayError}. Requests omit ambient credentials by
+ * default, bypass the cache, and send a tenant selector only when one is given.
  */
 export async function sendGatewayRequest<T>(
   fetcher: typeof fetch,
@@ -266,8 +266,8 @@ export async function sendGatewayRequest<T>(
 
 /**
  * Authenticated browser client for the v1 Gateway and owner-backed APIs.
- * Requests omit ambient browser credentials by default, avoid caching, and
- * include a tenant selector only when the caller has a confirmed value.
+ * Requests omit ambient browser credentials by default, bypass the cache, and
+ * include a tenant selector only when the caller provides one.
  */
 export class AgentweaverGatewayClient {
   private readonly baseUrl: string;
@@ -343,7 +343,7 @@ export class AgentweaverGatewayClient {
     return this.request(token, path, init, this.gatewayRootUrl, tenantSelector);
   }
 
-  /** Relays a validated CLI callback state without sending a bearer token or browser cookie. */
+  /** Sends CLI callback state to the server relay without a bearer token or browser cookie. */
   async relayCopilotCallback(state: string): Promise<string> {
     const requestUrl = this.copilotRequestUrl('/api/connections/copilot-user/v1/callback-relay');
     const response = await this.fetcher.call(globalThis, requestUrl, {
@@ -514,17 +514,15 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the current project configuration together with its revision. */
+  /** Reads the current configuration, or the saved version for `revision`. */
   getProjectConfiguration(
     token: string,
     projectId: string,
     tenantSelector?: string | null,
     revision?: number,
   ): Promise<VersionedProjectConfiguration> {
-    // Without `revision` the owner returns the current configuration; with it, that saved version.
     return this.request(
       token,
-      // Without `revision` the server returns the latest configuration; with it, that exact saved version.
       `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
       {},
       this.baseUrl,
@@ -1697,7 +1695,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads one Priority. */
   getChiefOfStaffPriority(
     token: string,
     priorityId: string,
@@ -1893,7 +1890,6 @@ export class AgentweaverGatewayClient {
     }
   }
 
-  /** Reads usage totals for one run. */
   getRunUsage(
     token: string,
     projectId: string,
@@ -2987,8 +2983,8 @@ export class AgentweaverGatewayClient {
   }
 }
 
-/** Shared Gateway client used by the v1 browser application. */
 /** Fixed same-origin Gateway route for the portal's cookie-bound Copilot BFF. */
 export const copilotGatewayBaseUrl = '/api/v1';
 export const copilotGatewayClient = new AgentweaverGatewayClient(copilotGatewayBaseUrl);
+/** Shared Gateway client used by the v1 browser application. */
 export const gatewayClient = new AgentweaverGatewayClient();
