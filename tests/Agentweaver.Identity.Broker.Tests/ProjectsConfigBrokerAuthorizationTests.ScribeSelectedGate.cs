@@ -206,7 +206,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var childId = MafExecutionIds.CreateChildSessionId(root, planId, associationId);
             _ = await coordination.RegisterChildAsync(actor, root, childId, 4, 2, default,
                 new ConfirmedWorkPlanItemAssociation(associationId, stateVersion, decision.SelectionHash));
-            // Fixture starts after the accepted child's successful completion, not after Scribe dispatch.
+            // The fixture sets the accepted child to completed before dispatching Scribe.
             await using (var connection = await dataSource.OpenConnectionAsync())
             await using (var complete = new NpgsqlCommand($"""
                 UPDATE "{schema}".coordination_sessions SET lifecycle_state = 'completed', turn_state = 'idle'

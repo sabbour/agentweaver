@@ -218,7 +218,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(1, childEnvironment!.SandboxClaimCreateCount);
             Assert.False(sdk.TurnReceived.Task.IsCompleted);
 
-            // Dispatch must not wait while another owner holds the startup lease.
+            // Dispatch must return pending while the startup intent is leased.
             await using (var held = await store.AcquireAsync(intent, cancellationToken))
             {
                 using var busyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
