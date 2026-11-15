@@ -19,8 +19,8 @@ function segment(value) {
 }
 
 /**
- * Observe the Gateway requests made by an already-authorized browser page.
- * Actions are allowed only for the selected project and run, with captured evidence bound to tenant and actor.
+ * Capture Gateway traffic from an already-authorized browser page.
+ * Gate and message actions use the bound project and run; each capture checks tenant and broker identity.
  */
 export class UiHarnessClient {
   /** Bind browser traffic to the exact web origin, Gateway origin, tenant, and broker actor. */
@@ -63,7 +63,7 @@ export class UiHarnessClient {
     return target.origin === this.gateway.origin && target.pathname.startsWith('/api/v1/');
   }
 
-  /** Capture one matching Playwright response at most once, including its redirect ancestry. */
+  /** Capture each matching Playwright response once and record redirected Gateway requests as failures. */
   capture(response) {
     let original = response.request();
     while (original.redirectedFrom?.()) original = original.redirectedFrom();
@@ -138,7 +138,7 @@ export class UiHarnessClient {
       + (parts.length ? `/${parts.map(segment).join('/')}` : '');
   }
 
-  /** Navigate the injected page to one exact project/run without initiating login or consent. */
+  /** Navigate the injected page to the selected project/run URL without initiating sign-in or consent. */
   async openRun({ projectId, runId }) {
     segment(projectId);
     segment(runId);
@@ -177,8 +177,8 @@ export class UiHarnessClient {
   }
 
   /**
-   * Trigger a UI refresh, capture the run and requested owner snapshots, and verify their scope.
-   * Any failed capture or non-200 snapshot throws before a caller can take an action.
+   * Refresh the UI, capture the run and requested owner responses, and check the run's project/run IDs.
+   * A capture failure, non-200 response, or run-scope mismatch throws before the caller can act.
    */
   async refresh(paths = []) {
     const runPath = this.runPath('coordination', 'status');

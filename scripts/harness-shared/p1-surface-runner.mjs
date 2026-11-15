@@ -185,7 +185,7 @@ async function requireUiActionEvidence(beforeUiAction, journey) {
   await beforeUiAction({ journey });
 }
 
-/** Validate the actual accepted-message receipt for the selected recipient. */
+/** Require a message receipt for the selected recipient with an accepted or admitted status. */
 function requireMessageReceipt(receipt, recipientSessionId) {
   if (typeof receipt?.ownerMessageId !== 'string' || !receipt.ownerMessageId
     || receipt.recipientSessionId !== recipientSessionId

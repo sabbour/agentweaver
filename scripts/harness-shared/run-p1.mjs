@@ -25,7 +25,6 @@ import { redact } from './redaction.mjs';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from './safe-jsonl.mjs';
 import { runP1AcceptanceScripts } from './acceptance-scripts.mjs';
 
-/** CLI orchestration for P1 setup, surface journeys, cleanup, and JSONL results. */
 /** Serialize an object with recursively sorted keys for a stable execution-plan fingerprint. */
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;

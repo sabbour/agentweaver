@@ -240,7 +240,7 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
           P1_SETUP_SCOPES,
         ));
 
-        // Only the reconciler receives the setup-scoped API client; it whitelists the two documented GET operations.
+        // Only the reconciler receives the setup-scoped client; it uses the project, authority, assignment, and audit reads.
         const api = createSetupApi({
           environment: validated.environment,
           setupToken,

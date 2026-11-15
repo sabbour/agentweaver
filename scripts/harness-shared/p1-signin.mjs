@@ -232,7 +232,7 @@ export async function openP1AuthorizedUiPage({
       window.sessionStorage.setItem(key, '1');
     }
   }, { origin: target.origin, key: WEB_SIGNED_IN_BEFORE_KEY });
-  // Wait for a successful same-origin Gateway response instead of reading a browser token or session store.
+  // Use a successful same-origin Gateway response as authorization evidence; do not read browser token storage.
   const authorizedResponse = page.waitForResponse(response => {
     try {
       const url = new URL(response.url());
@@ -618,10 +618,9 @@ async function authorizeP1InContext({
 }
 
 /**
- * Complete a public-client flow in the caller's fresh Chrome context. Callers may
- * reuse that context for setup and run-bound tokens so one user login supplies both.
- * Request-stage CDP interception blocks the registered callback, including redirect
- * hops, before the Portal can consume its code. No Portal script is allowed to run.
+ * Complete a public-client flow in the caller's Chrome context. Callers can reuse that
+ * context for setup and run-bound tokens, so one login supplies both. Request-stage CDP
+ * interception aborts the registered callback before the Portal receives its code.
  */
 export async function authorizeP1InBrowser({
   chromium,
@@ -673,7 +672,7 @@ export async function authorizeP1InBrowser({
   }
 }
 
-/** Read only the P1 manifest identity needed to request the setup and fixture tokens. */
+/** Read and validate the P1 manifest before sign-in. */
 export async function readP1SignInInput(argv, options = {}) {
   const inputIndex = argv.indexOf('--input');
   if (inputIndex < 0 || !argv[inputIndex + 1] || argv[inputIndex + 1].startsWith('--')) {
