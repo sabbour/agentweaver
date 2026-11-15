@@ -765,6 +765,7 @@ internal static class P1PostgresContinuation
         ServicePlan service,
         CancellationToken cancellationToken)
     {
+        // Keep any temporary SET grant and the history read in one transaction; rollback leaves no lasting membership.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {

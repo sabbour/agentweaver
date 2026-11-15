@@ -71,7 +71,7 @@ if (!Regex.IsMatch(sourceSha, "^[0-9a-f]{40}$") ||
         !Regex.IsMatch(priorPlanHash!, "^[0-9a-f]{64}$") ||
         !Regex.IsMatch(priorReceiptHash!, "^[0-9a-f]{64}$"))))
     throw new ArgumentException("Full lowercase source, Core merge, and plan hashes are required.");
-// Never initialize from a dirty or stale checkout, and require the separately reviewed Core merge to be an ancestor.
+// Require the source SHA to match the fetched v1 tip; modes with a Core merge also require it as an ancestor.
 var worktreeStatus = await RunLocalAsync("git", ["status", "--porcelain", "--untracked-files=all"]);
 var statusEntries = worktreeStatus.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 // Fresh initialization needs a fully clean checkout. Later modes may also see receipts that earlier
@@ -88,10 +88,9 @@ if (continuationMode)
     await RunLocalAsync("git", ["merge-base", "--is-ancestor", priorSourceSha!, sourceSha]);
 if (coreMergeSha is not null)
 {
-    // Inspection skips this because it writes nothing. Writing modes require the reviewed Core merge
-    // to be in this source's history. git exits non-zero, and RunLocalAsync throws, when it is not.
+    // Fresh initialization, continuation, and pending-migration modes require the reviewed Core merge in this history.
     await RunLocalAsync("git", ["merge-base", "--is-ancestor", coreMergeSha, sourceSha]);
-    // A real merge commit has exactly two parents. This rejects an ordinary commit SHA passed by mistake.
+    // Require a two-parent merge commit, not an ordinary commit SHA.
     var coreParents = await RunLocalAsync("git", ["show", "--format=%P", "--no-patch", coreMergeSha]);
     if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
         throw new InvalidOperationException("The supplied Core commit must be the actual separately reviewed merge.");
@@ -188,7 +187,7 @@ if (continuationMode)
         ?? throw new InvalidOperationException("The prior receipt contains an invalid record.")).ToArray();
     InitializerChecks.AssertContinuationReceipt(priorEntries, priorSourceSha!, coreMergeSha!, priorPlanHash!);
 }
-// Create the receipt once and flush every stage so an interruption never looks like an unrecorded success.
+// Create the receipt once and flush each record to disk as it is written.
 FileStream? receipt = null;
 if (receiptPath is not null)
 {
@@ -250,8 +249,7 @@ try
     await using var connection = await source.OpenConnectionAsync(cancellationToken);
     if (readOnlyMode)
     {
-        // Confirm the server applied the read-only startup option on both connections. If it ignored
-        // the option, stop before the first catalog read rather than trusting the request.
+        // Confirm the server applied the read-only startup option on both connections before reading target state.
         foreach (var session in new[] { principalConnection, connection })
         {
             await using var readOnly = new NpgsqlCommand(
@@ -263,8 +261,7 @@ try
     uint? projectsMigrationRoleOid = null;
     if (freshMode)
     {
-        // Only fresh initialization requires an empty target. The other modes expect the roles and
-        // schemas to exist already and check them in their own branches.
+        // Only fresh initialization requires an empty target; each database mode checks the state it needs.
         await using var fresh = new NpgsqlCommand("""
             SELECT current_user = @operator AND current_database() = 'agentweaver'
               AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = ANY(@roles))
@@ -275,7 +272,7 @@ try
         fresh.Parameters.AddWithValue("schemas", plan.Services.Select(item => item.Schema).ToArray());
         if (await fresh.ExecuteScalarAsync(cancellationToken) is not true)
             throw new InvalidOperationException("The target contains existing, partial, or unapproved state. Refusing to adopt, reset, or retry it.");
-        // A separate install target has no Projects migration role yet; the installer passes its object ID.
+        // A separate target uses the installer-provided migration principal ID; the helper creates or validates its role.
         var projectsMigrationObjectId = Environment.GetEnvironmentVariable(
             "P1Initializer__ProjectsConfigMigrationPrincipalObjectId");
         if (installTarget != "agentweaver")
@@ -317,14 +314,13 @@ try
 
     if (inspectMode)
     {
-        // Inspection reports live facts for operator review and never asserts or changes them.
+        // Inspection reports live facts for operator review without changing the database.
         var planPrincipals = await P1PostgresContinuation.ReadPrincipalsAsync(
             principalConnection, null, plan, cancellationToken);
         string principalStatus;
         try
         {
-            // Run the same principal checks the writing modes use, but record a mismatch in the report
-            // instead of stopping. The operator needs to see every difference, not only the first one.
+            // Run the same principal checks as writing modes, but record the first mismatch instead of stopping the report.
             var grantors = InitializerChecks.CaptureMembershipGrantors(
                 plan.Services, planPrincipals, operatorOid, plan.Target.TenantId);
             InitializerChecks.AssertPrincipals(
@@ -364,7 +360,7 @@ try
                 };
                 if (planned is not null)
                 {
-                    // Only Core and Events use integer version histories that can be partly applied.
+                    // Only Core and Events have planned integer histories that support partial application.
                     // Pending versions are planned but absent; unplanned versions exist live but not in this source.
                     var applied = await ReadIntHistoryAsync(connection, service.Schema,
                         HistoryTables(service)[0].Table, cancellationToken) ?? [];
@@ -390,8 +386,7 @@ try
                     .Except(relations.Select(relation => relation.Name)).ToArray());
                 try
                 {
-                    // Reuse the service migrator's own startup verification. Failure is reported, not thrown,
-                    // because an older live schema is an expected inspection result.
+                    // Report validation and PostgreSQL server errors as incomplete; older migration histories are valid inspection results.
                     await P1PostgresContinuation.VerifyServiceMigrationsAsync(source, service, cancellationToken);
                     item["sourceMigrationVerification"] = "complete";
                 }
@@ -451,8 +446,7 @@ try
             plan.Target.TenantId, cancellationToken, requireOnlyProjectsSchema: false);
         foreach (var service in plan.Services.Skip(1))
         {
-            // P1 schemas remain operator-owned until the maintenance handover, and every
-            // live table or sequence must be one the plan knows about. Unknown objects stop the run.
+            // P1 schemas remain operator-owned until handover; the inventory rejects unplanned tables, views, and sequences.
             var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
             InitializerChecks.AssertServiceSchemaAcl(service,
                 await ReadJsonAsync<SchemaAclState>(connection, null, InitializerChecks.SchemaAclQuery, cancellationToken,
@@ -492,8 +486,7 @@ try
             return 0;
         }
 
-        // Step 3: migrate each service that has pending versions. The receipt records the start and the end
-        // of each one so an interrupted run shows exactly where it stopped.
+        // Step 3: migrate each service with pending versions. The receipt records each service's start and completion.
         await RecordAsync($"pending_state_checked:{summary}");
         foreach (var service in plan.Services.Where(item => pending.GetValueOrDefault(item.Service)?.Length > 0))
         {
@@ -521,7 +514,7 @@ try
             // New tables from the pending migrations get their planned privileges here.
             foreach (var service in plan.Services.Where(item => PlannedVersions(item) is not null))
                 await ApplyPlannedServiceGrantsAsync(connection, grants, service, cancellationToken);
-            // CONNECT already exists, so the database ACL and protected state must be byte-for-byte unchanged.
+            // CONNECT already exists, so the database grants and protected-state snapshot must remain unchanged.
             InitializerChecks.AssertBoundary(existingBoundary,
                 await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken), []);
             // Read every service's grants back inside the same transaction. Any difference throws, and the
@@ -938,7 +931,7 @@ static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction? t
     await command.ExecuteNonQueryAsync(cancellationToken);
 }
 
-// Runs a local source-controlled planning command and fails with its stderr when it exits unsuccessfully.
+// Runs a local command, captures its output, and throws with stderr when it exits unsuccessfully.
 static async Task<string> RunLocalAsync(string name, string[] arguments)
 {
     var settings = new ProcessStartInfo(name) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -959,7 +952,7 @@ static Task<ExistingBoundary> ReadExistingBoundaryAsync(NpgsqlConnection connect
         cancellationToken, new NpgsqlParameter("schemas", plan.Services.Select(item => item.Schema).ToArray()));
 }
 
-// Rechecks operator identity, grants, and public/default authority before each write stage.
+// Rechecks the operator and database boundary, then rejects incompatible public or default privileges.
 static async Task AssertPreflightAsync(NpgsqlConnection connection, PostgresPlan plan,
     ExistingBoundary baseline, uint operatorOid, CancellationToken cancellationToken)
 {

@@ -37,7 +37,7 @@ internal sealed class MacOsKeychainVault : ICliCredentialVault
             if (length is <= 0 or > MaximumCredentialBytes)
                 throw new CliVaultException("The saved CLI sign-in is invalid or exceeds the vault limit.");
 
-            // Copy CFData into a managed buffer so its native object can be released without extending secret lifetime.
+            // Clear the temporary byte copy after decoding so credential bytes do not remain in that buffer.
             var bytes = new byte[(int)length];
             try
             {
