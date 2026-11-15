@@ -1220,6 +1220,7 @@ public sealed partial class GatewayOwnerClient(
                     "application/problem+json",
                     ProblemBody("copilot_callback_relay_request_invalid", StatusCodes.Status400BadRequest));
 
+            // Send one 413 response for an oversized Content-Length, a bounded-read overflow, or a Kestrel 413.
             if (context.Request.ContentLength is > CopilotCallbackRelayMaximumBytes)
                 throw RequestBodyTooLarge();
 
