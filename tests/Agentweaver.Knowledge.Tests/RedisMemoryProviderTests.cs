@@ -189,6 +189,7 @@ public sealed class RedisMemoryProviderTests
     public async Task OperationalReadDetectsHashFieldExpiryAfterRedisUpgrade()
     {
         var (provider, client, options) = CreateProvider();
+        // Negotiate on Redis 7.0, then simulate an upgrade before the read checks field expiry.
         client.Snapshot = client.Snapshot with
         {
             Server = client.Snapshot.Server.SetItem("redis_version", "7.0.0")
@@ -389,6 +390,7 @@ public sealed class RedisMemoryProviderTests
             "transfer-update");
         var bundle = await source.ExportAsync("project-a", "agent-a");
         var entry = Assert.Single(bundle.Records);
+        // Cover both absent and empty legacy reasons; import must preserve the distinction.
         bundle = bundle with
         {
             Records = bundle.Records.SetItem(
@@ -450,6 +452,7 @@ public sealed class RedisMemoryProviderTests
     [Fact]
     public async Task AcknowledgmentUsesRedisServerTimeForLeaseFencing()
     {
+        // Keep the client clock far behind Redis to prove lease checks use server time.
         var localClock = new ManualTimeProvider(new DateTimeOffset(2010, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var (provider, client, options) = CreateProvider(localClock);
         await provider.NegotiateAsync(Candidate(provider, options));

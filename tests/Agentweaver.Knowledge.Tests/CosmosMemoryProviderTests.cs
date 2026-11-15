@@ -187,6 +187,7 @@ public sealed class CosmosMemoryProviderTests
         var (provider, store, _) = CreateProvider();
         var first = await CreateDecisionAsync(provider, "concurrent-first");
         var second = await CreateDecisionAsync(provider, "concurrent-second");
+        // Pause the first batch so the second supersession commits first.
         store.PauseNextBatch();
         var delayed = provider.UpdateAsync(
             DecisionUpdate(first, KnowledgeRecordState.Superseded, second.RecordId),
@@ -234,6 +235,7 @@ public sealed class CosmosMemoryProviderTests
         var transitiveSource = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-source");
         var sameAgentTarget = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-target");
         var foreignDownstream = await CreateDecisionInAgentAsync("agent-b", "foreign-chain-downstream");
+        // Seed a downstream link that a normal update would reject.
         store.SetRecord(sameAgentTarget with
         {
             State = KnowledgeRecordState.Superseded,
@@ -699,6 +701,7 @@ public sealed class CosmosMemoryProviderTests
         var (provider, store, _) = CreateProvider();
         var proposalId = await CreateProposalAsync(provider, "claim-race");
         var receiptId = (await PromoteAsync(provider, proposalId)).OutboxEventId!.Value;
+        // Let the delayed claim read the old ETag, then commit a competing claim first.
         store.PauseNextBatch();
         var delayedClaim = provider.ClaimAcceptedEffectDeliveryAsync(
             "project-a", "run-a", receiptId, "worker-delayed", TimeSpan.FromSeconds(30));
@@ -891,6 +894,7 @@ public sealed class CosmosMemoryProviderTests
         FakeCosmosMemoryStore store,
         Func<Task<T>> operation)
     {
+        // Pause one read so the competing identical request commits before the first resumes.
         store.PauseNextRecordRead();
         var delayed = operation();
         T committed;

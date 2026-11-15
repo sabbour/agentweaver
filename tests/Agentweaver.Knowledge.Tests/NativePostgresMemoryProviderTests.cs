@@ -395,6 +395,7 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
         var transitiveSource = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-source");
         var sameAgentTarget = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-target");
         var foreignDownstream = await CreateDecisionInAgentAsync("agent-b", "foreign-chain-downstream");
+        // Seed an invalid downstream link so the provider must check the full supersession chain.
         await using (var connection = await postgres.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
             UPDATE "{database.Options.Schema}".knowledge_records
@@ -433,6 +434,7 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
         const long pauseLockId = 1981040611;
         const string sharedKey = "decision-graph-ordering";
 
+        // Block receipt insertion after the update holds the decision-graph lock.
         await using (var setup = await postgres.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
             CREATE FUNCTION "{database.Options.Schema}".pause_knowledge_write_receipt()
@@ -562,6 +564,7 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
             Record("project-a", "agent-a", KnowledgeRecordKind.Proposal, "architectural", "accept",
                 sourceRunId: "run-a"),
             "boundary-proposal");
+        // Fail the accepted-effect outbox insert to check that promotion leaves no partial writes.
         await using (var connection = await postgres.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
             CREATE OR REPLACE FUNCTION "{database.Options.Schema}".reject_accepted_effect_insert()
@@ -641,6 +644,7 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
         var crossTeamMemory = await database.Provider.CreateAsync(
             Record("project-a", "agent-b", KnowledgeRecordKind.Memory, "note", "cross-team-memory"),
             "context-3-shared");
+        // This makes the other agent's memory eligible only via its approved cross-team tag.
         await using (var connection = await database.DataSource.OpenConnectionAsync())
         await using (var approve = new NpgsqlCommand($"""
             UPDATE "{database.Options.Schema}".knowledge_records
