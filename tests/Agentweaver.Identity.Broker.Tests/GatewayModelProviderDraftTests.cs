@@ -498,7 +498,7 @@ public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixt
             HttpMethod.Get, projectRoute + "/not-found", projectToken, tenantId))
         using (var response = await projects.Client.SendAsync(missing))
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        var missingProjectId = "missing-" + suffix;
+        var missingProjectId = "missing-" + suffix[..16];
         var platformBoundMissingToken = CreateToken(
             signingKey, adminSubject, "api.read projects.admin", projectId: missingProjectId);
         using (var missingList = OwnerRequest(
