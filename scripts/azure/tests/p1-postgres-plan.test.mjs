@@ -228,7 +228,6 @@ test('Only reviewed owner functions receive direct runtime EXECUTE', () => {
 
 // The Core catalog includes feature migrations and preserves the reserved 034 gap.
 test('Core plan includes migration 051 and exact owner grants', () => {
-  // The plan must include every shipped resource and only the table operations its owner requires.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
     [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]);
@@ -341,8 +340,7 @@ test('Initializer validates planned and installed mutation guards before it comm
 });
 
 test('Initializer protected-table count matches the plan', () => {
-  // The initializer rejects any plan whose one-column row-lock table count differs from its reviewed number.
-  // A new protected table must update that number in the same change, or every initializer mode stops.
+  // Keep all three reviewed counts in sync with the plan; preflight rejects a mismatch before database access.
   const plan = buildP1PostgresPlan();
   const protectedTables = plan.services.flatMap(service =>
     service.tables.filter(table => table.mutationDenialRequired));
@@ -355,7 +353,6 @@ test('Initializer protected-table count matches the plan', () => {
   assert.ok(checks.includes(`appendOnlyLedgers != ${appendOnlyLedgers}`));
 });
 
-// Both owner catalogs must agree with the separately reviewed initializer plan.
 test('Current source catalog preserves exact Core and Events versions and embedded resources', () => {
   const plan = buildP1PostgresPlan();
   const owners = [
@@ -364,7 +361,6 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       plan.eventsVersions],
   ];
   for (const [owner, migrator, versions] of owners) {
-    // Version registration, embedded resources, and the reviewed plan must describe the same catalog.
     const directory = new URL(`../../../services/${owner}/`, import.meta.url);
     const source = readFileSync(new URL(migrator, directory), 'utf8').replace(/\r\n/g, '\n');
     const project = readFileSync(new URL(`${owner.split('/')[1]}.csproj`, directory), 'utf8');
@@ -433,7 +429,6 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 
-// The initializer derives Core and Events versions from the plan and the compiled migrator catalogs.
 test('Initializer binds exact plan versions to compiled migrator catalogs and approved maxima', () => {
   const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8');
   assert.ok(!source.includes('private const int CurrentSchemaVersion = 9;'));

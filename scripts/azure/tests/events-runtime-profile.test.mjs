@@ -1,4 +1,3 @@
-// Checks Events runtime values without generating Deployments, Services, or policies.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
