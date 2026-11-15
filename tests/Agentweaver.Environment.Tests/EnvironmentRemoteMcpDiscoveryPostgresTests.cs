@@ -142,6 +142,7 @@ public sealed class EnvironmentRemoteMcpDiscoveryPostgresTests(EnvironmentPostgr
         var (store, discovery, source, projectId, caller) = Create();
         var enabled = await CreateEnabledAsync(store, caller, projectId);
         source.Pages[""] = Page("""[{"name":"forecast","inputSchema":{"type":"object"}}]""", null);
+        // Disable the connection during the tools-page read, before discovery can save the catalog.
         source.OnToolsListRead = () => store.SetStateAsync(
             caller,
             projectId,
