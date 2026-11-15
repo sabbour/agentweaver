@@ -2,6 +2,7 @@ name: Agentweaver v1 Docs CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches: [v1]
   push:
     branches: [v1]

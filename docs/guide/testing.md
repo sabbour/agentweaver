@@ -398,6 +398,12 @@ or is unexpectedly skipped. Release composition validation, controlled API
 journeys, and CI/coverage guards still run on every candidate. `v1-docs-ci.yml`
 remains the separate documentation check.
 
+Both workflows trigger for pull requests targeting `v1` when a PR opens,
+receives new commits, reopens, or is edited, including a base branch change.
+An edit to the PR title or body also triggers both workflows. GitHub suppresses
+these workflows when the PR has conflicts. The foundation workflow also
+triggers for PRs targeting `sabbour-v1-opentelemetry-core`.
+
 Changed-path detection skips expensive .NET, Web, image, and tooling suites
 for documentation/metadata-only PRs. Unrelated workflow edits do not run those
 suites. Unknown paths and edits to `v1-ci.yml` or CI helpers select everything.
