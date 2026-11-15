@@ -36,9 +36,8 @@ export async function startStaticServer({ includeGateway = true } = {}) {
       return;
     }
     const file = normalize(join(dist, decodeURIComponent(path)));
-    // Only serve real files that stay inside dist. Paths without an extension
-    // are client-side routes, so they get index.html (SPA fallback). This also
-    // blocks `..` paths from reading files outside dist.
+    // Paths without an extension are client-side routes, so they get index.html
+    // (SPA fallback).
     const inside = file.startsWith(normalize(dist)) && extname(file);
     try {
       const target = inside ? file : join(dist, 'index.html');
@@ -180,7 +179,8 @@ export async function openApp({ seed = {}, extra, origin }) {
  * `src/v1/contracts.ts`: owner status, a coordinator root with one child work session,
  * session status with the pending gate as a blocker, decision state, a journal of `turn`
  * events with their text from `readSessionTurnContent`, gate actions, and addressed messages. Every route needs a token bound to this run.
- * Mutate `room.decisions` to change or replace the gate. Writes land in `room.writes`.
+ * Mutate `room.decisions` to change or replace the gate.
+ * POST requests are recorded in `room.writes`.
  */
 export function runRoom({ projectId, runId, gate = null, turns = [] }) {
   // One coordinator root with one child work session is the smallest tree the run page shows.
@@ -261,7 +261,7 @@ export function runRoom({ projectId, runId, gate = null, turns = [] }) {
     if (method === 'GET' && rest === `/coordination/sessions/${childSessionId}/status`) return json(200, status(childSessionId, 'childWork', rootSessionId));
     if (method === 'GET' && /^\/coordination\/sessions\/[^/]+\/decisions$/.test(rest)) return json(200, room.decisions);
     if (method === 'POST') {
-      // Record every write so tests can prove that nothing was sent.
+      // Record POST requests so tests can check which gate or message requests were sent.
       room.writes.push({ method, path: rest, body: url.body });
       const gateAction = rest.match(/\/decisions\/gates\/([^/]+)\/(approve|reject|answer)$/);
       if (gateAction) {

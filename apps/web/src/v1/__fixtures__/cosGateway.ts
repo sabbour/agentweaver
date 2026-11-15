@@ -1,7 +1,7 @@
 /**
  * In-memory Gateway for Chief of Staff, run list, and notification tests. It
- * implements the documented status codes and `{ error }` bodies, records every
- * request, and replays creates by Idempotency-Key like the owners do.
+ * records requests and fakes the routes below, including idempotent run and
+ * Priority creates.
  */
 import type {
   ChiefOfStaffConversation,
@@ -58,7 +58,7 @@ export function project(projectId: string, name = projectId): ProjectSummary {
   return { projectId, name, state: 'active', revision: 1, configurationRevision: 3, createdAt: NOW, updatedAt: NOW, effectiveRoles: [] };
 }
 
-/** Builds a run summary. Terminal states get a completion time, like the real owner. */
+/** The fixture assigns a completion time to these terminal states. */
 export function run(runId: string, state: ProjectRunState, title: string | null = null): ProjectRunSummary {
   return {
     runId,
@@ -329,7 +329,7 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
       const key = `${method} ${path}`;
       failures.set(key, [...(failures.get(key) ?? []), failure]);
     },
-    /** Requests other than reads whose path starts with `prefix`. */
+    /** Lists recorded non-GET requests whose path starts with `prefix`. */
     writes(prefix = '') {
       return requests.filter((request) => request.method !== 'GET' && request.url.pathname.startsWith(prefix));
     },

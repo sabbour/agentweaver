@@ -1,10 +1,7 @@
 import { AgentweaverApiClient, ApiError } from '../api/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// The `/api` base-path convention: API_URL is the ORIGIN ONLY (no `/api` suffix). The API
-// client owns the single `/api` prefix for XHR endpoints, while the Entra redirect
-// endpoint lives at the origin root (`/auth/entra/authorize`). These tests lock in that
-// convention for both localhost dev (absolute origin) and the deployed gateway (same origin,
-// empty API_URL) so a regression can never reintroduce the sign-in "unauthorized" bug.
+// The legacy API client adds `/api` to its origin, while the Entra redirect stays
+// at the origin root. The v1 Gateway client uses its configured `/api/v1` path.
 
 afterEach(() => {
   FakeBroadcastChannel.reset();

@@ -653,9 +653,4 @@ describe('AppShell navigation', () => {
     expect(screen.queryByText('Work')).toBeNull();
   });
 
-  // The legacy "Operator dock" (LeftNav trigger -> BrowserConsole sidebar, backed by
-  // ConsolePanelContext + the /console/turn facade) was removed in #346. The Sessions
-  // page under Projects (#4/#5) and the /assistant route are now the sole entry points
-  // to the MCP-driven assistant; the old /console bookmark now redirects straight to
-  // /assistant (see App.tsx), so there is no shell-level panel left to exercise here.
 });
