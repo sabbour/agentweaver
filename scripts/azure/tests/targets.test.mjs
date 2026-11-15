@@ -16,7 +16,7 @@ test('every registered target binds its own foundation and AKS-only parameter fi
       assert.notEqual(foundation.byokKeyVaultName.value, foundation.keyVaultName.value);
       byokVaultNames.push(foundation.byokKeyVaultName.value.toLowerCase());
     }
-    // git.mjs requires the AKS-only file to repeat these foundation values and nothing else.
+    // The AKS-only file repeats these foundation values and has no other fields.
     const repeated = ['costCenter', 'location', 'namePrefix', 'owner', 'tenantId'];
     if (foundation.kataVmSize) repeated.push('kataVmSize');
     assert.deepEqual(Object.keys(aksOnly).sort(), repeated.sort());

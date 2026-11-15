@@ -346,7 +346,6 @@ test('rejects a missing pending changeset before any mutation (fails closed, no 
     status: () => '',
     readFileSync: fakeRead,
   }), /cannot read changeset/);
-  // Nothing should have been written: manifest and project file are untouched.
   assert.equal(readFileSync(manifestPath(dir), 'utf8'), originalManifest);
   assert.equal(readFileSync(path.join(dir, 'packages', 'Pkg.A', 'Pkg.A.csproj'), 'utf8'), originalCsproj);
 });
@@ -417,7 +416,6 @@ test('rejects a major bump of a compatibility dependency without an explicit pre
   assert.equal(plan.components[0].toVersion, '1.0.0');
   assert.throws(() => applyPlan(plan, manifestPath(dir), { root: dir }),
     /major bump of Pkg\.B to 1\.0\.0 is not automatically assumed compatible/);
-  // Nothing should have been written: a failed preflight check must not mutate the manifest.
   assert.equal(readManifest(dir).components.find((c) => c.id === 'Pkg.B').version, '0.1.0');
 });
 
@@ -462,7 +460,6 @@ test('rejects a changelog read failure that is not a missing-file error', (t) =>
   };
   assert.throws(() => applyPlan(plan, manifestPath(dir), { root: dir, readFileSync: fakeRead }),
     /cannot read existing changelog/);
-  // Nothing should have been written.
   assert.equal(readManifest(dir).components.find((c) => c.id === 'Pkg.A').version, '0.1.0');
 });
 
@@ -592,8 +589,8 @@ test('a deleted-only top-level changeset with no receipt at all still fails the 
   git(dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'changesets present');
   const baseSha = git(dir, 'rev-parse', 'HEAD');
 
-  // Simulate a real Pkg.A product-code bump without going through applyPlan at all (no archive, no
-  // receipt) — just deleting the top-level note, which must not be credited as coverage.
+  // Change Pkg.A's project version and delete its top-level note without an archive or receipt.
+  // The coverage check must still report the missing entry.
   writeFileSync(path.join(dir, 'packages', 'Pkg.A', 'Pkg.A.csproj'), csproj('0.2.0', ['Pkg.B']));
   execFileSync('git', ['rm', '-q', '.changeset/to-delete-a.md'], { cwd: dir });
   git(dir, 'add', '-A');
