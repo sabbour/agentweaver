@@ -228,6 +228,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var suffix = Guid.NewGuid().ToString("N");
         var singleScope = "acs-migration-single-" + suffix;
         var duplicateScope = "acs-migration-duplicate-" + suffix;
+        // The valid and duplicate scopes verify that a failed migration leaves both sets of rows unchanged.
         var seeded = new[]
         {
             (Scope: singleScope, PolicyId: "legacy-" + suffix[..8]),
@@ -374,6 +375,7 @@ public sealed partial class ProjectsConfigPostgresTests
             tenantId, ProjectAuthorityRole.TenantAdmin);
         var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
             .CreateProjectAsync(caller, "ACS rollback", CancellationToken.None);
+        // Reject outbox and audit writes in separate attempts, then verify neither leaves partial policy state.
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var constraint = new NpgsqlCommand(
             """
@@ -475,6 +477,7 @@ public sealed partial class ProjectsConfigPostgresTests
             ProjectAuthorityRole.Owner,
             "fixture");
         var owner = await ResolveCallerAsync(db, ownerSubject, tenantId, ["api.read", "projects.admin"]);
+        // The replacement Owner grant has a new ID; the resolved caller still carries the revoked grant.
         await authorityStore.RevokeRoleAssignmentAsync(
             assignment.AssignmentId, assignment.Revision, "fixture", CancellationToken.None);
         var replacement = await authorityStore.AssignRoleAsync(

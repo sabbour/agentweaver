@@ -2210,6 +2210,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var runId = "project-setup-race-run-" + suffix;
         var runRequest = RunRequest(setupReceipt.ProjectConfigurationRevision, platform.Revision);
 
+        // The trigger blocks run admission at the selection insert while cleanup waits on FOR UPDATE.
+        // Releasing the session lock makes admission finish first.
         var suffixHash = Guid.NewGuid().ToString("N");
         var lockKey1 = unchecked((int)Convert.ToUInt32(suffixHash[..8], 16));
         var lockKey2 = unchecked((int)Convert.ToUInt32(suffixHash[8..16], 16));
@@ -3387,6 +3389,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
         try
         {
+            // The first write raises 40001; a final sequence value of 2 proves that the operation retried.
             await ExecuteAsync($"CREATE SEQUENCE {sequence}");
             await ExecuteAsync($"""
                 CREATE FUNCTION {function}() RETURNS trigger
