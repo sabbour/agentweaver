@@ -392,7 +392,6 @@ function draggedTaskId(transfer: DataTransfer): string | null {
   }
 }
 
-/** Props for one task card. */
 interface BoardTaskCardProps {
   graph: BacklogGraph;
   task: BacklogTaskSnapshot;
@@ -714,7 +713,6 @@ function BoardTaskCard({
   );
 }
 
-/** Props for one board column. */
 interface BoardColumnViewProps {
   column: BoardColumn;
   graph: BacklogGraph;
@@ -920,7 +918,6 @@ function RunOverviewSection({ projectId, refreshKey, onPreviewWorkPlanPromotion 
   );
 }
 
-/** Renders one project's Board. */
 export function BoardPage() {
   const styles = useStyles();
   const { projectId = '' } = useParams();
@@ -1223,6 +1220,7 @@ export function BoardPage() {
       || currentTask.reference.projectId !== projectId || currentTask.revision !== task.revision
       || currentTask.isArchived || currentTask.isAutomationInvocationPending || currentTask.lifecycle !== 'open'
       || currentTask.state !== 'backlog' && currentTask.state !== 'ready') return false;
+    // Keep the drop tied to the graph, task, and authorization scope the user saw when dragging began.
     const snapshot = {
       taskId: currentTask.reference.taskId,
       graphRevision: graph.revision,
