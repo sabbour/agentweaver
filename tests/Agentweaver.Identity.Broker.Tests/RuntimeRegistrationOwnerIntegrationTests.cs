@@ -1232,7 +1232,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
             else
             {
-                // Native usage without a published rate stays visible but never counts as priced credit.
+                // Retain unpriced-model coverage even though the fixture configures a published rate card.
                 Assert.Equal(0m, amount.Amount);
                 Assert.Equal(0, amount.PricedEvents);
                 Assert.Equal(1, amount.UnpricedEvents);
@@ -1354,7 +1354,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             objects.AfterWrite = null;
             await endRuntimeAuthority();
         };
-        // Revoke after storage returns but before the owner can commit a reference or acknowledge the turn.
+        // Revoke after the fake store writes the bytes, before the owner can record their reference.
         var revokedWrite = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             session.CommitTurnContentAsync(
                 material, unacknowledgedEventId, "user", "Must not be acknowledged.", cancellationToken));
@@ -1364,7 +1364,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
         Assert.Equal(receipt, historical.Material);
         Assert.Equal(read.Bytes, historical.Bytes);
-        // Existing history remains readable, while the rejected event has no committed owner reference.
+        // Historical-read authority is independent of the runtime authority revoked above.
         var uncommitted = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             material.ReadRecordedAsync(
                 receipt.Identity, unacknowledgedEventId, SessionMaterialKind.TurnContent, cancellationToken));
@@ -1495,7 +1495,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (!_values.TryAdd(key, buffer.ToArray()))
                 throw new InvalidOperationException("A material object already exists.");
             Interlocked.Increment(ref Writes);
-            // Revoke authority in the middle of the owner write protocol to exercise its post-storage check.
             if (AfterWrite is not null)
                 await AfterWrite();
         }
@@ -1886,6 +1885,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         await using var observations = session.CommitUsageAsync(sourceClient, cancellationToken).GetAsyncEnumerator();
         var append = observations.MoveNextAsync().AsTask();
+        // Revoke only after PostgreSQL confirms that the append is blocked by this transaction.
         TraceNativeStage(failures, $"Source {loss} append started; waiting for actual PostgreSQL contention.");
         try
         {
@@ -2117,7 +2117,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             bool provisionFirstStartOnDemand = false)
         {
             var dataSource = NpgsqlDataSource.Create(connectionString);
-            // This cross-service integration can exceed the sandbox's short production lease.
+            // By default, the lease clock runs five minutes ahead so this long test does not expire its Sandbox lease.
             var leaseTimeProvider = new RuntimeLeaseTestTimeProvider(leaseClockStart);
             if (leaseClockStart is not null)
                 leaseTimeProvider.AdvanceTo(DateTimeOffset.UtcNow);
