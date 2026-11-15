@@ -120,6 +120,7 @@ public sealed class RuntimeServiceTlsTests
                 "EventsAndSessions");
             using var peerChain = new X509Chain();
 
+            // Supply chain errors to model a backend CA that is absent from system trust.
             Assert.True(identity.AcceptServerCertificate(
                 peerCertificate, peerChain, SslPolicyErrors.RemoteCertificateChainErrors,
                 caFile, X509RevocationMode.NoCheck));

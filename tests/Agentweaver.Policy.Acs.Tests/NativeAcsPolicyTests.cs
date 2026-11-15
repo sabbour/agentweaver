@@ -603,6 +603,7 @@ public sealed class NativeAcsPolicyTests
                 Snapshot("merge"),
                 timeout.Token);
             var stopwatch = Stopwatch.StartNew();
+            // Wait for the wrapper marker so cancellation occurs after the wrapper starts.
             while (!File.Exists(markerPath) &&
                    !evaluationTask.IsCompleted &&
                    stopwatch.Elapsed < TimeSpan.FromSeconds(10))

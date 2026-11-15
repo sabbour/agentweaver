@@ -205,7 +205,7 @@ public sealed class RuntimeModelBindingsResolverTests
     [Fact]
     public void NewHostedCopilotModelsCanBeEnabledByChangingTheConfiguredBinding()
     {
-        // Stable references can target new SDK-listed model IDs without a compiled model catalog.
+        // Stable references can target configured model IDs without a compiled model catalog.
         var resolver = new RuntimeModelBindingsResolver("model-bindings-v2",
             new Dictionary<string, RuntimeModelBinding>
             {

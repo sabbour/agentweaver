@@ -226,7 +226,7 @@ public sealed class RuntimeRunAdmissionContractTests
                 [modelReference] = new(modelId, ModelSourceMode.HostedCopilot)
             });
 
-    /// <summary>Builds a test card with the published rates for both approved HostedCopilot models.</summary>
+    /// <summary>Builds a test card with rate entries for both approved HostedCopilot models.</summary>
     private static CostRateCard PublishedCard() =>
         new("github-copilot-published", "2026-10-17",
             SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
