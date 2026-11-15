@@ -77,16 +77,14 @@ export function GeneralSection({ project, onUpdated }: { project: ProjectSummary
 
 /**
  * Shows what the signed-in user can do in this project, followed by the project
- * members panel. Member change controls appear only for tenant administrators.
+ * members panel. Member change controls require tenant-scoped `writeProjects`.
  */
 export function AccessSection({ projectId }: { projectId: string }) {
   const context = useAuthorizationContext();
   // Keep only the permissions that apply to this project: project, tenant-wide, or platform grants.
   const permissions = context.data ? permissionsForProject(context.data, projectId) : [];
-  // The service reports a tenant-wide "Change project settings" permission only for
-  // a tenant administrator with admin scope. That is also the only role that can
-  // add or remove members, so it decides whether the member controls appear.
-  // The service still checks every change; this flag only hides controls.
+  // Only tenant-scoped `writeProjects` enables member controls here.
+  // The service still checks each change; this flag only hides controls.
   const canManageMembers = permissions.some((item) => item.scope === 'tenant' && item.permission === 'writeProjects');
   return (
     <>
@@ -126,7 +124,6 @@ export function RepositoryFields({ configuration, onChange, readOnly }: {
   const repository = sourceControl.repository ?? { owner: '', name: '' };
   /** Updates one part of the repository and keeps the other part as it is. */
   const setRepository = (part: 'owner' | 'name', value: string) => {
-    // Owner and name never contain spaces, so trim while typing.
     const next = { ...repository, [part]: value.trim() };
     // When both parts are empty, remove the repository instead of saving an
     // empty owner and name, which the server would treat as a real value.

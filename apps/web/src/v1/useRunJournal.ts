@@ -41,8 +41,9 @@ const initialState: Omit<JournalState, 'scopeId'> = {
  * Replays a run's persisted owner events, then follows its live event stream.
  * Replay is cursor-bounded, live events are deduplicated by ID, and any event
  * outside the exact project/run scope stops the stream instead of being shown.
- * A cleanly closed stream reconnects quietly with backoff; `error` reports only
- * fatal responses or three transient failures in a row.
+ * A cleanly closed stream reconnects quietly with backoff. Replay failures and
+ * fatal stream responses set `error` at once; transient stream errors do so
+ * after three failures in a row.
  */
 export function useRunJournal(
   token: string | undefined,

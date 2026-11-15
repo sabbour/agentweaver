@@ -242,7 +242,7 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
         <p>{current.credentialUseAvailable ? 'The service reports that this connection can be used.' : 'The service reports that this connection cannot be used.'}</p>
         {!configured && <p className="v1-warning">The saved connection does not match the current project configuration. Update its setup before authorizing or refreshing.</p>}
         <div className="v1-actions">
-          {/* Refresh and disconnect send the revisions shown on screen, so the server rejects them if the connection changed meanwhile. Refresh also needs a matching configuration. Disconnect is always allowed and carries an idempotency key so a retried click is safe. */}
+          {/* Both actions send the revisions shown in the loaded status. Refresh requires the current configuration to match; each disconnect request gets a fresh idempotency key. */}
           <Button disabled={busy || !configured} onClick={() => void run(() => apiCall((token, tenant) => gatewayClient.refreshRemoteMcpOAuthConnection(token, connectionId, {
             expectedConnectionRevision: current.connectionRevision, expectedCredentialRevision: current.credentialRevision,
             expectedConfigurationRevision: current.storedConfigurationRevision,

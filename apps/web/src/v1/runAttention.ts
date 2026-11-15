@@ -40,7 +40,7 @@ export type AttentionItem = PendingGateItem | BacklogPromotedItem;
 export interface RunAttention {
   /** Newest first, at most one page, without items dismissed in this tab. */
   items: AttentionItem[];
-  /** Total pending notifications on the service, for the badge. 0 on error. */
+  /** Service count, minus items hidden from this page in this tab. 0 on error. */
   count: number;
   loading: boolean;
   error: unknown;
@@ -55,7 +55,7 @@ export interface RunAttention {
 /** How often the list is read again while the tab is visible. */
 export const ATTENTION_POLL_MS = 30_000;
 
-/** Items read per request. The badge still shows the full `count`. */
+/** Items read per request; the badge count starts with the service count. */
 export const ATTENTION_PAGE_SIZE = 50;
 
 /**

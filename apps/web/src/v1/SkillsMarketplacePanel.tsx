@@ -132,10 +132,9 @@ type SkillInventoryView = {
 };
 
 /**
- * Turns a failed request into one plain sentence for the user. Service
- * messages are shown as they are, because the skill routes return readable
- * validation text. Bare statuses get a short fixed explanation instead of a
- * status code.
+ * Turns a failed request into one plain sentence for the user. Gateway 403 and
+ * 413 errors use fixed messages. Other statuses use a plain service message
+ * when available, then a status-specific or generic fallback.
  */
 function messageForError(reason: unknown): string {
   if (reason instanceof GatewayError) {
@@ -326,7 +325,7 @@ async function buildPackageRequest(files: readonly File[]): Promise<SkillPackage
       entries.push({ relativePath: relativeFilePath(file).replaceAll('\\', '/'), content: await fileToBase64(file) });
     request = { files: entries };
   }
-  // Base64 grows the data by a third, so check the encoded body against the request limit too.
+  // Check the serialized JSON's JavaScript string length against the client limit.
   if (JSON.stringify(request).length > MAX_REQUEST_BYTES)
     throw new Error('The upload is larger than the 3 MB request limit. Remove large files and try again.');
   return request;
@@ -378,8 +377,8 @@ function makeIdempotencyKey(): string {
 }
 
 /**
- * Manages project marketplace sources, skill previews/imports, inventory paging,
- * and revision-fenced assignments while rejecting stale responses from prior scopes.
+ * Manages one project's marketplace sources, skill previews/imports, inventory,
+ * and revision-fenced assignments.
  */
 export function SkillsMarketplacePanel({
   projectId,
@@ -391,8 +390,8 @@ export function SkillsMarketplacePanel({
   onAssignmentPendingChange,
   onConfigurationChanged,
 }: SkillsMarketplacePanelProps) {
-  // The project and actions this panel currently serves. Async handlers compare
-  // against these after each await and drop results that belong to an old scope.
+  // Async handlers use the project ref to drop old-project results. The actions
+  // ref lets the layout effect detect when the action client changes.
   const activeProjectId = useRef(projectId);
   const activeActions = useRef(actions);
   // One counter per request kind. Each request remembers its number, and only the

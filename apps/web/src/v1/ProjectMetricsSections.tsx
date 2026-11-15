@@ -99,7 +99,7 @@ const useStyles = makeStyles({
   // columns, so names and costs fit. A wide table scrolls sideways in tableWrap.
   table: { minWidth: '100%', width: 'max-content', tableLayout: 'auto' },
   headerCell: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap' },
-  // Names never break inside a word; the name column gets room to fit them.
+  // Keep names on one line; the table can scroll when a name does not fit.
   nameColumn: { minWidth: '200px' },
   nameCell: { fontWeight: tokens.fontWeightSemibold, wordBreak: 'normal', overflowWrap: 'normal', whiteSpace: 'nowrap' },
   idCaption: { display: 'block', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, wordBreak: 'normal', overflowWrap: 'normal', whiteSpace: 'nowrap' },

@@ -27,7 +27,7 @@ export interface TranscriptTurn {
 /** Chat history rebuilt from committed `turn` events and their owner-read text. */
 export interface TurnTranscript {
   turns: TranscriptTurn[];
-  /** True after a 403: every text is cleared and no further reads run until `retry`. */
+  /** True after a 403: stored text is cleared; new batches wait for `retry`. */
   accessLost: boolean;
   /** Reads failed turns again, or all turns after access was lost. */
   retry: () => void;
@@ -51,9 +51,10 @@ export function turnEventsOf(events: SessionEventEnvelope[], projectId: string, 
 /**
  * Reads the text of each replayed or live `turn` event with `readSessionTurnContent`
  * and the token bound to this run, so the chat history survives reload and reconnect.
- * Each event is read once per mount. A response for another event or identity is
- * treated as unavailable. A 403 means project read access was lost: all text is
- * dropped from memory and nothing else is read until `retry`.
+ * Each event is read once per attempt. A response for another event or identity is
+ * treated as unavailable. A 403 means project read access was lost: all stored
+ * text is dropped. Other reads in the current batch may continue; later batches
+ * wait for `retry`.
  */
 export function useTurnTranscript(
   events: SessionEventEnvelope[],
@@ -89,8 +90,8 @@ export function useTurnTranscript(
       requested.current = { scope, generation, ids: new Set() };
     }
     const claimed = requested.current;
-    // Read only turns that are not requested and not loaded yet. After access
-    // is lost, read nothing until retry.
+    // Queue only turns without a request or result. After access loss,
+    // start no new batch until retry; existing batches may continue.
     const queue = current.accessLost ? [] : turnEvents.filter((event) =>
       !claimed.ids.has(event.eventId) && !current.entries[event.eventId]);
     if (queue.length === 0) return;
@@ -121,7 +122,7 @@ export function useTurnTranscript(
       } catch (reason) {
         if (!valid()) return;
         if (reason instanceof GatewayError && reason.status === 403) {
-          // Access lost: drop all text for this run at once and stop further reads.
+          // Access lost: clear stored text; other reads in this batch may continue.
           setStore({ scope, entries: {}, accessLost: true });
         } else if (reason instanceof GatewayError && reason.status === 404) {
           // The owner has no content for this event. This is final; retry does not reread it.
