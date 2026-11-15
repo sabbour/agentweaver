@@ -679,6 +679,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             [TenantId]))
             Assert.Equal(HttpStatusCode.Unauthorized, wrongAudiencePlacement.StatusCode);
 
+        // Revoke selection authority after the context read, before the placement request can succeed.
         selectionObserver.RevokeAfterNextAuthorizationContext(() =>
             RevokeRoleAsync(
                 projects.PrivilegedFixtureDataSource,
@@ -784,6 +785,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Empty(sandboxKubernetesHandler.DeleteRequests);
 
         var selectionReadsBeforeSandboxRevocation = selectionObserver.SelectionReadCount;
+        // Revoke the role after selection resolves, before the abandon request can reach Kubernetes.
         selectionObserver.RevokeAfterNextSelectionRead(() =>
             RevokeRoleAsync(
                 projects.PrivilegedFixtureDataSource,
@@ -956,6 +958,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(beforeDeniedWrites.ResourceGeneration, workspaceAfterPartialRetirement.ResourceGeneration);
         Assert.Equal(beforeDeniedWrites.DataGeneration, workspaceAfterPartialRetirement.DataGeneration);
 
+        // Hold the claim response until abandonment advances the fence; late provisioning must stay unready.
         var callbackGate = sandboxKubernetesHandler.DeferNextClaimCreateResponse();
         var lateProvisionRequest = sandboxProvisionRequest with
         {
@@ -1080,6 +1083,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(fence, activeAfterSandboxRetirement.Fence);
 
         var selectionReadsBeforeRevocation = selectionObserver.SelectionReadCount;
+        // Revoke selection authority between the owner read and the workspace release effect.
         selectionObserver.RevokeAfterNextSelectionRead(() =>
             RevokeRoleAsync(
                 projects.PrivilegedFixtureDataSource,
@@ -1150,6 +1154,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var allowFinalAuthorization = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        // Keep the final authority read pending while retirement waits on the same owner lock.
         selectionObserver.BeforeAuthorizationContextRequest(
             selectionObserver.AuthorizationContextRequestCount + 3,
             async () =>

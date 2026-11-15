@@ -364,6 +364,7 @@ public sealed class RuntimeRunStartOrchestrationTests
                 if (start.Owner.RunId == "run-1")
                 {
                     firstStarted.SetResult(true);
+                    // A serial worker cannot start run-2 while run-1 waits here.
                     await secondStarted.Task.WaitAsync(cancellationToken);
                 }
                 else if (start.Owner.RunId == "run-2")
@@ -559,7 +560,6 @@ public sealed class RuntimeRunStartOrchestrationTests
             Assert.Equal(registration.Revision, savedRetirement.RegistrationRevision);
             var firstPlacementAttempt = Assert.Single(ownerClients.PlacementRequests);
             Assert.Equal(firstRecoveryState.BootstrapOperationId, firstPlacementAttempt.BootstrapOperationId);
-            // The released attempt's registration is revoked before the attempt is replaced.
             Assert.Equal(RuntimeRegistrationState.Revoked,
                 (await registrationStore.ReadAsync(registration.RuntimeInstanceId, default))!.State);
 
@@ -691,7 +691,6 @@ public sealed class RuntimeRunStartOrchestrationTests
             credential.Invalidate();
         }
 
-        // The used bootstrap operation is not retried; the links stay for terminal cleanup.
         Assert.Empty(clients.PlacementRequests);
         Assert.Empty(clients.RetirementRequests);
         var after = await store.ReadAsync(before, CancellationToken.None);
