@@ -111,7 +111,7 @@ internal static class AgentSuiteImageReference
     private static (string Domain, string Remote) SplitDockerDomain(string name)
     {
         // Docker naming rules, adapted from upstream.
-        // No slash ("ubuntu"): an official Docker Hub image, stored under "library/".
+        // Docker Hub adds "library/" to single-segment names, even when the host is explicit.
         var slash = name.IndexOf('/', StringComparison.Ordinal);
         if (slash < 0)
             return ("docker.io", "library/" + name);
