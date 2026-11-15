@@ -227,7 +227,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 selectionDocument.RootElement.Clone(),
                 () => new RuntimeServiceRouter(runtimeRoutes, runtimeOwnerFailures),
                 leaseClockStart: DateTimeOffset.UtcNow,
-                // This fixture creates the Host after provisioning and checks the owner binding first.
+                // Allow time for owner-binding checks before the fixture starts the runtime Host.
                 startupBudgets: new AgentSandboxStartupBudgets(30, 30, 30, 60, 30, 120),
                 mountPath: "/workspace",
                 volumeId: RuntimeRunStartKeys.WorkspaceVolumeId(startingOwner),

@@ -1043,6 +1043,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var preparation = service.PrepareConsentAsync(
                 Actor(), Issuer, ActorId, ConnectionId, Request(), timeout.Token);
+            // Change authority or configuration only after preparation waits on the locked row.
             await WaitForConsentPublicationWaitAsync(dataSource, timeout.Token);
             if (driftConfiguration)
                 environmentHandler.DriftCurrentConfiguration();

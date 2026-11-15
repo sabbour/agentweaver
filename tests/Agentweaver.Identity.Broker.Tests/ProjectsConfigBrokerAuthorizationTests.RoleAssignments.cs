@@ -91,7 +91,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(adminSubject, listed.GetProperty("createdBy").GetString());
         }
 
-        // A project Owner without TenantAdmin can read the list but still cannot change it.
+        // A project Owner without TenantAdmin can read the list but cannot revoke a role.
         using (var memberOwner = await PostRoleAsync(projects.Client, path, adminToken, memberSubject, "owner"))
             Assert.Equal(HttpStatusCode.Created, memberOwner.StatusCode);
         using (var ownerList = await SendAsync(projects.Client, HttpMethod.Get, path, memberToken, [TenantId]))
