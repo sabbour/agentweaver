@@ -43,7 +43,7 @@ test('a failed-jobs rerun combines the passing rerun shard, not the failed first
       { artifact: 'v1-dotnet-identity-broker-2-2', attempt: 2, superseded: [1] });
     assert.deepEqual(manifest.suites['dotnet/identity-broker-1'].superseded, []);
     assert.deepEqual(JSON.parse(readFileSync(join(destination, 'attempts.json'), 'utf8')), manifest);
-    // The failed attempt stays out of the coverage layout.
+    // Attempt selection must leave the downloaded artifact in place.
     assert.ok(existsSync(join(source, 'v1-dotnet-identity-broker-2-1')));
   } finally {
     rmSync(root, { recursive: true, force: true });
