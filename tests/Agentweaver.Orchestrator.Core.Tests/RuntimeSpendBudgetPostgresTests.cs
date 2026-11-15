@@ -262,7 +262,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             };
         }
 
-        // Both runs admit at the same time. The per-bucket advisory lock makes the second wait for the first.
+        // The delayed evidence reads let both admissions overlap; the per-bucket advisory lock serializes them.
         var outcomes = await Task.WhenAll(
             AdmitDirectAsync(budgets, Delayed(_registrations[0].Binding.RunId)),
             AdmitDirectAsync(budgets, Delayed(otherRun.Binding.RunId), otherRun));
@@ -576,6 +576,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
     private Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>> EvidenceWithRootUsage(
         Guid rootTurnId, Guid[] usageEventIds, long cursor) => (request, _) =>
     {
+        // Root accounting matches usage-event IDs; the fake pairs each event with a fresh source-receipt ID.
         var binding = _registrations[0].Binding;
         var total = new UsageSpendTotal(0m, 0, 0);
         var scope = new UsageDispatchAccountingScope(
@@ -715,9 +716,9 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             new(now.UtcDateTime.AddDays(1), TimeSpan.Zero));
     }
 
-    // Fake Events reader. Every response reports the same committed total (priced amount, unpriced count) for
-    // the run, agent, and project period, at the given accounting cursor. For each requested dispatch it returns
-    // a witness with the receipts listed in receipts, or no receipts. Optionally records each request.
+    // Fake Events reader. It returns the supplied totals for the run and requested agent or project period,
+    // plus one witness per dispatch. Each witness uses the listed source-receipt IDs with generated usage-event
+    // IDs, or no receipts. It can record each request.
     private Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>> Evidence(
         decimal priced, long cursor, long unpriced = 0, IReadOnlyDictionary<Guid, Guid[]>? receipts = null,
         List<UsageSpendEvidenceRequest>? requests = null, string? runId = null) => (request, _) =>
