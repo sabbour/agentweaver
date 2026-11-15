@@ -346,7 +346,7 @@ function assertSourceComposition(input) {
   assert.equal(Object.keys(runtimeConfig.data).some(key => key.includes('__Migration__')), false,
     'the runtime ConfigMap must not receive migration credentials or plan settings');
 
-  // Runtime clients use the Events owner over HTTP; neither the host path nor its profile carries Blob secrets.
+  // The host uses the Events owner HTTP transport; its runtime profile carries no Blob credentials.
   for (const [key, value] of Object.entries(runtimeConfig.data)) {
     assert.doesNotMatch(key, credentialKey, `runtime ConfigMap key '${key}' must not provide Blob credentials`);
     assert.doesNotMatch(value, credentialValue,

@@ -229,7 +229,7 @@ test('model-binding copy rejects provider, credential and malformed eligibility 
 });
 
 test('model-binding copy accepts every effort shape AgentHost accepts', () => {
-  // AgentHost ignores hosted binding efforts and accepts a BYOK binding with none; the copy must not fail on either.
+  // The copy preserves BYOK with two efforts, hosted with one or none, and disabled BYOK with none.
   const input = bindingFixture();
   delete input.configuration.AgentHost__ModelBindings__retired__SupportedReasoningEfforts__0;
   input.configuration.AgentHost__ModelBindings__reasoning__SupportedReasoningEfforts__0 = 'low';
