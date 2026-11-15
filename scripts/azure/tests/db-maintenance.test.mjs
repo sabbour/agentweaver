@@ -849,8 +849,8 @@ test('service ordering does not treat skipped Core 034 as compatible', () => {
 });
 
 test('the schema range comes from the readiness check in the migrator source', () => {
-  // Orchestrator requires 31 and optionally accepts 032, 033, and 035 through 051 during rollout.
-  // Git output passes through redaction, which must not change the parsed text.
+  // Orchestrator requires 31 and optionally accepts 32, 33, and 35 through 51 during rollout.
+  // Source text passes through redaction, which must not change the parsed range.
   const read = (path, component) => schemaRangeFromSource(redact(readFileSync(path, 'utf8')), component);
   assert.deepEqual(read('services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
     'Agentweaver.Orchestrator'), coreRange());

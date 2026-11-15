@@ -14,6 +14,7 @@ foreach (var kind in new[] { RuntimeNumericLimitKind.ModelTurns, RuntimeNumericL
 {
     foreach (var checkpoint in new[] { false, true })
     {
+        // The checkpoint case puts control characters and Unicode in grantRevision to exercise JSON escaping.
         var receipt = RuntimeNumericLimitDenialReceipt.Seal(new(
             1, id, "project-a", "run-a", "root-a", "session-a", id, 7, 7, id, hash,
             id, checkpoint ? "rev \"quoted\" + <tag> & '\u00e9`\n\t\\\U0001F600" : "1",
