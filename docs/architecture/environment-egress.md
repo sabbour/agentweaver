@@ -343,6 +343,12 @@ The parts are:
   treats `AlreadyExists` as a no-op. Other read or create errors stop the
   deployment. The provider only reads and replaces the object. If the object is
   missing, the apply fails with `policy_object_missing`.
+- A separate administrator-applied Role grants the `environment`
+  ServiceAccount `get`, `update`, and `patch` on that named policy. Kubernetes
+  combines this grant with existing Environment permissions. The bundle stays
+  outside default workload deployment and does not select or activate Cilium.
+  The provider uses the named grant to read and replace the policy; deployment
+  continues to create the DNS-only seed only when the policy is missing.
 - `PublicHttps` renders one `toCIDRSet` rule for `0.0.0.0/0` and `::/0` on
   TCP 443, with the excluded ranges in `except`. `Allowlist` renders DNS
   `matchName` rules and `toFQDNs` `matchName` rules for each exact host on
@@ -384,6 +390,7 @@ sequenceDiagram
             C-->>R: Accepted or Failed
         end
     end
+    Note over C,K: Environment Role grants get, update, and patch on the named policy; deploy creates the seed only when missing
 ```
 
 Environment does not run the reconciler yet. #2659 connects it to the
