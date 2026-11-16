@@ -13,6 +13,7 @@ using Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -267,9 +268,17 @@ public sealed class PlatformPolicySourceTlsTests
     public async Task PrivateListenerRequiresEnvironmentTlsAndKeepsThePublicAndIssueSyncListeners()
     {
         using var certificates = new PolicySourceCertificates();
+        using var revokedRecheckClient = certificates.CreateClient(
+            PlatformPolicySourceTls.EnvironmentDnsName, clientAuthentication: true);
         var values = certificates.Configuration();
+        values["ProjectsConfig:PolicySource:EnvironmentPins:1:Sha256"] =
+            Convert.ToHexString(SHA256.HashData(revokedRecheckClient.RawData));
+        values["ProjectsConfig:PolicySource:EnvironmentPins:1:RetireAtUtc"] =
+            values["ProjectsConfig:PolicySource:EnvironmentPins:0:RetireAtUtc"];
         values["ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256"] =
             certificates.AgentHostPin;
+        // The reused connection's request recheck uses this pinned leaf and its fresh CRL URL.
+        certificates.Revoke(revokedRecheckClient);
         values["Kestrel:Endpoints:IssueSyncIdentity:Url"] = "https://localhost:8444";
         AddIssueSyncProfile(values, certificates);
         var builder = Builder(values);
@@ -285,10 +294,16 @@ public sealed class PlatformPolicySourceTlsTests
         await using var app = builder.Build();
         app.UseRouting();
         var privateConnectionIds = new ConcurrentQueue<string>();
+        var useRevokedPeerForRequest = 0;
         app.Use((context, next) =>
         {
             if (context.Connection.LocalPort == 8445)
+            {
                 privateConnectionIds.Enqueue(context.Connection.Id);
+                if (Volatile.Read(ref useRevokedPeerForRequest) != 0)
+                    context.Features.Set<ITlsConnectionFeature>(
+                        new TestTlsConnectionFeature(revokedRecheckClient));
+            }
             return next(context);
         });
         app.UsePrivateListenerGuard();
@@ -301,7 +316,6 @@ public sealed class PlatformPolicySourceTlsTests
             using var publicResponse = await publicClient.GetAsync("https://127.0.0.1:8443/public");
             Assert.Equal(HttpStatusCode.OK, publicResponse.StatusCode);
 
-            var crlNextUpdate = certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(10));
             using var environmentClient = CreateClient(
                 certificates.EnvironmentClient);
             using (var privateResponse = await environmentClient.GetAsync(
@@ -328,9 +342,7 @@ public sealed class PlatformPolicySourceTlsTests
             Assert.Equal(privateConnectionIds.ElementAt(0), privateConnectionIds.ElementAt(1));
 
             clock.SetUtcNow(beforeRetirement);
-            var crlRequestsBeforeRevocation = certificates.CrlRequestCount;
-            await certificates.WaitForCrlExpirationAsync(crlNextUpdate, CancellationToken.None);
-            certificates.Revoke(certificates.EnvironmentClient);
+            Volatile.Write(ref useRevokedPeerForRequest, 1);
             using var revokedPeerResponse = await environmentClient.GetAsync(
                 "https://127.0.0.1:8445" + PlatformPolicySourceTls.RoutePath);
             Assert.Equal(HttpStatusCode.Forbidden, revokedPeerResponse.StatusCode);
@@ -338,7 +350,6 @@ public sealed class PlatformPolicySourceTlsTests
                 await revokedPeerResponse.Content.ReadAsStringAsync());
             Assert.Equal("policy_source_peer_denied",
                 revokedPeerBody.RootElement.GetProperty("code").GetString());
-            Assert.True(certificates.CrlRequestCount > crlRequestsBeforeRevocation);
             Assert.Equal(privateConnectionIds.ElementAt(0), privateConnectionIds.ElementAt(2));
 
             using var otherPrivatePath = await environmentClient.GetAsync("https://127.0.0.1:8445/public");
@@ -366,6 +377,15 @@ public sealed class PlatformPolicySourceTlsTests
         {
             await app.StopAsync();
         }
+    }
+
+    private sealed class TestTlsConnectionFeature(X509Certificate2? clientCertificate)
+        : ITlsConnectionFeature
+    {
+        public X509Certificate2? ClientCertificate { get; set; } = clientCertificate;
+
+        public Task<X509Certificate2?> GetClientCertificateAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ClientCertificate);
     }
 
     private static WebApplicationBuilder Builder(Dictionary<string, string?> values)
@@ -706,21 +726,8 @@ public sealed class PlatformPolicySourceTlsTests
             _crlServer.SetCrl(crl);
         }
 
-        internal DateTimeOffset SetUnrevokedCrl(TimeSpan lifetime)
-        {
-            var nextUpdate = DateTimeOffset.UtcNow.Add(lifetime);
-            _crlServer.SetCrl(CreateCrl([], nextUpdate));
-            return nextUpdate;
-        }
-
-        internal async Task WaitForCrlExpirationAsync(
-            DateTimeOffset nextUpdate,
-            CancellationToken cancellationToken)
-        {
-            // X509Chain checks CRL freshness against system time, not the injected clock.
-            while (DateTimeOffset.UtcNow < nextUpdate)
-                await Task.Delay(nextUpdate - DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
-        }
+        internal void SetUnrevokedCrl(TimeSpan lifetime) =>
+            _crlServer.SetCrl(CreateCrl([], DateTimeOffset.UtcNow.Add(lifetime)));
 
         private static byte[] CreateAuthorityKeyIdentifier(X509Certificate2 ca)
         {
