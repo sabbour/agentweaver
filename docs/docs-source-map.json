@@ -38,6 +38,7 @@
     "docs/guide/identity-scopes.md",
     "docs/guide/notifications.md",
     "docs/guide/platform-components.md",
+    "docs/guide/read-platform-policies.md",
     "docs/guide/release-planning.md",
     "docs/guide/azure-acceptance.md",
     "docs/guide/web-client.md",
@@ -806,6 +807,7 @@
         "docs/experience/runs-sessions.md",
         "docs/experience/knowledge.md",
         "docs/guide/web-client.md",
+        "docs/guide/read-platform-policies.md",
         "docs/guide/deploy-to-azure.md",
         "docs/guide/troubleshooting.md"
       ]

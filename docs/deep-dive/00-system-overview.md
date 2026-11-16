@@ -77,7 +77,7 @@ the decision records in section 9.
 | AgentHost — `services/agenthost/Agentweaver.AgentHost/` | Guarded native runtime, collectors and process readiness | Current project roles or self-scheduling |
 | Events — `services/events-and-sessions/Agentweaver.EventsAndSessions/` | Journal order, material references, messages and accounting | Execution decisions |
 | Knowledge — `services/knowledge/Agentweaver.Knowledge/` | Authorized record operations and context composition | Run history |
-| Browser — `apps/web/src/v1/`, entry `apps/web/src/App.tsx` | User interaction with Gateway and Broker | Server-side authority |
+| Browser — `apps/web/src/v1/`, entry `apps/web/src/App.tsx` | User interaction with Gateway and Broker, including read-only saved Platform Policy snapshots | Server-side authority |
 | Retained compatibility adapter — `services/mcp/Agentweaver.Mcp/` | Source OpenAPI-to-tool translation | A supported MCP product |
 
 Source Control owner endpoints and state live in Orchestrator, not a separate

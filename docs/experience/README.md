@@ -18,6 +18,7 @@ understand its access boundaries.
 | Sign in and open a run | [Sign in and access](./onboarding-auth.md) |
 | Find or create a project | [Projects](./projects.md) |
 | Change project settings or membership | [Project configuration](./configuration.md) |
+| Read saved Platform Policy source | [Read Platform Policies](../guide/read-platform-policies.md) |
 | Import or assign a Skill | [Skills and marketplace](./skills.md) |
 | Connect GitHub or Copilot | [Account connections](./connections.md) |
 | Start or inspect a run | [Runs and sessions](./runs-sessions.md) |

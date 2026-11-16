@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   BrokerConsentPrompt,
   EffectiveProjectRole,
@@ -200,6 +200,8 @@ vi.mock('./AuthContext', () => {
       expiresAt: Date.now() + 60_000,
       binding: null,
     },
+    authSessionGeneration: 0,
+    unboundSessionGeneration: 0,
     apiCall: mocks.apiCall,
     authorize: (binding: unknown) => mocks.authorize(binding),
     // Silent sign-in for a run binding. Tests control whether it succeeds.
@@ -212,6 +214,21 @@ vi.mock('./AuthContext', () => {
     error: null,
     configurationError: null,
     decideConsent: async () => {},
+    establishPlatformPolicyAccess: async () => {
+      throw new Error('Policy access is unavailable in this test.');
+    },
+    getPlatformPolicyRevisionHistory: async () => ({
+      scopeType: 'platform',
+      scopeId: 'default',
+      policyId: null,
+      snapshotRevision: null,
+      items: [],
+      nextCursor: null,
+    }),
+    readPlatformPolicyRevision: async () => {
+      throw new Error('Policy access is unavailable in this test.');
+    },
+    refreshPlatformPolicySession: async () => false,
   };
   return {
     AuthProvider: ({ children }: { children: React.ReactNode }) => {
@@ -484,10 +501,15 @@ function knowledgeTransferBundle(projectId = 'p1', agentId = 'a1') {
 }
 
 describe('v1 web project scoping', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     window.history.replaceState({}, '', '/projects/p1/settings?section=connections');
     window.name = '';
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
     mocks.authProvider.mockClear();
     // Match AuthContext's stable callback; the Board restarts reads when this reference changes.
     mocks.apiCall.mockReset().mockImplementation(
