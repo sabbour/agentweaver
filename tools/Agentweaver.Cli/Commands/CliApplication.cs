@@ -53,6 +53,13 @@ public static class CliApplication
             if (args[0] == "models")
                 return await ByokModelCommands.RunAsync(
                     args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
+            if (args[0] == "policy")
+            {
+                var actualRuntime = runtime ?? new CliRuntimeOptions();
+                using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                return await PolicyCommands.RunAsync(
+                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, ct).ConfigureAwait(false);
+            }
             if (args[0] == "copilot")
             {
                 var actualRuntime = runtime ?? new CliRuntimeOptions();
@@ -491,6 +498,8 @@ public static class CliApplication
           agentweaver auth login|status|logout [target options] [--scope <scope>]
           agentweaver copilot status|connect --scope project|platform [--scope-id <id>] [target options]
           agentweaver copilot refresh|disconnect --connection-id <guid> [target options]
+          agentweaver policy show --scope platform [--revision <revision>] [target options]
+          agentweaver policy history --scope platform [--page-size <1-100>] [--cursor <token>] [target options]
           agentweaver workspace refs --project <project-id> --interactive [--cursor <2-10000>] [target options]
           agentweaver workspace tree --project <project-id> --ref <commit-sha> --interactive [target options]
           agentweaver workspace file --project <project-id> --ref <commit-sha> --path <repository-path>
