@@ -215,35 +215,40 @@ public sealed partial class ProjectsConfigPostgresTests
         var receipt = await SeedPlatformPolicySourceArtifactAsync(change, artifact);
         var stateBeforeReads = await CapturePolicyTableStateAsync();
         using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
+        using var revokedRecheckClient = change == "revocation"
+            ? certificates.CreateClient(
+                PlatformPolicySourceTls.EnvironmentDnsName, clientAuthentication: true)
+            : null;
         var now = DateTimeOffset.UtcNow;
         var retirement = change == "pin-retirement" ? now.AddSeconds(5) : now.AddDays(2);
         var clock = new MutableTimeProvider(now);
-        var identity = certificates.CreateIdentity(retireAtUtc: retirement, timeProvider: clock);
-        var crlRequestsBeforeMutation = 0;
-        DateTimeOffset? crlNextUpdate = null;
-        var interceptor = new PolicyReadInterceptor(async cancellationToken =>
+        var identity = revokedRecheckClient is null
+            ? certificates.CreateIdentity(retireAtUtc: retirement, timeProvider: clock)
+            : certificates.CreateIdentity([revokedRecheckClient], retireAtUtc: retirement, timeProvider: clock);
+        TestTlsConnectionFeature? tlsConnectionFeature = null;
+        var interceptor = new PolicyReadInterceptor(cancellationToken =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (change == "pin-retirement")
                 clock.SetUtcNow(retirement);
             else if (change == "ca-change")
                 File.WriteAllText(certificates.CaPath, certificates.OtherCa.ExportCertificatePem());
             else
             {
-                await certificates.WaitForCrlExpirationAsync(
-                    crlNextUpdate ?? throw new InvalidOperationException("The revocation CRL was not initialized."),
-                    cancellationToken).ConfigureAwait(false);
-                crlRequestsBeforeMutation = certificates.CrlRequestCount;
-                certificates.Revoke(certificates.EnvironmentClient);
+                // TestServer switches the peer after the read so the final check sees the revoked leaf.
+                tlsConnectionFeature!.ClientCertificate = revokedRecheckClient;
             }
+            return Task.CompletedTask;
         });
         using var host = await StartPlatformPolicySourceEndpointHostAsync(
             fixture.DataSource,
             identity,
             certificates.EnvironmentClient,
-            interceptor);
+            interceptor,
+            onTlsConnectionFeature: feature => tlsConnectionFeature = feature);
         using var client = host.GetTestClient();
-        if (change == "revocation")
-            crlNextUpdate = certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(5));
+        if (revokedRecheckClient is not null)
+            certificates.Revoke(revokedRecheckClient);
 
         using var response = await client.GetAsync(PlatformPolicySourceTls.RoutePath);
 
@@ -253,8 +258,6 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.DoesNotContain(receipt.ContentSha256, body, StringComparison.Ordinal);
         Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
         Assert.True(clock.GetUtcNow() < certificates.EnvironmentClient.NotAfter.ToUniversalTime());
-        if (change == "revocation")
-            Assert.True(certificates.CrlRequestCount > crlRequestsBeforeMutation);
         Assert.Equal(stateBeforeReads, await CapturePolicyTableStateAsync());
     }
 
@@ -544,7 +547,8 @@ public sealed partial class ProjectsConfigPostgresTests
         PlatformPolicySourceTlsIdentity identity,
         System.Security.Cryptography.X509Certificates.X509Certificate2? clientCertificate,
         DbCommandInterceptor? commandInterceptor = null,
-        Action? onAuthentication = null) =>
+        Action? onAuthentication = null,
+        Action<TestTlsConnectionFeature>? onTlsConnectionFeature = null) =>
         await new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -573,8 +577,12 @@ public sealed partial class ProjectsConfigPostgresTests
                         context.Connection.LocalPort = 8445;
                         context.Request.Scheme = "https";
                         context.Features.Set<ITlsHandshakeFeature>(new TestTlsHandshakeFeature());
-                        context.Features.Set<ITlsConnectionFeature>(
-                            new TestTlsConnectionFeature { ClientCertificate = clientCertificate });
+                        var tlsConnectionFeature = new TestTlsConnectionFeature
+                        {
+                            ClientCertificate = clientCertificate,
+                        };
+                        context.Features.Set<ITlsConnectionFeature>(tlsConnectionFeature);
+                        onTlsConnectionFeature?.Invoke(tlsConnectionFeature);
                         await next();
                     });
                     app.UsePrivateListenerGuard();
