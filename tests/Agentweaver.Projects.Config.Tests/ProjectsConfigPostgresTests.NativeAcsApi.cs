@@ -1118,7 +1118,8 @@ public sealed partial class ProjectsConfigPostgresTests
 
     private sealed class PolicyReadInterceptor(
         Func<CancellationToken, Task> intercept,
-        string targetTable = "native_acs_policy_heads") : DbCommandInterceptor
+        string targetTable = "native_acs_policy_heads",
+        Action<string>? observeCommand = null) : DbCommandInterceptor
     {
         public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command,
@@ -1127,7 +1128,10 @@ public sealed partial class ProjectsConfigPostgresTests
             CancellationToken cancellationToken = default)
         {
             if (command.CommandText.Contains(targetTable, StringComparison.OrdinalIgnoreCase))
+            {
+                observeCommand?.Invoke(command.CommandText);
                 await intercept(cancellationToken).ConfigureAwait(false);
+            }
             return result;
         }
     }

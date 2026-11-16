@@ -178,6 +178,27 @@ These controlled tests use disposable PostgreSQL. They check the source API and
 database state; they do not call a live API, activate policy, or prove that a
 deployed image contains the pinned ACS assets.
 
+### Test the private Environment Policy source
+
+After the Release build, run the direct TLS tests with their controlled
+certificate fixtures:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~PlatformPolicySourceTlsTests
+```
+
+The route and PostgreSQL snapshot tests use disposable PostgreSQL. Hosted CI
+runs them:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~PrivatePlatformPolicySource
+```
+
+The TLS tests check the listener profile, peer certificate rules, certificate
+rotation, revocation, and reused connections. The PostgreSQL tests check the
+complete response, pending admission, read-only snapshot, storage bounds, and
+sanitized errors.
+
 ## Test project-wide Knowledge discovery
 
 Run the Knowledge service suite to check authorization, existing provider
