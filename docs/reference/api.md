@@ -1290,14 +1290,16 @@ for the receipt rules.
 
 Active coordinator sessions also receive `executionRecovery`, a read-only view
 of the latest bound MAF checkpoint. A failed or indeterminate run still receives
-this projection when its session lifecycle remains active. The response reports checkpoint status
-and dependency readiness, pending child dispatches, BuildTest, OpenPullRequest,
-Merge, IndependentReview, and RubberDuck intent/receipt evidence, failed
-dependencies, and the current pending decision blocker. RubberDuck operations
-also expose `failureCode` for a retryable owner failure or invalid verdict.
-External-effect intents without receipts are marked `mayRepeat`; unresolved
-running effects are `indeterminate`. At a recovered child join, the one
-supported committed OpenPullRequest effect is reported in
+this projection when its session lifecycle remains active. The response reports checkpoint
+status and dependency readiness, pending child dispatches, BuildTest,
+OpenPullRequest, Scribe, Merge, IndependentReview, and RubberDuck intent/receipt
+evidence, failed dependencies, and the current pending decision blocker.
+RubberDuck operations also expose `failureCode` for a retryable owner failure
+or invalid verdict. A pending IndependentReview reports `awaitingApproval` for
+its step and operation until its review receipt is recorded. Other external-effect
+intents without receipts report `mayRepeat`, except the committed OpenPullRequest
+case described below. Unresolved running effects are `indeterminate`. At a recovered
+child join, the one supported committed OpenPullRequest effect is reported in
 `executionRecovery.steps[].effectRecoveryState` as `reconcileCommitted` until
 its original intent receives a saved receipt. This state means recovery
 must read and verify the already stored pull request; it does not mean the
