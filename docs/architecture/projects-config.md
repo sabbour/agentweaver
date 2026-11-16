@@ -135,6 +135,13 @@ Blob credentials or provider selections. It does not publish or deploy an image.
 Applied migrations, runtime authorization, trusted TLS, and healthy owner flows
 still require separate approval and evidence.
 
+The optional Platform Policy source listener is a separate source capability.
+It is disabled by default and is not exposed by the checked-in Service or
+network policies. When enabled, Projects binds HTTPS port `8445` and accepts
+only `GET /internal/policy-source/platform` from the pinned Environment
+workload. The listener uses the existing Projects server certificate and the
+existing backend CA mount.
+
 ## API surface
 
 Public routes require a validated bearer token with exactly one `sub`, the
@@ -171,6 +178,15 @@ revision metadata; exact reads return all retained bytes after a hash check.
 These reads do not activate policy or change the v4 Policy path. See the
 [Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
 for authorization, paging, limits, and errors.
+
+The Environment source route does not use public bearer authorization. It
+rechecks the peer certificate on every request, including requests on a reused
+TLS connection. The source store reads the head, revision metadata, and file
+metadata in one read-only PostgreSQL `RepeatableRead` transaction. It checks
+the artifact limits before it loads file bytes, then checks the canonical
+artifact hash. The route returns `admission.state: "pending"` and
+`admission.checkpoint: null`. It reads stored source without querying OPA or
+changing policy state.
 
 The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 
@@ -212,6 +228,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
 | `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
 | `GET /api/policies/platform` | Read the current canonical ACS Policy artifact as a complete, hash-verified source. Requires `api.read` and a current unbound PlatformAdmin; it does not require `projects.admin`. |
+| `GET /internal/policy-source/platform` | Private Environment source read on port `8445`. Requires native TLS 1.2/1.3, the exact Environment DNS SAN, a current pinned clientAuth leaf, the pinned backend CA, and valid online revocation status. Accepts no query or body and returns the complete artifact with Pending admission state and `Cache-Control: no-store`. |
 | `GET /api/policies/platform/revisions?pageSize={n}&cursor={token}` | Read newest-first revision metadata for the stable Platform lineage. `pageSize` defaults to 20 and ranges from 1 to 100. Every page rechecks current PlatformAdmin authority. |
 | `GET /api/policies/platform/revisions/{revision}` | Read the complete, hash-verified artifact and its original creation time from the exact retained revision. The revision is a canonical positive decimal Int64. |
 | `POST /api/policies/platform/validate` | Validate a complete Platform Policy artifact without changing stored policy state. |
@@ -228,6 +245,47 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse` | Resolve a source ref to a commit and return a bounded, filtered, paged manifest index. |
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview` | Validate selected source bytes from an exact source revision, commit SHA, and path, then return the Skills preview and digest. |
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the expected content digest and idempotency key into the existing Skills content store. |
+
+### Environment Policy source read
+
+```mermaid
+sequenceDiagram
+    actor E as Environment workload
+    participant K as Projects HTTPS port 8445
+    participant T as Environment peer validator
+    participant S as NativeAcsPolicyStore
+    participant D as PostgreSQL
+    E->>K: TLS 1.2/1.3 and client certificate
+    K->>T: Require certificate and validate CA, leaf, SAN, EKU, validity, and revocation
+    T-->>K: Accept handshake or fail without an HTTP response
+    E->>K: GET /internal/policy-source/platform
+    K->>T: Recheck peer certificate for this request
+    T-->>K: Accept or return 403 policy_source_peer_denied
+    K->>S: Read current Platform source
+    S->>D: Begin read-only RepeatableRead transaction
+    S->>D: Read head, revision metadata, and bounded file metadata
+    S->>D: Load artifact bytes after the metadata bounds pass
+    S->>S: Reconstruct artifact and verify canonical hash
+    S-->>K: One complete artifact snapshot
+    K-->>E: 200 artifact, admission pending, no-store
+```
+
+The source response is one PostgreSQL snapshot. A newer head can commit after
+the read; the response still represents the head from its transaction.
+Malformed requests return `400 policy_source_request_invalid`. A missing head
+returns `404 native_acs_policy_not_found`. A corrupt or oversized artifact
+returns `500 native_acs_policy_corrupt`. A database connection failure returns
+`503 native_acs_policy_source_unavailable`. Unexpected failures return
+`500 policy_source_internal_error` without diagnostic details. Every response
+uses `Cache-Control: no-store`. The route accepts no query or request body;
+other paths on port `8445` and this path on the public listener return 404.
+Unsupported methods return 405.
+
+The request deadline is 15 seconds and includes database and response work.
+Certificate URL retrieval has a five-second timeout. Failed or unknown
+revocation status denies the peer. See the
+[Policy source TLS settings](../reference/runtime-configuration.md#optional-environment-policy-source)
+for the pin and rotation requirements.
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
 

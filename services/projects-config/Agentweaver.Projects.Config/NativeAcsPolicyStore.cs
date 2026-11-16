@@ -17,6 +17,10 @@ internal sealed class NativeAcsPolicyStore(
     TimeProvider timeProvider)
 {
     private const string PolicyRevisionEventType = "native_acs.policy_revision_committed.v1";
+    private const int MaximumPolicySourceManifestBytes = 65_536;
+    private const int MaximumPolicySourceFiles = 64;
+    private const int MaximumPolicySourceFileBytes = 262_144;
+    private const int MaximumPolicySourceArtifactBytes = 1_048_576;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const int HistoryCursorVersion = 1;
     private const string HistoryCursorOrder = "revision-descending";
@@ -297,6 +301,120 @@ internal sealed class NativeAcsPolicyStore(
             storedFiles,
             "The current native ACS policy artifact failed its integrity check.");
 
+        return new NativeAcsPolicyReadResult(
+            head.ScopeType,
+            head.ScopeId,
+            head.PolicyId,
+            head.CurrentRevision,
+            revision.ContentSha256,
+            artifact,
+            head.UpdatedAt);
+    }
+
+    internal async Task<NativeAcsPolicyReadResult?> ReadPlatformPolicySourceAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+            .ConfigureAwait(false);
+        await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken)
+            .ConfigureAwait(false);
+
+        var head = await db.NativeAcsPolicyHeads.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (head is null)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
+        var revisionMetadata = await db.NativeAcsPolicyRevisions.AsNoTracking()
+            .Where(item =>
+                item.ScopeType == head.ScopeType &&
+                item.ScopeId == head.ScopeId &&
+                item.PolicyId == head.PolicyId &&
+                item.Revision == head.CurrentRevision)
+            .Select(item => new
+            {
+                item.ContentSha256,
+                item.CreatedAt,
+                ManifestLength = item.ManifestBytes.Length,
+            })
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw Corrupt("The current native ACS policy revision is unavailable.");
+        var fileMetadata = await db.NativeAcsPolicyArtifactFiles.AsNoTracking()
+            .Where(item =>
+                item.ScopeType == head.ScopeType &&
+                item.ScopeId == head.ScopeId &&
+                item.PolicyId == head.PolicyId &&
+                item.Revision == head.CurrentRevision)
+            .OrderBy(item => item.RelativePath)
+            .Select(item => new
+            {
+                item.RelativePath,
+                Length = item.Bytes.Length,
+            })
+            .Take(MaximumPolicySourceFiles + 1)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var totalBytes = (long)revisionMetadata.ManifestLength;
+        if (revisionMetadata.ManifestLength is < 1 or > MaximumPolicySourceManifestBytes ||
+            fileMetadata.Length > MaximumPolicySourceFiles ||
+            fileMetadata.Any(file =>
+                string.IsNullOrWhiteSpace(file.RelativePath) ||
+                file.RelativePath.Length > 256 ||
+                file.Length > MaximumPolicySourceFileBytes))
+            throw Corrupt("The current native ACS policy artifact exceeds its storage limits.");
+        foreach (var file in fileMetadata)
+            totalBytes += file.Length;
+        if (totalBytes > MaximumPolicySourceArtifactBytes)
+            throw Corrupt("The current native ACS policy artifact exceeds its total size limit.");
+
+        var revision = await db.NativeAcsPolicyRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == head.ScopeType &&
+                item.ScopeId == head.ScopeId &&
+                item.PolicyId == head.PolicyId &&
+                item.Revision == head.CurrentRevision,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw Corrupt("The current native ACS policy revision is unavailable.");
+        var storedFiles = await db.NativeAcsPolicyArtifactFiles.AsNoTracking()
+            .Where(item =>
+                item.ScopeType == head.ScopeType &&
+                item.ScopeId == head.ScopeId &&
+                item.PolicyId == head.PolicyId &&
+                item.Revision == head.CurrentRevision)
+            .OrderBy(item => item.RelativePath)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (storedFiles.Length != fileMetadata.Length ||
+            storedFiles.Where((file, index) =>
+                file.RelativePath != fileMetadata[index].RelativePath ||
+                file.Bytes.Length != fileMetadata[index].Length).Any())
+            throw Corrupt("The current native ACS policy artifact changed during its bounded read.");
+
+        NativeAcsArtifact artifact;
+        try
+        {
+            artifact = ReconstructArtifact(
+                revision,
+                storedFiles,
+                "The current native ACS policy artifact failed its integrity check.");
+        }
+        catch (ArgumentException)
+        {
+            throw Corrupt("The current native ACS policy artifact failed its integrity check.");
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new NativeAcsPolicyReadResult(
             head.ScopeType,
             head.ScopeId,

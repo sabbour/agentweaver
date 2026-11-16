@@ -295,6 +295,46 @@ active validation slot per Projects & Config process. A busy process returns
 `503` with retry guidance. These are source-level limits; they do not prove
 deployed capacity.
 
+### Private Environment Policy source read
+
+`GET /internal/policy-source/platform` is a private Projects & Config route on
+port `8445`. It is mapped only when
+`ProjectsConfig:PolicySource:Enabled` is `true`. The route is not exposed
+through the public Gateway, OpenAPI, or MCP surfaces.
+
+The route uses TLS 1.2 or TLS 1.3 and requires a client certificate. Projects
+checks the pinned Environment leaf, exact
+`environment.agentweaver.svc.cluster.local` DNS SAN, client-authentication
+EKU, certificate validity, the single pinned backend CA, and online revocation
+status. Projects checks the peer again for each request. Failed TLS validation
+ends the handshake; a failed per-request check returns `403
+policy_source_peer_denied`. Bearer tokens do not authenticate this route.
+
+The route accepts no query parameters or request body. It returns the current
+Platform head, complete artifact, stored hash, revision, update time, and
+`admission: { state: "pending", checkpoint: null }`. It reads source without
+calling OPA or changing policy state. The head, revision metadata, and file
+metadata come from one read-only PostgreSQL `RepeatableRead` transaction.
+Projects checks limits before it loads file bytes, then checks the artifact
+hash. The source limits are a 65,536-byte manifest, at most 64 files, at most
+262,144 bytes per file, and 1,048,576 artifact bytes in total. The serialized
+response limit is 5,242,880 bytes. The request deadline is 15 seconds.
+
+| Result | Contract |
+| --- | --- |
+| `400 policy_source_request_invalid` | The request has a query parameter or body. |
+| `404 native_acs_policy_not_found` | The Platform scope has no policy head. |
+| `404 not_found` | The request uses another path on port `8445` or this path on the public listener. |
+| `405` | The request uses a method other than `GET`. |
+| `500 native_acs_policy_corrupt` | The stored source exceeds a limit or fails its integrity check. |
+| `500 policy_source_internal_error` | The request deadline expires or an unexpected internal error occurs. |
+| `503 native_acs_policy_source_unavailable` | PostgreSQL is unavailable. |
+
+Every HTTP response uses `Cache-Control: no-store`. If a client omits its
+certificate, TLS rejects the connection before the route returns an HTTP
+response. Runtime pin values and leaf rotation are described in the
+[runtime configuration reference](./runtime-configuration.md#optional-environment-policy-source).
+
 If `ACS_OPA_PATH` is not set to an absolute path, Projects & Config still
 starts. Policy validation and writes then return `503` with dependency `opa`.
 

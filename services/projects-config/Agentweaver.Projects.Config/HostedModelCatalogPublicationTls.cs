@@ -16,27 +16,36 @@ internal sealed class HostedModelCatalogPublicationTls
     private const string CertificatePinKey = "AgentHostCertificateSha256";
     private const string BackendCaFile = "/var/run/service-backend-ca/ca.crt";
     private readonly string _agentHostCertificatePin;
+    private readonly string _backendCaFile;
     private readonly TimeProvider _timeProvider;
 
     internal HostedModelCatalogPublicationTls(string pin, TimeProvider timeProvider)
+        : this(pin, BackendCaFile, timeProvider)
+    {
+    }
+
+    internal HostedModelCatalogPublicationTls(string pin, string backendCaFile, TimeProvider timeProvider)
     {
         _agentHostCertificatePin = pin;
+        _backendCaFile = backendCaFile;
         _timeProvider = timeProvider;
     }
 
     /// <summary>Enables optional TLS client certificates and rejects every peer except pinned AgentHost.</summary>
-    internal static void Configure(WebApplicationBuilder builder)
+    internal static void Configure(WebApplicationBuilder builder) => Configure(builder, BackendCaFile);
+
+    internal static void Configure(WebApplicationBuilder builder, string backendCaFile)
     {
         var section = builder.Configuration.GetSection(SectionName);
         if (!section.Exists())
             return;
         var pin = section[CertificatePinKey];
         if (pin is not { Length: 64 } || pin.Any(character => !char.IsAsciiHexDigit(character)) ||
-            !File.Exists(BackendCaFile))
+            !File.Exists(backendCaFile))
             throw new InvalidOperationException(
                 "Hosted model catalog publication requires the AgentHost certificate pin and backend CA.");
 
-        var identity = new HostedModelCatalogPublicationTls(pin, TimeProvider.System);
+        var identity = new HostedModelCatalogPublicationTls(pin, backendCaFile, TimeProvider.System);
         builder.Services.AddSingleton(identity);
         builder.WebHost.ConfigureKestrel(server => server.ConfigureHttpsDefaults(https =>
         {
@@ -64,5 +73,5 @@ internal sealed class HostedModelCatalogPublicationTls
         System.Security.Cryptography.X509Certificates.X509Chain? chain,
         SslPolicyErrors errors) =>
         RuntimeServiceTlsIdentity.ValidatePinnedClientCertificate(
-            certificate, chain, errors, [_agentHostCertificatePin], BackendCaFile, _timeProvider.GetUtcNow());
+            certificate, chain, errors, [_agentHostCertificatePin], _backendCaFile, _timeProvider.GetUtcNow());
 }

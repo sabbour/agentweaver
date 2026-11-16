@@ -25,7 +25,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectAuthorization.cs` | Current membership, roles, scopes, and effective permissions |
 | `ProjectConfiguration.cs` | Typed settings, validation, limits, and egress narrowing |
 | `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
-| `NativeAcsPolicyEndpoints.cs` and `NativeAcsPolicyStore.cs` | Canonical Platform ACS Policy API and immutable policy source |
+| `NativeAcsPolicyEndpoints.cs`, `PlatformPolicySourceEndpoints.cs`, `PlatformPolicySourceTls.cs`, and `NativeAcsPolicyStore.cs` | Public Platform ACS Policy API, private Environment source read, and immutable policy source |
 | `ModelProviderDraftService.cs` and `ModelProviderDraftRecords.cs` | Customer-provided model-provider metadata in Draft heads and immutable revisions |
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
@@ -104,6 +104,15 @@ and after retrieval. Writes also require `projects.admin` and the
 does not activate ACS or change the v4 Policy path. The
 [native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
 defines its full error and request contract.
+
+The Environment reads the current complete artifact through the separate,
+disabled-by-default `GET /internal/policy-source/platform` route on port
+`8445`. Pinned mTLS identifies the Environment peer. Projects rechecks that
+certificate on each request, reads the source in one bounded, read-only
+PostgreSQL snapshot, and returns admission as pending with no checkpoint.
+The read is independent of OPA and leaves policy state unchanged. See the
+[private source contract](../reference/contracts.md#private-environment-policy-source-read)
+and [runtime TLS settings](../reference/runtime-configuration.md#optional-environment-policy-source).
 
 ### Edit configuration safely
 

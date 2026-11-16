@@ -145,6 +145,7 @@ if (runMigrations)
     return;
 }
 
+var platformPolicySourceEnabled = PlatformPolicySourceTls.Configure(builder);
 var runtimeConnectionString = builder.Configuration.GetConnectionString("ProjectsConfig")
     ?? throw new InvalidOperationException("Missing required configuration 'ConnectionStrings:ProjectsConfig'.");
 // The history route depends on the Knowledge owner even though the rest of Projects & Config does not.
@@ -327,6 +328,8 @@ await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions)
 await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 app.UseRouting();
 app.UseModelProviderDraftNoStore();
+if (platformPolicySourceEnabled)
+    app.UsePrivateListenerGuard();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseModelProviderDraftBodyLimit();
@@ -336,6 +339,8 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints(enableBrokerRunBinding: brokerRunBindingAudienceUri is not null);
+if (platformPolicySourceEnabled)
+    app.MapPlatformPolicySource();
 app.MapP1ProjectSetupEndpoint();
 app.MapIssueSyncAuthority(issueSyncIdentity);
 app.MapSkillMarketplaceEndpoints();

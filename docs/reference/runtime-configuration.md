@@ -493,6 +493,45 @@ same references, source modes, enabled states, reasoning efforts, and revision.
 Because the ConfigMap is immutable, follow
 [Update an immutable ConfigMap](#update-an-immutable-configmap).
 
+### Optional Environment Policy source
+
+The private source route reads the current complete Platform Policy artifact
+for the Environment workload. `ProjectsConfig:PolicySource:Enabled` defaults
+to `false`. The checked-in runtime ConfigMap does not enable this listener.
+When enabled, the service adds the private HTTPS listener on port `8445` and
+preserves the configured public HTTPS listener on port `8443`. It uses the
+existing `ProjectsConfig__Tls__CertificatePath` and
+`ProjectsConfig__Tls__KeyPath` certificate and key.
+
+| Setting | Contract |
+| --- | --- |
+| `ProjectsConfig__PolicySource__Enabled` | Optional Boolean. Defaults to `false`. When `true`, require the CA fingerprint and one to four Environment leaf pins. |
+| `ProjectsConfig__PolicySource__BackendCaSha256` | Required when enabled. SHA-256 of the mounted backend CA certificate's DER bytes. Use 64 hexadecimal characters. Projects checks the fingerprint at startup and for each request. |
+| `ProjectsConfig__PolicySource__EnvironmentPins__<index>__Sha256` | Required for each pin. Indexes are sequential from `0`; configure one to four unique SHA-256 leaf fingerprints, each as 64 hexadecimal characters. |
+| `ProjectsConfig__PolicySource__EnvironmentPins__<index>__RetireAtUtc` | Required with each pin. Use an ISO 8601 UTC timestamp that ends in `Z`. Every configured retirement time must be later than startup. At runtime, the pin stops matching at the exact retirement instant. |
+| `Kestrel__Endpoints__EnvironmentPolicySource__Url` | Optional when `Enabled` is `true`; leave it unset when `Enabled` is false or unset. Setting it without `Enabled=true` fails startup. When enabled, it must equal `https://+:8445`; Projects supplies this value when it is absent. Reserve port `8445` for this endpoint; a conflict fails startup. |
+
+The mounted CA file is
+`/var/run/service-backend-ca/ca.crt`. Each Environment leaf must chain to that
+single pinned CA, include client authentication EKU, and contain exactly the
+DNS SAN `environment.agentweaver.svc.cluster.local`. Projects checks the leaf
+pin, SAN, validity, custom-root chain, and online revocation status. Revocation
+data must be reachable from Projects. Unknown or revoked status denies the
+request. Forwarded headers and bearer tokens do not authenticate this route.
+
+To rotate an Environment leaf, configure the old and new pins together before
+the old pin's retirement time. Give each pin its own future `RetireAtUtc`.
+After the Environment uses the new certificate, remove the old pin and restart
+Projects. The old pin stops matching at its retirement instant. There is no
+default overlap period. Remove a retired pin before restarting Projects,
+because startup rejects any pin whose retirement time is at or before startup.
+
+Projects trusts one backend CA root for this route. Coordinate a CA rotation
+with the Environment certificate and Projects configuration. Projects denies
+requests when the mounted CA no longer matches `BackendCaSha256`. Port `8445`
+is not exposed by the checked-in Kubernetes Service or network policies; this
+source configuration does not deploy or enable that exposure.
+
 The following settings are supplied to an explicit migration or bootstrap
 command. They are not part of the runtime ConfigMap:
 
