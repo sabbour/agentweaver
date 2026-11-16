@@ -220,8 +220,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var clock = new MutableTimeProvider(now);
         var identity = certificates.CreateIdentity(retireAtUtc: retirement, timeProvider: clock);
         var crlRequestsBeforeMutation = 0;
-        if (change == "revocation")
-            certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(2));
+        DateTimeOffset? crlNextUpdate = null;
         var interceptor = new PolicyReadInterceptor(async cancellationToken =>
         {
             if (change == "pin-retirement")
@@ -230,7 +229,9 @@ public sealed partial class ProjectsConfigPostgresTests
                 File.WriteAllText(certificates.CaPath, certificates.OtherCa.ExportCertificatePem());
             else
             {
-                await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+                await certificates.WaitForCrlExpirationAsync(
+                    crlNextUpdate ?? throw new InvalidOperationException("The revocation CRL was not initialized."),
+                    cancellationToken).ConfigureAwait(false);
                 crlRequestsBeforeMutation = certificates.CrlRequestCount;
                 certificates.Revoke(certificates.EnvironmentClient);
             }
@@ -241,6 +242,8 @@ public sealed partial class ProjectsConfigPostgresTests
             certificates.EnvironmentClient,
             interceptor);
         using var client = host.GetTestClient();
+        if (change == "revocation")
+            crlNextUpdate = certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(5));
 
         using var response = await client.GetAsync(PlatformPolicySourceTls.RoutePath);
 

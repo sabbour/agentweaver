@@ -282,8 +282,9 @@ other paths on port `8445` and this path on the public listener return 404.
 Unsupported methods return 405.
 
 The request deadline is 15 seconds and includes database and response work.
-Certificate URL retrieval has a five-second timeout. Failed or unknown
-revocation status denies the peer. See the
+Certificate URL retrieval has a five-second timeout. The platform CRL cache
+controls freshness: a newer CRL takes effect after the cached CRL's
+`nextUpdate`. Unavailable or unknown revocation status denies the peer. See the
 [Policy source TLS settings](../reference/runtime-configuration.md#optional-environment-policy-source)
 for the pin and rotation requirements.
 

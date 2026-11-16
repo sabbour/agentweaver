@@ -515,9 +515,11 @@ The mounted CA file is
 `/var/run/service-backend-ca/ca.crt`. Each Environment leaf must chain to that
 single pinned CA, include client authentication EKU, and contain exactly the
 DNS SAN `environment.agentweaver.svc.cluster.local`. Projects checks the leaf
-pin, SAN, validity, custom-root chain, and online revocation status. Revocation
-data must be reachable from Projects. Unknown or revoked status denies the
-request. Forwarded headers and bearer tokens do not authenticate this route.
+pin, SAN, validity, custom-root chain, and online revocation status. The
+platform certificate chain builder uses its CRL cache. A newer CRL takes effect
+after the cached CRL's `nextUpdate`. If revocation status is unavailable or
+unknown, Projects denies the request. Forwarded headers and bearer tokens do not
+authenticate this route.
 
 To rotate an Environment leaf, configure the old and new pins together before
 the old pin's retirement time. Give each pin its own future `RetireAtUtc`.
