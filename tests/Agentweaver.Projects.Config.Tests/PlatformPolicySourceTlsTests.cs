@@ -297,11 +297,11 @@ public sealed class PlatformPolicySourceTlsTests
         await app.StartAsync();
         try
         {
-            certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(5));
             using var publicClient = CreateClient();
             using var publicResponse = await publicClient.GetAsync("https://127.0.0.1:8443/public");
             Assert.Equal(HttpStatusCode.OK, publicResponse.StatusCode);
 
+            var crlNextUpdate = certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(10));
             using var environmentClient = CreateClient(
                 certificates.EnvironmentClient);
             using (var privateResponse = await environmentClient.GetAsync(
@@ -329,7 +329,7 @@ public sealed class PlatformPolicySourceTlsTests
 
             clock.SetUtcNow(beforeRetirement);
             var crlRequestsBeforeRevocation = certificates.CrlRequestCount;
-            await Task.Delay(TimeSpan.FromSeconds(6));
+            await certificates.WaitForCrlExpirationAsync(crlNextUpdate, CancellationToken.None);
             certificates.Revoke(certificates.EnvironmentClient);
             using var revokedPeerResponse = await environmentClient.GetAsync(
                 "https://127.0.0.1:8445" + PlatformPolicySourceTls.RoutePath);
@@ -706,8 +706,21 @@ public sealed class PlatformPolicySourceTlsTests
             _crlServer.SetCrl(crl);
         }
 
-        internal void SetUnrevokedCrl(TimeSpan lifetime) =>
-            _crlServer.SetCrl(CreateCrl([], DateTimeOffset.UtcNow.Add(lifetime)));
+        internal DateTimeOffset SetUnrevokedCrl(TimeSpan lifetime)
+        {
+            var nextUpdate = DateTimeOffset.UtcNow.Add(lifetime);
+            _crlServer.SetCrl(CreateCrl([], nextUpdate));
+            return nextUpdate;
+        }
+
+        internal async Task WaitForCrlExpirationAsync(
+            DateTimeOffset nextUpdate,
+            CancellationToken cancellationToken)
+        {
+            // X509Chain checks CRL freshness against system time, not the injected clock.
+            while (DateTimeOffset.UtcNow < nextUpdate)
+                await Task.Delay(nextUpdate - DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+        }
 
         private static byte[] CreateAuthorityKeyIdentifier(X509Certificate2 ca)
         {

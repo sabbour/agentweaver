@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Formats.Asn1;
 using System.Globalization;
 using System.Net.Security;
-using System.Numerics;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -189,20 +188,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
     private const string ClientAuthenticationOid = "1.3.6.1.5.5.7.3.2";
     private const int MaximumPeerIntermediates = 8;
     private const int MaximumPeerIntermediateBytes = 262_144;
-    private const int MaximumCrlBytes = 1_048_576;
-    private const int MaximumCrlDistributionPointUris = 16;
-    private const string CrlDistributionPointsOid = "2.5.29.31";
     private static readonly TimeSpan UrlRetrievalTimeout = TimeSpan.FromSeconds(5);
-    private static readonly HttpClient CrlHttpClient = new(new SocketsHttpHandler
-    {
-        AllowAutoRedirect = false,
-        ConnectTimeout = UrlRetrievalTimeout,
-        UseProxy = false,
-    })
-    {
-        Timeout = Timeout.InfiniteTimeSpan,
-    };
-
     private readonly PlatformPolicySourceTlsOptions _options;
     private readonly byte[] _backendCaDigest;
     private readonly ImmutableArray<(byte[] Digest, DateTimeOffset RetireAtUtc)> _pins;
@@ -289,7 +275,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
             validationChain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
             validationChain.ChainPolicy.CustomTrustStore.Add(root);
             validationChain.ChainPolicy.ApplicationPolicy.Add(new Oid(ClientAuthenticationOid));
-            validationChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            validationChain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
             validationChain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
             validationChain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
             validationChain.ChainPolicy.DisableCertificateDownloads = false;
@@ -311,22 +297,13 @@ internal sealed class PlatformPolicySourceTlsIdentity
                     validationChain.ChainPolicy.ExtraStore.Add(intermediate);
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!validationChain.Build(leaf) ||
                     validationChain.ChainStatus.Any(status => status.Status != X509ChainStatusFlags.NoError))
                     return false;
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var chainElements = validationChain.ChainElements;
-                using var crlTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                crlTimeout.CancelAfter(UrlRetrievalTimeout);
-                for (var index = 0; index < chainElements.Count - 1; index++)
-                {
-                    if (!IsCertificateNotRevoked(
-                            chainElements[index].Certificate,
-                            chainElements[index + 1].Certificate,
-                            crlTimeout.Token))
-                        return false;
-                }
-
                 var verifiedAt = _timeProvider.GetUtcNow();
                 if (!IsPinnedEnvironmentLeaf(leaf, verifiedAt, out var currentDigest) ||
                     !CryptographicOperations.FixedTimeEquals(digest, currentDigest) ||
@@ -347,298 +324,10 @@ internal sealed class PlatformPolicySourceTlsIdentity
         }
         catch (Exception exception) when (
             exception is CryptographicException or IOException or UnauthorizedAccessException or
-                HttpRequestException or OperationCanceledException or AsnContentException or FormatException)
+                OperationCanceledException)
         {
             return false;
         }
-    }
-
-    private bool IsCertificateNotRevoked(
-        X509Certificate2 certificate,
-        X509Certificate2 issuer,
-        CancellationToken cancellationToken)
-    {
-        var uris = ReadCrlDistributionPointUris(certificate);
-        if (uris.IsDefaultOrEmpty)
-            return false;
-
-        foreach (var uri in uris)
-        {
-            var crl = DownloadCrl(uri, cancellationToken);
-            if (!CrlIsCurrentAndDoesNotRevoke(
-                    crl,
-                    certificate,
-                    issuer,
-                    _timeProvider.GetUtcNow()))
-                return false;
-        }
-        return true;
-    }
-
-    private static ImmutableArray<Uri> ReadCrlDistributionPointUris(X509Certificate2 certificate)
-    {
-        var extension = certificate.Extensions
-            .OfType<X509Extension>()
-            .FirstOrDefault(item => item.Oid?.Value == CrlDistributionPointsOid);
-        if (extension is null)
-            return [];
-
-        try
-        {
-            var reader = new AsnReader(extension.RawData, AsnEncodingRules.DER);
-            var points = reader.ReadSequence();
-            var uris = ImmutableArray.CreateBuilder<Uri>();
-            while (points.HasData)
-            {
-                var point = points.ReadSequence();
-                var pointUriCount = uris.Count;
-                while (point.HasData)
-                {
-                    var tag = point.PeekTag();
-                    if (tag.TagClass != TagClass.ContextSpecific || tag.TagValue != 0 || !tag.IsConstructed)
-                        return default;
-
-                    var distributionPointName = point.ReadSequence(tag);
-                    if (!distributionPointName.HasData)
-                        continue;
-                    var nameTag = distributionPointName.PeekTag();
-                    if (nameTag.TagClass == TagClass.ContextSpecific &&
-                        nameTag.TagValue == 0 &&
-                        nameTag.IsConstructed)
-                    {
-                        var names = distributionPointName.ReadSequence(nameTag);
-                        while (names.HasData)
-                        {
-                            var generalNameTag = names.PeekTag();
-                            if (generalNameTag.TagClass == TagClass.ContextSpecific &&
-                                generalNameTag.TagValue == 6 &&
-                                !generalNameTag.IsConstructed)
-                            {
-                                var value = names.ReadCharacterString(
-                                    UniversalTagNumber.IA5String,
-                                    generalNameTag);
-                                if (value.Length > 2_048 ||
-                                    !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-                                    (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-                                     !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) ||
-                                    uri.UserInfo.Length != 0 ||
-                                    uris.Count == MaximumCrlDistributionPointUris)
-                                    return default;
-                                uris.Add(uri);
-                            }
-                            else
-                            {
-                                _ = names.ReadEncodedValue();
-                            }
-                        }
-                    }
-                    else
-                    {
-                        _ = distributionPointName.ReadEncodedValue();
-                    }
-                    distributionPointName.ThrowIfNotEmpty();
-                }
-                if (uris.Count == pointUriCount)
-                    return default;
-            }
-            reader.ThrowIfNotEmpty();
-            return uris.ToImmutable();
-        }
-        catch (AsnContentException)
-        {
-            return default;
-        }
-    }
-
-    private static byte[] DownloadCrl(Uri uri, CancellationToken cancellationToken)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache, no-store");
-        using var response = CrlHttpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken)
-            .GetAwaiter()
-            .GetResult();
-        if (!response.IsSuccessStatusCode ||
-            response.Content.Headers.ContentLength is > MaximumCrlBytes)
-            throw new IOException("The peer certificate revocation list is unavailable.");
-
-        using var stream = response.Content.ReadAsStreamAsync(cancellationToken).GetAwaiter().GetResult();
-        using var content = new MemoryStream();
-        var buffer = new byte[8_192];
-        int read;
-        while ((read = stream.ReadAsync(buffer.AsMemory(), cancellationToken)
-                   .AsTask()
-                   .GetAwaiter()
-                   .GetResult()) != 0)
-        {
-            if (content.Length > MaximumCrlBytes - read)
-                throw new IOException("The peer certificate revocation list exceeds its size limit.");
-            content.Write(buffer, 0, read);
-        }
-        return content.ToArray();
-    }
-
-    private static bool CrlIsCurrentAndDoesNotRevoke(
-        byte[] encodedCrl,
-        X509Certificate2 certificate,
-        X509Certificate2 issuer,
-        DateTimeOffset now)
-    {
-        var reader = new AsnReader(encodedCrl, AsnEncodingRules.DER);
-        var certificateList = reader.ReadSequence();
-        var encodedTbs = certificateList.ReadEncodedValue();
-        var signatureAlgorithm = ReadAlgorithmIdentifier(certificateList);
-        var signature = certificateList.ReadBitString(out var unusedBitCount);
-        if (unusedBitCount != 0)
-            return false;
-        certificateList.ThrowIfNotEmpty();
-        reader.ThrowIfNotEmpty();
-        if (!VerifyCrlSignature(issuer, signatureAlgorithm, encodedTbs, signature))
-            return false;
-
-        var tbsReader = new AsnReader(encodedTbs, AsnEncodingRules.DER);
-        var tbs = tbsReader.ReadSequence();
-        if (tbs.PeekTag().HasSameClassAndValue(new Asn1Tag(UniversalTagNumber.Integer)))
-        {
-            var version = tbs.ReadInteger();
-            if (version < BigInteger.Zero || version > BigInteger.One)
-                return false;
-        }
-        if (ReadAlgorithmIdentifier(tbs) != signatureAlgorithm)
-            return false;
-        if (!tbs.ReadEncodedValue().Span.SequenceEqual(issuer.SubjectName.RawData))
-            return false;
-        var issuerKeyUsage = issuer.Extensions.OfType<X509KeyUsageExtension>().FirstOrDefault();
-        if (issuerKeyUsage is not null &&
-            (issuerKeyUsage.KeyUsages & X509KeyUsageFlags.CrlSign) == 0)
-            return false;
-
-        var thisUpdate = ReadCrlTime(tbs);
-        if (!tbs.HasData || !IsTimeTag(tbs.PeekTag()))
-            return false;
-        var nextUpdate = ReadCrlTime(tbs);
-        if (thisUpdate > now || now >= nextUpdate)
-            return false;
-
-        var serialNumber = new BigInteger(
-            Convert.FromHexString(certificate.SerialNumber),
-            isUnsigned: true,
-            isBigEndian: true);
-        if (tbs.HasData && IsUniversalTag(tbs.PeekTag(), UniversalTagNumber.Sequence))
-        {
-            var revokedCertificates = tbs.ReadSequence();
-            while (revokedCertificates.HasData)
-            {
-                var entry = revokedCertificates.ReadSequence();
-                var revokedSerial = new BigInteger(
-                    entry.ReadIntegerBytes().Span,
-                    isUnsigned: true,
-                    isBigEndian: true);
-                var revocationTime = ReadCrlTime(entry);
-                if (revokedSerial == serialNumber && revocationTime <= now)
-                    return false;
-                if (entry.HasData && !ReadNonCriticalExtensions(entry))
-                    return false;
-                entry.ThrowIfNotEmpty();
-            }
-        }
-
-        if (tbs.HasData)
-        {
-            var extensionsTag = tbs.PeekTag();
-            if (extensionsTag.TagClass != TagClass.ContextSpecific ||
-                extensionsTag.TagValue != 0 ||
-                !extensionsTag.IsConstructed)
-                return false;
-            var explicitExtensions = tbs.ReadSequence(extensionsTag);
-            if (!ReadNonCriticalExtensions(explicitExtensions))
-                return false;
-            explicitExtensions.ThrowIfNotEmpty();
-        }
-
-        tbs.ThrowIfNotEmpty();
-        tbsReader.ThrowIfNotEmpty();
-        return true;
-    }
-
-    private static bool ReadNonCriticalExtensions(AsnReader reader)
-    {
-        var extensions = reader.ReadSequence();
-        while (extensions.HasData)
-        {
-            var extension = extensions.ReadSequence();
-            var oid = extension.ReadObjectIdentifier();
-            var critical = IsUniversalTag(extension.PeekTag(), UniversalTagNumber.Boolean) &&
-                extension.ReadBoolean();
-            _ = extension.ReadOctetString();
-            if (critical || oid is "2.5.29.27" or "2.5.29.28" or "2.5.29.29")
-                return false;
-            extension.ThrowIfNotEmpty();
-        }
-        return true;
-    }
-
-    private static string ReadAlgorithmIdentifier(AsnReader reader)
-    {
-        var algorithm = reader.ReadSequence();
-        var oid = algorithm.ReadObjectIdentifier();
-        while (algorithm.HasData)
-            _ = algorithm.ReadEncodedValue();
-        return oid;
-    }
-
-    private static DateTimeOffset ReadCrlTime(AsnReader reader)
-    {
-        var tag = reader.PeekTag();
-        return tag.TagValue switch
-        {
-            23 => reader.ReadUtcTime(),
-            24 => reader.ReadGeneralizedTime(),
-            _ => throw new AsnContentException(),
-        };
-    }
-
-    private static bool IsTimeTag(Asn1Tag tag) =>
-        tag.TagClass == TagClass.Universal && tag.TagValue is 23 or 24;
-
-    private static bool IsUniversalTag(Asn1Tag tag, UniversalTagNumber number) =>
-        tag.TagClass == TagClass.Universal && tag.TagValue == (int)number;
-
-    private static bool VerifyCrlSignature(
-        X509Certificate2 issuer,
-        string algorithm,
-        ReadOnlyMemory<byte> encodedTbs,
-        byte[] signature)
-    {
-        var (hash, isRsa) = algorithm switch
-        {
-            "1.2.840.113549.1.1.5" => (HashAlgorithmName.SHA1, true),
-            "1.2.840.113549.1.1.11" => (HashAlgorithmName.SHA256, true),
-            "1.2.840.113549.1.1.12" => (HashAlgorithmName.SHA384, true),
-            "1.2.840.113549.1.1.13" => (HashAlgorithmName.SHA512, true),
-            "1.2.840.10045.4.1" => (HashAlgorithmName.SHA1, false),
-            "1.2.840.10045.4.3.2" => (HashAlgorithmName.SHA256, false),
-            "1.2.840.10045.4.3.3" => (HashAlgorithmName.SHA384, false),
-            "1.2.840.10045.4.3.4" => (HashAlgorithmName.SHA512, false),
-            _ => default,
-        };
-        if (hash == default)
-            return false;
-
-        if (isRsa)
-        {
-            using var key = issuer.GetRSAPublicKey();
-            return key?.VerifyData(encodedTbs.Span, signature, hash, RSASignaturePadding.Pkcs1) == true;
-        }
-
-        using var ecdsa = issuer.GetECDsaPublicKey();
-        return ecdsa?.VerifyData(
-            encodedTbs.Span,
-            signature,
-            hash,
-            DSASignatureFormat.Rfc3279DerSequence) == true;
     }
 
     private static bool IsCertificateCurrentlyValid(X509Certificate2 certificate, DateTimeOffset now) =>
