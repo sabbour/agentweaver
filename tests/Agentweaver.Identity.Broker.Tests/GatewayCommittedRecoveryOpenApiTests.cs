@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Microsoft.Agents.AI.Workflows;
@@ -31,7 +32,7 @@ public sealed class GatewayCommittedRecoveryOpenApiTests
         var (snapshot, _) = ProjectCommittedRecovery();
         using var document = await ReadOpenApi();
         var (stepSchema, operationSchema) = ResolveSchemas(document.RootElement);
-        var selected = Select(snapshot, kind);
+        var selected = Select(snapshot, kind, "publish");
         Assert.Equal(expected, selected.GetProperty(field).GetString());
         ValidateEnum(selected, kind == "step" ? stepSchema : operationSchema, field);
     }
@@ -42,8 +43,8 @@ public sealed class GatewayCommittedRecoveryOpenApiTests
         var (snapshot, operationId) = ProjectCommittedRecovery();
         using var document = await ReadOpenApi();
         var (stepSchema, operationSchema) = ResolveSchemas(document.RootElement);
-        var step = Select(snapshot, "step");
-        var operation = Select(snapshot, "operation");
+        var step = Select(snapshot, "step", "publish");
+        var operation = Select(snapshot, "operation", "publish");
 
         Assert.Equal("publish", step.GetProperty("stepId").GetString());
         Assert.Equal("running", step.GetProperty("checkpointStatus").GetString());
@@ -59,10 +60,12 @@ public sealed class GatewayCommittedRecoveryOpenApiTests
         ValidateOperation(operation, operationSchema);
 
         AssertEnumValues(stepSchema, "effectRecoveryState",
-            "mayRepeat", "indeterminate", "checkpointResultRecorded", "terminalReceiptRecorded", "reconcileCommitted");
+            "mayRepeat", "indeterminate", "checkpointResultRecorded", "terminalReceiptRecorded", "reconcileCommitted", "awaitingApproval");
+        AssertEnumValues(operationSchema, "gate",
+            "buildTest", "openPullRequest", "scribe", "merge", "independentReview", "rubberDuck");
         AssertEnumValues(operationSchema, "evidenceState",
             "intentOnly", "terminalReceiptRecorded", "committedAwaitingReceipt");
-        AssertEnumValues(operationSchema, "effectRecoveryState", "mayRepeat", "reconcileCommitted");
+        AssertEnumValues(operationSchema, "effectRecoveryState", "mayRepeat", "reconcileCommitted", "awaitingApproval");
 
         foreach (var field in new[] { "workItemId", "associationId", "readiness", "effectRecoveryState" })
             Assert.DoesNotContain(field, Required(stepSchema));
@@ -91,6 +94,117 @@ public sealed class GatewayCommittedRecoveryOpenApiTests
         ValidateOperation(Changed(operation, "effectRecoveryState", remove: true), operationSchema);
         ValidateOperation(Changed(operation, "effectRecoveryState", remove: false), operationSchema);
         AssertRejected(operation, "operationId", "not-a-uuid", obj => ValidateOperation(obj, operationSchema));
+    }
+
+    [Fact]
+    public async Task PendingReviewStepApprovalStateIsInServedEnum()
+    {
+        var (snapshot, _) = ProjectPendingReview();
+        using var document = await ReadOpenApi();
+        var (stepSchema, _) = ResolveSchemas(document.RootElement);
+        var step = Select(snapshot, "step", "review");
+
+        Assert.Equal("awaitingApproval", step.GetProperty("effectRecoveryState").GetString());
+        ValidateEnum(step, stepSchema, "effectRecoveryState");
+    }
+
+    [Fact]
+    public async Task PendingReviewOperationApprovalStateIsInServedEnum()
+    {
+        var (snapshot, intent) = ProjectPendingReview();
+        using var document = await ReadOpenApi();
+        var (_, operationSchema) = ResolveSchemas(document.RootElement);
+        var operation = Select(snapshot, "operation", "review");
+
+        Assert.Equal("independentReview", operation.GetProperty("gate").GetString());
+        Assert.Equal("awaitingApproval", operation.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal("intentOnly", operation.GetProperty("evidenceState").GetString());
+        Assert.Equal(intent.OperationId, operation.GetProperty("operationId").GetGuid());
+        Assert.Equal(intent.ApprovalRequestId, operation.GetProperty("approvalRequestId").GetString());
+        ValidateEnum(operation, operationSchema, "effectRecoveryState");
+    }
+
+    [Fact]
+    public async Task PendingReviewGateIsInServedEnum()
+    {
+        var (snapshot, _) = ProjectPendingReview();
+        using var document = await ReadOpenApi();
+        var (_, operationSchema) = ResolveSchemas(document.RootElement);
+        var operation = Select(snapshot, "operation", "review");
+
+        Assert.Equal("independentReview", operation.GetProperty("gate").GetString());
+        ValidateEnum(operation, operationSchema, "gate");
+    }
+
+    [Fact]
+    public async Task ScribeGateIsInServedEnum()
+    {
+        var (snapshot, operationId) = ProjectScribeRecovery();
+        using var document = await ReadOpenApi();
+        var (_, operationSchema) = ResolveSchemas(document.RootElement);
+        var step = Select(snapshot, "step", "scribe");
+        var operation = Select(snapshot, "operation", "scribe");
+
+        Assert.Equal("mayRepeat", step.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal("scribe", operation.GetProperty("gate").GetString());
+        Assert.Equal("intentOnly", operation.GetProperty("evidenceState").GetString());
+        Assert.Equal("mayRepeat", operation.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal(operationId, operation.GetProperty("operationId").GetGuid());
+        ValidateEnum(operation, operationSchema, "gate");
+    }
+
+    [Fact]
+    public async Task MergeGateIsInServedEnum()
+    {
+        var (snapshot, operationId) = ProjectMergeRecovery();
+        using var document = await ReadOpenApi();
+        var (_, operationSchema) = ResolveSchemas(document.RootElement);
+        var step = Select(snapshot, "step", "merge");
+        var operation = Select(snapshot, "operation", "merge");
+
+        Assert.Equal("mayRepeat", step.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal("merge", operation.GetProperty("gate").GetString());
+        Assert.Equal("intentOnly", operation.GetProperty("evidenceState").GetString());
+        Assert.Equal("mayRepeat", operation.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal(operationId, operation.GetProperty("operationId").GetGuid());
+        ValidateEnum(operation, operationSchema, "gate");
+    }
+
+    [Fact]
+    public async Task RubberDuckGateIsInServedEnum()
+    {
+        var (snapshot, operationId) = ProjectRubberduckRecovery();
+        using var document = await ReadOpenApi();
+        var (_, operationSchema) = ResolveSchemas(document.RootElement);
+        var step = Select(snapshot, "step", "rubberduck");
+        var operation = Select(snapshot, "operation", "rubberduck");
+
+        Assert.Equal("mayRepeat", step.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal("rubberDuck", operation.GetProperty("gate").GetString());
+        Assert.Equal("intentOnly", operation.GetProperty("evidenceState").GetString());
+        Assert.Equal("mayRepeat", operation.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal(operationId, operation.GetProperty("operationId").GetGuid());
+        ValidateEnum(operation, operationSchema, "gate");
+    }
+
+    [Fact]
+    public async Task CompletedReviewReceiptMatchesServedSchema()
+    {
+        var fixture = CreateReviewFixture(CreatePlan(("review", WorkflowPlatformGate.IndependentReview)), "review");
+        var complete = CompleteReview(fixture);
+        var snapshot = SerializeRecovery(complete, fixture.Plan.Plan, 5, "review-terminal");
+        using var document = await ReadOpenApi();
+        var (stepSchema, operationSchema) = ResolveSchemas(document.RootElement);
+        var step = Select(snapshot, "step", "review");
+        var operation = Select(snapshot, "operation", "review");
+
+        Assert.Equal("succeeded", step.GetProperty("checkpointStatus").GetString());
+        Assert.Equal("terminalReceiptRecorded", step.GetProperty("effectRecoveryState").GetString());
+        Assert.Equal("independentReview", operation.GetProperty("gate").GetString());
+        Assert.Equal("terminalReceiptRecorded", operation.GetProperty("evidenceState").GetString());
+        Assert.Equal(JsonValueKind.Null, operation.GetProperty("effectRecoveryState").ValueKind);
+        ValidateStep(step, stepSchema);
+        ValidateOperation(operation, operationSchema);
     }
 
     private static void ValidateStep(JsonElement obj, JsonElement schema)
@@ -184,10 +298,10 @@ public sealed class GatewayCommittedRecoveryOpenApiTests
     private static string[] Required(JsonElement schema) =>
         schema.GetProperty("required").EnumerateArray().Select(x => x.GetString()!).ToArray();
 
-    private static JsonElement Select(JsonElement snapshot, string kind)
+    private static JsonElement Select(JsonElement snapshot, string kind, string stepId)
     {
         var array = snapshot.GetProperty(kind == "step" ? "steps" : "platformGateOperations");
-        return Assert.Single(array.EnumerateArray(), x => x.GetProperty("stepId").GetString() == "publish");
+        return Assert.Single(array.EnumerateArray(), x => x.GetProperty("stepId").GetString() == stepId);
     }
 
     private static JsonElement Changed(JsonElement original, string field, bool remove)
@@ -312,6 +426,227 @@ public sealed class GatewayCommittedRecoveryOpenApiTests
         };
         return (JsonSerializer.SerializeToElement(projected, options), intent.OperationId);
     }
+
+    private static (JsonElement Snapshot, MafExecutionReviewIntent Intent) ProjectPendingReview()
+    {
+        var fixture = CreateReviewFixture(CreatePlan(("review", WorkflowPlatformGate.IndependentReview)), "review");
+        return (SerializeRecovery(fixture.Running, fixture.Plan.Plan, 3, "review-checkpoint"), fixture.Intent);
+    }
+
+    private static (JsonElement Snapshot, Guid OperationId) ProjectScribeRecovery()
+    {
+        var fixture = CreatePlan(("scribe", WorkflowPlatformGate.Scribe));
+        var checkpoint = CreateInitialCheckpoint(fixture.Plan, 1);
+        var identity = new SessionIdentity("project-1", "run-1", "root");
+        var actor = new CoordinationActor("https://identity.test/", "owner");
+        const long fence = 7;
+        var selectionHash = new string('a', 64);
+        var intent = MafScribeGateContract.CreateIntent(
+            identity, fixture.Plan, checkpoint, "scribe", fence, selectionHash, actor);
+        var running = MafScribeGateContract.Prepare(
+            new(new("root", "initial"), checkpoint), intent);
+        return (SerializeRecovery(running, fixture.Plan, 1, "scribe-checkpoint"),
+            MafScribeGateContract.OperationId(intent));
+    }
+
+    private static (JsonElement Snapshot, Guid OperationId) ProjectMergeRecovery()
+    {
+        var fixture = CreatePlan(("merge", WorkflowPlatformGate.Merge));
+        var checkpoint = CreateInitialCheckpoint(fixture.Plan, 1);
+        var identity = new SessionIdentity("project-1", "run-1", "root");
+        const long fence = 7;
+        var selectionHash = new string('a', 64);
+        var pin = CreateSourceControlPin(identity, selectionHash, fence);
+        var intent = MafMergeContract.CreateIntent(
+            Guid.NewGuid(), identity, "merge-checkpoint", 2, fixture.Plan.Plan.Id,
+            fixture.Plan.Workflow.Definition.Id, fixture.Plan.Workflow.Definition.Revision,
+            "merge", 1, fence, selectionHash, pin, 42, new string('a', 40), SourceControlMergeMethod.Rebase);
+        var running = CoordinationEndpoints.PrepareMergeCheckpoint(
+            new(new("root", "initial"), checkpoint), intent)!;
+        return (SerializeRecovery(running, fixture.Plan, 1, "merge-checkpoint"), intent.OperationId);
+    }
+
+    private static (JsonElement Snapshot, Guid OperationId) ProjectRubberduckRecovery()
+    {
+        var fixture = CreatePlan(
+            ("independent-review", WorkflowPlatformGate.IndependentReview),
+            ("rubberduck", WorkflowPlatformGate.RubberDuck),
+            ("merge", WorkflowPlatformGate.Merge));
+        var review = CreateReviewFixture(fixture, "independent-review");
+        var reviewComplete = CompleteReview(review);
+        var owner = CreateRuntimeRegistration(review.Identity, review.ActorId, review.Fence, review.SelectionHash);
+        var step = fixture.Plan.Workflow.Definition.Steps.Single(item => item.Id == "rubberduck");
+        var intent = MafRubberduckReviewContract.CreateIntent(
+            Guid.NewGuid(), review.Identity, "rubberduck-checkpoint", reviewComplete.Revision + 1,
+            fixture.Plan, step, reviewComplete, 5, review.ActorId, review.Fence, review.SelectionHash, owner);
+        var running = CoordinationEndpoints.PrepareRubberduckCheckpoint(
+            new(new("root", "review-terminal"), reviewComplete), intent)!;
+        return (SerializeRecovery(running, fixture.Plan, 5, "rubberduck-checkpoint"), intent.OperationId);
+    }
+
+    private static ReviewFixture CreateReviewFixture(PlanFixture fixture, string stepId)
+    {
+        var identity = new SessionIdentity("project-1", "run-1", "root");
+        const string actorId = "reviewer-1";
+        const long fence = 1;
+        const long decisionVersion = 3;
+        var selectionHash = new string('a', 64);
+        var initial = CreateInitialCheckpoint(fixture.Plan, decisionVersion);
+        var step = fixture.Plan.Workflow.Definition.Steps.Single(item => item.Id == stepId);
+        var intent = MafIndependentReviewContract.CreateIntent(
+            Guid.NewGuid(), identity, "review-checkpoint", 2, fixture.Plan, step, initial,
+            decisionVersion, actorId, fence, selectionHash);
+        var running = CoordinationEndpoints.PrepareReviewCheckpoint(
+            new(new("root", "initial"), initial), intent)!;
+        return new(fixture, identity, actorId, fence, selectionHash, running, intent);
+    }
+
+    private static MafExecutionCheckpoint CompleteReview(ReviewFixture fixture)
+    {
+        var confirmed = ConfirmedDecision(fixture.Plan.Plan, fixture.Plan.SelectionContext, fixture.ActorId);
+        var requested = CoordinatorDecisionFlow.RequestApproval(
+            confirmed, fixture.Intent.ApprovalRequestId, fixture.Intent.EvidenceHash, fixture.ActorId);
+        Assert.True(requested.IsSuccess);
+        Assert.Null(MafIndependentReviewContract.ReadDecision(
+            fixture.Intent, new(requested.State!, 4, fixture.SelectionHash), fixture.ActorId));
+        var answered = requested.State!.ApplyGateAnswer(new(
+            fixture.Intent.ApprovalRequestId, fixture.ActorId, fixture.Fence,
+            CoordinatorGateChoices.Approve, null));
+        Assert.True(answered.IsAccepted);
+        var receipt = MafIndependentReviewContract.ReadDecision(
+            fixture.Intent, new(answered.State, 5, fixture.SelectionHash), fixture.ActorId)!;
+        return CoordinationEndpoints.PrepareReviewCompletionCheckpoint(
+            new(new("root", "review-checkpoint"), fixture.Running with { DecisionStateVersion = 5 }),
+            fixture.Intent, receipt)!;
+    }
+
+    private static CoordinatorDecisionState ConfirmedDecision(
+        WorkPlanSnapshot plan, WorkPlanRunSelectionContext selectionContext, string actor)
+    {
+        var outcome = CoordinatorDecisionFlow.ProposeOutcomeSpec(
+            CoordinatorDecisionState.Create(1),
+            new("outcome-1", "Implement the change.", "The result is reviewed.",
+                "Only the requested changes.", "The source is available.", []),
+            "outcome-request", actor);
+        var confirmedOutcome = outcome.State!.ApplyGateAnswer(
+            new("outcome-request", actor, 1, CoordinatorGateChoices.Approve, null)).State;
+        var selected = CoordinatorDecisionFlow.SelectWorkflow(
+            confirmedOutcome, new(plan.Workflow.Definition, [plan.Workflow.Definition]), null, null, null);
+        var proposed = CoordinatorDecisionFlow.ProposeWorkPlan(
+            selected.State, plan.Plan, selectionContext, "plan-request", actor);
+        Assert.True(proposed.IsSuccess);
+        return proposed.State!.ApplyGateAnswer(
+            new("plan-request", actor, 1, CoordinatorGateChoices.Approve, null)).State;
+    }
+
+    private static MafExecutionCheckpoint CreateInitialCheckpoint(WorkPlanSnapshot plan, long decisionVersion)
+    {
+        var nonModelSteps = ImmutableDictionary<string, MafExecutionTaskStatus>.Empty
+            .WithComparers(StringComparer.Ordinal);
+        foreach (var step in plan.Workflow.Definition.Steps.Where(item => item.Mode == WorkflowStepMode.Platform))
+            nonModelSteps = nonModelSteps.Add(step.Id, MafExecutionTaskStatus.Pending);
+        return new MafExecutionCheckpoint(1, plan.Plan.Id, decisionVersion, MafExecutionProgress.Empty with
+        {
+            WorkItems = MafExecutionProgress.Empty.WorkItems.Add("first", MafExecutionTaskStatus.Succeeded),
+            NonModelSteps = nonModelSteps
+        })
+        {
+            Results = ImmutableDictionary<string, string>.Empty
+                .WithComparers(StringComparer.Ordinal).Add("first", "Reviewed implementation output.")
+        };
+    }
+
+    private static JsonElement SerializeRecovery(
+        MafExecutionCheckpoint checkpoint, WorkPlanSnapshot plan, long decisionVersion, string checkpointId)
+    {
+        var projected = MafExecutionRecoveryProjector.Project(
+            new(new("root", checkpointId), checkpoint), plan, decisionVersion, true, null);
+        Assert.Equal("available", projected.State);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            MaxDepth = 16,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        return JsonSerializer.SerializeToElement(projected, options);
+    }
+
+    private static PlanFixture CreatePlan(params (string StepId, WorkflowPlatformGate Gate)[] gates)
+    {
+        var steps = new List<WorkflowStepDefinition>
+        {
+            new("implement", "Open work", WorkflowStepMode.Open, 0, new(1, 8), [],
+                ["engineer", "researcher"], ["execution", "research", "validation"],
+                ["worktree", "sandboxed"], ["sandbox.workspace.write"], null, null)
+        };
+        var predecessor = "implement";
+        foreach (var (stepId, gate) in gates)
+        {
+            steps.Add(new(stepId, stepId, WorkflowStepMode.Platform, steps.Count, new(1, 1), [predecessor],
+                [], [], [], [], null, gate));
+            predecessor = stepId;
+        }
+        var workflow = new WorkflowDefinition(
+            "workflow.core", "revision-1", "catalog-1", WorkflowDefinitionOrigin.BuiltIn, 32,
+            steps.ToImmutableArray());
+        var workflowResult = WorkflowDefinitionValidator.ValidateAndSnapshot(workflow);
+        Assert.True(workflowResult.IsValid, string.Join("; ", workflowResult.Issues.Select(issue => issue.Message)));
+        var sandbox = Pin(ProviderSeam.Sandbox, "sandbox.test",
+            ImmutableHashSet.Create(StringComparer.Ordinal, "sandbox.workspace.write"));
+        var selectionContext = new WorkPlanRunSelectionContext(
+            [new RoleRunSelection("engineer", ["agent-1"], ["model:provider/alpha"], ["worktree", "sandboxed"]),
+             new RoleRunSelection("researcher", ["agent-2"], ["model:provider/alpha"], ["worktree", "sandboxed"])],
+            sandbox)
+        {
+            ModelTaskSelections = [new ModelTaskSelectionReference(
+                ModelTaskKind.Straightforward, null, null, "model:provider/alpha")]
+        };
+        var plan = new WorkPlan("plan-1", workflow.Id, workflow.Revision, workflow.CatalogVersion,
+            [new("first", "implement", "Implement", "Implement the requested change.", "engineer",
+                "agent-1", "execution", "model:provider/alpha", "sandbox.test", "worktree", [],
+                ["src/implementation.cs"])]);
+        var planResult = WorkPlanValidator.ValidateAndSnapshot(workflowResult.Value!, plan, selectionContext);
+        Assert.True(planResult.IsValid, string.Join("; ", planResult.Issues.Select(issue => issue.Message)));
+        return new(planResult.Value!, selectionContext);
+    }
+
+    private static SourceControlRepositoryPin CreateSourceControlPin(
+        SessionIdentity identity, string selectionHash, long fence)
+    {
+        var capabilities = ImmutableHashSet.Create(StringComparer.Ordinal,
+            SourceControlCapabilities.RepositoryRead, SourceControlCapabilities.RepositoryCheckout);
+        var binding = Pin(ProviderSeam.SourceControl, "github", capabilities);
+        var accepted = new SourceControlAcceptedRunBinding(
+            "issuer", "actor", "tenant-1", identity.ProjectId, identity.RunId, identity.SessionId,
+            selectionHash, 1, 1, 1, "context", fence);
+        return new("source-pin", accepted, binding, new("octo", "repo"),
+            new(new SecretRef("api", "1"), SourceControlSecretPurposes.Api),
+            new(new SecretRef("checkout", "1"), SourceControlSecretPurposes.Checkout),
+            null, 123, "main", false, DateTimeOffset.UnixEpoch);
+    }
+
+    private static RuntimeRegistration CreateRuntimeRegistration(
+        SessionIdentity identity, string actorId, long fence, string selectionHash)
+    {
+        var binding = new RuntimeBinding(
+            "https://identity.example/", actorId, "tenant-1", identity.ProjectId, identity.RunId,
+            identity.SessionId, RuntimeActionContract.CoordinatorRootStepId, "root-turn",
+            1, 1, 1, "context-v1", selectionHash, fence, "environment-1", "placement-1",
+            1, "profile-1", new Uri("https://runtime.example/runtime/v1/configure"),
+            new Uri("https://runtime.example/runtime/v1/observe"));
+        return new(Guid.NewGuid(), 1, binding, RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(5));
+    }
+
+    private sealed record PlanFixture(WorkPlanSnapshot Plan, WorkPlanRunSelectionContext SelectionContext);
+
+    private sealed record ReviewFixture(
+        PlanFixture Plan,
+        SessionIdentity Identity,
+        string ActorId,
+        long Fence,
+        string SelectionHash,
+        MafExecutionCheckpoint Running,
+        MafExecutionReviewIntent Intent);
 
     private static PinnedProviderBinding Pin(ProviderSeam seam, string id, ImmutableHashSet<string> capabilities)
     {
