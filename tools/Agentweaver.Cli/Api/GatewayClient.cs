@@ -803,6 +803,10 @@ public sealed partial class GatewayClient : IGatewayClient
             ["contentType"] = null,
             ["operationId"] = operationId,
         };
+        var hidePolicyEvidence = operationId is
+            "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision";
+        if (hidePolicyEvidence)
+            evidence["responseBody"] = "[REDACTED]";
 
         try
         {
@@ -898,11 +902,12 @@ public sealed partial class GatewayClient : IGatewayClient
                 if (bytes.Length > 0 || !opaqueUnknownMediaTypes)
                 {
                     binaryBody = bytes;
-                    evidence["responseBody"] = new JsonObject
-                    {
-                        ["mediaType"] = contentType,
-                        ["bytes"] = bytes.Length,
-                    };
+                    if (!hidePolicyEvidence)
+                        evidence["responseBody"] = new JsonObject
+                        {
+                            ["mediaType"] = contentType,
+                            ["bytes"] = bytes.Length,
+                        };
                 }
             }
             else if (bytes.Length > 0)
@@ -911,16 +916,18 @@ public sealed partial class GatewayClient : IGatewayClient
                 if (contentType is "application/json" or "application/problem+json")
                 {
                     responseBody = ParseJson(bytes);
-                    evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
-                        ? "[REDACTED]"
-                        : RedactJson(responseBody);
+                    if (!hidePolicyEvidence)
+                        evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
+                            ? "[REDACTED]"
+                            : RedactJson(responseBody);
                 }
                 else
                 {
                     responseBody = JsonValue.Create(textBody);
-                    evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
-                        ? "[REDACTED]"
-                        : RedactText(textBody);
+                    if (!hidePolicyEvidence)
+                        evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
+                            ? "[REDACTED]"
+                            : RedactText(textBody);
                 }
             }
 

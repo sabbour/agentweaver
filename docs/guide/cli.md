@@ -173,6 +173,50 @@ Broker rejects the change if another request changes that revision first.
 `disconnect` revokes the connection. `status` and these changes return safe
 connection details; they do not return GitHub credentials.
 
+## Read Platform Policy revisions
+
+The policy commands show the identity, revision and hash of the canonical
+Platform Policy. You need an active membership and current PlatformAdmin
+authority. Sign in with `agentweaver auth login` for the selected target.
+These commands use an unbound identity and do not accept `--project-id` or
+`--run-id`. If `AGENTWEAVER_PROJECT_ID` and `AGENTWEAVER_RUN_ID` are set,
+clear them before you sign in. The policy commands ignore those variables.
+
+```powershell
+$env:AGENTWEAVER_PROJECT_ID = $null
+$env:AGENTWEAVER_RUN_ID = $null
+agentweaver auth login
+```
+
+```powershell
+agentweaver policy show --scope platform
+agentweaver policy history --scope platform --page-size 20
+```
+
+`show` returns JSON with `scopeType`, `scopeId`, `policyId`, `revision`,
+`contentSha256` and `updatedAt`. To read an exact retained revision, use its
+positive decimal revision number. The exact read returns `createdAt` instead
+of `updatedAt`.
+
+```powershell
+agentweaver policy show --scope platform --revision 1
+```
+
+History returns the newest revision first. Each item contains `revision`,
+`contentSha256` and `createdAt`. The response also contains
+`snapshotRevision` and `nextCursor`. To continue, pass `nextCursor` unchanged
+and use the same page size. Page size defaults to 20 and ranges from 1 to 100.
+
+```powershell
+agentweaver policy history --scope platform --page-size 20 --cursor CURSOR
+```
+
+Replace `CURSOR` with the returned value. An empty scope returns an empty
+history; a show request returns `native_acs_policy_not_found`. The head and
+exact revision reads verify the stored artifact hash. History shows stored
+hashes without verifying each artifact. The commands return metadata, not
+artifact files or enforcement status.
+
 ## Discover and invoke API operations
 
 The CLI reads the currently served Gateway `GET /openapi/v1.json` document for
