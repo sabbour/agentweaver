@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Data.Common;
 using System.Net;
 using System.Net.Security;
 using System.Security.Authentication;
@@ -365,19 +366,15 @@ public sealed partial class ProjectsConfigPostgresTests
                 .Select(index => ($"policies/boundary-{index:D2}.rego", new byte[fileSizes[index]])));
         _ = await SeedPlatformPolicySourceArtifactAsync("bounds-boundary", boundaryArtifact);
         var blobReads = 0;
-        var blobReadObserver = new Action<string>(commandText =>
+        var blobReadObserver = new Action<DbDataReader>(reader =>
         {
-            var fromIndex = commandText.IndexOf("FROM", StringComparison.OrdinalIgnoreCase);
-            if (fromIndex < 0)
-                return;
-            var projection = commandText[..fromIndex];
-            var bytesColumn = projection.IndexOf("\"bytes\"", StringComparison.OrdinalIgnoreCase);
-            var afterBytesColumn = bytesColumn + "\"bytes\"".Length;
-            if (bytesColumn >= 0 &&
-                (afterBytesColumn == projection.Length ||
-                 char.IsWhiteSpace(projection[afterBytesColumn]) ||
-                 projection[afterBytesColumn] == ','))
+            for (var index = 0; index < reader.FieldCount; index++)
+            {
+                if (!string.Equals(reader.GetName(index), "bytes", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 Interlocked.Increment(ref blobReads);
+                break;
+            }
         });
         using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
         using var host = await StartPlatformPolicySourceEndpointHostAsync(
@@ -437,14 +434,21 @@ public sealed partial class ProjectsConfigPostgresTests
         var artifact = HistoryArtifact("private policy source hash corruption");
         var receipt = await SeedPlatformPolicySourceArtifactAsync("hash-corruption", artifact);
         byte[] originalBytes;
+        string relativePath;
         await using (var read = CreateDbContext(fixture.DataSource))
-            originalBytes = (await read.NativeAcsPolicyArtifactFiles.AsNoTracking().SingleAsync(item =>
-                item.PolicyId == receipt.PolicyId && item.Revision == receipt.Revision)).Bytes.ToArray();
+        {
+            var file = await read.NativeAcsPolicyArtifactFiles.AsNoTracking()
+                .Where(item => item.PolicyId == receipt.PolicyId && item.Revision == receipt.Revision)
+                .OrderBy(item => item.RelativePath)
+                .FirstAsync();
+            relativePath = file.RelativePath;
+            originalBytes = file.Bytes.ToArray();
+        }
         var corruptedBytes = originalBytes.ToArray();
         corruptedBytes[0] ^= 0xff;
         var stateBeforeCorruption = await CapturePolicyTableStateAsync();
         await WithArtifactFilesImmutableTriggerDisabledAsync(
-            () => SetArtifactFileBytesAsync(receipt.PolicyId, receipt.Revision, corruptedBytes));
+            () => SetArtifactFileBytesAsync(receipt.PolicyId, receipt.Revision, relativePath, corruptedBytes));
         using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
         using var host = await StartPlatformPolicySourceEndpointHostAsync(
             fixture.DataSource,
@@ -463,7 +467,7 @@ public sealed partial class ProjectsConfigPostgresTests
         finally
         {
             await WithArtifactFilesImmutableTriggerDisabledAsync(
-                () => SetArtifactFileBytesAsync(receipt.PolicyId, receipt.Revision, originalBytes));
+                () => SetArtifactFileBytesAsync(receipt.PolicyId, receipt.Revision, relativePath, originalBytes));
         }
 
         Assert.Equal(stateBeforeCorruption, await CapturePolicyTableStateAsync());
