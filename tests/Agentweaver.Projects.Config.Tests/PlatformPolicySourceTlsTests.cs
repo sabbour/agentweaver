@@ -211,6 +211,39 @@ public sealed class PlatformPolicySourceTlsTests
     }
 
     [Fact]
+    public void RevocationListFromAnotherAuthorityIsDenied()
+    {
+        using var certificates = new PolicySourceCertificates();
+        var identity = certificates.CreateIdentity();
+        certificates.SetInvalidCrl();
+
+        Assert.False(identity.AcceptClientCertificate(
+            certificates.EnvironmentClient, null, SslPolicyErrors.None));
+    }
+
+    [Fact]
+    public void RevocationListWithAnInvalidSignatureIsDenied()
+    {
+        using var certificates = new PolicySourceCertificates();
+        var identity = certificates.CreateIdentity();
+        certificates.CorruptCrlSignature();
+
+        Assert.False(identity.AcceptClientCertificate(
+            certificates.EnvironmentClient, null, SslPolicyErrors.None));
+    }
+
+    [Fact]
+    public void ExpiredRevocationListIsDenied()
+    {
+        using var certificates = new PolicySourceCertificates();
+        var identity = certificates.CreateIdentity();
+        certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(-1));
+
+        Assert.False(identity.AcceptClientCertificate(
+            certificates.EnvironmentClient, null, SslPolicyErrors.None));
+    }
+
+    [Fact]
     public async Task ValidEnvironmentPeerWithIntermediateChainBuildsBeforeDisposal()
     {
         using var certificates = new PolicySourceCertificates();
@@ -662,6 +695,16 @@ public sealed class PlatformPolicySourceTlsTests
 
         internal void Revoke(X509Certificate2 certificate) =>
             _crlServer.SetCrl(CreateCrl([Convert.FromHexString(certificate.SerialNumber)]));
+
+        internal void SetInvalidCrl() =>
+            _crlServer.SetCrl(CreateCrl([], issuer: _otherCa));
+
+        internal void CorruptCrlSignature()
+        {
+            var crl = CreateCrl([]);
+            crl[^1] ^= 0x01;
+            _crlServer.SetCrl(crl);
+        }
 
         internal void SetUnrevokedCrl(TimeSpan lifetime) =>
             _crlServer.SetCrl(CreateCrl([], DateTimeOffset.UtcNow.Add(lifetime)));

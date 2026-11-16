@@ -378,14 +378,22 @@ public sealed partial class ProjectsConfigPostgresTests
             caller, artifact, "acs-corrupt-exact-" + suffix, "acs-corrupt-correlation-" + suffix);
         var stateBeforeCorruption = await CapturePolicyTableStateAsync();
         byte[] originalBytes;
+        string relativePath;
         await using (var read = CreateDbContext())
-            originalBytes = (await read.NativeAcsPolicyArtifactFiles.AsNoTracking().SingleAsync(item =>
-                item.PolicyId == receipt.PolicyId && item.Revision == receipt.Revision)).Bytes.ToArray();
+        {
+            var file = await read.NativeAcsPolicyArtifactFiles.AsNoTracking()
+                .Where(item => item.PolicyId == receipt.PolicyId && item.Revision == receipt.Revision)
+                .OrderBy(item => item.RelativePath)
+                .FirstAsync();
+            relativePath = file.RelativePath;
+            originalBytes = file.Bytes.ToArray();
+        }
 
         try
         {
             await WithArtifactFilesImmutableTriggerDisabledAsync(
-                () => SetArtifactFileBytesAsync(receipt.PolicyId, receipt.Revision, [.. originalBytes, 0x7f]));
+                () => SetArtifactFileBytesAsync(
+                    receipt.PolicyId, receipt.Revision, relativePath, [.. originalBytes, 0x7f]));
 
             using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
             using var client = CreatePlatformPolicyReader(host, subject, tenantId);
@@ -401,7 +409,7 @@ public sealed partial class ProjectsConfigPostgresTests
         finally
         {
             await WithArtifactFilesImmutableTriggerDisabledAsync(
-                () => SetArtifactFileBytesAsync(receipt.PolicyId, receipt.Revision, originalBytes));
+                () => SetArtifactFileBytesAsync(receipt.PolicyId, receipt.Revision, relativePath, originalBytes));
         }
         Assert.Equal(stateBeforeCorruption, await CapturePolicyTableStateAsync());
     }
@@ -1013,7 +1021,11 @@ public sealed partial class ProjectsConfigPostgresTests
         }
     }
 
-    private async Task SetArtifactFileBytesAsync(string policyId, long revision, byte[] bytes)
+    private async Task SetArtifactFileBytesAsync(
+        string policyId,
+        long revision,
+        string relativePath,
+        byte[] bytes)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(
@@ -1022,11 +1034,13 @@ public sealed partial class ProjectsConfigPostgresTests
             SET bytes = @bytes
             WHERE scope_type = 'Platform' AND scope_id = 'default'
               AND policy_id = @policy_id AND revision = @revision
+              AND relative_path = @relative_path
             """,
             connection);
         command.Parameters.AddWithValue("bytes", bytes);
         command.Parameters.AddWithValue("policy_id", policyId);
         command.Parameters.AddWithValue("revision", revision);
+        command.Parameters.AddWithValue("relative_path", relativePath);
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
@@ -1119,7 +1133,7 @@ public sealed partial class ProjectsConfigPostgresTests
     private sealed class PolicyReadInterceptor(
         Func<CancellationToken, Task> intercept,
         string targetTable = "native_acs_policy_heads",
-        Action<string>? observeCommand = null) : DbCommandInterceptor
+        Action<DbDataReader>? observeResult = null) : DbCommandInterceptor
     {
         public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command,
@@ -1128,11 +1142,19 @@ public sealed partial class ProjectsConfigPostgresTests
             CancellationToken cancellationToken = default)
         {
             if (command.CommandText.Contains(targetTable, StringComparison.OrdinalIgnoreCase))
-            {
-                observeCommand?.Invoke(command.CommandText);
                 await intercept(cancellationToken).ConfigureAwait(false);
-            }
             return result;
+        }
+
+        public override ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains(targetTable, StringComparison.OrdinalIgnoreCase))
+                observeResult?.Invoke(result);
+            return ValueTask.FromResult(result);
         }
     }
 }
