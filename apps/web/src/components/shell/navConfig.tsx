@@ -14,6 +14,7 @@ import {
   People24Regular,
   Pulse24Regular,
   Server24Regular,
+  Shield24Regular,
   Stethoscope24Regular,
 } from '@fluentui/react-icons';
 import type { ReactElement } from 'react';
@@ -56,6 +57,7 @@ export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'overview', label: 'Overview', icon: <Home24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
   { key: 'chief-of-staff', label: 'Chief of Staff', icon: <Bot24Regular />, path: '/overview#chief-of-staff', v1Only: true },
   { key: 'projects', label: 'Projects', icon: <Apps24Regular />, path: '/projects', matchPrefixes: ['/projects'] },
+  { key: 'platform-policies', label: 'Platform Policies', icon: <Shield24Regular />, path: '/policies', matchPrefixes: ['/policies'], v1Only: true },
   { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions', '/assistant'] },
 ];
 

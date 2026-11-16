@@ -634,6 +634,16 @@
 .v1-table th, .v1-table td { text-align: start; vertical-align: top; padding: var(--spacingVerticalS) var(--spacingHorizontalM); border-block-end: 1px solid var(--colorNeutralStroke2); }
 .v1-table thead th { color: var(--colorNeutralForeground3); font-weight: var(--fontWeightRegular); }
 .v1-table tbody th { font-weight: var(--fontWeightSemibold); }
+.v1-policy-source {
+  max-block-size: 32rem;
+  overflow: auto;
+  padding: var(--spacingVerticalM) var(--spacingHorizontalM);
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: var(--borderRadiusMedium);
+  background: var(--colorNeutralBackground2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .v1-implementation-list { margin: 0; padding-inline-start: var(--spacingHorizontalL); display: grid; gap: var(--spacingVerticalXS); }
 .v1-composer { gap: var(--spacingVerticalS); }
 .v1-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

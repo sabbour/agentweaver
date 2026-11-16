@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AgentweaverGatewayClient, gatewayClient, GatewayError } from './api';
 import type { AuthorizationCallbackMessage, AuthorizationTransaction } from './authProtocol';
 
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   readAuthorizationTransaction: vi.fn<() => AuthorizationTransaction | null>(() => null),
   refreshBrokerToken: vi.fn(),
   submitBrokerConsent: vi.fn(),
+  storeAuthorizationTransaction: vi.fn(),
 }));
 
 vi.mock('./authProtocol', async (importOriginal) => ({
@@ -48,7 +49,7 @@ vi.mock('./authProtocol', async (importOriginal) => ({
   randomVerifier: () => 'verifier-1',
   readAuthorizationTransaction: mocks.readAuthorizationTransaction,
   refreshBrokerToken: mocks.refreshBrokerToken,
-  storeAuthorizationTransaction: vi.fn(),
+  storeAuthorizationTransaction: mocks.storeAuthorizationTransaction,
   submitBrokerConsent: mocks.submitBrokerConsent,
 }));
 
@@ -117,6 +118,26 @@ async function completeSilentSignIn(
   });
 }
 
+async function completePlatformPolicySignIn(
+  callback: { code?: string; error?: string } = { code: 'policy-code' },
+): Promise<void> {
+  await waitFor(() => expect(
+    document.querySelector('iframe[title="Platform Policy sign-in"]'),
+  ).not.toBeNull());
+  const iframe = document.querySelector<HTMLIFrameElement>('iframe[title="Platform Policy sign-in"]')!;
+  await act(async () => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'https://app.test',
+      source: iframe.contentWindow,
+      data: {
+        type: 'agentweaver.identity.callback',
+        state: 'state-1',
+        ...callback,
+      },
+    }));
+  });
+}
+
 function Harness() {
   const auth = useAuth();
   const [observedTenant, setObservedTenant] = useState<string | null>(null);
@@ -124,6 +145,10 @@ function Harness() {
   // so tests can check that a run-bound session does not replace the unbound one.
   const [ensured, setEnsured] = useState('not-ensured');
   const [unboundToken, setUnboundToken] = useState('none');
+  const [policyRead, setPolicyRead] = useState('not-read');
+  const [concurrentPolicyResult, setConcurrentPolicyResult] = useState('not-started');
+  const firstPolicyAbortRef = useRef<AbortController | null>(null);
+  const cancelablePolicyAbortRef = useRef<AbortController | null>(null);
   const runConcurrentCalls = async () => {
     const operation = async (accessToken: string) => {
       if (accessToken === 'access-1')
@@ -136,6 +161,16 @@ function Harness() {
   return (
     <div>
       <button type="button" onClick={() => { void auth.authorize(null); }}>Sign in</button>
+      <button type="button" onClick={() => {
+        void auth.authorize({ projectId: 'project-1', runId: 'run-1' });
+      }}>
+        Sign in for active run
+      </button>
+      <button type="button" onClick={() => {
+        void auth.authorize({ projectId: 'project-2', runId: 'run-2' });
+      }}>
+        Start interactive run
+      </button>
       <button type="button" onClick={() => { void auth.authorize({ projectId: 'project-1', runId: 'run-1' }); }}>
         Sign in for run
       </button>
@@ -162,6 +197,56 @@ function Harness() {
       </button>
       <button type="button" onClick={() => { void auth.resolveAuthorizationContext('tenant-2'); }}>
         Resolve tenant two
+      </button>
+      <button type="button" onClick={() => {
+        void (async () => {
+          const identity = await auth.establishPlatformPolicyAccess('tenant-1');
+          await auth.getPlatformPolicyRevisionHistory(identity.tenantId);
+          setPolicyRead(`${identity.issuer}:${identity.actorId}:${identity.tenantId}`);
+        })().catch(() => setPolicyRead('failed'));
+      }}>
+        Check Platform Policy
+      </button>
+      <button type="button" onClick={() => {
+        const controller = new AbortController();
+        cancelablePolicyAbortRef.current = controller;
+        void auth.establishPlatformPolicyAccess('tenant-1', controller.signal)
+          .then(() => setPolicyRead('cancelable-policy-allowed'), () => setPolicyRead('cancelable-policy-cancelled'));
+      }}>
+        Check cancelable Platform Policy
+      </button>
+      <button type="button" onClick={() => cancelablePolicyAbortRef.current?.abort()}>
+        Cancel Platform Policy check
+      </button>
+      <button type="button" onClick={() => {
+        void (async () => {
+          const identity = await auth.establishPlatformPolicyAccess('tenant-2');
+          await auth.getPlatformPolicyRevisionHistory(identity.tenantId);
+          setPolicyRead(`${identity.issuer}:${identity.actorId}:${identity.tenantId}`);
+        })().catch(() => setPolicyRead('failed'));
+      }}>
+        Check tenant two Policy
+      </button>
+      <button type="button" onClick={() => {
+        void auth.getPlatformPolicyRevisionHistory('tenant-2')
+          .then(() => setPolicyRead('tenant-two-history-ok'), () => setPolicyRead('tenant-two-history-failed'));
+      }}>
+        Read tenant two Policy history
+      </button>
+      <button type="button" onClick={() => {
+        const firstAbort = new AbortController();
+        firstPolicyAbortRef.current = firstAbort;
+        const first = auth.establishPlatformPolicyAccess('tenant-1', firstAbort.signal)
+          .then(() => 'allowed', () => 'cancelled');
+        const second = auth.establishPlatformPolicyAccess('tenant-1')
+          .then(() => 'allowed', () => 'denied');
+        void Promise.all([first, second]).then(([firstResult, secondResult]) =>
+          setConcurrentPolicyResult(`${firstResult}:${secondResult}`));
+      }}>
+        Start concurrent Policy checks
+      </button>
+      <button type="button" onClick={() => firstPolicyAbortRef.current?.abort()}>
+        Abort first Policy check
       </button>
       <button type="button" onClick={auth.signOut}>Sign out</button>
       <button
@@ -190,6 +275,8 @@ function Harness() {
       <output>issuer:{auth.authorizationContext?.issuer ?? 'none'}</output>
       <output>context-fields:{Object.keys(auth.authorizationContext ?? {}).sort().join(',')}</output>
       <output>api-tenant:{observedTenant ?? 'none'}</output>
+      <output>policy:{policyRead}</output>
+      <output>policy-concurrent:{concurrentPolicyResult}</output>
     </div>
   );
 }
@@ -338,6 +425,243 @@ describe('Broker refresh coordination', () => {
     await screen.findByText('unbound:access-1');
     expect(window.open).toHaveBeenCalledOnce();
   });
+
+  it('gets an independent unbound session for policy reads without replacing the active run session', async () => {
+    mocks.exchangeAuthorizationCode
+      .mockResolvedValueOnce(token('run-token', 'refresh-run'))
+      .mockResolvedValueOnce(token('policy-token', 'refresh-policy'));
+    vi.mocked(gatewayClient.getAuthorizationContext).mockImplementation(
+      async (accessToken, tenantSelector) => ({
+        contractVersion: 1,
+        issuer: 'projects-config',
+        actorId: 'actor-1',
+        tenantId: tenantSelector ?? 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: accessToken === 'run-token' ? 'project-1' : null,
+        boundRunId: accessToken === 'run-token' ? 'run-1' : null,
+        effectiveAuthority: [],
+      }),
+    );
+    const historyRead = vi.spyOn(gatewayClient, 'getPlatformPolicyRevisionHistory')
+      .mockResolvedValue({
+        scopeType: 'platform',
+        scopeId: 'default',
+        policyId: null,
+        snapshotRevision: null,
+        items: [],
+        nextCursor: null,
+      });
+
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for run' }));
+    await completePopupSignIn();
+    await screen.findByText('run-token');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check Platform Policy' }));
+    await completePlatformPolicySignIn();
+    await screen.findByText('policy:projects-config:actor-1:tenant-1');
+
+    expect(historyRead).toHaveBeenCalledWith('policy-token', 'tenant-1', {});
+    expect(screen.getByText('run-token')).toBeTruthy();
+    expect(window.open).toHaveBeenCalledOnce();
+    expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ binding: null }),
+      'challenge',
+      'none',
+    );
+  });
+
+  it('keeps a shared silent policy sign-in alive when one caller aborts', async () => {
+    mocks.exchangeAuthorizationCode
+      .mockResolvedValueOnce(token('run-token', 'refresh-run'))
+      .mockResolvedValueOnce(token('policy-token', 'refresh-policy'));
+    vi.mocked(gatewayClient.getAuthorizationContext).mockImplementation(
+      async (accessToken, tenantSelector) => ({
+        contractVersion: 1,
+        issuer: 'projects-config',
+        actorId: 'actor-1',
+        tenantId: tenantSelector ?? 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: accessToken === 'run-token' ? 'project-1' : null,
+        boundRunId: accessToken === 'run-token' ? 'run-1' : null,
+        effectiveAuthority: [],
+      }),
+    );
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for run' }));
+    await completePopupSignIn();
+    await screen.findByText('run-token');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start concurrent Policy checks' }));
+    await waitFor(() => expect(
+      document.querySelector('iframe[title="Platform Policy sign-in"]'),
+    ).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Abort first Policy check' }));
+    await completePlatformPolicySignIn();
+
+    await screen.findByText('policy-concurrent:cancelled:allowed');
+    expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledTimes(2);
+    expect(window.open).toHaveBeenCalledOnce();
+    expect(document.querySelector('iframe[title="Platform Policy sign-in"]')).toBeNull();
+  });
+
+  it.each([
+    ['late success', 'success', true],
+    ['late denial', 'denial', true],
+    ['early success', 'success', false],
+    ['early denial', 'denial', false],
+  ] as const)('keeps the newer tenant access after an older %s response', async (_label, resultKind, late) => {
+    vi.mocked(gatewayClient.getAuthorizationContext).mockImplementation(
+      async (_accessToken, tenantSelector) => ({
+        contractVersion: 1,
+        issuer: 'projects-config',
+        actorId: 'actor-1',
+        tenantId: tenantSelector ?? 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: null,
+        boundRunId: null,
+        effectiveAuthority: [],
+      }),
+    );
+    let resolveOld!: (page: {
+      scopeType: 'platform';
+      scopeId: 'default';
+      policyId: null;
+      snapshotRevision: null;
+      items: [];
+      nextCursor: null;
+    }) => void;
+    let rejectOld!: (reason: unknown) => void;
+    const oldResponse = new Promise<{
+      scopeType: 'platform';
+      scopeId: 'default';
+      policyId: null;
+      snapshotRevision: null;
+      items: [];
+      nextCursor: null;
+    }>((resolve, reject) => {
+      resolveOld = resolve;
+      rejectOld = reject;
+    });
+    const emptyPage = {
+      scopeType: 'platform' as const,
+      scopeId: 'default' as const,
+      policyId: null,
+      snapshotRevision: null,
+      items: [] as [],
+      nextCursor: null,
+    };
+    const historyRead = vi.spyOn(gatewayClient, 'getPlatformPolicyRevisionHistory')
+      .mockImplementation((_accessToken, tenantSelector) =>
+        tenantSelector === 'tenant-1' ? oldResponse : Promise.resolve(emptyPage));
+
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Check Platform Policy' }));
+    await waitFor(() => expect(historyRead).toHaveBeenCalledWith('access-1', 'tenant-1', {}));
+
+    const settleOldResponse = () => {
+      if (resultKind === 'success') resolveOld(emptyPage);
+      else rejectOld(new GatewayError(403, { code: 'forbidden' }, 'Denied.'));
+    };
+    if (!late) {
+      await act(async () => { settleOldResponse(); });
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check tenant two Policy' }));
+    await screen.findByText('policy:projects-config:actor-1:tenant-2');
+    if (late) {
+      await act(async () => { settleOldResponse(); });
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Read tenant two Policy history' }));
+    await screen.findByText('policy:tenant-two-history-ok');
+    expect(historyRead).toHaveBeenLastCalledWith('access-1', 'tenant-2', {});
+  });
+
+  it.each(['success', 'failure', 'timeout', 'cancel'] as const)(
+    'keeps interactive PKCE and consent polling usable during isolated Policy %s',
+    async (policyOutcome) => {
+      mocks.exchangeAuthorizationCode.mockImplementation(async (_config, _transaction, code) =>
+        token(code === 'policy-code'
+          ? 'policy-token'
+          : code === 'run-2-code'
+            ? 'run2-token'
+            : 'run-token'));
+      vi.mocked(gatewayClient.getAuthorizationContext).mockImplementation(
+        async (accessToken, tenantSelector) => ({
+          contractVersion: 1,
+          issuer: 'projects-config',
+          actorId: 'actor-1',
+          tenantId: tenantSelector ?? 'tenant-1',
+          membershipRevision: 1,
+          boundProjectId: accessToken === 'policy-token'
+            ? null
+            : accessToken === 'run2-token' ? 'project-2' : 'project-1',
+          boundRunId: accessToken === 'policy-token'
+            ? null
+            : accessToken === 'run2-token' ? 'run-2' : 'run-1',
+          effectiveAuthority: [],
+        }),
+      );
+      vi.spyOn(gatewayClient, 'getPlatformPolicyRevisionHistory').mockResolvedValue({
+        scopeType: 'platform',
+        scopeId: 'default',
+        policyId: null,
+        snapshotRevision: null,
+        items: [],
+        nextCursor: null,
+      });
+
+      render(<AuthProvider><Harness /></AuthProvider>);
+      fireEvent.click(screen.getByRole('button', { name: 'Sign in for active run' }));
+      await completePopupSignIn('run-1-code');
+      await screen.findByText('run-token');
+
+      const pollsBeforeInteractive = vi.mocked(fetch).mock.calls.length;
+      fireEvent.click(screen.getByRole('button', { name: 'Start interactive run' }));
+      await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(pollsBeforeInteractive));
+      await waitFor(() => expect(mocks.storeAuthorizationTransaction).toHaveBeenCalledTimes(2));
+
+      if (policyOutcome === 'cancel') {
+        fireEvent.click(screen.getByRole('button', { name: 'Check cancelable Platform Policy' }));
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: 'Check Platform Policy' }));
+      }
+      await waitFor(() => expect(
+        document.querySelector('iframe[title="Platform Policy sign-in"]'),
+      ).not.toBeNull());
+
+      if (policyOutcome === 'success') {
+        await completePlatformPolicySignIn();
+        await screen.findByText('policy:projects-config:actor-1:tenant-1');
+      } else if (policyOutcome === 'failure') {
+        await completePlatformPolicySignIn({ error: 'login_required' });
+        await screen.findByText('policy:failed');
+      } else if (policyOutcome === 'timeout') {
+        await act(async () => new Promise((resolve) => window.setTimeout(resolve, 15_100)));
+        await screen.findByText('policy:failed');
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel Platform Policy check' }));
+        await screen.findByText('policy:cancelable-policy-cancelled');
+      }
+
+      expect(document.querySelector('iframe[title="Platform Policy sign-in"]')).toBeNull();
+      expect(screen.getByText('run-token')).toBeTruthy();
+      expect(mocks.storeAuthorizationTransaction).toHaveBeenCalledTimes(2);
+      expect(mocks.storeAuthorizationTransaction.mock.calls[1][0]).toMatchObject({
+        binding: { projectId: 'project-2', runId: 'run-2' },
+      });
+
+      await completePopupSignIn('run-2-code');
+      await screen.findByText('run2-token');
+      expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(pollsBeforeInteractive);
+    },
+    25_000,
+  );
 
   it('stores an interactive run session without activating it', async () => {
     render(<AuthProvider><Harness /></AuthProvider>);

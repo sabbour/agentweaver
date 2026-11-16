@@ -19,7 +19,7 @@ is a source build, not an installed or deployed platform.
 If you have access to a configured Agentweaver web app, start with
 [the browser experience](./experience/README.md). It describes the checked-in
 web implementation and links to tasks for sign-in, projects, settings, runs,
-connections, Skills, and Knowledge. It does not confirm that a web app or its
+connections, Skills, Knowledge, and Platform Policies. It does not confirm that a web app or its
 owner services are deployed.
 
 <a id="concepts"></a>
@@ -46,6 +46,7 @@ owner services are deployed.
 | Configure or build the web client | [Build and configure the web client](./guide/web-client.md) |
 | Read and dismiss notifications | [Read notifications](./guide/notifications.md) |
 | Read platform component status | [Read the platform components report](./guide/platform-components.md) |
+| Read Platform Policies | [Read Platform Policies](./guide/read-platform-policies.md) |
 | Find local CLI commands | [Find CLI commands](./guide/find-cli-commands.md) |
 | Plan a release | [Plan issues and releases](./guide/release-planning.md) |
 | Deploy to an approved Azure target | [Deploy Agentweaver to Azure](./guide/deploy-to-azure.md) |

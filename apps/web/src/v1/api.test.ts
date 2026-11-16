@@ -311,6 +311,27 @@ describe('Gateway API client', () => {
     });
   });
 
+  it('rejects an authorization context with an unsafe membership revision', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({
+        contractVersion: 1,
+        issuer: 'https://identity.test/',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: Number.MAX_SAFE_INTEGER + 1,
+        boundProjectId: null,
+        boundRunId: null,
+        effectiveAuthority: [],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.getAuthorizationContext('broker-token', 'tenant-1')).rejects.toMatchObject({
+      status: 502,
+      code: 'owner_contract_invalid',
+    });
+  });
+
   it('preserves explicit project authorization errors from the Gateway', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({

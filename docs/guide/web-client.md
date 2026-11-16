@@ -93,6 +93,7 @@ The client uses these routes:
 | `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
 | `/platform-settings` | Read the platform component report. Only tenant and platform administrators can read it. |
+| `/policies` | Read saved Platform Policy source and revision history when the Gateway authorizes the history read. |
 
 ## Navigate the client
 
@@ -100,7 +101,8 @@ The client keeps the 0.x navigation rail, project switcher, floating content
 panel, gallery tiles, dialogs, typography, and theme. Its views use the current
 service contracts instead of the 0.x API.
 
-The rail has **Overview**, **Projects**, and **Sessions**. The **Sessions**
+The rail has **Overview**, **Projects**, and **Sessions**. The **Platform
+Policies** link appears after an authorized history read. The **Sessions**
 group has a **New session** button. **Overview** is the home page. It shows:
 
 - An **Operations** card with active projects, archived projects, recent
@@ -340,6 +342,18 @@ service, its readiness, and the active and available implementations. The
 page shows each status exactly as the owner reported it. If an owner didn't
 report, the area reads **Status not reported**. Other users get a permission
 message.
+
+### Read Platform Policies
+
+Open `/policies` or select **Platform Policies** in the rail. The page uses the
+confirmed tenant ID and checks access by reading Platform Policy history. If
+the tenant field is empty, enter a tenant ID and select **Retry**. A successful
+empty history means no Platform Policy is saved for that tenant.
+
+Select **View** to read a saved revision's manifest and files. Select **Load
+more** to read older revisions. The page displays saved source as text; it does
+not report runtime enforcement. For the full task, see
+[Read Platform Policies](./read-platform-policies.md).
 
 ### Operations pages
 

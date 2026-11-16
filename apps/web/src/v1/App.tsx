@@ -34,6 +34,8 @@ import { EmptyState } from '../components/ui/States';
 import { Pager } from '../copilot-fluent-system';
 import { SignInView } from '../pages/SignInPage';
 import { RetainedShell as Shell } from './RetainedShell';
+import { PlatformPoliciesPage } from './PlatformPoliciesPage';
+import { PlatformPoliciesControllerProvider } from './PlatformPoliciesController';
 import { iconForRole, workflowNodeTypes } from '../components/WorkflowGraphPanel';
 import type { WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import { ConfigurationFields } from './ConfigurationFields';
@@ -4063,6 +4065,7 @@ function AuthenticatedRoutes() {
     return <main className="v1-auth-page"><Loading label="Checking your sign-in session…" /></main>;
   if (!session) return <SignInScreen />;
   return (
+    <PlatformPoliciesControllerProvider>
     <Routes>
       {/* App-wide pages. Pages without a v1 service show an explanation instead of failing. */}
       <Route path="/" element={<Navigate to="/overview" replace />} />
@@ -4072,6 +4075,7 @@ function AuthenticatedRoutes() {
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
       <Route path="/platform-settings" element={<Shell><PlatformSettingsPage /></Shell>} />
+      <Route path="/policies" element={<Shell><PlatformPoliciesPage /></Shell>} />
       <Route path="/auth/callback" element={<CallbackPage />} />
       <Route path="/projects" element={<Shell><ProjectsPage /></Shell>} />
       <Route path="/projects/:projectId" element={<Shell><DashboardPage /></Shell>} />
@@ -4103,6 +4107,7 @@ function AuthenticatedRoutes() {
       {/* Unknown addresses show "Page not found" inside the app shell, so navigation stays available. */}
       <Route path="*" element={<Shell><UnavailablePage title="Page not found" description="This address does not match an Agentweaver page. Use the navigation to choose a destination." /></Shell>} />
     </Routes>
+    </PlatformPoliciesControllerProvider>
   );
 }
 

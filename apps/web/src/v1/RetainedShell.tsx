@@ -21,6 +21,7 @@ import {
   hasCompletedFirstRunTour,
   markFirstRunTourComplete,
 } from '../components/onboarding/firstRunTourStorage';
+import { usePlatformPoliciesController } from './PlatformPoliciesController';
 
 /**
  * Keeps the 0.x persona trigger and menu layout without requesting legacy identity APIs.
@@ -105,9 +106,10 @@ function shellActiveKey(pathname: string, projectId: string | undefined, hash: s
 }
 
 /** Adapts Gateway data to the existing rail; no monolith API consumers are mounted. */
-export function RetainedShell({ children }: { children: ReactNode }) {
+function RetainedShellContent({ children }: { children: ReactNode }) {
   const location = useLocation();
   const { session, apiCall, authorizationContext } = useAuth();
+  const platformPolicies = usePlatformPoliciesController();
   const match = useMatch('/projects/:projectId/*');
   const projectId = match?.params.projectId;
   const actorIdentityKey = authorizationContext?.issuer?.trim() && authorizationContext.actorId?.trim()
@@ -198,7 +200,13 @@ export function RetainedShell({ children }: { children: ReactNode }) {
         {/* The rail shows the 0.x pages, plus the Sessions group with its New
             session button. Operations pages show what current reads support. */}
         <LeftNavView
-          visibleGlobalKeys={['overview', 'chief-of-staff', 'projects', 'sessions']}
+          visibleGlobalKeys={[
+            'overview',
+            'chief-of-staff',
+            'projects',
+            ...(platformPolicies.authorized ? ['platform-policies'] : []),
+            'sessions',
+          ]}
           visibleProjectKeys={['dashboard', 'board', 'flow', 'orchestrations', 'workspace', 'agents', 'skills', 'memories', 'workflows', 'observability', 'diagnostics', 'heartbeat', 'cluster']}
           showNewSession
           projectId={projectId}
@@ -223,7 +231,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           notifications={<SharedAttentionBell projectNames={projectNames} />}
         />
         <div className="aw-shell-canvas">
-          <main className="aw-shell-content" aria-label="Main content">
+          <main className="aw-shell-content" aria-label="Main content" tabIndex={-1}>
             {/* Overview uses the same most-recent active project as its Current focus card. */}
             {startTaskProjectId && (
               <StartTaskAction
@@ -260,4 +268,8 @@ export function RetainedShell({ children }: { children: ReactNode }) {
       </div>
     </RunAttentionProvider>
   );
+}
+
+export function RetainedShell({ children }: { children: ReactNode }) {
+  return <RetainedShellContent>{children}</RetainedShellContent>;
 }

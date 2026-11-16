@@ -35,6 +35,8 @@ behavior; they do not confirm availability in a particular environment.
   dismiss a notification.
 - [Read platform component status](./platform-components.md): interpret the
   owner-reported report.
+- [Read Platform Policies](./read-platform-policies.md): inspect saved policy
+  source and revision history.
 
 <a id="tutorial"></a>
 

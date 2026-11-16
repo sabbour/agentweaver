@@ -26,7 +26,11 @@ import {
   storeAuthorizationTransaction,
   submitBrokerConsent,
 } from './authProtocol';
-import type { AuthorizationTransaction, RunBinding } from './authProtocol';
+import type {
+  AuthorizationCallbackMessage,
+  AuthorizationTransaction,
+  RunBinding,
+} from './authProtocol';
 import { missingAuthConfiguration } from './config';
 import type {
   BrokerConsentPrompt,
@@ -35,6 +39,10 @@ import type {
 } from './contracts';
 import { gatewayClient, GatewayError } from './api';
 import { clearRecentRuns } from './recentRuns';
+import type {
+  PlatformPolicyRevisionPage,
+  PlatformPolicyRevisionReadResult,
+} from './platformPolicyContracts';
 
 /** In-memory bearer session bound to the project/run that initiated authorization. */
 interface AuthSession {
@@ -52,9 +60,23 @@ type ConfirmedAuthorizationContext = Pick<
   'issuer' | 'actorId' | 'tenantId' | 'membershipRevision'
 >;
 
+/** Identity fields safe to share with the read-only Platform Policies controller. */
+export type PlatformPolicyIdentity = Pick<
+  ConfirmedAuthorizationContext,
+  'issuer' | 'actorId' | 'tenantId'
+>;
+
+export interface PlatformPolicyRefreshResult {
+  refreshed: boolean;
+  authSessionGeneration: number;
+  unboundSessionGeneration: number;
+}
+
 /** Authentication state and operations shared with v1 pages and Gateway callers. */
 interface AuthContextValue {
   session: AuthSession | null;
+  authSessionGeneration: number;
+  unboundSessionGeneration: number;
   authorizationContext: ConfirmedAuthorizationContext | null;
   authorizationContextLoading: boolean;
   authorizationContextError: unknown;
@@ -78,6 +100,20 @@ interface AuthContextValue {
     operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
     binding?: RunBinding | null,
   ) => Promise<T>;
+  establishPlatformPolicyAccess: (
+    tenantSelector: string,
+    signal?: AbortSignal,
+  ) => Promise<PlatformPolicyIdentity>;
+  getPlatformPolicyRevisionHistory: (
+    tenantSelector: string,
+    options?: { cursor?: string | null; signal?: AbortSignal },
+  ) => Promise<PlatformPolicyRevisionPage>;
+  readPlatformPolicyRevision: (
+    tenantSelector: string,
+    revision: number,
+    signal?: AbortSignal,
+  ) => Promise<PlatformPolicyRevisionReadResult>;
+  refreshPlatformPolicySession: () => Promise<PlatformPolicyRefreshResult>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -158,6 +194,21 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
   };
 }
 
+interface PlatformPolicyAccessSnapshot {
+  identity: PlatformPolicyIdentity;
+  activeSession: AuthSession;
+  unboundSession: AuthSession;
+  authSessionGeneration: number;
+  unboundSessionGeneration: number;
+}
+
+interface PlatformPolicySilentAttempt {
+  controller: AbortController;
+  iframe: HTMLIFrameElement | null;
+  messageHandler: ((event: MessageEvent<unknown>) => void) | null;
+  waiters: number;
+}
+
 /**
  * Owns the v1 Broker sessions, PKCE sign-in, one-time silent restoration, consent,
  * refresh, and tenant context.
@@ -168,6 +219,8 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<AuthSession | null>(null);
+  const [authSessionGeneration, setAuthSessionGeneration] = useState(0);
+  const [unboundSessionGeneration, setUnboundSessionGeneration] = useState(0);
   const [authorizationContext, setAuthorizationContextState] =
     useState<ConfirmedAuthorizationContext | null>(null);
   const [authorizationContextLoading, setAuthorizationContextLoading] = useState(false);
@@ -192,6 +245,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // share one attempt instead of opening several hidden frames.
   const ensureRef = useRef(new Map<string, Promise<boolean>>());
   const sessionGenerationRef = useRef(0);
+  const unboundSessionGenerationRef = useRef(0);
   const authorizationContextRequestRef = useRef(0);
   const authorizationContextRef = useRef<{
     value: ConfirmedAuthorizationContext;
@@ -203,13 +257,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // refresh token twice.
   const refreshPromisesRef = useRef(new Map<string, {
     session: AuthSession;
-    promise: Promise<AuthSession | null>;
+    promise: Promise<AuthSession>;
   }>());
   const transactionRef = useRef<AuthorizationTransaction | null>(null);
   const consentSessionModeRef = useRef<SessionMode | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
   const authorizationFrameRef = useRef<HTMLIFrameElement | null>(null);
   const silentAttemptedRef = useRef(false);
+  const policyAccessRef = useRef<PlatformPolicyAccessSnapshot | null>(null);
+  const policyCandidateRef = useRef<{
+    identity: PlatformPolicyIdentity;
+    binding: RunBinding | null;
+  } | null>(null);
+  const policySilentAttemptRef = useRef<PlatformPolicySilentAttempt | null>(null);
+  const policySilentPromiseRef = useRef<Promise<boolean> | null>(null);
 
   const configurationError = useMemo(() => {
     const missing = missingAuthConfiguration();
@@ -218,33 +279,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : null;
   }, []);
 
+  const notifyUnboundSessionChange = useCallback(() => {
+    const next = ++unboundSessionGenerationRef.current;
+    setUnboundSessionGeneration(next);
+    policyAccessRef.current = null;
+  }, []);
+
+  const cancelPolicyAuthorization = useCallback(() => {
+    const attempt = policySilentAttemptRef.current;
+    if (!attempt) return;
+    attempt.controller.abort();
+    if (attempt.messageHandler)
+      window.removeEventListener('message', attempt.messageHandler);
+    attempt.iframe?.remove();
+    policySilentAttemptRef.current = null;
+    policySilentPromiseRef.current = null;
+  }, []);
+
   /** Makes `next` the active session without changing the held sessions. */
   const setActiveSession = useCallback((next: AuthSession | null) => {
     const current = sessionRef.current;
     // A different token or binding means a new identity for the page. Bump the generation
     // and drop the cached tenant context so no answer from the old session is reused.
     if (current?.accessToken !== next?.accessToken || !sameBinding(current?.binding ?? null, next?.binding ?? null)) {
+      cancelPolicyAuthorization();
+      if (!sameBinding(current?.binding ?? null, next?.binding ?? null))
+        policyCandidateRef.current = null;
       sessionGenerationRef.current += 1;
+      setAuthSessionGeneration(sessionGenerationRef.current);
       authorizationContextRequestRef.current += 1;
       authorizationContextRef.current = null;
+      policyAccessRef.current = null;
       setAuthorizationContextState(null);
       setAuthorizationContextLoading(false);
       setAuthorizationContextError(null);
     }
     sessionRef.current = next;
     setSessionState(next);
-  }, []);
+  }, [cancelPolicyAuthorization]);
 
   /** Replaces every held session with `next` (or none) and activates it. */
   const setSession = useCallback((next: AuthSession | null) => {
     // Forget every held session and every pending silent sign-in. Used for sign-out
     // and for a fresh unbound sign-in.
+    cancelPolicyAuthorization();
+    const hadUnboundSession = sessionsRef.current.has('');
     sessionsRef.current.clear();
+    if (hadUnboundSession) notifyUnboundSessionChange();
     ensureRef.current.clear();
     consentSessionModeRef.current = null;
-    if (next) sessionsRef.current.set(bindingKey(next.binding), next);
+    if (next) {
+      sessionsRef.current.set(bindingKey(next.binding), next);
+      if (!next.binding) notifyUnboundSessionChange();
+    }
+    policyAccessRef.current = null;
+    policyCandidateRef.current = null;
     setActiveSession(next);
-  }, [setActiveSession]);
+  }, [cancelPolicyAuthorization, notifyUnboundSessionChange, setActiveSession]);
 
   /** Stores a new session for its binding; `mode` decides whether others are kept and it becomes active. */
   const storeSession = useCallback((stored: AuthSession, mode: SessionMode) => {
@@ -259,11 +350,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : stored;
     // A new token for the same binding replaces the old one in the map.
     sessionsRef.current.set(bindingKey(next.binding), next);
+    if (!next.binding) notifyUnboundSessionChange();
     // In `store` mode we still activate when the active session is already bound to this
     // same run: the page is using that run, so it must switch to the newer token.
     if (mode === 'activate' || sessionRef.current?.binding && sameBinding(sessionRef.current.binding, next.binding))
       setActiveSession(next);
-  }, [setActiveSession, setSession]);
+  }, [notifyUnboundSessionChange, setActiveSession, setSession]);
 
   /** Exchanges the authorization code for tokens and stores the new session using `mode`. */
   const finishCode = useCallback(async (code: string, transaction: AuthorizationTransaction, mode: SessionMode) => {
@@ -550,6 +642,136 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [configurationError, consumeAuthorizationResponse, setSession]);
 
+  /** Gets an unbound token without taking ownership of the interactive sign-in flow. */
+  const ensurePlatformPolicySession = useCallback((signal?: AbortSignal): Promise<boolean> => {
+    const waitForCaller = (
+      promise: Promise<boolean>,
+      attempt: PlatformPolicySilentAttempt | null = null,
+    ): Promise<boolean> => {
+      if (attempt) attempt.waiters += 1;
+      const release = (cancelled: boolean) => {
+        if (!attempt) return;
+        attempt.waiters -= 1;
+        if (cancelled && attempt.waiters === 0 &&
+            policySilentAttemptRef.current === attempt)
+          attempt.controller.abort();
+      };
+      if (!signal) return attempt
+        ? promise.finally(() => release(false))
+        : promise;
+      if (signal.aborted) {
+        release(true);
+        return Promise.resolve(false);
+      }
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result: boolean, cancelled = false) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          release(cancelled);
+          resolve(result);
+        };
+        const onAbort = () => finish(false, true);
+        signal.addEventListener('abort', onAbort, { once: true });
+        void promise.then(finish, () => finish(false));
+        if (signal.aborted) finish(false);
+      });
+    };
+    if (sessionsRef.current.has('')) return waitForCaller(Promise.resolve(true));
+    if (signal?.aborted || configurationError) return Promise.resolve(false);
+    if (policySilentPromiseRef.current)
+      return waitForCaller(policySilentPromiseRef.current, policySilentAttemptRef.current);
+
+    const config = defaultAuthorizationConfig();
+    const transaction = transactionFor(null);
+    const attempt: PlatformPolicySilentAttempt = {
+      controller: new AbortController(),
+      iframe: null,
+      messageHandler: null,
+      waiters: 0,
+    };
+    const activeGeneration = sessionGenerationRef.current;
+    policySilentAttemptRef.current = attempt;
+
+    const promiseRef: { current: Promise<boolean> | null } = { current: null };
+    const promise = (async () => {
+      let timeout: number | undefined;
+      try {
+        const challenge = await pkceChallenge(transaction.verifier);
+        if (attempt.controller.signal.aborted) return false;
+        const authorizeUrl = buildAuthorizeUrl(config, transaction, challenge, 'none');
+        const iframe = document.createElement('iframe');
+        attempt.iframe = iframe;
+        iframe.title = 'Platform Policy sign-in';
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.tabIndex = -1;
+        iframe.style.display = 'none';
+        iframe.src = authorizeUrl;
+        document.body.append(iframe);
+        const callbackWindow = iframe.contentWindow;
+        if (!callbackWindow) return false;
+
+        const callbackOrigin = new URL(transaction.redirectUri).origin;
+        const callback = await new Promise<AuthorizationCallbackMessage>((resolve, reject) => {
+          const handler = (event: MessageEvent<unknown>) => {
+            if (event.source !== callbackWindow ||
+                event.origin !== callbackOrigin ||
+                policySilentAttemptRef.current !== attempt)
+              return;
+            const message = parseAuthorizationCallbackMessage(event.data);
+            if (!message || message.state !== transaction.state) return;
+            resolve(message);
+          };
+          attempt.messageHandler = handler;
+          window.addEventListener('message', handler);
+          timeout = window.setTimeout(
+            () => reject(new Error('Silent sign-in timed out.')),
+            SILENT_AUTH_TIMEOUT_MS,
+          );
+          attempt.controller.signal.addEventListener(
+            'abort',
+            () => reject(new DOMException('Silent sign-in was cancelled.', 'AbortError')),
+            { once: true },
+          );
+        });
+        if (!('code' in callback) ||
+            attempt.controller.signal.aborted ||
+            policySilentAttemptRef.current !== attempt ||
+            sessionGenerationRef.current !== activeGeneration)
+          return false;
+
+        const responseUrl = new URL(transaction.redirectUri);
+        responseUrl.searchParams.set('state', callback.state);
+        responseUrl.searchParams.set('code', callback.code);
+        const result = parseAuthorizationResult(responseUrl.toString(), transaction.state);
+        if (!result || 'error' in result) return false;
+        const token = await exchangeAuthorizationCode(config, transaction, result.code);
+        if (attempt.controller.signal.aborted ||
+            policySilentAttemptRef.current !== attempt ||
+            sessionGenerationRef.current !== activeGeneration)
+          return false;
+        const stored = sessionFromToken(token, null);
+        if (!sessionsRef.current.has('')) storeSession(stored, 'store');
+        return true;
+      } catch {
+        return false;
+      } finally {
+        if (timeout !== undefined) window.clearTimeout(timeout);
+        if (attempt.messageHandler)
+          window.removeEventListener('message', attempt.messageHandler);
+        attempt.iframe?.remove();
+        if (policySilentAttemptRef.current === attempt)
+          policySilentAttemptRef.current = null;
+        if (policySilentPromiseRef.current === promiseRef.current)
+          policySilentPromiseRef.current = null;
+      }
+    })();
+    promiseRef.current = promise;
+    policySilentPromiseRef.current = promise;
+    return waitForCaller(promise, attempt);
+  }, [configurationError, storeSession]);
+
   /** Interactive sign-in for the unbound session or a project/run binding. */
   const authorize = useCallback(async (
     requestedBinding: RunBinding | null = null,
@@ -647,52 +869,77 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!sessionRef.current) setError(message);
   }, [setActiveSession, setSession]);
 
-  /**
-   * Refreshes one held session's token. Returns the new session, the newer session that
-   * already replaced it, or null when the session was dropped.
-   */
-  const refresh = useCallback((current: AuthSession): Promise<AuthSession | null> => {
+  /** Shares the Broker refresh itself; each caller decides what a failure removes. */
+  const refreshSession = useCallback((current: AuthSession): Promise<AuthSession> => {
     const key = bindingKey(current.binding);
-    // Someone already replaced this session (refresh or new sign-in): use the newer one.
     const latest = sessionsRef.current.get(key) ?? null;
-    if (latest !== current) return Promise.resolve(latest);
+    if (latest !== current) {
+      return latest
+        ? Promise.resolve(latest)
+        : Promise.reject(new GatewayError(401, { code: 'unauthorized' }, 'Your Broker session expired.'));
+    }
     // Share an in-flight refresh so parallel 401s do not spend the refresh token twice.
     const inFlight = refreshPromisesRef.current.get(key);
     if (inFlight?.session === current) return inFlight.promise;
     const refreshToken = current.refreshToken;
-    if (!refreshToken) {
-      dropSession(current, 'Your sign-in expired. Sign in again to continue.');
-      return Promise.resolve(null);
-    }
-    const promise = (async (): Promise<AuthSession | null> => {
-      try {
-        const refreshed = await refreshBrokerToken(defaultAuthorizationConfig(), refreshToken);
-        // The refreshed token keeps the same binding as the session it replaces.
-        const next = sessionFromToken(refreshed, current.binding);
-        // Keep the old refresh token if the Broker did not rotate it.
-        if (!next.refreshToken) next.refreshToken = refreshToken;
-        // A refresh response may omit the ID token; the person has not changed, so keep the name.
-        if (!next.displayName) next.displayName = current.displayName;
-        // Sign-out or a new sign-in happened while we waited: do not put the old session back.
-        if (sessionsRef.current.get(key) !== current) return sessionsRef.current.get(key) ?? null;
-        sessionsRef.current.set(key, next);
-        if (sessionRef.current === current) setActiveSession(next);
-        return next;
-      } catch (reason) {
-        if (sessionsRef.current.get(key) !== current) return sessionsRef.current.get(key) ?? null;
-        dropSession(current, reason instanceof Error ? reason.message : 'Your sign-in expired. Sign in again.');
-        return null;
-      }
-    })();
+    if (!refreshToken)
+      return Promise.reject(new GatewayError(401, { code: 'unauthorized' }, 'Your Broker session expired.'));
+    const promise = refreshBrokerToken(defaultAuthorizationConfig(), refreshToken).then((refreshed) => {
+      const next = sessionFromToken(refreshed, current.binding);
+      if (!next.refreshToken) next.refreshToken = refreshToken;
+      if (!next.displayName) next.displayName = current.displayName;
+      if (sessionsRef.current.get(key) !== current)
+        return sessionsRef.current.get(key) ?? Promise.reject(
+          new GatewayError(401, { code: 'unauthorized' }, 'Your Broker session expired.'),
+        );
+      sessionsRef.current.set(key, next);
+      if (!next.binding) notifyUnboundSessionChange();
+      if (sessionRef.current === current) setActiveSession(next);
+      return next;
+    });
     const activeRefresh = { session: current, promise };
     refreshPromisesRef.current.set(key, activeRefresh);
-    void promise.finally(() => {
+    const clearRefresh = () => {
       // Remove only our own entry; a newer refresh may already own the key.
       if (refreshPromisesRef.current.get(key) === activeRefresh)
         refreshPromisesRef.current.delete(key);
-    });
+    };
+    void promise.then(clearRefresh, clearRefresh);
     return promise;
-  }, [dropSession, setActiveSession]);
+  }, [notifyUnboundSessionChange, setActiveSession]);
+
+  /** Preserves the established failure behavior for existing authentication callers. */
+  const refresh = useCallback(async (current: AuthSession): Promise<AuthSession | null> => {
+    try {
+      return await refreshSession(current);
+    } catch (reason) {
+      if (sessionsRef.current.get(bindingKey(current.binding)) === current)
+        dropSession(current, reason instanceof Error ? reason.message : 'Your sign-in expired. Sign in again.');
+      return sessionsRef.current.get(bindingKey(current.binding)) ?? null;
+    }
+  }, [dropSession, refreshSession]);
+
+  /** A Policy read can discard only its unbound session after a refresh failure. */
+  const refreshPlatformPolicySession = useCallback(async (): Promise<PlatformPolicyRefreshResult> => {
+    const result = (refreshed: boolean): PlatformPolicyRefreshResult => ({
+      refreshed,
+      authSessionGeneration: sessionGenerationRef.current,
+      unboundSessionGeneration: unboundSessionGenerationRef.current,
+    });
+    const current = sessionsRef.current.get('') ?? null;
+    if (!current) return result(false);
+    try {
+      await refreshSession(current);
+      return result(true);
+    } catch {
+      if (sessionsRef.current.get('') === current) {
+        sessionsRef.current.delete('');
+        notifyUnboundSessionChange();
+        if (sessionRef.current === current) setActiveSession(null);
+      }
+      return result(false);
+    }
+  }, [notifyUnboundSessionChange, refreshSession, setActiveSession]);
 
   useEffect(() => {
     if (!session) return;
@@ -824,6 +1071,191 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [apiCall]);
 
+  const establishPlatformPolicyAccess = useCallback(async (
+    tenantSelector: string,
+    signal?: AbortSignal,
+  ): Promise<PlatformPolicyIdentity> => {
+    if (!tenantSelector ||
+        tenantSelector.length > 256 ||
+        /[\r\n]/.test(tenantSelector) ||
+        tenantSelector.trim() !== tenantSelector)
+      throw new GatewayError(400, { code: 'tenant_selector_required' },
+        'Choose a tenant before reading Platform Policies.');
+    if (signal?.aborted) throw new DOMException('Policy check was cancelled.', 'AbortError');
+
+    const active = sessionRef.current;
+    if (!active)
+      throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
+    const activeGeneration = sessionGenerationRef.current;
+    const cached = authorizationContextRef.current;
+    let candidate: PlatformPolicyIdentity;
+    if (cached &&
+        cached.accessToken === active.accessToken &&
+        cached.sessionGeneration === activeGeneration &&
+        sameBinding(cached.binding, active.binding) &&
+        cached.value.tenantId === tenantSelector) {
+      candidate = {
+        issuer: cached.value.issuer,
+        actorId: cached.value.actorId,
+        tenantId: cached.value.tenantId,
+      };
+    } else {
+      const activeContext = await gatewayClient.getAuthorizationContext(
+        active.accessToken,
+        tenantSelector,
+        signal,
+      );
+      if (signal?.aborted) throw new DOMException('Policy check was cancelled.', 'AbortError');
+      if (sessionRef.current !== active || sessionGenerationRef.current !== activeGeneration)
+        throw new GatewayError(401, { code: 'authorization_context_stale' },
+          'The sign-in session changed while checking Platform Policy access.');
+      if (!contextMatchesBinding(activeContext, active.binding) ||
+          activeContext.tenantId !== tenantSelector)
+        throw new GatewayError(403, { code: 'policy_context_mismatch' },
+          'Platform Policy access was denied.');
+      candidate = {
+        issuer: activeContext.issuer,
+        actorId: activeContext.actorId,
+        tenantId: activeContext.tenantId,
+      };
+    }
+
+    const previousCandidate = policyCandidateRef.current;
+    if (previousCandidate &&
+        sameBinding(previousCandidate.binding, active.binding) &&
+        previousCandidate.identity.tenantId === tenantSelector &&
+        (previousCandidate.identity.issuer !== candidate.issuer ||
+         previousCandidate.identity.actorId !== candidate.actorId))
+      throw new GatewayError(403, { code: 'policy_identity_changed' },
+        'Platform Policy access was denied.');
+    policyCandidateRef.current = {
+      identity: candidate,
+      binding: active.binding,
+    };
+
+    if (!await ensurePlatformPolicySession(signal)) {
+      if (signal?.aborted) throw new DOMException('Policy check was cancelled.', 'AbortError');
+      throw new GatewayError(401, { code: 'policy_sign_in_required' },
+        'Sign in again to check Platform Policy access.');
+    }
+    const unbound = sessionsRef.current.get('') ?? null;
+    if (!unbound || unbound.expiresAt <= Date.now() + 5_000)
+      throw new GatewayError(401, { code: 'platform_policy_request_failed' },
+        'Sign in again to check Platform Policy access.');
+    const unboundGeneration = unboundSessionGenerationRef.current;
+    let unboundContext: ProjectAuthorizationContextResponse;
+    try {
+      unboundContext = await gatewayClient.getAuthorizationContext(
+        unbound.accessToken,
+        tenantSelector,
+        signal,
+      );
+    } catch (reason) {
+      if (reason instanceof GatewayError && reason.status === 401)
+        throw new GatewayError(401, { code: 'platform_policy_request_failed' },
+          'Platform Policy data could not be loaded.');
+      throw reason;
+    }
+    if (signal?.aborted) throw new DOMException('Policy check was cancelled.', 'AbortError');
+    if (sessionRef.current !== active ||
+        sessionGenerationRef.current !== activeGeneration ||
+        sessionsRef.current.get('') !== unbound ||
+        unboundSessionGenerationRef.current !== unboundGeneration)
+      throw new GatewayError(401, { code: 'authorization_context_stale' },
+        'The sign-in session changed while checking Platform Policy access.');
+    if (unboundContext.boundProjectId !== null ||
+        unboundContext.boundRunId !== null ||
+        unboundContext.issuer !== candidate.issuer ||
+        unboundContext.actorId !== candidate.actorId ||
+        unboundContext.tenantId !== candidate.tenantId)
+      throw new GatewayError(403, { code: 'policy_identity_mismatch' },
+        'Platform Policy access was denied.');
+
+    const identity = {
+      issuer: candidate.issuer,
+      actorId: candidate.actorId,
+      tenantId: candidate.tenantId,
+    };
+    policyAccessRef.current = {
+      identity,
+      activeSession: active,
+      unboundSession: unbound,
+      authSessionGeneration: activeGeneration,
+      unboundSessionGeneration: unboundGeneration,
+    };
+    return identity;
+  }, [ensurePlatformPolicySession]);
+
+  const isCurrentPlatformPolicyAccess = useCallback((
+    access: PlatformPolicyAccessSnapshot,
+    tenantSelector: string,
+  ): boolean => policyAccessRef.current === access &&
+    access.identity.tenantId === tenantSelector &&
+    sessionRef.current === access.activeSession &&
+    sessionGenerationRef.current === access.authSessionGeneration &&
+    sessionsRef.current.get('') === access.unboundSession &&
+    unboundSessionGenerationRef.current === access.unboundSessionGeneration, []);
+
+  const requirePlatformPolicyAccess = useCallback((tenantSelector: string): PlatformPolicyAccessSnapshot => {
+    const access = policyAccessRef.current;
+    if (access && isCurrentPlatformPolicyAccess(access, tenantSelector))
+      return access;
+    throw new GatewayError(401, { code: 'policy_access_expired' },
+      'Platform Policy access must be checked again.');
+  }, [isCurrentPlatformPolicyAccess]);
+
+  const getPlatformPolicyRevisionHistory = useCallback(async (
+    tenantSelector: string,
+    options: { cursor?: string | null; signal?: AbortSignal } = {},
+  ): Promise<PlatformPolicyRevisionPage> => {
+    const access = requirePlatformPolicyAccess(tenantSelector);
+    try {
+      const page = await gatewayClient.getPlatformPolicyRevisionHistory(
+        access.unboundSession.accessToken,
+        tenantSelector,
+        options,
+      );
+      if (!isCurrentPlatformPolicyAccess(access, tenantSelector))
+        throw new GatewayError(401, { code: 'policy_access_expired' },
+          'Platform Policy access must be checked again.');
+      return page;
+    } catch (reason) {
+      if (reason instanceof GatewayError &&
+          reason.status === 403 &&
+          policyAccessRef.current === access)
+        policyAccessRef.current = null;
+      throw reason;
+    }
+  }, [isCurrentPlatformPolicyAccess, requirePlatformPolicyAccess]);
+
+  const readPlatformPolicyRevision = useCallback(async (
+    tenantSelector: string,
+    revision: number,
+    signal?: AbortSignal,
+  ): Promise<PlatformPolicyRevisionReadResult> => {
+    const access = requirePlatformPolicyAccess(tenantSelector);
+    try {
+      const result = await gatewayClient.readPlatformPolicyRevision(
+        access.unboundSession.accessToken,
+        revision,
+        tenantSelector,
+        signal,
+      );
+      if (!isCurrentPlatformPolicyAccess(access, tenantSelector))
+        throw new GatewayError(401, { code: 'policy_access_expired' },
+          'Platform Policy access must be checked again.');
+      return result;
+    } catch (reason) {
+      if (reason instanceof GatewayError &&
+          reason.status === 403 &&
+          policyAccessRef.current === access)
+        policyAccessRef.current = null;
+      throw reason;
+    }
+  }, [isCurrentPlatformPolicyAccess, requirePlatformPolicyAccess]);
+
+  useEffect(() => () => cancelPolicyAuthorization(), [cancelPolicyAuthorization]);
+
   useEffect(() => {
     if (!session) return;
     const bootstrap = window.setTimeout(() => {
@@ -848,6 +1280,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthContextValue>(() => ({
     session,
+    authSessionGeneration,
+    unboundSessionGeneration,
     busy,
     restoringSession,
     consent,
@@ -858,12 +1292,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     decideConsent,
     signOut,
     apiCall,
+    establishPlatformPolicyAccess,
+    getPlatformPolicyRevisionHistory,
+    readPlatformPolicyRevision,
+    refreshPlatformPolicySession,
     authorizationContext,
     authorizationContextLoading,
     authorizationContextError,
     resolveAuthorizationContext,
   }), [
     apiCall,
+    authSessionGeneration,
     authorizationContext,
     authorizationContextError,
     authorizationContextLoading,
@@ -873,10 +1312,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     consent,
     decideConsent,
     ensureSession,
+    establishPlatformPolicyAccess,
     error,
+    getPlatformPolicyRevisionHistory,
+    readPlatformPolicyRevision,
     resolveAuthorizationContext,
+    refreshPlatformPolicySession,
     session,
     signOut,
+    unboundSessionGeneration,
     restoringSession,
   ]);
 

@@ -19,12 +19,14 @@ Paths in this table are relative to `apps/web`.
 | --- | --- |
 | `src/main.tsx` | React mount, Strict Mode, and top-level render error boundary. |
 | `src/App.tsx` | Stable entry that exports `src/v1/App.tsx`. |
-| `src/v1/App.tsx` | Authentication gates, shell, routes, project/configuration/Knowledge pages, and run tabs. |
-| `src/v1/AuthContext.tsx` | In-memory session, exact-run authorization, refresh, and current tenant context. |
+| `src/v1/App.tsx` | Authentication gates, shell, routes, project/configuration/Knowledge pages, Platform Policies, and run tabs. |
+| `src/v1/AuthContext.tsx` | In-memory sessions, exact-run authorization, isolated unbound Platform Policy reads, refresh, and current tenant context. |
 | `src/v1/authProtocol.ts` | PKCE, state and callback validation, consent, and Broker token requests. |
 | `src/v1/config.ts` | Runtime and build-time configuration. |
-| `src/v1/api.ts` | Gateway HTTP client, structured errors, header forwarding, and server-sent events (SSE) parsing. |
+| `src/v1/api.ts` | Gateway HTTP client, structured errors, explicit-tenant Platform Policy reads with response bounds, header forwarding, and server-sent events (SSE) parsing. |
 | `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including the project issue and pull request list pages used by the Priority picker. |
+| `src/v1/platformPolicyContracts.ts` | Bounds and validates Platform Policy history, revision metadata, UTF-8 manifest bytes, and source files. |
+| `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only saved history and source. |
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client, callback messages, and the actionable setup message for `github_repo_app_not_configured`. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
@@ -33,7 +35,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/RunOutputCaptures.tsx` | **Produced files** on the run Changes tab: saved file sets and their patches. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP saved connection list, connection status, sign-in, refresh, and disconnect in project settings. |
-| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. The rail links to the Chief of Staff section on Overview. The shell also provides **Start task** for the most recently updated active project when the user can change it. |
+| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. The rail links to the Chief of Staff section on Overview and shows Platform Policies after an authorized history read. The shell also provides **Start task** for the most recently updated active project when the user can change it. |
 | `src/v1/OverviewPage.tsx` | Cross-project home: operations summary, recent projects, metrics for one selected project, recent runs, and items that need input, followed by Chief of Staff (Priorities, New chat, and My conversations). |
 | `src/v1/SessionsPage.tsx` | Runs across all visible projects, newest first, with **Load more** and **New session**. |
 | `src/v1/NewSessionPage.tsx`, `src/v1/pendingRun.ts` | New session: create a run, sign in silently for that run, and start it. The pending run is kept in session storage across the sign-in. |
@@ -86,6 +88,7 @@ data hooks are not mounted.
 | `/sessions` | `SessionsPage`. |
 | `/assistant` | `NewSessionPage`; `project` or `projectId` preselects the project. |
 | `/platform-settings` | `PlatformSettingsPage`. |
+| `/policies` | `PlatformPoliciesPage`; a confirmed tenant selector and successful Platform Policy history read gate the saved history and revision source. |
 | `/projects/:projectId/team/cast` | `CastTeamPage`. |
 | `/projects/:projectId/runs/:runId/history` | Project-authorized Session tree or Activity history for the selected run. Current project readers can open it without run-accepting authority; run-bound tokens remain limited to their run. |
 | `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `chat`, `topology`, `approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**). Missing or unknown values open `chat`. |
@@ -223,6 +226,25 @@ in a row. See [events](./events.md).
    It returns `false` when the Broker needs user input, and the run page then
    shows **Sign in for this project and run**. Leaving the run page calls
    `ensureSession(null)` to switch back to the project session.
+
+### Platform Policy reads
+
+Platform Policy reads use a separate unbound session. When the browser has no
+unbound session, `AuthContext` starts a hidden PKCE request with `prompt=none`.
+This request keeps the active run session and interactive consent flow intact.
+
+The browser compares the active and unbound authorization contexts for the
+same issuer, actor, and explicit tenant. It sends the unbound token and
+`X-Agentweaver-Tenant` on the Platform Policy history and revision routes. The
+history read is the access check; a successful empty history means the caller
+is authorized and no policy is saved. The client does not use a
+`projects.admin` claim as this check.
+
+The shared controller clears policy data when the session, tenant, or identity
+changes. A `401` triggers one unbound-session refresh, identity check, and
+history recheck before the client retries the selected read. It checks access
+again on route entry, when the tab becomes visible, and every 60 seconds while
+the tab stays visible.
 
 Callback handlers check the expected origin, popup, state, and transaction
 binding. The HTML bootstrap removes callback query values before assets load.

@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import packageInfo from '../../package.json';
 import { BrokerIdentity, RetainedShell } from './RetainedShell';
+import { PlatformPoliciesControllerProvider } from './PlatformPoliciesController';
 import { useSharedRunAttention } from './RunAttentionContext';
 import type { RunAttention } from './runAttention';
 
@@ -69,7 +70,13 @@ function AttentionReader({ onRead }: { onRead: (value: RunAttention) => void }) 
 }
 
 function renderShell(path: string, children = <p>Page</p>) {
-  return render(<MemoryRouter initialEntries={[path]}><RetainedShell>{children}</RetainedShell></MemoryRouter>);
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <PlatformPoliciesControllerProvider>
+        <RetainedShell>{children}</RetainedShell>
+      </PlatformPoliciesControllerProvider>
+    </MemoryRouter>,
+  );
 }
 
 function LocationReader() {
@@ -249,9 +256,21 @@ describe('RetainedShell', () => {
       expect(screen.queryByRole('heading', { name: 'AI access' })).toBeNull();
 
       mocks.authorizationContext = null;
-      view.rerender(<MemoryRouter initialEntries={['/overview']}><RetainedShell><p>Page</p></RetainedShell></MemoryRouter>);
+      view.rerender(
+        <MemoryRouter initialEntries={['/overview']}>
+          <PlatformPoliciesControllerProvider>
+            <RetainedShell><p>Page</p></RetainedShell>
+          </PlatformPoliciesControllerProvider>
+        </MemoryRouter>,
+      );
       mocks.authorizationContext = { issuer: 'https://broker.test', actorId: 'actor-1' };
-      view.rerender(<MemoryRouter initialEntries={['/overview']}><RetainedShell><p>Page</p></RetainedShell></MemoryRouter>);
+      view.rerender(
+        <MemoryRouter initialEntries={['/overview']}>
+          <PlatformPoliciesControllerProvider>
+            <RetainedShell><p>Page</p></RetainedShell>
+          </PlatformPoliciesControllerProvider>
+        </MemoryRouter>,
+      );
 
       expect(screen.queryByRole('heading', { name: 'AI access' })).toBeNull();
     } finally {

@@ -46,6 +46,7 @@ flowchart LR
   chief --> newchat[New chat]
   chief --> conversations[My conversations]
   overview --> projects[Projects]
+  overview --> policies[Platform Policies]
   overview --> sessions[Sessions]
   overview --> attention[Needs attention]
   bell[Notification bell] --> attention
@@ -192,6 +193,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Settings > Danger zone | Archive and restore. | Project delete: `DELETE /api/v1/projects/{projectId}`. |
 | Account settings | The 0.x description, an **Authentication** summary with the sign-in method and your name, **Sign out**, and the **GitHub Repo App** connection. | Account AI access. |
 | Platform settings | The web app version and build commit, and all 16 platform component areas with owner, readiness, and the active and available implementations with their versions. | BYOK providers, platform-default Copilot status, account AI access. |
+| Platform Policies | Authorized saved snapshot history and revision source, gated by the Platform Policy history read for the confirmed tenant. | Policy editing, approval, and runtime enforcement status. |
 | Board | Run counts from the same project metrics as Dashboard, plus **Open runs**, **Human review**, **Problems**, and paged **Run history**. **Refresh** reloads the backlog, run counts, and all four run lists. The backlog also has **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, queue order, drag and drop within or between Backlog and Ready, send all to Ready, archive, prerequisite controls, and a revision-checked **Delete task** confirmation for eligible tasks. Known dependents and repository-issue links disable delete with an explanation. The Board can preview and explicitly promote a confirmed work plan. | Automatic pickup settings remain unavailable until v1 has a scheduler. File decomposition is not available; work-plan promotion does not read local files or create a plan. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
 | Workflows | **Active workflow** and grouped **Referenced workflows** rich-list cards, with **View blueprints** inline assignments. **Use platform default** clears a saved default; **Refresh** and **Open Project settings** work. | Workflow catalog and definitions, validity, graph, edit, run, generate, sync, schedule and event triggers, and choosing a different workflow as the default. |

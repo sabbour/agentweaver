@@ -1,5 +1,12 @@
 import { gatewayBaseUrl } from './config';
 import { isProjectAuthorizationContextResponse, isRemoteMcpConnectionDirectoryPage } from './contracts';
+import {
+  PLATFORM_POLICY_HISTORY_PAGE_SIZE,
+  PLATFORM_POLICY_MAX_CURSOR_LENGTH,
+  PLATFORM_POLICY_MAX_HTTP_BYTES,
+  parsePlatformPolicyRevisionPage,
+  parsePlatformPolicyRevisionReadResult,
+} from './platformPolicyContracts';
 import type {
   AgentSuiteAgentPolicy,
   AgentSuiteExport,
@@ -129,6 +136,10 @@ import type {
   UsageRunTotals,
   VersionedProjectConfiguration,
 } from './contracts';
+import type {
+  PlatformPolicyRevisionPage,
+  PlatformPolicyRevisionReadResult,
+} from './platformPolicyContracts';
 
 /** HTTP error returned by a Gateway request, including the parsed problem payload. */
 export class GatewayError extends Error {
@@ -332,6 +343,84 @@ export class AgentweaverGatewayClient {
     return await response.json() as T;
   }
 
+  private async requestPlatformPolicy<T>(
+    token: string,
+    path: string,
+    tenantSelector: string,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (!token)
+      throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
+    if (!tenantSelector ||
+        tenantSelector.length > 256 ||
+        /[\r\n]/.test(tenantSelector) ||
+        tenantSelector.trim() !== tenantSelector)
+      throw new GatewayError(400, { code: 'tenant_selector_required' }, 'Choose a tenant before reading Platform Policies.');
+
+    const headers = new Headers({
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'X-Agentweaver-Tenant': tenantSelector,
+    });
+    const response = await this.fetcher.call(globalThis, `${this.baseUrl}${path}`, {
+      headers,
+      signal,
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+    if (!response.ok)
+      throw new GatewayError(response.status, { code: 'platform_policy_request_failed' },
+        response.status === 403
+          ? 'Platform Policy access was denied.'
+          : 'Platform Policy data could not be loaded.');
+    if (response.status === 204)
+      throw new GatewayError(502, { code: 'platform_policy_response_invalid' },
+        'Platform Policy data could not be loaded.');
+
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > PLATFORM_POLICY_MAX_HTTP_BYTES) {
+      await response.body?.cancel();
+      throw new GatewayError(502, { code: 'platform_policy_response_too_large' },
+        'Platform Policy data could not be loaded.');
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalLength = 0;
+    if (response.body) {
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          totalLength += value.byteLength;
+          if (totalLength > PLATFORM_POLICY_MAX_HTTP_BYTES) {
+            await reader.cancel();
+            throw new GatewayError(502, { code: 'platform_policy_response_too_large' },
+              'Platform Policy data could not be loaded.');
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+
+    const bytes = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    } catch {
+      throw new GatewayError(502, { code: 'platform_policy_response_invalid' },
+        'Platform Policy data could not be loaded.');
+    }
+    return body as T;
+  }
+
   /** Sends a Copilot BFF request only through this portal's HTTPS origin. */
   private async requestCopilot<T>(
     token: string,
@@ -401,11 +490,12 @@ export class AgentweaverGatewayClient {
   async getAuthorizationContext(
     token: string,
     tenantSelector?: string | null,
+    signal?: AbortSignal,
   ): Promise<ProjectAuthorizationContextResponse> {
     const context = await this.request<unknown>(
       token,
       '/authorization/context',
-      {},
+      { signal },
       this.baseUrl,
       tenantSelector,
     );
@@ -2432,6 +2522,55 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+  }
+
+  async getPlatformPolicyRevisionHistory(
+    token: string,
+    tenantSelector: string,
+    options: { cursor?: string | null; pageSize?: number; signal?: AbortSignal } = {},
+  ): Promise<PlatformPolicyRevisionPage> {
+    const pageSize = options.pageSize ?? PLATFORM_POLICY_HISTORY_PAGE_SIZE;
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100 ||
+        (options.cursor !== undefined && options.cursor !== null &&
+          (options.cursor.length === 0 || options.cursor.length > PLATFORM_POLICY_MAX_CURSOR_LENGTH)))
+      throw new GatewayError(400, { code: 'platform_policy_history_request_invalid' },
+        'Platform Policy history could not be loaded.');
+
+    const query = new URLSearchParams({ pageSize: String(pageSize) });
+    if (options.cursor) query.set('cursor', options.cursor);
+    const value = await this.requestPlatformPolicy<unknown>(
+      token,
+      `/policies/platform/revisions?${query.toString()}`,
+      tenantSelector,
+      options.signal,
+    );
+    const page = parsePlatformPolicyRevisionPage(value);
+    if (!page)
+      throw new GatewayError(502, { code: 'platform_policy_response_invalid' },
+        'Platform Policy data could not be loaded.');
+    return page;
+  }
+
+  async readPlatformPolicyRevision(
+    token: string,
+    revision: number,
+    tenantSelector: string,
+    signal?: AbortSignal,
+  ): Promise<PlatformPolicyRevisionReadResult> {
+    if (!Number.isSafeInteger(revision) || revision < 1)
+      throw new GatewayError(400, { code: 'platform_policy_revision_invalid' },
+        'The selected Platform Policy revision is unavailable.');
+    const value = await this.requestPlatformPolicy<unknown>(
+      token,
+      `/policies/platform/revisions/${revision}`,
+      tenantSelector,
+      signal,
+    );
+    const result = parsePlatformPolicyRevisionReadResult(value);
+    if (!result)
+      throw new GatewayError(502, { code: 'platform_policy_response_invalid' },
+        'Platform Policy data could not be loaded.');
+    return result;
   }
 
   /**
