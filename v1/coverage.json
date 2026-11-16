@@ -1,14 +1,14 @@
 {
-  "sha": "834acf5461d50f8864f4d42ab8592f98e98629ed",
+  "sha": "419490bc44e97bdf91cddfe7b0bfb6d33cdd492c",
   "ref": "v1",
-  "runUrl": "https://github.com/sabbour/agentweaver/actions/runs/39459165856",
-  "artifact": "v1-coverage-834acf5461d50f8864f4d42ab8592f98e98629ed-1",
-  "measuredAt": "2026-10-20T19:52:24.735Z",
+  "runUrl": "https://github.com/sabbour/agentweaver/actions/runs/43874879034",
+  "artifact": "v1-coverage-419490bc44e97bdf91cddfe7b0bfb6d33cdd492c-1",
+  "measuredAt": "2026-11-16T13:38:02.549Z",
   "surfaces": {
     "dotnet": {
-      "covered": 104913,
-      "total": 126543,
-      "pct": 82.9,
+      "covered": 185591,
+      "total": 219610,
+      "pct": 84.5,
       "gaps": [
         {
           "name": "Agentweaver.AgentHost: Agentweaver.AgentHost.BuildTestOutputCollectorProgram",
@@ -18,116 +18,116 @@
           "missed": 674
         },
         {
-          "name": "Agentweaver.Projects.Config: Agentweaver.Projects.Config.SkillMarketplaceEndpoints",
+          "name": "Agentweaver.Projects.Config: Program",
           "covered": 0,
-          "total": 334,
+          "total": 276,
           "pct": 0,
-          "missed": 334
+          "missed": 276
         },
         {
           "name": "Agentweaver.Knowledge: Agentweaver.Knowledge.CosmosMemoryDocumentStore",
           "covered": 0,
-          "total": 265,
+          "total": 268,
           "pct": 0,
-          "missed": 265
-        },
-        {
-          "name": "Agentweaver.Projects.Config: Program",
-          "covered": 0,
-          "total": 195,
-          "pct": 0,
-          "missed": 195
+          "missed": 268
         },
         {
           "name": "Agentweaver.Knowledge: Program",
           "covered": 0,
-          "total": 183,
+          "total": 199,
           "pct": 0,
-          "missed": 183
+          "missed": 199
+        },
+        {
+          "name": "Agentweaver.Abstractions: Agentweaver.Abstractions.GeneratedApplicationPublicationSourceBinding",
+          "covered": 0,
+          "total": 170,
+          "pct": 0,
+          "missed": 170
         }
       ]
     },
     "web": {
-      "covered": 2189,
-      "total": 2892,
-      "pct": 75.6,
+      "covered": 6555,
+      "total": 7600,
+      "pct": 86.2,
       "gaps": [
         {
-          "name": "apps/web/src/v1/contracts.ts",
-          "covered": 15,
-          "total": 30,
-          "pct": 50,
-          "missed": 15
-        },
-        {
-          "name": "apps/web/src/v1/App.tsx",
-          "covered": 876,
-          "total": 1238,
-          "pct": 70.7,
-          "missed": 362
+          "name": "apps/web/src/v1/ProjectSettingsSections.tsx",
+          "covered": 1,
+          "total": 59,
+          "pct": 1.6,
+          "missed": 58
         },
         {
           "name": "apps/web/src/v1/api.ts",
-          "covered": 113,
-          "total": 158,
-          "pct": 71.5,
-          "missed": 45
+          "covered": 310,
+          "total": 414,
+          "pct": 74.8,
+          "missed": 104
         },
         {
           "name": "apps/web/src/v1/SkillsMarketplacePanel.tsx",
-          "covered": 342,
-          "total": 477,
-          "pct": 71.6,
-          "missed": 135
+          "covered": 517,
+          "total": 674,
+          "pct": 76.7,
+          "missed": 157
         },
         {
-          "name": "apps/web/src/v1/CopilotUserConnectionPanel.tsx",
-          "covered": 190,
-          "total": 242,
-          "pct": 78.5,
-          "missed": 52
+          "name": "apps/web/src/v1/App.tsx",
+          "covered": 1269,
+          "total": 1572,
+          "pct": 80.7,
+          "missed": 303
+        },
+        {
+          "name": "apps/web/src/v1/chiefOfStaff.ts",
+          "covered": 80,
+          "total": 97,
+          "pct": 82.4,
+          "missed": 17
         }
       ]
     },
     "node": {
-      "covered": 8938,
-      "total": 10119,
-      "pct": 88.3,
+      "covered": 5339,
+      "total": 6003,
+      "pct": 88.9,
       "gaps": [
         {
-          "name": "scripts/release/merge-packs.mjs",
-          "covered": 186,
-          "total": 244,
-          "pct": 76.2,
-          "missed": 58
+          "name": "scripts/release/measure-agenthost-image.mjs",
+          "covered": 80,
+          "total": 156,
+          "pct": 51.2,
+          "missed": 76
         },
         {
-          "name": "scripts/release/publication-selection.mjs",
-          "covered": 59,
-          "total": 72,
-          "pct": 81.9,
-          "missed": 13
+          "name": "scripts/release/preparation.mjs",
+          "covered": 145,
+          "total": 239,
+          "pct": 60.6,
+          "missed": 94
         },
         {
-          "name": "scripts/release/publish.mjs",
-          "covered": 661,
-          "total": 796,
-          "pct": 83,
-          "missed": 135
+          "name": "scripts/release/runtime-list.mjs",
+          "covered": 354,
+          "total": 469,
+          "pct": 75.4,
+          "missed": 115
         },
         {
-          "name": "scripts/release/kustomize-runtime.mjs",
-          "covered": 59,
-          "total": 71,
-          "pct": 83,
-          "missed": 12
+          "name": "scripts/release/registry.mjs",
+          "covered": 335,
+          "total": 381,
+          "pct": 87.9,
+          "missed": 46
         },
         {
-          "name": "scripts/release/plan.mjs",
-          "covered": 174,
-          "total": 209,
-          "pct": 83.2,
-          "missed": 35
+          "name": "scripts/release/changesets.mjs",
+          "covered": 396,
+          "total": 444,
+          "pct": 89.1,
+          "missed": 48
         }
       ]
     }
