@@ -11,7 +11,7 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed class ProjectsConfigModelSnapshotTests
 {
     [Fact]
-    public void GovernanceDecisionMigrationTargetMatchesCurrentSnapshot()
+    public void LatestMigrationTargetMatchesCurrentSnapshot()
     {
         var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql("Host=localhost;Database=projects_config_model")
@@ -21,7 +21,7 @@ public sealed class ProjectsConfigModelSnapshotTests
         Assert.False(db.Database.HasPendingModelChanges());
 
         var snapshot = db.GetService<IMigrationsAssembly>().ModelSnapshot!.Model;
-        var target = new AddProjectGovernanceDecisionChains().TargetModel;
+        var target = new VerifyRuntimeRateCardAvailability().TargetModel;
         var differ = db.GetService<IMigrationsModelDiffer>();
         var runtimeInitializer = db.GetService<IModelRuntimeInitializer>();
         snapshot = runtimeInitializer.Initialize(snapshot, designTime: true);
