@@ -2,13 +2,14 @@ using System.Security.Cryptography;
 using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
 internal static class RuntimeRateCardOwnerReadEndpoint
 {
-    internal const string Route = "/internal/runtime-rate-cards/{id}/{version}";
+    internal const string Route = "/internal/runtime-rate-cards";
 
     internal static IEndpointRouteBuilder MapRuntimeRateCardOwnerRead(
         this IEndpointRouteBuilder endpoints,
@@ -19,8 +20,8 @@ internal static class RuntimeRateCardOwnerReadEndpoint
 
         endpoints.MapGet(Route, async (
                 HttpContext context,
-                string id,
-                string version,
+                [FromQuery] string id,
+                [FromQuery] string version,
                 RuntimeRateCardStore store,
                 CancellationToken cancellationToken) =>
             {

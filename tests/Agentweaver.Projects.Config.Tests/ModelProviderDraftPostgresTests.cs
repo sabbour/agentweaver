@@ -416,6 +416,63 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task FailedCredentialRotationMovesAvailableProviderBackToDraftAndReplaysTheResult()
+    {
+        await using var db = CreateDbContext();
+        var providerId = "rate-card-rotation-" + Guid.NewGuid().ToString("N");
+        const string actorId = "broker-agent";
+        const string cardId = "manual:azure-card";
+        const string cardVersion = "opaque:2026-11-10";
+        await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
+        var owner = new RuntimeRateCardTestClient(true, false);
+        var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
+        var initialRequest = new ModelProviderCredentialPublicationRequest(
+            Guid.NewGuid(),
+            1,
+            ModelProviderBindingScope.Platform,
+            null,
+            providerId,
+            "0123456789abcdef0123456789abcdef");
+
+        var initialReceipt = await service.PublishCredentialAsync(initialRequest, actorId, CancellationToken.None);
+        Assert.Equal(2, initialReceipt.ProviderRevision);
+        Assert.Equal(
+            ModelProviderDraftState.Available,
+            await db.ModelProviderDrafts.AsNoTracking()
+                .Where(head => head.ProviderId == providerId)
+                .Select(head => head.State)
+                .SingleAsync());
+
+        var rotationRequest = initialRequest with
+        {
+            OperationId = Guid.NewGuid(),
+            ExpectedProviderRevision = initialReceipt.ProviderRevision,
+            CredentialVersion = "fedcba9876543210fedcba9876543210",
+        };
+        var rotationReceipt = await service.PublishCredentialAsync(rotationRequest, actorId, CancellationToken.None);
+
+        Assert.Equal(3, rotationReceipt.ProviderRevision);
+        Assert.Equal(rotationRequest.CredentialVersion, rotationReceipt.CredentialVersion);
+        Assert.Equal(
+            ModelProviderDraftState.Draft,
+            await db.ModelProviderDrafts.AsNoTracking()
+                .Where(head => head.ProviderId == providerId)
+                .Select(head => head.State)
+                .SingleAsync());
+
+        var replay = await service.PublishCredentialAsync(rotationRequest, actorId, CancellationToken.None);
+        Assert.Equal(rotationReceipt, replay);
+        Assert.Equal(2, owner.Requests.Count);
+        Assert.Equal(3, await db.ModelProviderDraftRevisions.CountAsync(item => item.ProviderId == providerId));
+        Assert.Equal(
+            ModelProviderDraftState.Draft,
+            await db.ModelProviderDrafts.AsNoTracking()
+                .Where(head => head.ProviderId == providerId)
+                .Select(head => head.State)
+                .SingleAsync());
+    }
+
+    [Fact]
     public async Task CredentialPublicationWithoutSavedRateCardStaysDraft()
     {
         await using var db = CreateDbContext();

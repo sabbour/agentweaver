@@ -235,11 +235,12 @@ builder.Services.AddScoped<ISkillAssignmentService>(services => services.GetRequ
 builder.Services.AddSingleton(TimeProvider.System);
 // Platform component owners are optional; unconfigured owners are reported as unknown.
 builder.Services.AddPlatformComponentCollector(builder.Configuration);
-builder.Services.AddHttpClient<IRuntimeRateCardOwnerClient, RuntimeRateCardOwnerClient>(client =>
+builder.Services.AddHttpClient(RuntimeRateCardOwnerClient.HttpClientName, client =>
         client.Timeout = Timeout.InfiniteTimeSpan)
     .RedactLoggedHeaders(["Authorization"])
     .ConfigurePrimaryHttpMessageHandler(
         Agentweaver.Identity.RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+builder.Services.AddScoped<IRuntimeRateCardOwnerClient, RuntimeRateCardOwnerClient>();
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
 

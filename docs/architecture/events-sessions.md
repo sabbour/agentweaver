@@ -211,7 +211,7 @@ The lookup does not save cards or fetch prices at startup. The configured Azure
 Cost provider and immutable card store remain separate.
 
 The private
-`GET /internal/runtime-rate-cards/{id}/{version}` route serves an exact stored
+`GET /internal/runtime-rate-cards?id={id}&version={version}` route serves an exact stored
 card to Projects. It is mapped only when Events service-token authentication is
 configured. The shared policy requires the configured Projects workload
 subject. The response contains the canonical card and provenance, a strong

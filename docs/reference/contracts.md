@@ -235,7 +235,7 @@ Projects requires an existing provider at `expectedProviderRevision`.
 It appends a revision that copies the current metadata, configuration hash, and
 rate-card references, then sets `credentialVersion`. Before the transaction,
 Projects reads the stored rate-card ID and opaque version through Events'
-private `GET /internal/runtime-rate-cards/{id}/{version}` route. The route
+private `GET /internal/runtime-rate-cards?id={id}&version={version}` route. The route
 requires the exact configured Projects workload subject and returns the
 canonical card and provenance with a strong ETag: the quoted lowercase
 SHA-256 of the response bytes. Projects checks the ETag, canonical bytes,

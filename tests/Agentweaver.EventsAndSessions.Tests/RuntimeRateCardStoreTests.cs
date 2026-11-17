@@ -60,7 +60,7 @@ public sealed class RuntimeRateCardStoreTests : IAsyncLifetime
     [Fact]
     public async Task OwnerReadRequiresProjectsIdentityAndReturnsCanonicalCardWithStrongEtag()
     {
-        var card = ManualCard(id: "owner-read-card");
+        var card = ManualCard(id: ".", version: "..");
         await _store.SaveAsync(card);
         var authentication = new PlatformComponentServiceAuthenticationOptions(
             new Uri("https://issuer.example/"),
@@ -94,7 +94,9 @@ public sealed class RuntimeRateCardStoreTests : IAsyncLifetime
             })
             .StartAsync();
         using var client = host.GetTestClient();
-        var path = $"{RuntimeRateCardOwnerReadEndpoint.Route.Replace("{id}/{version}", $"{card.RateCard.Id}/{card.RateCard.Version}", StringComparison.Ordinal)}";
+        var path =
+            $"{RuntimeRateCardOwnerReadEndpoint.Route}?id={Uri.EscapeDataString(card.RateCard.Id)}" +
+            $"&version={Uri.EscapeDataString(card.RateCard.Version)}";
 
         using (var request = new HttpRequestMessage(HttpMethod.Get, path))
         using (var response = await client.SendAsync(request))
@@ -264,11 +266,12 @@ public sealed class RuntimeRateCardStoreTests : IAsyncLifetime
 
     private static RuntimeRateCard ManualCard(
         string id = "manual-azure-card",
-        decimal inputRate = 1.25m) =>
+        decimal inputRate = 1.25m,
+        string version = "2026-11-10") =>
         new(
             new CostRateCard(
                 id,
-                "2026-11-10",
+                version,
                 AzureCostProvider.MeterSource,
                 "USD",
                 AzureCostProviderOptions.TokensPerRateUnit,

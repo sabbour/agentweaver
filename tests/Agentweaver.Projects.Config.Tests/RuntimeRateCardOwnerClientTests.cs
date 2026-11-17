@@ -13,19 +13,68 @@ public sealed class RuntimeRateCardOwnerClientTests
     private const string Version = "2026-11-10";
 
     [Fact]
-    public async Task VerifiesCanonicalCardWithStrongHashAndEscapedKeySegments()
+    public async Task VerifiesCanonicalCardWithStrongHashAndEncodedQueryKey()
     {
         var payload = Canonical(ManualCard(CardId, Version));
-        var observedPath = string.Empty;
+        var observedPathAndQuery = string.Empty;
         using var httpClient = new HttpClient(new DelegateHandler((request, _) =>
         {
-            observedPath = request.RequestUri!.OriginalString;
+            observedPathAndQuery = request.RequestUri!.PathAndQuery;
             return Task.FromResult(Response(payload, StrongTag(payload)));
         }));
         var client = CreateClient(httpClient);
 
         Assert.True(await client.VerifyAsync(CardId, Version, CancellationToken.None));
-        Assert.Contains("/manual%3Aazure-card/2026-11-10", observedPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            "/internal/runtime-rate-cards?id=manual%3Aazure-card&version=2026-11-10",
+            observedPathAndQuery);
+    }
+
+    [Fact]
+    public async Task PreservesDotOnlyIdentifiersInOwnerReadQuery()
+    {
+        var payload = Canonical(ManualCard(".", ".."));
+        var observedPathAndQuery = string.Empty;
+        using var httpClient = new HttpClient(new DelegateHandler((request, _) =>
+        {
+            observedPathAndQuery = request.RequestUri!.PathAndQuery;
+            return Task.FromResult(Response(payload, StrongTag(payload)));
+        }));
+        var client = CreateClient(httpClient);
+
+        Assert.True(await client.VerifyAsync(".", "..", CancellationToken.None));
+        Assert.Equal("/internal/runtime-rate-cards?id=.&version=..", observedPathAndQuery);
+    }
+
+    [Fact]
+    public async Task CreatesEventsHttpClientOnlyWhenConfiguredAndInsideTheFailureBoundary()
+    {
+        var factory = new DelegateClientFactory(_ =>
+            throw new InvalidOperationException("The service backend CA ConfigMap is required."));
+        var tokenReader = new Func<CancellationToken, Task<string?>>(_ =>
+            Task.FromResult<string?>("projects-token"));
+        var unconfigured = new RuntimeRateCardOwnerClient(
+            factory,
+            new PlatformComponentCollectorOptions("token", new Dictionary<string, Uri>()),
+            tokenReader,
+            TimeSpan.FromSeconds(1));
+
+        Assert.False(await unconfigured.VerifyAsync(CardId, Version, CancellationToken.None));
+        Assert.Equal(0, factory.CreatedCount);
+
+        var configured = new RuntimeRateCardOwnerClient(
+            factory,
+            new PlatformComponentCollectorOptions(
+                "token",
+                new Dictionary<string, Uri>(StringComparer.Ordinal)
+                {
+                    [PlatformComponentOwners.EventsAndSessions] = new("https://events.example/"),
+                }),
+            tokenReader,
+            TimeSpan.FromSeconds(1));
+
+        Assert.False(await configured.VerifyAsync(CardId, Version, CancellationToken.None));
+        Assert.Equal(1, factory.CreatedCount);
     }
 
     [Fact]
@@ -105,6 +154,17 @@ public sealed class RuntimeRateCardOwnerClientTests
             options,
             _ => Task.FromResult<string?>("projects-token"),
             timeout ?? TimeSpan.FromSeconds(1));
+    }
+
+    private sealed class DelegateClientFactory(Func<string, HttpClient> create) : IHttpClientFactory
+    {
+        public int CreatedCount { get; private set; }
+
+        public HttpClient CreateClient(string name)
+        {
+            CreatedCount++;
+            return create(name);
+        }
     }
 
     private static string Canonical(RuntimeRateCardReadResponse response) =>
