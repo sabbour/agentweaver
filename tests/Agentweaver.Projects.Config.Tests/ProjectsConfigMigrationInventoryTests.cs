@@ -55,6 +55,8 @@ public sealed class ProjectsConfigMigrationInventoryTests(
         Assert.Contains("20261026183946_039_LinkProjectSetupAuthorityAuditInvocation", migrationIds);
         Assert.Contains("20261111093300_AddModelProviderDrafts", migrationIds);
         Assert.Contains("20261111192724_AddNativeAcsPolicyStorage", migrationIds);
+        Assert.Contains("20261113221434_EnforceOneNativeAcsPolicyHeadPerScope", migrationIds);
+        Assert.Contains("20261117115706_PersistPlatformPolicyPreparations", migrationIds);
         Assert.True(migrationIds.IndexOf("20261023201615_AddHostedModelReasoningCatalogAfterCasting") >
             migrationIds.IndexOf("20261023165553_AddCastingGenerationRequests"));
         Assert.True(migrationIds.IndexOf("20261026183946_039_LinkProjectSetupAuthorityAuditInvocation") >
@@ -63,6 +65,8 @@ public sealed class ProjectsConfigMigrationInventoryTests(
             migrationIds.IndexOf("20261026183946_039_LinkProjectSetupAuthorityAuditInvocation"));
         Assert.True(migrationIds.IndexOf("20261111192724_AddNativeAcsPolicyStorage") >
             migrationIds.IndexOf("20261111093300_AddModelProviderDrafts"));
+        Assert.True(migrationIds.IndexOf("20261117115706_PersistPlatformPolicyPreparations") >
+            migrationIds.IndexOf("20261113221434_EnforceOneNativeAcsPolicyHeadPerScope"));
         Assert.All(migrationIds, migrationId => Assert.Contains('_', migrationId));
     }
 }

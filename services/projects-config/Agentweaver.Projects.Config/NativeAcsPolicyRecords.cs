@@ -29,6 +29,20 @@ public sealed record NativeAcsPolicyWriteReceipt(
     Guid OutboxId,
     bool Replayed);
 
+public sealed record NativeAcsPolicyPreparationReceipt(
+    Guid PreparationId,
+    NativeAcsPolicyScopeType ScopeType,
+    string ScopeId,
+    string PolicyId,
+    string? ExpectedHeadPolicyId,
+    long? ExpectedHeadRevision,
+    string? ExpectedHeadContentSha256,
+    string ProposedContentSha256,
+    string State,
+    string? Checkpoint,
+    DateTimeOffset CreatedAt,
+    bool Replayed);
+
 public sealed record NativeAcsPolicyReadResult(
     NativeAcsPolicyScopeType ScopeType,
     string ScopeId,
@@ -68,6 +82,31 @@ public sealed class NativeAcsPolicyHeadRecord
     public long CurrentRevision { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class NativeAcsPolicyPreparationRecord
+{
+    public Guid PreparationId { get; set; }
+    public required string ScopeDigest { get; set; }
+    public NativeAcsPolicyScopeType ScopeType { get; set; }
+    public required string ScopeId { get; set; }
+    public required string PolicyId { get; set; }
+    public required string ActorIssuer { get; set; }
+    public required string ActorId { get; set; }
+    public Guid MembershipId { get; set; }
+    public long MembershipRevision { get; set; }
+    public Guid RoleAssignmentId { get; set; }
+    public long RoleAssignmentRevision { get; set; }
+    public required string IdempotencyKey { get; set; }
+    public required string RequestDigest { get; set; }
+    public string? ExpectedHeadPolicyId { get; set; }
+    public long? ExpectedHeadRevision { get; set; }
+    public string? ExpectedHeadContentSha256 { get; set; }
+    public required string ProposedContentSha256 { get; set; }
+    public required string ArtifactJson { get; set; }
+    public required string Reason { get; set; }
+    public required string CorrelationId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 public sealed class NativeAcsPolicyRevisionRecord

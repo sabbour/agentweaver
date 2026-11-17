@@ -35,6 +35,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<HostedModelReasoningCatalogRecord> HostedModelReasoningCatalog =>
         Set<HostedModelReasoningCatalogRecord>();
     public DbSet<NativeAcsPolicyHeadRecord> NativeAcsPolicyHeads => Set<NativeAcsPolicyHeadRecord>();
+    public DbSet<NativeAcsPolicyPreparationRecord> NativeAcsPolicyPreparations =>
+        Set<NativeAcsPolicyPreparationRecord>();
     public DbSet<NativeAcsPolicyRevisionRecord> NativeAcsPolicyRevisions =>
         Set<NativeAcsPolicyRevisionRecord>();
     public DbSet<NativeAcsPolicyArtifactFileRecord> NativeAcsPolicyArtifactFiles =>
@@ -757,6 +759,58 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(head => head.CurrentRevision).HasColumnName("current_revision").IsConcurrencyToken();
             entity.Property(head => head.CreatedAt).HasColumnName("created_at");
             entity.Property(head => head.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<NativeAcsPolicyPreparationRecord>(entity =>
+        {
+            entity.ToTable("native_acs_policy_preparations", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_preparations_scope",
+                    "scope_type = 'Platform' AND scope_id = 'default'");
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_preparations_hashes",
+                    "scope_digest ~ '^[0-9a-f]{64}$' AND request_digest ~ '^[0-9a-f]{64}$' " +
+                    "AND proposed_content_sha256 ~ '^[0-9a-f]{64}$' AND " +
+                    "(expected_head_content_sha256 IS NULL OR expected_head_content_sha256 ~ '^[0-9a-f]{64}$')");
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_preparations_expected_head",
+                    "(expected_head_policy_id IS NULL AND expected_head_revision IS NULL AND " +
+                    "expected_head_content_sha256 IS NULL) OR " +
+                    "(expected_head_policy_id IS NOT NULL AND expected_head_revision > 0 AND " +
+                    "expected_head_content_sha256 IS NOT NULL)");
+            });
+            entity.HasKey(preparation => preparation.PreparationId);
+            entity.HasIndex(preparation => preparation.ScopeDigest)
+                .IsUnique()
+                .HasDatabaseName("ux_native_acs_policy_preparations_scope_digest");
+            entity.Property(preparation => preparation.PreparationId).HasColumnName("preparation_id");
+            entity.Property(preparation => preparation.ScopeDigest).HasColumnName("scope_digest").HasMaxLength(64);
+            entity.Property(preparation => preparation.ScopeType)
+                .HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(preparation => preparation.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(preparation => preparation.PolicyId).HasColumnName("policy_id").HasMaxLength(128);
+            entity.Property(preparation => preparation.ActorIssuer).HasColumnName("actor_issuer").HasMaxLength(512);
+            entity.Property(preparation => preparation.ActorId).HasColumnName("actor_id").HasMaxLength(256);
+            entity.Property(preparation => preparation.MembershipId).HasColumnName("membership_id");
+            entity.Property(preparation => preparation.MembershipRevision).HasColumnName("membership_revision");
+            entity.Property(preparation => preparation.RoleAssignmentId).HasColumnName("role_assignment_id");
+            entity.Property(preparation => preparation.RoleAssignmentRevision).HasColumnName("role_assignment_revision");
+            entity.Property(preparation => preparation.IdempotencyKey)
+                .HasColumnName("idempotency_key").HasMaxLength(128);
+            entity.Property(preparation => preparation.RequestDigest).HasColumnName("request_digest").HasMaxLength(64);
+            entity.Property(preparation => preparation.ExpectedHeadPolicyId)
+                .HasColumnName("expected_head_policy_id").HasMaxLength(128);
+            entity.Property(preparation => preparation.ExpectedHeadRevision).HasColumnName("expected_head_revision");
+            entity.Property(preparation => preparation.ExpectedHeadContentSha256)
+                .HasColumnName("expected_head_content_sha256").HasMaxLength(64);
+            entity.Property(preparation => preparation.ProposedContentSha256)
+                .HasColumnName("proposed_content_sha256").HasMaxLength(64);
+            entity.Property(preparation => preparation.ArtifactJson).HasColumnName("artifact").HasColumnType("jsonb");
+            entity.Property(preparation => preparation.Reason).HasColumnName("reason").HasMaxLength(1024);
+            entity.Property(preparation => preparation.CorrelationId)
+                .HasColumnName("correlation_id").HasMaxLength(128);
+            entity.Property(preparation => preparation.CreatedAt).HasColumnName("created_at");
         });
 
         modelBuilder.Entity<NativeAcsPolicyRevisionRecord>(entity =>

@@ -207,8 +207,12 @@ dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.
 ```
 
 These controlled tests use disposable PostgreSQL. They check the source API and
-database state; they do not call a live API, activate policy, or prove that a
-deployed image contains the pinned ACS assets.
+database state. They check preparation persistence and replay, duplicate
+requests, stale heads, revoked authority, rollback, and unchanged canonical
+state. The private source test stages a preparation and confirms that the
+source still returns only the committed artifact with pending/null admission.
+These tests do not install a provider barrier or admit a policy. They do not
+call a live API or prove that a deployed image contains the pinned ACS assets.
 
 ### Test the private Environment Policy source
 

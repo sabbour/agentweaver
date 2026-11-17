@@ -230,6 +230,10 @@ public static class NativeAcsPolicyEndpoints
                     .ConfigureAwait(false);
                 if (replay is not null)
                     return Results.Ok(replay);
+                var preparationReplay = await policyStore.FindPreparationReplayAsync(
+                    caller, writeRequest, cancellationToken).ConfigureAwait(false);
+                if (preparationReplay is not null)
+                    return Results.Ok(preparationReplay);
                 if (!configuration.GetValue<bool>(HeadWritesEnabledSetting))
                     return Results.Problem(
                         title: "native_acs_policy_writes_unavailable",
@@ -245,7 +249,7 @@ public static class NativeAcsPolicyEndpoints
                 var error = ValidateArtifact(validator, requestGate, request.Artifact, context, out _);
                 if (error is not null)
                     return error;
-                var receipt = await policyStore.WriteAsync(caller, writeRequest, cancellationToken)
+                var receipt = await policyStore.PrepareAsync(caller, writeRequest, cancellationToken)
                     .ConfigureAwait(false);
                 return Results.Ok(receipt);
             }

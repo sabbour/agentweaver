@@ -3172,6 +3172,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 $"GRANT SELECT, INSERT, UPDATE ON projects_config.model_providers TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.model_provider_revisions TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");
 
             var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
             {

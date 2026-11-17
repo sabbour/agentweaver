@@ -11,6 +11,19 @@ are separate from compiling egress.
 
 ## Platform egress snapshot compiler
 
+The Platform Policy write gate is disabled by default. When
+`NativeAcsPolicy:HeadWritesEnabled` is true, `PUT /api/policies/platform`
+validates the artifact and stores an immutable preparation. Its receipt has
+`state: "pending"` and `checkpoint: null`. The preparation stores the expected
+head identity, revision and hash, plus the complete proposed artifact. It does
+not change the canonical head, revision history, audit log or outbox.
+
+The private Environment source reads only the committed canonical artifact. It
+does not return preparations. An exact retry returns the saved preparation
+after Projects checks current authority and the expected head. If the head has
+moved, submit a new request with a new idempotency key. A preparation does not
+grant permission, admit a policy, start a worker or change provider policy.
+
 The Environment source client reads the private Projects route only when code
 calls it. The client validates the pinned TLS peer, response bounds, pending
 admission, and complete artifact hash. `CompileCandidate` validates the fixed
@@ -39,13 +52,20 @@ approve an artifact.
 
 ```mermaid
 sequenceDiagram
+    participant Admin as Platform administrator
+    participant Projects as Projects & Config
     participant Caller as Internal Environment code
     participant Client as Policy source client
-    participant Projects as Projects private source
     participant Compiler as Finite-network compiler
+    opt Platform Policy write gate is enabled
+        Admin->>Projects: PUT /api/policies/platform (expected revision, artifact)
+        Projects->>Projects: Check current authority and head; validate artifact
+        Projects->>Projects: Commit pending preparation only
+        Projects-->>Admin: Preparation receipt (pending/null)
+    end
     Caller->>Client: ReadAsync()
     Client->>Projects: GET /internal/policy-source/platform (mTLS)
-    Projects-->>Client: Complete artifact with pending/null admission
+    Projects-->>Client: Committed artifact with pending/null admission
     Client->>Client: Check TLS, bounds, envelope, and artifact hashes
     Client-->>Caller: Pending observation
     Caller->>Compiler: CompileCandidate(artifact, source ID, revision)
@@ -53,14 +73,14 @@ sequenceDiagram
     Caller->>Compiler: CompileSystemOnlyCandidate(artifact, source ID, revision)
     Compiler->>Compiler: Validate the complete original artifact
     Compiler-->>Caller: Allowlist candidate with System destinations or coded failure
-    Note over Client,Compiler: Feature is off by default; enabling it sends no startup request
+    Note over Client,Compiler: Source client is off by default; enabling it sends no startup request
     Note over Caller,Compiler: Candidate compilation has no provider effect
+    Note over Projects,Client: Preparations are not source authority and do not reach providers
 ```
 
-The later Platform Policy admission fence uses the System-only candidate as a
-barrier. It installs that barrier on every affected target before it commits
-the canonical policy head. A provider outage leaves the write uncommitted and
-retryable.
+The System-only candidate is input for the later admission barrier. This flow
+does not install the barrier or admit a policy. A later commit must wait until
+the barrier is installed on every affected target.
 
 The existing provider capability check still requires exact-host support for
 `Allowlist`, and private-range exclusions remain a separate provider safety

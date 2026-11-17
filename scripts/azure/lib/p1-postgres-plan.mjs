@@ -67,7 +67,7 @@ const GROUPS = {
     SELECT: 'tenant_memberships __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -208,6 +208,18 @@ const APPEND_ONLY_GUARDS = {
       },
       {
         trigger: 'native_acs_policy_revisions_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
+    native_acs_policy_preparations: [
+      {
+        trigger: 'native_acs_policy_preparations_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'native_acs_policy_preparations_no_truncate',
         function: 'reject_immutable_record_mutation()', triggerType: 34,
         message: 'records in %.% are immutable', sqlState: '55000',
       },

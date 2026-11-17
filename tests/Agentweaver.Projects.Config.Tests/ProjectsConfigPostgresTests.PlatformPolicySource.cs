@@ -120,6 +120,22 @@ public sealed partial class ProjectsConfigPostgresTests
         var artifact = HistoryArtifact("private policy source " + suffix);
         var receipt = await WritePlatformPolicyAsync(
             caller, artifact, "policy-source-write-" + suffix, "policy-source-correlation-" + suffix);
+        var proposedArtifact = HistoryArtifact("uncommitted preparation " + suffix);
+        var preparation = await CreateNativeAcsStore().PrepareAsync(
+            caller,
+            new NativeAcsPolicyWriteRequest(
+                NativeAcsPolicyScopeType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                receipt.PolicyId,
+                receipt.Revision,
+                proposedArtifact,
+                "policy-source-preparation-" + suffix,
+                "Prepare policy update",
+                "policy-source-preparation-correlation-" + suffix),
+            CancellationToken.None);
+        Assert.Equal("pending", preparation.State);
+        Assert.Null(preparation.Checkpoint);
+        Assert.NotEqual(receipt.ContentSha256, preparation.ProposedContentSha256);
         var expected = await CreateNativeAcsStore().ReadAsync(
             NativeAcsPolicyScopeType.Platform,
             ProjectAuthorizationOwner.PlatformResourceId,

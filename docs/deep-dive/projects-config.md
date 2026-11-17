@@ -63,19 +63,25 @@ do not bootstrap membership.
 ### Store one canonical ACS Policy source
 
 Projects & Config exposes Platform Policy history, exact-revision, current
-read, validation, and compare-and-swap write routes. It uses one head per scope
-and keeps the Policy ID of an existing head. Only an empty scope gets the
-server-owned `canonical` Policy ID. Each artifact contains all policy domains;
-the API does not accept a scope or domain selector from the caller.
+read, validation, and preparation routes. It uses one head per scope and keeps
+the Policy ID of an existing head. Only an empty scope gets the server-owned
+`canonical` Policy ID. Each artifact contains all policy domains; the API does
+not accept a scope or domain selector from the caller.
 
 The read route returns the current artifact only after the store checks its
-content hash. The validation route does not write state. Head writes are off by
-default; the write route returns `503` until `NativeAcsPolicy:HeadWritesEnabled`
-is `true`. A retry of a saved request first gets its receipt, after a current
-authority check and without new validation. An enabled write validates the
-complete artifact before the existing serializable transaction appends the
-revision, idempotency receipt, audit record, and outbox event. The transaction
-rechecks current membership and role revisions before commit. The schema
+content hash. The validation route does not write state. Head writes are off by default. A
+new request returns `503` until `NativeAcsPolicy:HeadWritesEnabled` is `true`.
+Retries of committed writes still return their receipt after a current
+authority check. Preparation retries also check that the expected head is
+current. An enabled write validates the complete artifact, then stores an
+immutable preparation in a serializable transaction. The preparation binds the
+full proposed artifact and its hash to the expected head ID, revision, and
+hash. It has `state: "pending"` and `checkpoint: null`; it does not change the
+canonical head, revision history, committed-write receipt, audit, or outbox.
+The transaction rechecks current membership and role revisions before commit.
+A moved head returns `409`; submit a new request with a new idempotency key.
+The private source route reads only the committed head and returns pending
+admission with a null checkpoint. It does not read preparations. The schema
 enforces one head per scope. If old data has duplicate heads, the migration
 stops and names the affected scopes and policy IDs. It does not select, delete,
 or change a policy record.
