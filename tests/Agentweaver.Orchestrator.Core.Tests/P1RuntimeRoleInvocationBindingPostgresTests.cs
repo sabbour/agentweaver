@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator;
@@ -151,7 +152,10 @@ public sealed class P1RuntimeRoleInvocationBindingPostgresTests(CoordinationPost
     private static string EmbeddedPlanHash()
     {
         using var plan = JsonDocument.Parse(PlannedRuntimeGrants.ReadEmbeddedPlan());
-        var canonical = JsonSerializer.SerializeToUtf8Bytes(plan.RootElement);
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(plan.RootElement, new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
         return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
     }
 
