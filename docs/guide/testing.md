@@ -212,6 +212,23 @@ Config suite with disposable PostgreSQL:
 node scripts\ci\v1-test-plan.mjs run projects-config
 ```
 
+The production-host consumer test enables the source client, confirms that
+startup sends no request, and reads successive pending artifacts through the
+real Projects route. It checks candidate compilation and confirms that the
+Environment host registers no admitted source, provider, or reconciler. Run it
+with the disposable PostgreSQL fixture:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter FullyQualifiedName~ProductionEnvironmentReadsRealPendingSourceWithoutAdmissionOrWorkers
+```
+
+The client and compiler unit tests cover bounded response parsing, TLS
+certificate separation, and candidate output:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --configuration Release --filter "FullyQualifiedName~PlatformPolicySourceHttpClientTests|FullyQualifiedName~PlatformPolicySourceClientCompositionTests|FullyQualifiedName~PlatformEgressAcsCompilerTests"
+```
+
 ## Test project-wide Knowledge discovery
 
 Run the Knowledge service suite to check authorization, existing provider

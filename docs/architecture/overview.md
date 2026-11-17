@@ -22,9 +22,9 @@ permission.
 | --- | --- | --- |
 | Gateway/BFF | Authenticate and route a finite HTTP API for browser and native CLI callers | Approve workflow transitions or select arbitrary upstream URLs |
 | Identity Broker | Sign-in, tokens, purpose-bound grants and credential redemption | Assign project roles |
-| Projects & Config | Current project authority, immutable accepted run selections, revisioned native ACS artifact storage, and the optional private Environment mTLS source read | Activate policies or change the v4 Policy path |
+| Projects & Config | Current project authority, immutable accepted run selections, revisioned native ACS artifact storage, and the private Environment mTLS source route for pending Platform artifacts | Admit or apply policies, or change the v4 Policy path |
 | Orchestrator and Core | Decisions, gates, session tree, execution fences and MAF checkpoints | Treat model text as approval |
-| Environment | Resource lifecycle, network intent, workspace volumes and Sandbox placement | Own workflow completion |
+| Environment | Resource lifecycle, network intent, unadmitted Platform egress candidates, workspace volumes and Sandbox placement | Admit or apply Platform policy, or own workflow completion |
 | AgentHost and AgentRuntime | Guard native SDK turns and tools against current owner bindings | Schedule itself or choose a new model/credential |
 | Events & Sessions | Ordered history, material references, addressed delivery and accounting | Replace execution state or replay effects |
 | Knowledge | Authorized records and bounded context through the selected Memory provider | Replace the run journal |

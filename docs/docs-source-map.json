@@ -463,7 +463,10 @@
         "docs/architecture/environment-egress.md",
         "docs/architecture/overview.md",
         "docs/architecture/design/provider-seams.md",
-        "docs/guide/testing.md"
+        "docs/guide/testing.md",
+        "docs/reference/runtime-configuration.md",
+        "docs/deep-dive/environment-sandbox.md",
+        "docs/deep-dive/testing-strategy.md"
       ]
     },
     {

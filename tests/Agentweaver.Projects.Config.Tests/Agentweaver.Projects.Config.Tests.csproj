@@ -18,6 +18,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" />
+    <ProjectReference Include="..\..\services\environment\Agentweaver.Environment\Agentweaver.Environment.csproj"
+                      Aliases="EnvironmentService" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
@@ -57,6 +59,12 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\services\environment\Agentweaver.Environment\Program.cs"
           Link="provider-catalog\Environment.Program.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\deploy\k8s\runtime-configs\environment-cilium-config.json"
+          Link="runtime-configs\environment-cilium-config.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\deploy\k8s\runtime-configs\environment-runtime-config.json"
+          Link="runtime-configs\environment-runtime-config.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Program.cs"
           Link="provider-catalog\Orchestrator.Program.cs"

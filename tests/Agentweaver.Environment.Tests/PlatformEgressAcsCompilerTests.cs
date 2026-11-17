@@ -42,6 +42,15 @@ public sealed class PlatformEgressAcsCompilerTests
             SystemHosts.Append("a.example.com").Append("z.example.com").OrderBy(host => host, StringComparer.Ordinal),
             result.Snapshot.Destinations.Select(destination => destination.Host));
         Assert.All(result.Snapshot.Destinations, destination => Assert.Equal(443, destination.Port));
+
+        var candidate = PlatformEgressAcsCompiler.CompileCandidate(
+            artifact, "canonical-policy", "source-revision-1");
+        Assert.True(candidate.IsSuccess, candidate.Failure?.Code);
+        Assert.Equal(expectedMode, candidate.Candidate!.Mode);
+        Assert.Equal(artifact.ContentSha256, candidate.Candidate.SourceHash);
+        Assert.Equal(
+            result.Snapshot.Destinations.Select(destination => (destination.Host, destination.Port)),
+            candidate.Candidate.Destinations.Select(destination => (destination.Host, destination.Port)));
     }
 
     [Fact]
@@ -147,6 +156,12 @@ public sealed class PlatformEgressAcsCompilerTests
             Assert.False(result.IsSuccess);
             Assert.Null(result.Snapshot);
             Assert.Equal(code, result.Failure?.Code);
+
+            var candidate = PlatformEgressAcsCompiler.CompileCandidate(
+                artifact, "canonical-policy", "source-revision-1");
+            Assert.False(candidate.IsSuccess);
+            Assert.Null(candidate.Candidate);
+            Assert.Equal(code, candidate.Failure?.Code);
         }
     }
 

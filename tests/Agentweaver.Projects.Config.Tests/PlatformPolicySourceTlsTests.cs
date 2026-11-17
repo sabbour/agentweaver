@@ -659,6 +659,11 @@ public sealed class PlatformPolicySourceTlsTests
                 clientAuthentication: true,
                 notAfter: null,
                 issuer: _ca);
+            EnvironmentClientCertificatePath = Path.Combine(_fixtureDirectory, "environment-client.pem");
+            EnvironmentClientPrivateKeyPath = Path.Combine(_fixtureDirectory, "environment-client-key.pem");
+            File.WriteAllText(EnvironmentClientCertificatePath, EnvironmentClient.ExportCertificatePem());
+            using (var clientKey = EnvironmentClient.GetRSAPrivateKey())
+                File.WriteAllText(EnvironmentClientPrivateKeyPath, clientKey!.ExportPkcs8PrivateKeyPem());
             AgentHostClient = CreateClient(
                 "agenthost.agentweaver.svc.cluster.local",
                 crlUri,
@@ -675,6 +680,8 @@ public sealed class PlatformPolicySourceTlsTests
         }
 
         internal string CaPath { get; }
+        internal string EnvironmentClientCertificatePath { get; }
+        internal string EnvironmentClientPrivateKeyPath { get; }
         internal string ServerCertificatePath { get; }
         internal string ServerKeyPath { get; }
         internal X509Certificate2 OtherCa => _otherCa;
@@ -811,6 +818,11 @@ public sealed class PlatformPolicySourceTlsTests
             var names = new SubjectAlternativeNameBuilder();
             names.AddIpAddress(IPAddress.Loopback);
             request.CertificateExtensions.Add(names.Build());
+            request.CertificateExtensions.Add(new X509Extension(
+                "2.5.29.31",
+                CreateCrlDistributionPoints(new Uri(
+                    _crlServer.BaseAddress, Guid.NewGuid().ToString("N"))),
+                critical: false));
             using var issued = request.Create(
                 _ca,
                 DateTimeOffset.UtcNow.AddMinutes(-1),

@@ -891,6 +891,29 @@ The Environment Deployment supplies `AdapterVersion` as a parseable version
 and `OptionsRevision` as a nonempty, non-whitespace value; neither has a
 default.
 
+### Private Platform egress source
+
+The Environment source client reads the private Projects route
+`GET /internal/policy-source/platform`. The route returns a pending artifact
+with a null admission checkpoint. The client compiles an unadmitted candidate.
+A pending response carries no authority to change provider policy.
+
+| Configuration path | Contract |
+| --- | --- |
+| `Environment:PlatformEgress:Source:Enabled` | Optional Boolean. Defaults to `false`. When `true`, startup validates and registers the source client but sends no request. |
+| `Environment:PlatformEgress:Source:Tls:ClientCertificatePemPath`, `ClientPrivateKeyPemPath` | Absolute paths to the dedicated Environment client certificate and private key. The certificate must have the exact SAN `environment.agentweaver.svc.cluster.local` and the `clientAuth` purpose. |
+| `Environment:PlatformEgress:Source:Tls:ClientCertificateSha256` | SHA-256 fingerprint of the client certificate's DER bytes. |
+| `Environment:PlatformEgress:Source:Tls:BackendCaSha256` | SHA-256 fingerprint of the backend CA's DER bytes. |
+| `Environment:PlatformEgress:Source:Tls:BackendCaPemPath` | Optional absolute path to the backend CA PEM file. Defaults to `/var/run/service-backend-ca/ca.crt`. |
+| `Environment:PlatformEgress:Source:Tls:ProjectsPins` | One to four entries. Each entry has a unique `Sha256` pin and a future UTC `RetireAtUtc`. The source client checks the Projects server certificate against these pins and the backend CA. |
+
+The source client certificate must differ from the local certificates in both
+Environment Remote MCP TLS profiles and from every Projects peer pin. Projects
+must also list the client fingerprint in its existing Environment pins. Keep
+the private key and CA files in restricted mounts. The client uses
+`ProjectsConfig:BaseAddress` as its HTTPS origin and appends only the fixed
+private route.
+
 The nested `EndpointSelectors` map must match each service namespace and
 workload label in the checked-in Cilium policies. Each selector key is
 `<namespace>/<service>`, and each selector must include the exact

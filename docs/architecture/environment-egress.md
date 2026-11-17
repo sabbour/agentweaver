@@ -11,20 +11,45 @@ are separate from compiling egress.
 
 ## Platform egress snapshot compiler
 
-The shared ACS library validates the closed `finite-network-v1` native profile.
-The pure Environment compiler reads its fixed manifest and Rego module with
-the profile's JSON data. It returns the existing
-`PlatformEgressPolicySnapshot` or a coded failure. The snapshot keeps approved
+The Environment source client reads the private Projects route only when code
+calls it. The client validates the pinned TLS peer, response bounds, pending
+admission, and complete artifact hash. `CompileCandidate` validates the fixed
+manifest, Rego module, and JSON data, then returns an unadmitted candidate.
+The existing `Compile` method still requires a genuine admission checkpoint
+before it creates a `PlatformEgressPolicySnapshot`. The snapshot keeps approved
 and release-managed System destinations in both `Allowlist` and `PublicHttps`
-mode. Its source hash covers the manifest, module, and data. The caller must
-provide the source revision and admission checkpoint.
+mode. Its source hash covers the manifest, module, and data.
 
-This compiler is not connected to a Policy source adapter, the egress
-reconciler, or a packet-check entry point. Production assets remain inactive.
-Compilation does not apply or change provider policy, approve an artifact, or
-prove packet enforcement. The existing provider capability check still
-requires exact-host support for `Allowlist`, and private-range exclusions
-remain a separate provider safety gate.
+`Environment:PlatformEgress:Source:Enabled` defaults to `false`. Enabling it
+registers the client and its dedicated TLS identity; startup sends no source
+request. The source certificate must differ from the Environment Remote MCP
+local identities and every configured Projects peer pin.
+
+The client returns only the pending observation. Environment registers no
+admitted policy source, reconciler worker, or shared egress provider from that
+observation. The candidate carries no authority to change provider policy or
+approve an artifact.
+
+```mermaid
+sequenceDiagram
+    participant Caller as Internal Environment code
+    participant Client as Policy source client
+    participant Projects as Projects private source
+    participant Compiler as Finite-network compiler
+    Caller->>Client: ReadAsync()
+    Client->>Projects: GET /internal/policy-source/platform (mTLS)
+    Projects-->>Client: Complete artifact with pending/null admission
+    Client->>Client: Check TLS, bounds, envelope, and artifact hashes
+    Client-->>Caller: Pending observation
+    Caller->>Compiler: CompileCandidate(artifact, source ID, revision)
+    Compiler-->>Caller: Unadmitted candidate or coded failure
+    Note over Client,Compiler: Feature is off by default; enabling it sends no startup request
+    Note over Caller,Compiler: No admitted source, worker, projection store, provider, or apply path
+```
+
+The existing provider capability check still requires exact-host support for
+`Allowlist`, and private-range exclusions remain a separate provider safety
+gate.
 
 The network profile accepts only its fixed manifest and module and one
 `policy/data.json` file. The file names a trusted, versioned System catalog.
@@ -310,9 +335,10 @@ prove.
 
 ## Platform egress provider and reconciler
 
-Issue #2634 adds the provider side of the shared AgentHost egress baseline. It
-does not add a way to edit the policy. The canonical policy source and its
-management routes are planned in #2655 and #2659.
+Projects exposes the private route for the canonical Platform artifact. Its
+response has pending admission and a null checkpoint. The opt-in Environment
+client validates that response and compiles an unadmitted candidate. It does
+not register an admitted source or connect the reconciler to a provider.
 
 The parts are:
 
@@ -393,14 +419,15 @@ sequenceDiagram
     Note over C,K: Environment Role grants get, update, and patch on the named policy; deploy creates the seed only when missing
 ```
 
-Environment does not run the reconciler yet. #2659 connects it to the
-canonical policy source. Until then, the DNS-only seed may exist, but no
-source-derived platform egress rules are applied. The deploy-managed AgentHost
-egress policies stay in effect.
+Environment has no reconciler registration. The client returns a pending
+observation and an unadmitted candidate. The deployment owns the DNS-only seed
+and AgentHost egress policies; those paths remain separate from this candidate.
 
-The focused tests use a fake policy source and a fake Kubernetes store. They
-include a conformance kit that every `IPlatformEgressProvider` must pass. They
-do not prove datapath enforcement.
+The client integration test reads the actual Projects route and PostgreSQL
+artifact through the production client, then checks candidate compilation.
+Reconciler tests use a fake policy source and a fake Kubernetes store. They
+include a conformance kit that every `IPlatformEgressProvider` must pass.
+Datapath enforcement requires separate live-network evidence.
 
 ## Trade-offs and limits
 
