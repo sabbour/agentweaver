@@ -20,7 +20,7 @@ test('v1 required workflows retain their PR triggers and job gates', () => {
   assert.deepEqual(docs.on.push, { branches: ['v1'] });
   assert.equal(foundation.on.workflow_dispatch, null);
   assert.deepEqual(foundation.on.workflow_call, { inputs: { collect_coverage: { type: 'boolean', default: false } } });
-  assert.deepEqual(foundation.jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package']);
+  assert.deepEqual(foundation.jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package', 'acs-lint']);
   assert.equal(foundation.jobs.foundation.if, '${{ always() }}');
   assert.ok(docs.jobs.docs);
   assert.equal(Object.hasOwn(docs.jobs.docs, 'if'), false);
@@ -184,7 +184,7 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   const { parse } = await import('yaml');
   const parsed = parse(workflow);
   const jobs = parsed.jobs;
-  assert.deepEqual(jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package']);
+  assert.deepEqual(jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package', 'acs-lint']);
   assert.equal(jobs['cli-package'].uses, './.github/workflows/v1-cli-package.yml');
   assert.deepEqual(jobs['cli-package'].needs, 'changes');
   assert.equal(jobs['cli-package'].if, "needs.changes.outputs.cli == 'true'");
@@ -308,11 +308,11 @@ test('the real foundation gate rejects failures, cancellation and unexpected ski
   function execute(results, collect = 'false') {
     return runInNewContext(gate, { process: { env: { RESULTS: JSON.stringify(results), COLLECT_COVERAGE: collect } } });
   }
-  const full = Object.fromEntries(['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package']
+  const full = Object.fromEntries(['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package', 'acs-lint']
     .map((name) => [name, { result: name === 'coverage' ? 'skipped' : 'success' }]));
   full.changes.outputs = { images: 'true', web: 'true', dotnet: 'true', cli: 'true' };
   execute(full);
-  for (const name of ['harness', 'images', 'node', 'web', 'dotnet', 'cli-package', 'changes']) {
+  for (const name of ['harness', 'acs-lint', 'images', 'node', 'web', 'dotnet', 'cli-package', 'changes']) {
     for (const result of ['failure', 'cancelled', 'skipped']) {
       const broken = structuredClone(full);
       broken[name].result = result;

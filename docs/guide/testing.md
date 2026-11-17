@@ -134,6 +134,38 @@ dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessi
 PostgreSQL-backed rate-card and hard-budget regressions run in hosted GitHub CI.
 They need the CI test database and are not part of this offline lookup test.
 
+## Lint exported ACS artifacts
+
+Use this check to lint a policy artifact exported by Agentweaver. The
+materializer writes the exact manifest and relative files into a new directory.
+The lint runner passes only that directory's `manifest.yaml` to AGT. AGT checks
+the manifest schema and whether relative references exist. It does not check
+the Agentweaver profile, artifact hash, or Rego behavior; the native ACS tests
+check those rules.
+
+Run these commands from the repository root on Linux with Python 3.12.10,
+Rust 1.89.0, and uv 0.13.0. `uv sync` installs the locked tools from the pinned
+AGT source and package indexes. The lint commands run offline and do not sync
+dependencies or download Python.
+
+```bash
+uv sync --project scripts/acs-lint --locked
+uv run --project scripts/acs-lint --locked --offline --no-sync --no-python-downloads \
+  python scripts/acs-lint/test_acs_lint.py
+
+POLICY_EXPORT='path/to/cli-export.json'
+python scripts/acs-lint/materialize_export.py "$POLICY_EXPORT" \
+  --output-dir artifacts/acs-lint/policy
+uv run --project scripts/acs-lint --locked --offline --no-sync --no-python-downloads \
+  python scripts/acs-lint/lint.py \
+  artifacts/acs-lint/policy/manifest.yaml
+```
+
+The output directory must be new and inside the repository. Replace
+`path/to/cli-export.json` with the CLI export file. The materializer rejects an
+invalid hash, unsafe or duplicate paths, and artifacts that exceed the native
+size limits before it writes the artifact.
+
 ## Test the native ACS profile
 
 The shared ACS library validates a complete manifest and its relative Rego and
