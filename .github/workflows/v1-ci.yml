@@ -101,6 +101,8 @@ jobs:
         run: uv sync --project scripts/acs-lint --locked
       - name: Test ACS export and lint scripts
         run: uv run --project scripts/acs-lint --locked --offline --no-sync --no-python-downloads python scripts/acs-lint/test_acs_lint.py
+      - name: Test pinned Python prompt scan identity
+        run: uv run --project scripts/acs-lint --locked --offline --no-sync --no-python-downloads python scripts/acs-lint/test_prompt_defense_compatibility.py
       - name: Materialize exported ACS fixture
         run: python scripts/acs-lint/materialize_export.py scripts/acs-lint/fixtures/finite-network-v1.export.json --output-dir artifacts/acs-lint/finite-network-v1
       - name: Lint the explicit ACS manifest offline

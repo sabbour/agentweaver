@@ -2061,3 +2061,38 @@ Configure `ProjectsConfig:SkillContent:ContainerUri` with an explicit HTTPS
 container URI and grant the Projects Config workload identity Blob Data Contributor
 on that container only. Missing storage configuration or missing/corrupt objects
 fail closed.
+
+## Local prompt and content scan report
+
+`PromptContentScanner.Scan` evaluates one exact UTF-8 input with the pinned
+`Microsoft.AgentGovernance` 4.0.0 .NET evaluator from AGT commit
+`7bd5b44339db08e8b96bc2ecdb6fadf28f313450`. The scanner runs locally and makes
+no network or model calls. It returns `PromptContentScanReportV1`; it does not
+change project saves, skill imports, or runtime admission.
+
+Each report binds the lowercase SHA-256 digest and byte count to an input kind,
+owner kind and ID, owner revision, canonical relative path, provenance,
+evaluator version, vector-set revision, policy revision, and UTC evaluation
+time. Authored inputs use `Authored` provenance with null source revision and
+commit. Git inputs use `Git` provenance with the source revision and resolved
+40- or 64-character lowercase commit SHA.
+
+`Scan` accepts one project charter or Skill input. `ScanSet` accepts inputs
+from one Skill revision and returns one report per input. It enforces the
+64-resource, 1 MiB aggregate resource, and 2 MiB aggregate scan-set limits.
+Project charters keep the 20,000-character owner limit and a 60,000-byte scan
+limit. Skill Markdown is limited to 512 KiB, skill instructions to 256 KiB,
+and each resource to 256 KiB.
+
+Invalid UTF-8 and inputs above their owner limit fail before evaluation. A
+completed report contains the evaluator score, grade, covered and total vector
+counts, the recommended-threshold result, and missing vector IDs with OWASP
+categories. The .NET evaluator has 12 vectors; the recommended threshold is a
+score of 70. `EvaluatorError` reports a fixed error code for a regex timeout,
+input-hash mismatch, or unsupported vector set, without source text or match
+details. The score measures defensive-language coverage. It is not a finding
+that content is safe or unsafe.
+
+The pinned Python evaluator at AGT commit
+`48f04e5ad1efd4f2e5692d4b67def2e0f99a6870` remains separate. It has 17 vectors
+and a 100,000-character input limit; its output is not part of the .NET report.

@@ -166,6 +166,31 @@ The output directory must be new and inside the repository. Replace
 invalid hash, unsafe or duplicate paths, and artifacts that exceed the native
 size limits before it writes the artifact.
 
+## Test local prompt and content scans
+
+The Projects & Config scanner evaluates exact UTF-8 bytes with the pinned .NET
+AGT evaluator. Its report records the input hash, owner revision, source
+provenance, evaluator version, and vector coverage. The scan makes no network or
+model calls and does not admit a save or import.
+
+Run these commands from the repository root. First install the Python tools:
+
+```powershell
+uv sync --project scripts\acs-lint --locked
+```
+
+Then run the focused tests:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PromptContentScannerTests"
+uv run --project scripts\acs-lint --locked --offline --no-sync --no-python-downloads python scripts\acs-lint\test_prompt_defense_compatibility.py
+```
+
+The .NET tests check exact-byte hashing, owner and source provenance, input
+bounds, invalid UTF-8, evaluator errors, and report validation. The Python check
+confirms the pinned evaluator's separate 17-vector set and 100,000-character
+limit; it does not feed results into the .NET report.
+
 ## Test the native ACS profile
 
 The shared ACS library validates a complete manifest and its relative Rego and

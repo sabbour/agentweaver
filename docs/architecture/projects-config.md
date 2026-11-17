@@ -1045,3 +1045,28 @@ sequenceDiagram
     H->>H: Verify pins and install only accepted content
     H-->>H: Start native session with the accepted skill provider
 ```
+
+## Local prompt and content scans
+
+Projects & Config scans bounded UTF-8 inputs from one owner revision with the
+pinned .NET AGT evaluator. Each report binds the result to that input's exact
+bytes, relative path, and source provenance. Authored sources use `Authored`
+provenance with no Git revision or commit; Git sources record their source
+revision and resolved commit. The scanner makes no network or model calls and
+does not change save or import decisions.
+
+```mermaid
+sequenceDiagram
+    actor Owner
+    participant Scanner as Projects & Config scanner
+    participant AGT as Pinned .NET AGT evaluator
+    Owner->>Scanner: Bounded inputs and owner revision
+    Scanner->>Scanner: Check source, set limits, encoding, and SHA-256
+    Scanner->>AGT: Evaluate decoded input locally
+    AGT-->>Scanner: Vector coverage and prompt hash
+    Scanner->>Scanner: Bind sanitized result to exact bytes
+    Scanner-->>Owner: One versioned report per input, without source text
+```
+
+See the [local scan report contract](../reference/contracts.md#local-prompt-and-content-scan-report)
+and [focused scan tests](../guide/testing.md#test-local-prompt-and-content-scans).
