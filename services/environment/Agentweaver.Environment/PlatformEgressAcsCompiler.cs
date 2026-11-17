@@ -58,15 +58,37 @@ public static class PlatformEgressAcsCompiler
         if (!result.IsValid || result.Policy is not { } policy)
             return CandidateFailed(result.Diagnostics.FirstOrDefault()?.Code ?? "network_profile_invalid");
 
-        var candidate = new PlatformEgressCompilationCandidate(
+        var candidate = CreateCandidate(
+            artifact,
             sourceId,
             sourceRevision,
-            artifact.ContentSha256,
-            CompilerVersion,
             policy.Mode,
             policy.ApprovedDestinations,
             policy.SystemDestinations);
 
+        return new PlatformEgressCandidateCompilationResult(candidate, null);
+    }
+
+    internal static PlatformEgressCandidateCompilationResult CompileComposedCandidate(
+        NativeAcsArtifact artifact,
+        string sourceId,
+        string sourceRevision)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
+        if (string.IsNullOrWhiteSpace(sourceId) || string.IsNullOrWhiteSpace(sourceRevision))
+            return CandidateFailed("source_metadata_invalid");
+
+        var inspection = NativeAcsComposableDomainsProfile.Inspect(artifact);
+        if (!inspection.IsValid || inspection.NetworkPolicy is not { } policy)
+            return CandidateFailed(inspection.Diagnostics.FirstOrDefault()?.Code ?? "composed_profile_invalid");
+
+        var candidate = CreateCandidate(
+            artifact,
+            sourceId,
+            sourceRevision,
+            policy.Mode,
+            policy.ApprovedDestinations,
+            policy.SystemDestinations);
         return new PlatformEgressCandidateCompilationResult(candidate, null);
     }
 
@@ -88,6 +110,41 @@ public static class PlatformEgressAcsCompiler
             },
             null);
     }
+
+    internal static PlatformEgressCandidateCompilationResult CompileComposedSystemOnlyCandidate(
+        NativeAcsArtifact artifact,
+        string sourceId,
+        string sourceRevision)
+    {
+        var result = CompileComposedCandidate(artifact, sourceId, sourceRevision);
+        if (!result.IsSuccess)
+            return result;
+
+        var candidate = result.Candidate!;
+        return new PlatformEgressCandidateCompilationResult(
+            candidate with
+            {
+                Mode = PlatformEgressMode.Allowlist,
+                ApprovedDestinations = []
+            },
+            null);
+    }
+
+    private static PlatformEgressCompilationCandidate CreateCandidate(
+        NativeAcsArtifact artifact,
+        string sourceId,
+        string sourceRevision,
+        PlatformEgressMode mode,
+        ImmutableArray<PlatformEgressDestination> approvedDestinations,
+        ImmutableArray<PlatformEgressDestination> systemDestinations) =>
+        new(
+            sourceId,
+            sourceRevision,
+            artifact.ContentSha256,
+            CompilerVersion,
+            mode,
+            approvedDestinations,
+            systemDestinations);
 
     private static PlatformEgressCompilationResult Failed(string code) =>
         new(null, new PlatformEgressCompilationFailure(code));

@@ -12,11 +12,11 @@ namespace Agentweaver.Policy.Acs;
 
 public sealed class NativeAcsArtifactValidator
 {
-    private const int MaximumManifestBytes = 65_536;
+    internal const int MaximumManifestBytes = 65_536;
     private const int MaximumManifestDepth = 64;
-    private const int MaximumFileCount = 64;
-    private const int MaximumFileBytes = 262_144;
-    private const int MaximumArtifactBytes = 1_048_576;
+    internal const int MaximumFileCount = 64;
+    internal const int MaximumFileBytes = 262_144;
+    internal const int MaximumArtifactBytes = 1_048_576;
     private const int MaximumDiagnostics = 32;
     private const int MaximumDiagnosticMessageLength = 2048;
     private const int MaximumOpaAstCharacters = 4_194_304;
@@ -43,6 +43,12 @@ public sealed class NativeAcsArtifactValidator
         "input.policy_target.value.network.destination.kind",
         "input.policy_target.value.network.destination.value"
     };
+    private static readonly HashSet<string> AllowedActionAndNetworkInputPaths =
+        new(AllowedInputPaths.Concat(AllowedNetworkInputPaths), StringComparer.Ordinal);
+    private static readonly HashSet<string> AllowedDomainSelectorInputPaths = new(StringComparer.Ordinal)
+    {
+        "input.policy_target.value.domain_id"
+    };
     private static readonly HashSet<string> UnsafeBuiltins = new(StringComparer.Ordinal)
     {
         "http.send",
@@ -68,7 +74,13 @@ public sealed class NativeAcsArtifactValidator
 
     internal string OpaPath => _opaPath;
 
-    public NativeAcsValidationResult Validate(NativeAcsArtifact artifact)
+    public NativeAcsValidationResult Validate(NativeAcsArtifact artifact) =>
+        ValidateCore(artifact, requireComposedProfile: false);
+
+    public NativeAcsValidationResult ValidateComposed(NativeAcsArtifact artifact) =>
+        ValidateCore(artifact, requireComposedProfile: true);
+
+    private NativeAcsValidationResult ValidateCore(NativeAcsArtifact artifact, bool requireComposedProfile)
     {
         ArgumentNullException.ThrowIfNull(artifact);
 
@@ -155,10 +167,28 @@ public sealed class NativeAcsArtifactValidator
 
         if (diagnostics.Count > 0)
             return Result(false, diagnostics);
+        var isNetworkArtifact = NativeAcsFiniteNetworkProfile.IsCandidate(artifact);
+        var isComposedArtifact = NativeAcsComposableDomainsProfile.IsCandidate(artifact);
+        if (requireComposedProfile)
+        {
+            if (!isComposedArtifact)
+            {
+                Add(diagnostics, "composed_profile_required", "The composed ACS validator requires the reviewed domains profile.");
+                return Result(false, diagnostics);
+            }
+
+            var inspection = NativeAcsComposableDomainsProfile.Inspect(artifact);
+            if (!inspection.IsValid)
+            {
+                foreach (var diagnostic in inspection.Diagnostics)
+                    Add(diagnostics, diagnostic.Code, diagnostic.Message, diagnostic.RelativePath);
+                return Result(false, diagnostics);
+            }
+        }
+
         if (!File.Exists(_opaPath))
             return Result(false, diagnostics, NativeAcsValidationDependencyFailure.OpaUnavailable);
 
-        var isNetworkArtifact = NativeAcsFiniteNetworkProfile.IsCandidate(artifact);
         string manifest;
         Dictionary<string, string> regoModules;
         var definedRulePaths = new HashSet<string>(StringComparer.Ordinal);
@@ -182,13 +212,22 @@ public sealed class NativeAcsArtifactValidator
                     if (remainingMilliseconds <= 0)
                         return Result(false, diagnostics, NativeAcsValidationDependencyFailure.OpaUnavailable);
 
+                    IReadOnlySet<string> allowedInputPaths = requireComposedProfile && isComposedArtifact
+                        ? file.RelativePath switch
+                        {
+                            NativeAcsComposableDomainsProfile.ActionsModulePath => AllowedInputPaths,
+                            NativeAcsComposableDomainsProfile.NetworkModulePath => AllowedNetworkInputPaths,
+                            NativeAcsComposableDomainsProfile.SelectorModulePath => AllowedDomainSelectorInputPaths,
+                            _ => new HashSet<string>(StringComparer.Ordinal)
+                        }
+                        : isNetworkArtifact ? AllowedActionAndNetworkInputPaths : AllowedInputPaths;
                     var dependencyFailure = ValidateInputFacts(
                         file.RelativePath,
                         text,
                         diagnostics,
                         definedRulePaths,
                         remainingMilliseconds,
-                        isNetworkArtifact);
+                        allowedInputPaths);
                     if (dependencyFailure is not null)
                         return Result(false, diagnostics, dependencyFailure);
                 }
@@ -220,7 +259,7 @@ public sealed class NativeAcsArtifactValidator
             return Result(false, diagnostics);
         }
 
-        if (NativeAcsFiniteNetworkProfile.IsCandidate(artifact))
+        if (isNetworkArtifact && !(requireComposedProfile && isComposedArtifact))
         {
             var networkProfile = NativeAcsFiniteNetworkProfile.Validate(artifact);
             foreach (var diagnostic in networkProfile.Diagnostics)
@@ -293,7 +332,7 @@ public sealed class NativeAcsArtifactValidator
         ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics,
         HashSet<string> definedRulePaths,
         int timeoutMilliseconds,
-        bool allowNetworkFacts)
+        IReadOnlySet<string> allowedInputPaths)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -361,7 +400,7 @@ public sealed class NativeAcsArtifactValidator
             }
 
             using var document = JsonDocument.Parse(output);
-            ValidateAstInputFacts(document.RootElement, relativePath, diagnostics, allowNetworkFacts);
+            ValidateAstInputFacts(document.RootElement, relativePath, diagnostics, allowedInputPaths);
             CollectRulePaths(document.RootElement, definedRulePaths);
             return null;
         }
@@ -680,7 +719,7 @@ public sealed class NativeAcsArtifactValidator
         JsonElement element,
         string relativePath,
         ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics,
-        bool allowNetworkFacts)
+        IReadOnlySet<string> allowedInputPaths)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
@@ -702,8 +741,7 @@ public sealed class NativeAcsArtifactValidator
                             ? parsedPath
                             : null;
                     if (inputPath is null ||
-                        (!AllowedInputPaths.Contains(inputPath) &&
-                         !(allowNetworkFacts && AllowedNetworkInputPaths.Contains(inputPath))))
+                        !allowedInputPaths.Contains(inputPath))
                         Add(diagnostics, "unknown_fact", "The Rego module reads an unsupported input fact.", relativePath);
                 }
 
@@ -721,11 +759,11 @@ public sealed class NativeAcsArtifactValidator
                             firstType.ValueKind == JsonValueKind.String &&
                             firstType.GetString() == "var";
                         foreach (var segment in valueSegments.Skip(firstIsRootVariable ? 1 : 0))
-                            ValidateAstInputFacts(segment, relativePath, diagnostics, allowNetworkFacts);
+                            ValidateAstInputFacts(segment, relativePath, diagnostics, allowedInputPaths);
                     }
                     else
                     {
-                        ValidateAstInputFacts(property.Value, relativePath, diagnostics, allowNetworkFacts);
+                        ValidateAstInputFacts(property.Value, relativePath, diagnostics, allowedInputPaths);
                     }
                 }
 
@@ -773,13 +811,13 @@ public sealed class NativeAcsArtifactValidator
                     }
                 }
 
-                ValidateAstInputFacts(property.Value, relativePath, diagnostics, allowNetworkFacts);
+                ValidateAstInputFacts(property.Value, relativePath, diagnostics, allowedInputPaths);
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray())
-                ValidateAstInputFacts(item, relativePath, diagnostics, allowNetworkFacts);
+                ValidateAstInputFacts(item, relativePath, diagnostics, allowedInputPaths);
         }
     }
 

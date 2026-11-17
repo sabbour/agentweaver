@@ -261,6 +261,22 @@ identity source or infer identity from the Broker subject, actor ID, or UPN.
 `NativeAcsEvaluationResult` binds the decision to the artifact hash. Invalid
 artifacts and native runtime failures return an error rather than an allow.
 
+The `composable-domains-v1` profile adds reviewed `actions` and
+`platform_network` domains to one artifact. It pins the manifest and all three
+Rego modules. Actions data under `data.actions` and network data under
+`data.agentweaver` stay in separate files. Separate input-fact allowlists
+restrict the action and network rules; the selector reads only the caller-
+selected `domain_id`. The `agentweaver_domains_v1` selector invokes only that
+domain's rule at `pre_model_call`. Domain changes can update
+their own data file; they cannot change the manifest or policy modules.
+
+`NativeAcsPolicyEvaluator.EvaluateComposedAsync` requires a
+`NativeAcsDomainId`. The existing `Validate`, `EvaluateAsync`, and Environment
+compiler entrypoints keep their single-profile behavior and reject composed
+artifacts. The Environment candidate compiler has separate composed and
+System-only entrypoints, and each candidate hash covers the complete artifact.
+This profile adds no API consumer, runtime admission, or policy write.
+
 Projects & Config exposes the current Platform policy artifact through a
 source API. It uses one head per scope and keeps the Policy ID of an existing
 head. Only an empty scope gets the server-owned `canonical` Policy ID. Each

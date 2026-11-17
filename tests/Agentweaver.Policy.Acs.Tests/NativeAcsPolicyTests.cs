@@ -450,6 +450,182 @@ public sealed class NativeAcsPolicyTests
         }
     }
 
+    [Fact]
+    public void ComposedProfileClassifiesDomainDataEditsAndRejectsUnownedChanges()
+    {
+        var original = CreateComposedArtifact();
+        var actionEdit = ReplaceComposedFile(
+            original,
+            NativeAcsComposableDomainsProfile.ActionsDataPath,
+            """{"allowed_action_ids":["inspect"]}""");
+        var actionChanges = NativeAcsComposableDomainsProfile.ClassifyChanges(original, actionEdit);
+
+        Assert.True(actionChanges.IsValid);
+        Assert.Equal([NativeAcsDomainId.Actions], actionChanges.ChangedDomains.ToArray());
+        Assert.NotEqual(original.ContentSha256, actionEdit.ContentSha256);
+        Assert.Equal(
+            original.Files.Single(file => file.RelativePath == NativeAcsComposableDomainsProfile.NetworkDataPath).Bytes,
+            actionEdit.Files.Single(file => file.RelativePath == NativeAcsComposableDomainsProfile.NetworkDataPath).Bytes);
+        Assert.Equal(
+            original.Files.Single(file => file.RelativePath == NativeAcsComposableDomainsProfile.NetworkModulePath).Bytes,
+            actionEdit.Files.Single(file => file.RelativePath == NativeAcsComposableDomainsProfile.NetworkModulePath).Bytes);
+
+        var networkData = ComposedNetworkData.Replace(
+            "approved.example.com",
+            "another.example.com",
+            StringComparison.Ordinal);
+        var networkEdit = ReplaceComposedFile(
+            original,
+            NativeAcsComposableDomainsProfile.NetworkDataPath,
+            networkData);
+        var networkChanges = NativeAcsComposableDomainsProfile.ClassifyChanges(original, networkEdit);
+
+        Assert.True(networkChanges.IsValid);
+        Assert.Equal([NativeAcsDomainId.PlatformNetwork], networkChanges.ChangedDomains.ToArray());
+        Assert.Equal(
+            original.Files.Single(file => file.RelativePath == NativeAcsComposableDomainsProfile.ActionsDataPath).Bytes,
+            networkEdit.Files.Single(file => file.RelativePath == NativeAcsComposableDomainsProfile.ActionsDataPath).Bytes);
+
+        var changedModule = ReplaceComposedFile(
+            original,
+            NativeAcsComposableDomainsProfile.ActionsModulePath,
+            ReadComposedFile(original, NativeAcsComposableDomainsProfile.ActionsModulePath) +
+            "\nimport data.agent_control_specification.agentweaver_platform_network");
+        var rejected = NativeAcsComposableDomainsProfile.ClassifyChanges(original, changedModule);
+
+        Assert.False(rejected.IsValid);
+        Assert.Contains(rejected.Diagnostics, diagnostic => diagnostic.Code == "composed_module");
+    }
+
+    [Fact]
+    public void ComposedValidationRejectsUnreviewedModulesAndDomainData()
+    {
+        var original = CreateComposedArtifact();
+        var validator = new NativeAcsArtifactValidator(Path.Combine(AppContext.BaseDirectory, "missing-opa"));
+        var crossDomainImport = ReplaceComposedFile(
+            original,
+            NativeAcsComposableDomainsProfile.ActionsModulePath,
+            ReadComposedFile(original, NativeAcsComposableDomainsProfile.ActionsModulePath) +
+            "\nimport data.agent_control_specification.agentweaver_platform_network");
+        var unsupportedFact = ReplaceComposedFile(
+            original,
+            NativeAcsComposableDomainsProfile.ActionsModulePath,
+            ReadComposedFile(original, NativeAcsComposableDomainsProfile.ActionsModulePath) +
+            "\n\nunsupported if { input.policy_target.value.network.destination.value == \"approved.example.com\" }");
+        var duplicateKey = ReplaceComposedFile(
+            original,
+            NativeAcsComposableDomainsProfile.ActionsDataPath,
+            """{"allowed_action_ids":["merge"],"allowed_action_ids":["inspect"]}""");
+        var injectedNamespace = ReplaceComposedFile(
+            original,
+            NativeAcsComposableDomainsProfile.ActionsDataPath,
+            """{"allowed_action_ids":["merge"],"agentweaver":{"shared":"value"}}""");
+        var removedDomain = Rehash(original with
+        {
+            Files = original.Files
+                .Where(file => file.RelativePath != NativeAcsComposableDomainsProfile.ActionsDataPath)
+                .ToImmutableArray()
+        });
+
+        foreach (var invalid in new[] { crossDomainImport, unsupportedFact, duplicateKey, injectedNamespace, removedDomain })
+        {
+            var result = validator.ValidateComposed(invalid);
+            Assert.False(result.IsValid);
+            Assert.Null(result.DependencyFailure);
+        }
+
+        Assert.Contains(
+            validator.ValidateComposed(duplicateKey).Diagnostics,
+            diagnostic => diagnostic.Code == "actions_data_duplicate_key");
+        Assert.Contains(
+            validator.ValidateComposed(injectedNamespace).Diagnostics,
+            diagnostic => diagnostic.Code == "actions_data_shape");
+    }
+
+    [Fact]
+    public async Task ComposedEvaluatorRejectsUnsupportedDomainAndInterventionPoint()
+    {
+        var artifact = CreateComposedArtifact();
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(Path.Combine(AppContext.BaseDirectory, "missing-opa")),
+            WorkRoot);
+
+        var unsupportedDomain = await evaluator.EvaluateComposedAsync(
+            artifact,
+            (NativeAcsDomainId)999,
+            InterventionPoint.PreModelCall,
+            Snapshot("merge"));
+        var unsupportedInterventionPoint = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Actions,
+            (InterventionPoint)999,
+            Snapshot("merge"));
+
+        Assert.Equal(PolicyEvaluationOutcome.Error, unsupportedDomain.Outcome);
+        Assert.Equal("domain_intervention_point_unsupported", unsupportedDomain.DiagnosticCode);
+        Assert.Equal(PolicyEvaluationOutcome.Error, unsupportedInterventionPoint.Outcome);
+        Assert.Equal("domain_intervention_point_unsupported", unsupportedInterventionPoint.DiagnosticCode);
+    }
+
+    [NativeAcsFact]
+    public async Task ComposedNativeSelectorKeepsDomainDecisionsIndependent()
+    {
+        var opaPath = RequireNativeRuntime();
+        var artifact = CreateComposedArtifact();
+        var validator = new NativeAcsArtifactValidator(opaPath);
+        var validation = validator.ValidateComposed(artifact);
+        Assert.True(
+            validation.IsValid,
+            string.Join("; ", validation.Diagnostics.Select(diagnostic => $"{diagnostic.Code}:{diagnostic.Message}")));
+
+        var evaluator = new NativeAcsPolicyEvaluator(validator, WorkRoot);
+        var actionAllowed = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Actions,
+            InterventionPoint.PreModelCall,
+            Snapshot("merge"));
+        var networkDenied = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.PlatformNetwork,
+            InterventionPoint.PreModelCall,
+            Snapshot("merge"));
+        var actionDenied = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Actions,
+            InterventionPoint.PreModelCall,
+            Snapshot("inspect") with
+            {
+                Network = new NativeAcsNetworkEvaluationFacts(
+                    "packet",
+                    "TCP",
+                    443,
+                    new NativeAcsNetworkDestinationFacts("dns", "approved.example.com"))
+            });
+        var networkAllowed = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.PlatformNetwork,
+            InterventionPoint.PreModelCall,
+            Snapshot("inspect") with
+            {
+                Network = new NativeAcsNetworkEvaluationFacts(
+                    "packet",
+                    "TCP",
+                    443,
+                    new NativeAcsNetworkDestinationFacts("dns", "approved.example.com"))
+            });
+
+        Assert.Equal(PolicyEvaluationOutcome.Allow, actionAllowed.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, networkDenied.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, actionDenied.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Allow, networkAllowed.Outcome);
+
+        var unqualified = await evaluator.EvaluateAsync(
+            artifact,
+            InterventionPoint.PreModelCall,
+            Snapshot("merge"));
+        Assert.Equal(PolicyEvaluationOutcome.Error, unqualified.Outcome);
+    }
+
     [NativeAcsFact]
     public void NetworkFactsDoNotExpandTheActionProfileInputGate()
     {
@@ -643,6 +819,58 @@ public sealed class NativeAcsPolicyTests
             string.Empty);
         return Pin(artifact);
     }
+
+    private static NativeAcsArtifact CreateComposedArtifact() =>
+        NativeAcsComposableDomainsProfile.CreateArtifact(
+            """{"allowed_action_ids":["merge"]}""",
+            ComposedNetworkData);
+
+    private const string ComposedNetworkData = """
+        {
+          "agentweaver": {
+            "platform_egress": {
+              "profile": "finite-network-v1",
+              "mode": "Allowlist",
+              "approved": [
+                { "host": "approved.example.com", "port": 443 }
+              ],
+              "system": {
+                "catalog": "hosted-copilot-v1",
+                "destinations": [
+                  { "host": "api.business.githubcopilot.com", "port": 443 },
+                  { "host": "api.enterprise.githubcopilot.com", "port": 443 },
+                  { "host": "api.github.com", "port": 443 },
+                  { "host": "api.githubcopilot.com", "port": 443 },
+                  { "host": "api.individual.githubcopilot.com", "port": 443 }
+                ]
+              }
+            }
+          }
+        }
+        """;
+
+    private static string ReadComposedFile(NativeAcsArtifact artifact, string path) =>
+        Encoding.UTF8.GetString(artifact.Files.Single(file => file.RelativePath == path).Bytes.AsSpan());
+
+    private static NativeAcsArtifact ReplaceComposedFile(
+        NativeAcsArtifact artifact,
+        string path,
+        string content) =>
+        Rehash(artifact with
+        {
+            Files = artifact.Files
+                .Select(file => file.RelativePath == path
+                    ? file with { Bytes = Encoding.UTF8.GetBytes(content).ToImmutableArray() }
+                    : file)
+                .ToImmutableArray(),
+            ContentSha256 = string.Empty
+        });
+
+    private static NativeAcsArtifact Rehash(NativeAcsArtifact artifact) =>
+        artifact with
+        {
+            ContentSha256 = NativeAcsArtifactValidator.ComputeContentSha256(artifact)
+        };
 
     private static NativeAcsArtifact Pin(NativeAcsArtifact artifact) =>
         artifact with { ContentSha256 = NativeAcsArtifactValidator.ComputeContentSha256(artifact) };

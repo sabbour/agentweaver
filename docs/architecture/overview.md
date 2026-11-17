@@ -109,6 +109,9 @@ catalog/resolver, Azure Files Storage provider, and Agent Sandbox provider. Its
 egress flow, platform egress provider, and evidence boundary are described in
 [Environment egress](./environment-egress.md). Its Sandbox lease contract is
 described in [Environment Sandbox](./environment-sandbox.md).
+The fixed composed ACS profile adds action and network domains; egress
+candidate compilation reads the network domain and retains the complete
+artifact hash.
 `AzureFilesCsiWorkspaceVolumeProvider` implements `IWorkspaceVolumeProvider` and calls the Kubernetes API;
 it does not itself mount the volume into a Sandbox or prove data erasure. Environment reserves and releases
 the exact Workspace generation around Sandbox provider use. `AzureBlobObjectStore` implements

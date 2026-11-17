@@ -89,6 +89,43 @@ public sealed class PlatformEgressAcsCompilerTests
     }
 
     [Fact]
+    public void ComposedCompilerRetainsFullHashAndKeepsSystemOnlyNetworkIntent()
+    {
+        var artifact = CreateComposedArtifact("PublicHttps", ["approved.example.com"]);
+        var candidate = PlatformEgressAcsCompiler.CompileComposedCandidate(
+            artifact,
+            "canonical-policy",
+            "source-revision-1");
+
+        Assert.True(candidate.IsSuccess, candidate.Failure?.Code);
+        Assert.Equal(artifact.ContentSha256, candidate.Candidate!.SourceHash);
+        Assert.Equal(PlatformEgressMode.PublicHttps, candidate.Candidate.Mode);
+        Assert.Equal(["approved.example.com"], candidate.Candidate.ApprovedDestinations
+            .Select(destination => destination.Host));
+
+        var systemOnly = PlatformEgressAcsCompiler.CompileComposedSystemOnlyCandidate(
+            artifact,
+            "canonical-policy",
+            "source-revision-1");
+        Assert.True(systemOnly.IsSuccess, systemOnly.Failure?.Code);
+        Assert.Equal(artifact.ContentSha256, systemOnly.Candidate!.SourceHash);
+        Assert.Equal(PlatformEgressMode.Allowlist, systemOnly.Candidate.Mode);
+        Assert.Empty(systemOnly.Candidate.ApprovedDestinations);
+        Assert.Equal(
+            SystemHosts.OrderBy(host => host, StringComparer.Ordinal),
+            systemOnly.Candidate.SystemDestinations.Select(destination => destination.Host));
+
+        Assert.Equal(
+            "network_manifest_mismatch",
+            PlatformEgressAcsCompiler.CompileCandidate(
+                artifact, "canonical-policy", "source-revision-1").Failure?.Code);
+        Assert.Equal(
+            "network_manifest_mismatch",
+            PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+                artifact, "canonical-policy", "source-revision-1").Failure?.Code);
+    }
+
+    [Fact]
     public void SystemOnlyCompilationPreservesTheNormalCandidate()
     {
         var artifact = CreateArtifact("PublicHttps", ["approved.example.com"]);
@@ -412,6 +449,16 @@ public sealed class PlatformEgressAcsCompilerTests
             }
         });
         return NativeAcsFiniteNetworkProfile.CreateArtifact(json);
+    }
+
+    private static NativeAcsArtifact CreateComposedArtifact(string mode, IEnumerable<string> approved)
+    {
+        var networkArtifact = CreateArtifact(mode, approved);
+        var networkData = Encoding.UTF8.GetString(
+            networkArtifact.Files.Single(file => file.RelativePath == "policy/data.json").Bytes.AsSpan());
+        return NativeAcsComposableDomainsProfile.CreateArtifact(
+            """{"allowed_action_ids":["merge"]}""",
+            networkData);
     }
 
     private static NativeAcsArtifact ReplaceData(NativeAcsArtifact artifact, string json) =>

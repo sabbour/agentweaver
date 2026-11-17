@@ -15,6 +15,7 @@
     "docs/authoring/templates/adr.md",
     "docs/specs/native-cli-api-acceptance.md",
     "docs/specs/canonical-acs-policy-history-read-slice.md",
+    "docs/specs/native-acs-composable-domains.md",
     "docs/specs/session-material-persistence-and-recovery.md",
     "docs/architecture/decisions/0003-events-owned-session-material.md",
     "docs/guide/find-cli-commands.md",
@@ -95,6 +96,23 @@
     "docs/reference/mcp-tools.md"
   ],
   "rules": [
+    {
+      "name": "Native ACS composable domains",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Policy.Acs/",
+        "services/environment/Agentweaver.Environment/PlatformEgressAcsCompiler.cs",
+        "tests/Agentweaver.Policy.Acs.Tests/",
+        "tests/Agentweaver.Environment.Tests/PlatformEgressAcsCompilerTests.cs",
+        "scripts/ci/v1-test-plan.mjs",
+        "scripts/ci/tests/v1-ci.test.mjs"
+      ],
+      "required": [
+        "docs/specs/native-acs-composable-domains.md",
+        "docs/reference/contracts.md",
+        "docs/architecture/environment-egress.md",
+        "docs/guide/testing.md"
+      ]
+    },
     {
       "name": "Native .NET CLI and Gateway contracts",
       "sourcePrefixes": [

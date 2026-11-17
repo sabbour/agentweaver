@@ -174,6 +174,8 @@ any bundle or data path that points outside the supplied artifact. The
 pinned ACS package contains a Linux-x64 native library. To run its evaluator
 tests, use Linux and set `ACS_OPA_PATH` to the pinned OPA 0.70.0 executable
 described in the [ACS runtime asset guide](https://github.com/sabbour/agentweaver/blob/v1/eng/acs/README.md).
+The composed-domain tests also check fixed module bytes, separate data
+namespaces, and independent action and network decisions.
 
 Run these commands from the repository root. Replace `/path/to/opa` with the
 full path of the pinned OPA executable from the runtime asset guide.
@@ -186,9 +188,11 @@ dotnet test tests/Agentweaver.Policy.Acs.Tests/Agentweaver.Policy.Acs.Tests.cspr
 
 The suite checks content hashes, bounded facts, default deny, hard-deny
 precedence, unavailable verified-human facts, native failures and conversion
-goldens against the existing Policy adapter. Native tests are skipped when the
-pinned OPA executable is not available or the host is not Linux. These tests do
-not activate ACS or change the deployed v4 Policy path.
+goldens against the existing Policy adapter. The `native-acs` Ubuntu CI shard
+downloads OPA 0.70.0, verifies its pinned SHA-256, and requires each named
+native test to pass. `ComposedNativeSelectorKeepsDomainDecisionsIndependent`
+is one of those required tests. A Windows skip does not satisfy this Linux CI
+check. These tests do not activate ACS or change the deployed v4 Policy path.
 
 ## Test the canonical Policy API
 

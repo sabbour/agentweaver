@@ -27,6 +27,7 @@ export const nativeAcsRequiredMethods = [
   'HardDenyPrecedesAllowAndUnavailableHumanFactsRemainUnavailable',
   'NativeRuntimeErrorsFailClosed',
   'NativeEvaluationTimeoutFailsClosed',
+  'ComposedNativeSelectorKeepsDomainDecisionsIndependent',
 ].map((name) => `Agentweaver.Policy.Acs.Tests.NativeAcsPolicyTests.${name}`);
 
 export function loadBrokerWeights(path = brokerWeightsPath) {

@@ -22,19 +22,40 @@ public sealed class NativeAcsPolicyEvaluator
     }
 
     /// <summary>Validates inputs before native evaluation. A cleanup failure overrides even an allow or deny result with an error.</summary>
-    public async Task<NativeAcsEvaluationResult> EvaluateAsync(
+    public Task<NativeAcsEvaluationResult> EvaluateAsync(
         NativeAcsArtifact artifact,
         InterventionPoint interventionPoint,
         NativeAcsEvaluationSnapshot snapshot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        EvaluateCoreAsync(artifact, interventionPoint, snapshot, null, cancellationToken);
+
+    public Task<NativeAcsEvaluationResult> EvaluateComposedAsync(
+        NativeAcsArtifact artifact,
+        NativeAcsDomainId domain,
+        InterventionPoint interventionPoint,
+        NativeAcsEvaluationSnapshot snapshot,
+        CancellationToken cancellationToken = default) =>
+        EvaluateCoreAsync(artifact, interventionPoint, snapshot, domain, cancellationToken);
+
+    private async Task<NativeAcsEvaluationResult> EvaluateCoreAsync(
+        NativeAcsArtifact artifact,
+        InterventionPoint interventionPoint,
+        NativeAcsEvaluationSnapshot snapshot,
+        NativeAcsDomainId? domain,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(artifact);
         ArgumentNullException.ThrowIfNull(snapshot);
 
         if (cancellationToken.IsCancellationRequested)
             return Error("unavailable", "evaluation_cancelled");
+        if (domain is { } selectedDomain &&
+            (!Enum.IsDefined(selectedDomain) || interventionPoint != InterventionPoint.PreModelCall))
+            return Error("unavailable", "domain_intervention_point_unsupported");
 
-        var validation = _validator.Validate(artifact);
+        var validation = domain is null
+            ? _validator.Validate(artifact)
+            : _validator.ValidateComposed(artifact);
         if (!validation.IsValid)
         {
             var failureCode = validation.DependencyFailure switch
@@ -51,7 +72,8 @@ public sealed class NativeAcsPolicyEvaluator
         if (!IsValidSnapshot(snapshot))
             return Error(artifactHash, "snapshot_invalid");
 
-        if (NativeAcsFiniteNetworkProfile.IsCandidate(artifact) &&
+        if ((domain == NativeAcsDomainId.PlatformNetwork ||
+             domain is null && NativeAcsFiniteNetworkProfile.IsCandidate(artifact)) &&
             snapshot.Network is { } network &&
             !IsValidNetworkFacts(network))
             return Deny(artifactHash);
@@ -73,7 +95,8 @@ public sealed class NativeAcsPolicyEvaluator
 
             var manifestPath = Path.Combine(workDirectory, "manifest.yaml");
             var control = AgentControl.FromPath(manifestPath);
-            using var snapshotDocument = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(CreateSnapshot(snapshot)));
+            using var snapshotDocument = JsonDocument.Parse(
+                JsonSerializer.SerializeToUtf8Bytes(CreateSnapshot(snapshot, domain)));
             var result = await control.EvaluateInterventionPointAsync(
                 interventionPoint,
                 snapshotDocument.RootElement,
@@ -185,7 +208,9 @@ public sealed class NativeAcsPolicyEvaluator
                 label.All(character => char.IsAsciiLetterLower(character) || char.IsAsciiDigit(character) || character == '-'));
     }
 
-    private static NativeAcsSnapshotDocument CreateSnapshot(NativeAcsEvaluationSnapshot snapshot)
+    private static NativeAcsSnapshotDocument CreateSnapshot(
+        NativeAcsEvaluationSnapshot snapshot,
+        NativeAcsDomainId? domain)
     {
         var verifiedHuman = snapshot.VerifiedHumanIdentity;
         return new NativeAcsSnapshotDocument(
@@ -207,6 +232,9 @@ public sealed class NativeAcsPolicyEvaluator
                         network.Destination is { } destination
                             ? new NativeAcsNetworkDestinationFacts(destination.Kind, destination.Value)
                             : null)
+                    : null,
+                domain is { } selectedDomain
+                    ? NativeAcsComposableDomainsProfile.GetPolicyId(selectedDomain)
                     : null));
     }
 
@@ -260,7 +288,9 @@ public sealed class NativeAcsPolicyEvaluator
         [property: JsonPropertyName("human_tenant_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? HumanTenantId,
         [property: JsonPropertyName("network"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        NativeAcsNetworkFacts? Network);
+        NativeAcsNetworkFacts? Network,
+        [property: JsonPropertyName("domain_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? DomainId);
 
     private sealed record NativeAcsNetworkFacts(
         [property: JsonPropertyName("check_kind")] string CheckKind,
