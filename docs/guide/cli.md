@@ -539,6 +539,20 @@ input contains a Key Vault secret name and version, never an API key. For the
 full procedure, see
 [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).
 
+## Run workflow generation through the Gateway
+
+The `workflow-generation` case uses `api invoke` to submit a workflow draft,
+check job status and result, and verify native completion evidence. It uses a
+run-bound `projects.orchestrator` identity and a separate unbound
+`projects.admin` identity for the same actor and tenant. The case also cancels
+and verifies the named disposable run.
+
+Use an approved non-production Gateway and a disposable run with a bounded
+model budget. The case creates a durable generation job and draft. For the
+input, sign-in, dry run, and evidence steps, follow
+[Run workflow generation](./api-acceptance-migration.md#run-workflow-generation).
+This route-specific case does not replace full P1 API acceptance.
+
 ## Run the read-only Gateway API case
 
 The checked-in case script checks Gateway discovery and the signed-in actor’s authorization context through normal CLI commands. It runs auth status, api operations, api describe, and rest; it does not mutate resources, send model requests, or launch a browser.

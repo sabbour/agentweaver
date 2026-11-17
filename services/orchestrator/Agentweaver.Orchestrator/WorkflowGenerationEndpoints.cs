@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -54,7 +56,11 @@ public static partial class CoordinationEndpoints
 
             var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, request.RunId, cancellationToken).ConfigureAwait(false);
-            RequireProjectWriteAndOrchestratorAuthority(selection, projectId, request.RunId, actor);
+            var projectWriterBearer = RequireWorkflowGenerationProjectWriterBearer(context);
+            var projectWriterAuthority = await projects.ReadWorkflowGenerationProjectWriterAuthorityAsync(
+                context, projectId, projectWriterBearer, cancellationToken).ConfigureAwait(false);
+            RequireProjectWriteAndOrchestratorAuthority(
+                selection, projectWriterAuthority, projectId, request.RunId, actor);
             var existing = await jobs.ReadByIdempotencyKeyAsync(
                 selection.Authorization.TenantId,
                 projectId,
@@ -104,7 +110,7 @@ public static partial class CoordinationEndpoints
                         throw new CoordinationException(
                             "workflow_generation_binding_stale", StatusCodes.Status409Conflict);
                     await QueueJobAsync(
-                        context, existing, actor, queue, timeProvider).ConfigureAwait(false);
+                        context, existing, actor, projectWriterBearer, queue, timeProvider).ConfigureAwait(false);
                 }
                 return Results.Accepted(
                     WorkflowGenerationExecution.CreateEnvelope(existing).StatusUrl,
@@ -161,7 +167,8 @@ public static partial class CoordinationEndpoints
             var job = created.Job;
             await RequireValidCompletedResultAsync(jobs, job, cancellationToken).ConfigureAwait(false);
             if (WorkflowGenerationExecution.CanEnqueue(job))
-                await QueueJobAsync(context, job, actor, queue, timeProvider).ConfigureAwait(false);
+                await QueueJobAsync(
+                    context, job, actor, projectWriterBearer, queue, timeProvider).ConfigureAwait(false);
 
             var envelope = WorkflowGenerationExecution.CreateEnvelope(job);
             context.Response.Headers.Location = envelope.StatusUrl;
@@ -172,15 +179,28 @@ public static partial class CoordinationEndpoints
         HttpContext context,
         WorkflowGenerationJob job,
         CoordinationActor actor,
+        AuthenticationHeaderValue projectWriterBearer,
         WorkflowGenerationWorkQueue queue,
         TimeProvider timeProvider)
     {
         var runtimeActor = await CreateRuntimeActorAsync(context, actor, timeProvider).ConfigureAwait(false);
+        SecretCredential projectWriterCredential;
+        try
+        {
+            projectWriterCredential = CreateProjectWriterCredential(projectWriterBearer, timeProvider);
+        }
+        catch
+        {
+            runtimeActor.Bearer.Invalidate();
+            throw;
+        }
         var work = new WorkflowGenerationWork(
-            job.ProjectId, job.RunId, job.SessionId, actor, context.User, runtimeActor, job.JobId);
+            job.ProjectId, job.RunId, job.SessionId, actor, context.User, runtimeActor,
+            projectWriterCredential, job.JobId);
         if (!queue.TryEnqueue(work))
         {
             runtimeActor.Bearer.Invalidate();
+            projectWriterCredential.Invalidate();
             throw new CoordinationException(
                 "workflow_generation_queue_full", StatusCodes.Status503ServiceUnavailable);
         }
@@ -294,27 +314,67 @@ public static partial class CoordinationEndpoints
 
     internal static void RequireProjectWriteAndOrchestratorAuthority(
         AuthorizedRunSelection selection,
+        ProjectsAuthorizationContext projectWriterAuthority,
         string projectId,
         string runId,
         CoordinationActor actor)
     {
-        var authority = selection.Authorization;
-        // Require both project permissions at a positive role revision on this bound project.
-        if (authority.ContractVersion != 1 || authority.Issuer != actor.Issuer ||
-            authority.ActorId != actor.Subject || authority.BoundProjectId != projectId ||
-            authority.BoundRunId != runId || string.IsNullOrWhiteSpace(authority.TenantId) ||
-            !authority.EffectiveAuthority.Any(resource =>
+        var runAuthority = selection.Authorization;
+        if (runAuthority.ContractVersion != 1 || runAuthority.Issuer != actor.Issuer ||
+            runAuthority.ActorId != actor.Subject || runAuthority.BoundProjectId != projectId ||
+            runAuthority.BoundRunId != runId || string.IsNullOrWhiteSpace(runAuthority.TenantId) ||
+            !runAuthority.EffectiveAuthority.Any(resource =>
                 resource.ResourceType == "project" && resource.ResourceId == projectId &&
                 !resource.Permissions.IsDefault &&
                 resource.Permissions.Any(permission =>
                     permission.RoleRevision > 0 && permission.Permission == "acceptRunSelection")) ||
-            !authority.EffectiveAuthority.Any(resource =>
+            projectWriterAuthority.ContractVersion != 1 ||
+            projectWriterAuthority.Issuer != actor.Issuer ||
+            projectWriterAuthority.ActorId != actor.Subject ||
+            projectWriterAuthority.TenantId != runAuthority.TenantId ||
+            projectWriterAuthority.BoundProjectId is not null ||
+            projectWriterAuthority.BoundRunId is not null ||
+            projectWriterAuthority.MembershipRevision < 1 ||
+            projectWriterAuthority.EffectiveAuthority.IsDefault ||
+            !projectWriterAuthority.EffectiveAuthority.Any(resource =>
                 resource.ResourceType == "project" && resource.ResourceId == projectId &&
                 !resource.Permissions.IsDefault &&
                 resource.Permissions.Any(permission =>
                     permission.RoleRevision > 0 && permission.Permission == "writeProjects")))
             throw new CoordinationException(
                 "project_orchestrator_role_required_acceptRunSelection", StatusCodes.Status403Forbidden);
+    }
+
+    private static AuthenticationHeaderValue RequireWorkflowGenerationProjectWriterBearer(HttpContext context)
+    {
+        var values = context.Request.Headers["X-Agentweaver-Project-Authorization"];
+        if (values.Count != 1 ||
+            !AuthenticationHeaderValue.TryParse(values[0], out var bearer) ||
+            !string.Equals(bearer.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(bearer.Parameter) ||
+            bearer.Parameter.Length > 16_384 ||
+            bearer.Parameter.Any(char.IsWhiteSpace))
+            throw new CoordinationException("unauthenticated", StatusCodes.Status401Unauthorized);
+        return bearer;
+    }
+
+    private static SecretCredential CreateProjectWriterCredential(
+        AuthenticationHeaderValue bearer,
+        TimeProvider timeProvider)
+    {
+        DateTimeOffset expiresAt;
+        try
+        {
+            var token = new JwtSecurityTokenHandler().ReadJwtToken(bearer.Parameter);
+            expiresAt = new DateTimeOffset(token.ValidTo, TimeSpan.Zero);
+        }
+        catch (ArgumentException)
+        {
+            throw new CoordinationException("unauthenticated", StatusCodes.Status401Unauthorized);
+        }
+        if (expiresAt <= timeProvider.GetUtcNow())
+            throw new CoordinationException("unauthenticated", StatusCodes.Status401Unauthorized);
+        return new SecretCredential(bearer.Parameter!, expiresAt, timeProvider);
     }
 
     internal static void RequirePrePlanState(
@@ -357,6 +417,7 @@ internal sealed record WorkflowGenerationWork(
     CoordinationActor Caller,
     ClaimsPrincipal Principal,
     RuntimeActorAuthorization Actor,
+    SecretCredential ProjectWriterBearer,
     Guid JobId);
 
 internal sealed class WorkflowGenerationWorkQueue
@@ -434,17 +495,32 @@ internal sealed class WorkflowGenerationExecutor(
 
     private async Task ExecuteOwnedAsync(WorkflowGenerationWork work, CancellationToken cancellationToken)
     {
-        if (!work.Actor.Bearer.IsUsable())
-            return;
-        var job = await jobs.TryBeginExecutionAsync(
-            work.ProjectId, work.JobId, cancellationToken).ConfigureAwait(false);
+        WorkflowGenerationJob? job;
+        try
+        {
+            job = await jobs.TryBeginExecutionAsync(
+                work.ProjectId, work.JobId, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            InvalidateWorkCredentials(work);
+            throw;
+        }
         if (job is null)
+        {
+            InvalidateWorkCredentials(work);
             return;
+        }
 
         var completionVerified = false;
         var sendAdmitted = job.ExecutionPhase == "send-admitted";
         try
         {
+            if (!work.Actor.Bearer.IsUsable())
+                throw new CoordinationException("workflow_generation_actor_expired", StatusCodes.Status403Forbidden);
+            if (!work.ProjectWriterBearer.IsUsable())
+                throw new CoordinationException(
+                    "workflow_generation_project_writer_expired", StatusCodes.Status403Forbidden);
             var context = CreateContext(work, services);
             var current = await ReadCurrentAsync(context, work, job, cancellationToken).ConfigureAwait(false);
             if (job.ExecutionPhase != "send-admitted")
@@ -589,6 +665,10 @@ internal sealed class WorkflowGenerationExecutor(
             logger.LogWarning("Workflow generation job {JobId} failed with {FailureCode}.",
                 job.JobId, failureCode);
         }
+        finally
+        {
+            InvalidateWorkCredentials(work);
+        }
     }
 
     private async Task<WorkflowGenerationCurrent> ReadCurrentAsync(
@@ -599,11 +679,19 @@ internal sealed class WorkflowGenerationExecutor(
     {
         if (!work.Actor.Bearer.IsUsable())
             throw new CoordinationException("workflow_generation_actor_expired", StatusCodes.Status403Forbidden);
+        if (!work.ProjectWriterBearer.IsUsable())
+            throw new CoordinationException(
+                "workflow_generation_project_writer_expired", StatusCodes.Status403Forbidden);
         var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false);
         CoordinationEndpoints.RequireOrchestratorScope(context.User);
+        var projectWriterAuthority = await projects.ReadWorkflowGenerationProjectWriterAuthorityAsync(
+            context,
+            work.ProjectId,
+            new AuthenticationHeaderValue("Bearer", work.ProjectWriterBearer.GetValue()),
+            cancellationToken).ConfigureAwait(false);
         CoordinationEndpoints.RequireProjectWriteAndOrchestratorAuthority(
-            selection, work.ProjectId, work.RunId, work.Caller);
+            selection, projectWriterAuthority, work.ProjectId, work.RunId, work.Caller);
         await CoordinationEndpoints.RequireUnchangedAuthorizedSelectionAsync(
             context, work.ProjectId, work.RunId, selection, projects, cancellationToken)
             .ConfigureAwait(false);
@@ -634,6 +722,12 @@ internal sealed class WorkflowGenerationExecutor(
             throw new CoordinationException(
                 "workflow_generation_binding_stale", StatusCodes.Status409Conflict);
         return new(selection, decision, registration, selectionHash);
+    }
+
+    private static void InvalidateWorkCredentials(WorkflowGenerationWork work)
+    {
+        work.Actor.Bearer.Invalidate();
+        work.ProjectWriterBearer.Invalidate();
     }
 
     private async Task<(RuntimeRootTurnCompletionEvidence Evidence, string Output)> RecordCompletionAsync(

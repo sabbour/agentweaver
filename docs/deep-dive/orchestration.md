@@ -319,18 +319,31 @@ sequenceDiagram
 
 ### Generate a workflow draft
 
-The Orchestrator owner provides these routes:
+The Orchestrator owns these routes:
 
 - `POST /api/projects/{projectId}/workflows/generate`
 - `GET /api/projects/{projectId}/workflows/generation-jobs/{jobId}`
 - `GET /api/projects/{projectId}/workflows/generation-jobs/{jobId}/result`
 
-The owner requires an `Idempotency-Key`, the `projects.orchestrator` scope, current
-project write and Orchestrator authority, and the exact accepted coordinator
-root. It checks the current run selection, model registration, execution fence,
-and decision state before it sends work. The request names only the run,
-session, expected decision version, and prompt. The owner derives the tenant,
-actor, selection, model, fence, and native request ID.
+The Gateway exposes these public routes under `/api/v1`. The POST requires an
+`Idempotency-Key` and two separate credentials: a run-bound bearer with
+`api.read` and `projects.orchestrator`, plus an unbound
+`X-Agentweaver-Project-Authorization` bearer with current `writeProjects`
+authority for the exact project. Both credentials must identify the same
+issuer, actor, and tenant. The Gateway and Orchestrator check each authority
+separately. The project-writer bearer is not sent to the AgentHost or used for
+model execution. Status and result reads use the run-bound bearer.
+
+The owner also requires current `acceptRunSelection` authority and the exact
+accepted coordinator root. It checks the current run selection, model
+registration, execution fence, and decision state before it sends work. The
+request names only the run, session, expected decision version, and prompt.
+The owner derives the tenant, actor, selection, model, fence, and native
+request ID.
+
+The owner rechecks both authorities when it queues work and during each worker
+continuation. It keeps the project-writer credential separate from the
+run-bound credential and invalidates it after the job.
 
 The owner saves the job and native request ID before it sends a model turn.
 An identical authenticated POST returns the same job. A changed request with
@@ -372,27 +385,35 @@ needs `SELECT`, `INSERT`, and `UPDATE` on the job table. It has no `DELETE`
 grant. The migration is optional during rollout; readiness rejects an applied
 but incomplete schema.
 
-These are Orchestrator owner routes. The read-only CLI API case does not
-exercise them. The diagram shows the owner source flow, not a deployed or
-live-model test.
+The workflow-generation CLI case exercises these routes through the public
+Gateway with normal `api invoke` commands. It checks one model-backed flow and
+cancels its approved disposable run. Its local tests use controlled responses.
+The sequence shows source behavior; it does not establish a deployed service.
 
 ```mermaid
 sequenceDiagram
-    actor Caller
-    participant Core as Orchestrator
+    actor CLI as Native CLI
+    participant Gateway
     participant Projects
+    participant Core as Orchestrator
     participant DB as Orchestrator PostgreSQL
     participant Host as Accepted root AgentHost
     participant Events
-    Note over Caller,Events: Gateway admission remains pending PR 4.
-    Caller->>Core: POST workflow request with Idempotency-Key
-    Core->>Projects: Check current authority and accepted selection
+    Note over CLI,Projects: Use a run-bound bearer and a separate unbound project-writer bearer for the same actor and tenant.
+    CLI->>Gateway: POST public route with both bearers and Idempotency-Key
+    Gateway->>Projects: Check run and project-writer authority separately
+    Projects-->>Gateway: Current accepted selection and writeProjects authority
+    Gateway->>Core: Forward request with both credentials
+    Core->>Projects: Recheck run selection and project-writer authority
+    Projects-->>Core: Current authority for the same actor and tenant
     Core->>DB: Save job and stable native request ID
     alt Work queue is full
-        Core-->>Caller: 503, retry the same request and key
+        Core-->>Gateway: 503, retry the same request and key
+        Gateway-->>CLI: 503, job may already be saved
     else Job is queued
-        Core-->>Caller: 202 with status and result URLs
-        Core->>Projects: Recheck authority, root, selection, fence and decision
+        Core-->>Gateway: 202 with owner status and result URLs
+        Gateway-->>CLI: 202 with public status and result URLs
+        Core->>Projects: Recheck both authorities, root, selection, fence and decision
         Core->>DB: Persist send-admitted phase
         Core->>Host: Send the same read-only native request
         Host->>Events: Append user, assistant and cache material
@@ -400,10 +421,14 @@ sequenceDiagram
         Host-->>Core: Return native completion evidence
         Core->>Events: Read and verify acknowledged material
         Core->>DB: Store validated typed draft and completion evidence
-        Caller->>Core: GET status or result
-        Core->>Projects: Recheck actor and project authority
-        Core-->>Caller: Return job status or completed result
+        CLI->>Gateway: GET status or result with run-bound bearer
+        Gateway->>Core: Forward the read request
+        Core->>Projects: Recheck run authority, selection and job ownership
+        Projects-->>Core: Current run authority and job binding
+        Core-->>Gateway: Return job status or completed result
+        Gateway-->>CLI: Return job status or completed result
     end
+    Note over CLI,Gateway: The acceptance case cancels the approved disposable run and verifies its terminal status.
 ```
 
 ### Understand workflows, plans, and gates

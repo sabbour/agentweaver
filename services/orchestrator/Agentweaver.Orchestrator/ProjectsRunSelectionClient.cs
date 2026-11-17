@@ -98,6 +98,37 @@ internal sealed class ProjectsRunSelectionClient(
         return authority;
     }
 
+    internal async Task<ProjectsAuthorizationContext> ReadWorkflowGenerationProjectWriterAuthorityAsync(
+        HttpContext context,
+        string projectId,
+        AuthenticationHeaderValue projectWriterBearer,
+        CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        var authority = await ReadAuthorizationAsync(
+            owner, projectWriterBearer, tenant, cancellationToken).ConfigureAwait(false);
+        if (authority.ContractVersion != 1 ||
+            authority.Issuer != caller.Issuer ||
+            authority.ActorId != caller.Subject ||
+            string.IsNullOrWhiteSpace(authority.TenantId) ||
+            tenant is not null && authority.TenantId != tenant ||
+            authority.MembershipRevision < 1 ||
+            authority.BoundProjectId is not null ||
+            authority.BoundRunId is not null ||
+            authority.EffectiveAuthority.IsDefault ||
+            !authority.EffectiveAuthority.Any(item =>
+                item.ResourceType == "project" &&
+                item.ResourceId == projectId &&
+                !item.Permissions.IsDefault &&
+                item.Permissions.Any(permission =>
+                    permission.Permission == "writeProjects" && permission.RoleRevision > 0)))
+            throw new CoordinationException(
+                "workflow_generation_project_write_denied", StatusCodes.Status403Forbidden);
+        return authority;
+    }
+
     internal async Task<IssueSyncProjectProof> ReadTeamSyncProjectProofAsync(
         HttpContext context,
         string projectId,

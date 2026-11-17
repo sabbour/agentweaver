@@ -23,5 +23,6 @@
     <None Include="..\..\tests\fixtures\critical-paths.json" Link="Fixtures\critical-paths.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\acceptance\api\read-only-gateway.mjs" Link="Scripts\acceptance\api\read-only-gateway.mjs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\acceptance\api\workspace-repository-read.mjs" Link="Scripts\acceptance\api\workspace-repository-read.mjs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\acceptance\api\workflow-generation.mjs" Link="Scripts\acceptance\api\workflow-generation.mjs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

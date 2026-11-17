@@ -138,6 +138,7 @@ export function buildCommands(input) {
     { id: 'auth-status', args: ['auth', 'status', '--scope', 'api.read', ...targetArgs] },
     { id: 'api-operations', args: ['api', 'operations', ...targetArgs] },
     { id: 'api-describe', args: ['api', 'describe', 'getAuthorizationContext', ...targetArgs] },
+    { id: 'api-invoke-authorization-context', args: ['api', 'invoke', 'getAuthorizationContext', ...targetArgs] },
     {
       id: 'rest-authorization-context',
       args: ['rest', ...targetArgs, '--scope', 'api.read', '--method', 'GET', '--url', '/api/v1/authorization/context'],
@@ -315,6 +316,10 @@ async function runCase(options, env = process.env) {
           failure = 'The target Gateway contract does not match the expected authorization-context route.';
           break;
         }
+      } else if (command.id === 'api-invoke-authorization-context') {
+        const response = parseJson(record.stdout, command.id);
+        if (response?.status !== 200) throw new Error('The API invoke did not return HTTP 200.');
+        requireActorContext(response.body, input, command.id);
       } else if (command.id === 'rest-authorization-context') {
         const response = parseJson(record.stdout, command.id);
         if (response?.status !== 200) throw new Error('The rest request did not return HTTP 200.');

@@ -2,4 +2,8 @@
 
 **Status: Superseded.** The former native acceptance runner and its `test` command were removed. This specification no longer describes the supported acceptance interface.
 
-Use [Run a read-only CLI API case](../guide/api-acceptance-migration.md) for the current API acceptance procedure. The checked-in case invokes `auth status`, `api operations`, `api describe`, and `rest` through the native CLI apphost. It is read-only and does not prove a full API journey or P1 acceptance.
+Use [Run native CLI API cases](../guide/api-acceptance-migration.md) for the
+current targeted procedures. The read-only Gateway case invokes `auth status`,
+`api operations`, `api describe`, and `rest` through the native apphost. The
+workflow-generation case uses `api invoke` for one model-backed Gateway flow
+and disposable-run cleanup. Neither case replaces full P1 API acceptance.

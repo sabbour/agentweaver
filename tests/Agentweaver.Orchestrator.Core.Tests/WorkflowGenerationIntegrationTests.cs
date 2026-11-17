@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.IdentityModel.Tokens.Jwt;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
@@ -43,8 +44,12 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
     private AuthorizedRunSelection _selection = null!;
     private OrchestratorOptions _options = null!;
     private CoordinationOwnerStore _sessions = null!;
+    private CoordinatorDecisionOwnerStore _decisions = null!;
     private RuntimeRegistrationOwner _registrationOwner = null!;
     private RuntimeRegistration _registration = null!;
+    private ProjectsRunSelectionClient _projects = null!;
+    private ProjectsHandler _projectsHandler = null!;
+    private string _projectWriterToken = null!;
     private long _decisionVersion;
     private readonly List<HttpClient> _ownerClients = [];
 
@@ -83,19 +88,23 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             new EffectiveRunSelection(Project, Run, 1, 1, 1, "context-v1", snapshot),
             new ProjectsAuthorizationContext(1, Issuer, Subject, Tenant, 1, Project, Run,
                 [new ProjectsAuthority("project", Project,
-                    [new("acceptRunSelection", 1), new("readRunSelection", 1), new("writeProjects", 1)])]));
+                    [new("acceptRunSelection", 1), new("readRunSelection", 1)])]));
         _selection = selection;
         var options = new OrchestratorOptions(
             Issuer, "orchestrator", "https://projects.test/", "projects",
             "https://events.test/", "events", _schema);
         _options = options;
+        _projectWriterToken = CreateProjectWriterToken();
+        _projectsHandler = new ProjectsHandler(selection, _projectWriterToken);
         var projects = new ProjectsRunSelectionClient(
-            Client(new ProjectsHandler(selection)), options,
+            Client(_projectsHandler), options,
             new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
+        _projects = projects;
         var catalog = ProviderCatalog.Create([], [], []).Value!;
         var contexts = new CoordinatorRunSelectionContextStore(
             fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
         var decisions = new CoordinatorDecisionOwnerStore(fixture.DataSource, _schema, contexts);
+        _decisions = decisions;
         var sessions = new CoordinationOwnerStore(fixture.DataSource, _schema, TimeProvider.System, decisions);
         _sessions = sessions;
         var checkpoints = new PostgresMafCheckpointStore(fixture.DataSource, _schema, null);
@@ -160,23 +169,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         var actionGrants = new ExecutableActionGrantOwnerStore(
             fixture.DataSource, options, TimeProvider.System, projects, new HttpContextAccessor());
 
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddAuthentication("test").AddScheme<AuthenticationSchemeOptions, TestAuthentication>(
-            "test", _ => { });
-        builder.Services.AddAuthorization();
-        builder.Services.AddSingleton(options);
-        builder.Services.AddSingleton(projects);
-        builder.Services.AddSingleton(sessions);
-        builder.Services.AddSingleton(decisions);
-        builder.Services.AddSingleton(registrationOwner);
-        builder.Services.AddSingleton(_jobs);
-        builder.Services.AddSingleton(_queue);
-        builder.Services.AddSingleton(TimeProvider.System);
-        _app = builder.Build();
-        _app.UseAuthentication();
-        _app.UseAuthorization();
-        _app.MapWorkflowGenerationEndpoints();
+        _app = CreateTestApplication(_jobs, _queue, projects);
         await _app.StartAsync();
         _executor = new WorkflowGenerationExecutor(
             _jobs, projects, sessions, decisions, registrationOwner, actionGrants, events,
@@ -200,7 +193,8 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
     {
         var fillerCredential = new SecretCredential("filler", DateTimeOffset.UtcNow.AddMinutes(5));
         var filler = new WorkflowGenerationWork(
-            Project, Run, Root, _actor, Principal(), new(fillerCredential, Tenant), Guid.NewGuid());
+            Project, Run, Root, _actor, Principal(), new(fillerCredential, Tenant),
+            new SecretCredential("project-filler", DateTimeOffset.UtcNow.AddMinutes(5)), Guid.NewGuid());
         for (var index = 0; index < 64; index++)
             Assert.True(_queue.TryEnqueue(filler));
 
@@ -231,6 +225,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         }
         Assert.NotNull(scheduled);
         fillerCredential.Invalidate();
+        filler.ProjectWriterBearer.Invalidate();
         await ExecuteAsync(scheduled);
         using var status = await GetStatusAsync(stored.JobId);
         Assert.Equal(HttpStatusCode.OK, status.StatusCode);
@@ -247,6 +242,135 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         Assert.Equal(WorkflowDefinitionOrigin.Generated, result.WorkflowDefinition.Origin);
         Assert.Equal(completed.Artifact!.ArtifactId, result.ArtifactId);
         Assert.Equal(1, _host.NativeTurns);
+    }
+
+    [Fact]
+    public async Task ProjectWriterAuthorityMustMatchTheRunActor()
+    {
+        _projectsHandler.ProjectWriterAuthority = new ProjectsAuthorizationContext(
+            1, Issuer, "another-actor", Tenant, 1, null, null,
+            [new ProjectsAuthority("project", Project, [new("writeProjects", 1)])]);
+
+        using var response = await SubmitAsync("writer-mismatch");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Null(await _jobs.ReadByIdempotencyKeyAsync(
+            Tenant, Project, Issuer, Subject, "writer-mismatch", CancellationToken.None));
+        Assert.Empty(_host.Requests);
+    }
+
+    [Theory]
+    [InlineData("actor")]
+    [InlineData("project-writer")]
+    public async Task RevokedQueuedCredentialStopsBeforeNativeWork(string credentialName)
+    {
+        using var submitted = await SubmitAsync($"revoked-{credentialName}");
+        Assert.Equal(HttpStatusCode.Accepted, submitted.StatusCode);
+
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var reader = _queue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+        Assert.True(await reader.MoveNextAsync());
+        var work = reader.Current;
+        if (credentialName == "actor")
+            work.Actor.Bearer.Invalidate();
+        else
+            work.ProjectWriterBearer.Invalidate();
+
+        await ExecuteAsync(work);
+
+        var failed = await _jobs.ReadAsync(Project, work.JobId, CancellationToken.None);
+        Assert.Equal("failed", failed!.Status);
+        Assert.Equal("quiesced", failed.ExecutionPhase);
+        Assert.Equal("workflow_generation_failed", failed.FailureCode);
+        Assert.Empty(_host.Requests);
+        Assert.Equal(0, _host.NativeTurns);
+    }
+
+    [Theory]
+    [InlineData("actor", 6)]
+    [InlineData("project-writer", 11)]
+    public async Task ExpiredQueuedCredentialStopsBeforeNativeWork(string credentialName, int elapsedMinutes)
+    {
+        var writerToken = CreateProjectWriterToken();
+        _projectWriterToken = writerToken;
+        _projectsHandler.ProjectWriterToken = writerToken;
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var queue = new WorkflowGenerationWorkQueue();
+        await using var app = CreateTestApplication(_jobs, queue, _projects, clock);
+        await app.StartAsync();
+        var runToken = credentialName == "actor" ? "short-expiry-run-token" : "test-expiry-token";
+        using var submitted = await SubmitAsync(app, $"expired-{credentialName}", runToken, writerToken);
+        Assert.Equal(HttpStatusCode.Accepted, submitted.StatusCode);
+
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var reader = queue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+        Assert.True(await reader.MoveNextAsync());
+        var work = reader.Current;
+        clock.Advance(TimeSpan.FromMinutes(elapsedMinutes));
+
+        await ExecuteAsync(work);
+
+        var failed = await _jobs.ReadAsync(Project, work.JobId, CancellationToken.None);
+        Assert.Equal("failed", failed!.Status);
+        Assert.Equal("quiesced", failed.ExecutionPhase);
+        Assert.Equal("workflow_generation_failed", failed.FailureCode);
+        Assert.Empty(_host.Requests);
+        Assert.Equal(0, _host.NativeTurns);
+    }
+
+    [Fact]
+    public async Task RestartedQueueReattachesOnlyWithFreshCredentials()
+    {
+        const string key = "restart-reattach";
+        using var submitted = await SubmitAsync(key);
+        Assert.Equal(HttpStatusCode.Accepted, submitted.StatusCode);
+        var originalEnvelope =
+            await submitted.Content.ReadFromJsonAsync<WorkflowGenerationJobEnvelope>(JsonOptions);
+        Assert.NotNull(originalEnvelope);
+
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var originalReader = _queue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+        Assert.True(await originalReader.MoveNextAsync());
+        var originalWork = originalReader.Current;
+        var originalJob = await _jobs.ReadAsync(Project, originalWork.JobId, deadline.Token);
+        Assert.Equal(originalEnvelope.JobId, originalJob!.JobId);
+        originalWork.Actor.Bearer.Invalidate();
+        originalWork.ProjectWriterBearer.Invalidate();
+
+        var restartedJobs = new WorkflowGenerationJobStore(fixture.DataSource, _schema);
+        var restartedQueue = new WorkflowGenerationWorkQueue();
+        await using var restartedApp = CreateTestApplication(restartedJobs, restartedQueue, _projects);
+        await restartedApp.StartAsync();
+        var freshRunToken = "fresh-run-token";
+        var freshProjectWriterToken = CreateProjectWriterToken();
+        _projectWriterToken = freshProjectWriterToken;
+        _projectsHandler.ProjectWriterToken = freshProjectWriterToken;
+
+        using var retry = await SubmitAsync(
+            restartedApp, key, freshRunToken, freshProjectWriterToken);
+        Assert.Equal(HttpStatusCode.Accepted, retry.StatusCode);
+        var retryEnvelope = await retry.Content.ReadFromJsonAsync<WorkflowGenerationJobEnvelope>(JsonOptions);
+        Assert.Equal(originalEnvelope.JobId, retryEnvelope!.JobId);
+        Assert.Equal(originalJob.NativeRequestId, (await restartedJobs.ReadAsync(
+            Project, retryEnvelope.JobId, deadline.Token))!.NativeRequestId);
+
+        await using var restartedReader = restartedQueue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+        Assert.True(await restartedReader.MoveNextAsync());
+        var reattachedWork = restartedReader.Current;
+        try
+        {
+            Assert.Equal(originalEnvelope.JobId, reattachedWork.JobId);
+            Assert.Equal(freshRunToken, reattachedWork.Actor.Bearer.GetValue());
+            Assert.Equal(freshProjectWriterToken, reattachedWork.ProjectWriterBearer.GetValue());
+            Assert.True(reattachedWork.Actor.Bearer.IsUsable());
+            Assert.True(reattachedWork.ProjectWriterBearer.IsUsable());
+            Assert.Empty(_host.Requests);
+        }
+        finally
+        {
+            reattachedWork.Actor.Bearer.Invalidate();
+            reattachedWork.ProjectWriterBearer.Invalidate();
+        }
     }
 
     [Fact]
@@ -516,19 +640,53 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task<HttpResponseMessage> SubmitAsync(string key)
+    private Task<HttpResponseMessage> SubmitAsync(string key) =>
+        SubmitAsync(_app, key, "test-token", _projectWriterToken);
+
+    private async Task<HttpResponseMessage> SubmitAsync(
+        WebApplication app,
+        string key,
+        string runBearer,
+        string projectWriterBearer)
     {
-        using var client = _app.GetTestClient();
+        using var client = app.GetTestClient();
         using var message = new HttpRequestMessage(HttpMethod.Post, $"/api/projects/{Project}/workflows/generate")
         {
             Content = JsonContent.Create(
                 new GenerateProjectWorkflowRequest(Run, Root, _decisionVersion, "Create a workflow."),
                 options: JsonOptions)
         };
-        message.Headers.Authorization = new("Bearer", "test-token");
+        message.Headers.Authorization = new("Bearer", runBearer);
         message.Headers.Add("X-Agentweaver-Tenant", Tenant);
+        message.Headers.Add("X-Agentweaver-Project-Authorization", "Bearer " + projectWriterBearer);
         message.Headers.Add("Idempotency-Key", key);
         return await client.SendAsync(message);
+    }
+
+    private WebApplication CreateTestApplication(
+        WorkflowGenerationJobStore jobs,
+        WorkflowGenerationWorkQueue queue,
+        ProjectsRunSelectionClient projects,
+        TimeProvider? timeProvider = null)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test").AddScheme<AuthenticationSchemeOptions, TestAuthentication>(
+            "test", _ => { });
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton(_options);
+        builder.Services.AddSingleton(projects);
+        builder.Services.AddSingleton(_sessions);
+        builder.Services.AddSingleton(_decisions);
+        builder.Services.AddSingleton(_registrationOwner);
+        builder.Services.AddSingleton(jobs);
+        builder.Services.AddSingleton(queue);
+        builder.Services.AddSingleton(timeProvider ?? TimeProvider.System);
+        var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapWorkflowGenerationEndpoints();
+        return app;
     }
 
     private Task<HttpResponseMessage> GetStatusAsync(Guid jobId) => GetJobAsync(jobId, "");
@@ -562,6 +720,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         finally
         {
             work.Actor.Bearer.Invalidate();
+            work.ProjectWriterBearer.Invalidate();
         }
     }
 
@@ -586,7 +745,11 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
     {
         protected override Task<AuthenticateResult> HandleAuthenticateAsync() =>
             Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
-                Principal(), new AuthenticationProperties { ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(5) },
+                Principal(), new AuthenticationProperties
+                {
+                    ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(
+                        Context.Request.Headers.Authorization == "Bearer short-expiry-run-token" ? 5 : 30)
+                },
                 Scheme.Name)));
     }
 
@@ -620,14 +783,44 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             Task.FromResult(respond(request));
     }
 
-    private sealed class ProjectsHandler(AuthorizedRunSelection selection) : HttpMessageHandler
+    private static string CreateProjectWriterToken()
     {
+        var now = DateTime.UtcNow;
+        var token = new JwtSecurityToken(
+            Issuer,
+            "orchestrator",
+            [],
+            now.AddMinutes(-1),
+            now.AddMinutes(10));
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private sealed class ProjectsHandler(
+        AuthorizedRunSelection selection,
+        string projectWriterToken = "") : HttpMessageHandler
+    {
+        public string ProjectWriterToken { get; set; } = projectWriterToken;
+        public ProjectsAuthorizationContext ProjectWriterAuthority { get; set; } = new(
+            1, Issuer, Subject, Tenant, 1, null, null,
+            [new ProjectsAuthority("project", Project, [new("writeProjects", 1)])]);
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
             Task.FromResult(Response(
                 request,
                 request.RequestUri!.AbsolutePath == "/api/authorization/context"
-                    ? selection.Authorization
+                    ? request.Headers.Authorization?.Parameter == ProjectWriterToken
+                        ? ProjectWriterAuthority
+                        : selection.Authorization
                     : selection.Selection.Snapshot));
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan amount) => _utcNow = _utcNow.Add(amount);
     }
 
     private sealed class MaterialHandler : HttpMessageHandler

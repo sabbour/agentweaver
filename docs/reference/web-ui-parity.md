@@ -230,7 +230,7 @@ definitions and validity are not inferred from saved identifiers.
 | **Run now** | Missing `POST /api/v1/projects/{projectId}/workflows/{workflowId}/runs`. |
 | Schedule dialog: cadence, weekday/month day, UTC time, save, remove, cancel | Missing YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. |
 | Event dialog: event, issue action, condition type/value, match-any, add/remove condition/value, save, remove, cancel | Missing YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. |
-| **Generate workflow** dialog and **Check status** for a pending job | Missing `POST /api/v1/projects/{projectId}/workflows/generate`, `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}`, and `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}/result`. |
+| **Generate workflow** dialog and **Check status** for a pending job | The Gateway has `POST /api/v1/projects/{projectId}/workflows/generate`, `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}`, and `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}/result`. The v1 page has no generation dialog or status UI. |
 | **Sync** and the empty-state sync action | Missing `POST /api/v1/projects/{projectId}/workflows/sync`. |
 | Loading, empty, error, and denied states | The page uses the incumbent loading skeletons and empty-state component. Failed or denied reads show the error instead of cached references, including open details; **Refresh** retries. The reset action reports write errors, including denied writes. |
 
@@ -239,8 +239,10 @@ preservation, stale-refresh fencing, loading, empty, read/write denial, and read
 failure. `e2e/workflows.e2e.test.mjs` exercises the mounted route through the
 local Gateway harness, Tab/Enter/Space disclosure navigation, 390-pixel layout
 with long identifiers, all five read states, recovery, and a revision-fenced
-reset that preserves blueprint choices. No test calls a workflow catalog
-route or runs a workflow. The 0.x editor, graph, generation, and trigger controls
+reset that preserves blueprint choices. These web tests do not call a workflow
+catalog route or run a workflow; the Gateway tests and workflow-generation API
+case cover the service operations separately. The v1 page still has no
+generation dialog or status UI. The 0.x editor, graph, and trigger controls
 remain blocked by the exact missing routes below; this slice does not close
 the whole page-parity issue.
 

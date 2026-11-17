@@ -38,8 +38,9 @@ public static class GatewayWebCors
                 var headers = new List<string> { "Authorization", "Accept" };
                 if (route.HasJsonBody) headers.Add("Content-Type");
                 if (route.ForwardTenantSelector) headers.Add("X-Agentweaver-Tenant");
-                // Casting generation sends a second bearer for the Projects write.
-                if (route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal")
+                // Generation writes send a second bearer for the Projects write.
+                if (route.OperationId is
+                    "formulateCastingProposal" or "analyzeCastingProposal" or "generateProjectWorkflow")
                     headers.Add("X-Agentweaver-Project-Authorization");
                 if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)
                     headers.AddRange(route.ForwardRequestHeaders);
@@ -62,6 +63,7 @@ public static class GatewayWebCors
 
     /// <summary>Lists owner writes whose retries require an idempotency key header.</summary>
     private static bool RequiresIdempotencyKey(string operationId) => operationId is
+        "generateProjectWorkflow" or
         "createProjectRun" or
         "cancelProjectRun" or
         "sendProjectRunMessage" or

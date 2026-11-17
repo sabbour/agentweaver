@@ -82,9 +82,20 @@ or deployed discovery.
 
 ### Run normal-command API cases
 
-The checked-in API case scripts call the native CLI through public commands. The current read-only Gateway case checks `auth status`, `api operations`, `api describe`, and `rest` against one approved target. It does not create fixtures, mutate resources, send model requests, or open a browser. The `harness:p1 -- --surface api` launchers delegate to that script; they do not provide a second API client or a `test` command.
+The checked-in API case scripts call the native CLI through public commands.
+The read-only Gateway case checks `auth status`, `api operations`,
+`api describe`, and `rest` against one approved target. It does not mutate
+resources, send model requests, or open a browser. The workflow-generation
+case uses `api invoke` to submit a draft, check its job and result, and cancel
+an approved disposable run. It uses separate run-bound and unbound identities
+for the same actor and tenant. The `harness:p1 -- --surface api` launchers
+delegate to checked-in scripts; they do not provide a second API client or a
+`test` command.
 
-Use the [API case guide](../guide/api-acceptance-migration.md) for the exact apphost, input, and evidence contract. A dry run validates local input only. A passing case does not prove a live model, full API journey, or P1 acceptance.
+Use the [API case guide](../guide/api-acceptance-migration.md) for the exact
+apphost, input, and evidence contract. A dry run validates local input only.
+The workflow-generation case checks one model-backed Gateway flow; it does not
+replace a full P1 API journey.
 
 #### Child startup and cleanup sequence
 

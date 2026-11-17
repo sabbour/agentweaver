@@ -404,6 +404,19 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "getRunSelection", "Read the accepted run selection", forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/workflows/generate",
+            "/api/projects/{projectId}/workflows/generate",
+            "generateProjectWorkflow", "Generate a workflow for an accepted run",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: 64 * 1024,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Location"], excludeFromMcp: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/workflows/generation-jobs/{jobId:guid}",
+            "/api/projects/{projectId}/workflows/generation-jobs/{jobId:guid}",
+            "readProjectWorkflowGenerationJob", "Read a workflow generation job",
+            forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/workflows/generation-jobs/{jobId:guid}/result",
+            "/api/projects/{projectId}/workflows/generation-jobs/{jobId:guid}/result",
+            "readProjectWorkflowGenerationResult", "Read a completed workflow generation result",
+            forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/authorization/context", "/api/authorization/context",
             "getAuthorizationContext", "Read the caller's current authorization context",
             forwardTenantSelector: true);

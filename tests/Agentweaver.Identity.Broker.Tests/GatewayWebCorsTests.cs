@@ -61,6 +61,23 @@ public sealed class GatewayWebCorsTests
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains("x-agentweaver-tenant", castingAllowedHeaders, StringComparison.OrdinalIgnoreCase);
 
+        using var workflowPreflight = new HttpRequestMessage(
+            HttpMethod.Options, "/api/v1/projects/project-1/workflows/generate");
+        workflowPreflight.Headers.TryAddWithoutValidation("Origin", "https://web.test");
+        workflowPreflight.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "POST");
+        workflowPreflight.Headers.TryAddWithoutValidation(
+            "Access-Control-Request-Headers",
+            "authorization,content-type,idempotency-key,x-agentweaver-project-authorization,x-agentweaver-tenant");
+        using var workflowPreflightResponse = await gateway.Client.SendAsync(workflowPreflight);
+        Assert.Equal(HttpStatusCode.NoContent, workflowPreflightResponse.StatusCode);
+        var workflowAllowedHeaders = string.Join(
+            ",", workflowPreflightResponse.Headers.GetValues("Access-Control-Allow-Headers"));
+        Assert.Contains("idempotency-key", workflowAllowedHeaders, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "x-agentweaver-project-authorization",
+            workflowAllowedHeaders,
+            StringComparison.OrdinalIgnoreCase);
+
         using var copilotPreflight = new HttpRequestMessage(
             HttpMethod.Options, "/api/connections/copilot-user/v1/begin");
         copilotPreflight.Headers.TryAddWithoutValidation("Origin", "https://web.test");

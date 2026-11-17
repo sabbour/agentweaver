@@ -181,6 +181,8 @@ staged proposal with the casting tools. See [AgentSuite import and export](./age
 | `startProjectRun` | Deliver the first run message. |
 | `cancelProjectRun` | Cancel a run. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `readProjectWorkflowGenerationJob` | Read workflow-generation job status. |
+| `readProjectWorkflowGenerationResult` | Read the completed workflow draft and evidence. |
 | `getProjectRunHistorySessions` | Read a run's sessions with current project read authority and tenant ownership checks. |
 | `listProjectIssues` | List synced repository issues stored in the project backlog. |
 | `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |

@@ -66,7 +66,7 @@ public sealed class WorkflowGenerationContractTests
     }
 
     [Fact]
-    public void RequiresCurrentProjectWriteAndOrchestratorAuthority()
+    public void RequiresSeparateCurrentRunAndProjectWriterAuthority()
     {
         const string projectId = "project";
         const string runId = "run";
@@ -78,26 +78,34 @@ public sealed class WorkflowGenerationContractTests
                 1, actor.Issuer, actor.Subject, "tenant", 1, projectId, runId,
                 [
                     new ProjectsAuthority("project", projectId,
-                    [
-                        new ProjectsPermissionGrant("acceptRunSelection", 1),
-                        new ProjectsPermissionGrant("writeProjects", 1)
-                    ])
+                        [new ProjectsPermissionGrant("acceptRunSelection", 1)])
                 ]));
+        var writer = new ProjectsAuthorizationContext(
+            1, actor.Issuer, actor.Subject, "tenant", 1, null, null,
+            [new ProjectsAuthority("project", projectId, [new ProjectsPermissionGrant("writeProjects", 1)])]);
 
         CoordinationEndpoints.RequireProjectWriteAndOrchestratorAuthority(
-            accepted, projectId, runId, actor);
-        var revoked = accepted with
+            accepted, writer, projectId, runId, actor);
+        var revokedRun = accepted with
         {
             Authorization = accepted.Authorization with
             {
-                EffectiveAuthority = [new ProjectsAuthority("project", projectId,
-                    [new ProjectsPermissionGrant("acceptRunSelection", 2)])]
+                EffectiveAuthority = []
             }
         };
         var denied = Assert.Throws<CoordinationException>(() =>
             CoordinationEndpoints.RequireProjectWriteAndOrchestratorAuthority(
-                revoked, projectId, runId, actor));
+                revokedRun, writer, projectId, runId, actor));
         Assert.Equal(StatusCodes.Status403Forbidden, denied.StatusCode);
+
+        var revokedWriter = writer with
+        {
+            EffectiveAuthority = [new ProjectsAuthority("project", projectId, [])]
+        };
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            Assert.Throws<CoordinationException>(() =>
+                CoordinationEndpoints.RequireProjectWriteAndOrchestratorAuthority(
+                    accepted, revokedWriter, projectId, runId, actor)).StatusCode);
 
         var missingScope = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim("scope", "projects.read")], "test"));

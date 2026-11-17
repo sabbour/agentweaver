@@ -1,11 +1,12 @@
-# Run a read-only CLI API case
+# Run native CLI API cases
 
-Use this guide to check Gateway discovery and the signed-in actor's
-authorization context through normal native CLI commands.
+Use this guide to run targeted public API checks through the native CLI. Each
+case lists its target, required identity, side effects, and evidence.
 
-This read-only case does not test mutations, model execution, or full P1
-acceptance. The API launchers run this checked-in script; they do not provide a
-separate API runner.
+The read-only case checks Gateway discovery and the signed-in actor's
+authorization context. It does not test mutations, model execution, or full P1
+acceptance. The API launchers run checked-in case scripts through the native
+apphost; they do not provide a separate API runner.
 
 ## Before you begin
 
@@ -15,7 +16,7 @@ Gateway. You must already be signed in through the supported CLI flow for the
 actor and tenant in the case input. The script does not sign in, launch a
 browser, accept a bearer token, or create fixtures.
 
-The script uses `auth status`, `api operations`, `api describe`, and
+The read-only script uses `auth status`, `api operations`, `api describe`, and
 `rest --method GET` with the same Gateway target. It makes no resource changes
 and sends no model request. The `rest` command still uses normal CLI
 authentication and Gateway authorization.
@@ -109,6 +110,124 @@ An unauthenticated actor or missing Gateway operation is `blocked` (exit code
 `failed` (exit code `1`). A failed or interrupted run is not a pass. Review the
 redacted command records before you retry.
 
+## Run workflow generation
+
+The `workflow-generation` case uses normal `agentweaver api invoke` commands
+through the exact native apphost. It checks the current actor and accepted
+selection, creates or reattaches a durable generation job, polls its status,
+and verifies the generated draft, artifact hash, and native completion
+evidence. The job and draft remain stored after the case.
+
+The case sends a model request and cancels the named run after it confirms the
+run identity. Use an explicitly approved non-production Gateway and a
+disposable run with a bounded model budget. The case is complete only when it
+verifies that the run reached `cancelled`. It does not launch a browser or
+delete the job or draft.
+
+### Before you begin
+
+You need Node.js 24, the self-contained native apphost for the source commit,
+and an approved non-production Gateway. Prepare a disposable run whose accepted
+root session and model selection match the case. The same actor and tenant
+need two CLI identities:
+
+- A run-bound `projects.orchestrator` identity for the exact project and run.
+- An unbound `projects.admin` identity with no project or run selector.
+
+The case checks both identities before it submits the generation request. If
+you need to sign in, use the normal `agentweaver auth login` flow for each
+identity. Browser sign-in needs explicit authorization.
+
+### Prepare the case input
+
+Copy `scripts/acceptance/api/examples/workflow-generation.json` to a new local
+JSON file. Replace its example values with the approved case data:
+
+- `sourceCommit`: the full 40-character source commit for the apphost.
+- `targetCommit`: the full 40-character source commit recorded for the target.
+- `apphostSha256`: the SHA-256 hash of the exact apphost file.
+- `approvedNonProduction` and `approvedDisposableRun`: set both to `true`
+  after you approve the target and disposable run.
+- `expectedActorId`: the actor ID authorized for the project and run.
+- `expectedDecisionStateVersion`: the current accepted decision-state version.
+- `expectedSelection`: the exact project configuration revision, model
+  selection reference, and run limits returned by the accepted selection.
+- `prompt`: the prompt for the draft workflow.
+- `target`: the Gateway origin, Broker issuer, client ID, API audience, tenant,
+  project, run, and accepted root session IDs.
+
+Do not add credentials, tokens, or private prompt data. The input accepts only
+the fields in the example and rejects unknown fields.
+
+### Validate and run the case
+
+1. Set `AGENTWEAVER_CLI_PATH` to the absolute path of the exact native
+   apphost. Keep the input and evidence outside the repository. Use a new
+   evidence directory:
+
+   ```powershell
+   $env:AGENTWEAVER_CLI_PATH = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
+   $caseRoot = Join-Path $HOME 'agentweaver-acceptance'
+   New-Item -ItemType Directory -Force -Path $caseRoot | Out-Null
+   $caseInput = Join-Path $caseRoot 'workflow-generation.json'
+   Copy-Item .\scripts\acceptance\api\examples\workflow-generation.json $caseInput
+   $runName = '{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N'))
+   $evidence = Join-Path $caseRoot "workflow-generation-$runName"
+   ```
+
+2. Record the apphost source and hash in the input:
+
+   ```powershell
+   git rev-parse HEAD
+   (Get-FileHash $env:AGENTWEAVER_CLI_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
+   & $env:AGENTWEAVER_CLI_PATH --version
+   ```
+
+3. Validate the input without starting the apphost or contacting the Gateway:
+
+   ```powershell
+   node scripts\acceptance\api\workflow-generation.mjs --input $caseInput --output $evidence --dry-run
+   ```
+
+   A successful dry run reports `validated-not-run`. It checks the input,
+   apphost path and hash, and evidence path. It does not execute the apphost,
+   contact the Gateway, or create evidence.
+
+4. If either identity is not signed in, use `agentweaver auth login` with the
+   matching scope and selectors. Sign in to `projects.orchestrator` with the
+   project and run selectors. Sign in to `projects.admin` without either
+   selector. Use the same actor, tenant, and target options. The case does not
+   start sign-in.
+
+5. Run the case:
+
+   ```powershell
+   node scripts\acceptance\api\workflow-generation.mjs --input $caseInput --output $evidence
+   ```
+
+   The script checks the exact apphost hash, sign-in state, caller, and
+   accepted selection. It then uses `api invoke` to submit the generation
+   request, poll job status, and read the completed result. It cancels the
+   disposable run and verifies its status. The command log redacts request
+   bodies and headers; the result records the generated artifact ID and
+   definition hash. The command log also contains the returned draft and target
+   IDs. Store the evidence with the project's access controls.
+
+### Verify the result
+
+The evidence directory contains `commands.jsonl` and `result.json`. A `passed`
+result (exit code `0`) requires a completed generation, matching workflow
+definition hash and artifact ID, valid native completion evidence, and a
+verified cancelled run. The result records generation and cleanup separately.
+
+A missing sign-in, missing operation, or caller/selection mismatch is
+`blocked` (exit code `2`). A generation error, timeout, response mismatch, or
+unverified cleanup is `failed` (exit code `1`). A failed or blocked case is
+not a pass.
+
+This route-specific case checks workflow generation. It does not replace full
+P1 API acceptance.
+
 ## Run the Workspace repository-read case
 
 The `workspace-repository-read` case reads one file from the Repo App
@@ -153,7 +272,8 @@ sensitive-header guards.
 ## Next step
 
 Use the [Testing guide](./testing.md) to choose other checks and understand
-their limits. This case does not prove a live model, deployment, or full P1
-acceptance. To inspect an existing numeric tool-denial, root model-turn, or
-hard-credit observation through normal CLI commands and `rest`, use the
+their limits. The read-only case does not prove a live model; the
+workflow-generation case exercises one model-backed Gateway flow but does not
+prove full P1 acceptance. To inspect an existing numeric tool-denial, root
+model-turn, or hard-credit observation through normal CLI commands and `rest`, use the
 [numeric runtime observation case](./numeric-runtime-observation-acceptance.md).

@@ -45,11 +45,14 @@ Login, refresh, and logout for the same selected credential identity are
 serialized across processes. An interrupted or uncertain refresh requires a
 fresh sign-in rather than retrying a possibly consumed refresh token.
 
-The read-only API case scripts do not open a browser. Sign in with the normal
-CLI login command before running a case; browser authorization still requires
-explicit authorization. The scripts do not create fixtures or request
-project/run authority. See the [API case guide](./api-acceptance-migration.md)
-for the target and evidence requirements.
+The read-only API and Workspace read cases do not open a browser. Sign in with
+the normal CLI login command before running a case; browser authorization
+needs explicit approval. The workflow-generation case also uses normal CLI
+commands. It needs a run-bound `projects.orchestrator` identity and a separate
+unbound `projects.admin` identity for the same actor and tenant. It creates a
+durable generation job and cancels the named disposable run. See the
+[API case guide](./api-acceptance-migration.md) for the target, identity, and
+evidence requirements.
 
 ## `openid`
 

@@ -41,7 +41,11 @@ test('commands use public CLI operations and keep target selectors as literal ar
     'auth-status',
     'api-operations',
     'api-describe',
+    'api-invoke-authorization-context',
     'rest-authorization-context',
+  ]);
+  assert.deepEqual(commands.find(command => command.id === 'api-invoke-authorization-context').args.slice(0, 3), [
+    'api', 'invoke', 'getAuthorizationContext',
   ]);
   assert.deepEqual(commands.at(-1).args.slice(-6), [
     '--scope', 'api.read', '--method', 'GET', '--url', '/api/v1/authorization/context',

@@ -1546,6 +1546,47 @@ exact approval is recorded, a later dispatch recovers that same intent through
 owner returns the matching repository, PR, head, method, approval evidence, and
 durable merge SHA, which the Orchestrator stores as a compact receipt.
 
+### Workflow generation
+
+The Gateway exposes Orchestrator's durable workflow-generation jobs through
+these operations:
+
+| Method | Gateway path | Operation ID | Result |
+| --- | --- | --- | --- |
+| POST | `/api/v1/projects/{projectId}/workflows/generate` | `generateProjectWorkflow` | Accept or reattach a generation job. |
+| GET | `/api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}` | `readProjectWorkflowGenerationJob` | Read job status. |
+| GET | `/api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}/result` | `readProjectWorkflowGenerationResult` | Read the completed draft and evidence. |
+
+`generateProjectWorkflow` requires a run-bound bearer with `api.read` and
+`projects.orchestrator`, exact project/run binding, and current
+`acceptRunSelection` authority. It also requires
+`X-Agentweaver-Project-Authorization`: a separate, unbound bearer with current
+`writeProjects` authority for the exact project. The two bearers must identify
+the same issuer, actor, and tenant. The Gateway and Orchestrator check both
+authorities. The project-writer bearer does not authorize or enter model
+execution.
+
+The request body accepts only `runId`, `sessionId`,
+`expectedDecisionStateVersion`, and `prompt`. The body limit is 64 KiB. Supply
+one `Idempotency-Key` with 1 through 256 printable ASCII characters. A matching
+retry returns the saved job; a changed request with the same key returns
+`409 idempotency_key_conflict`.
+
+The owner returns `202 Accepted` with a job envelope, public `Location`,
+`statusUrl`, and `resultUrl`. Acceptance means the job was saved or reattached;
+it does not mean generation is complete. Retry a request that needs scheduling
+with the same key and current authority. Read status with the run-bound bearer.
+Read result after status is `completed`; an earlier result request returns
+`409 workflow_generation_not_complete`. Both read routes recheck current
+run authority and job ownership and return `Cache-Control: no-store`; they do
+not require the project-writer bearer.
+
+The stored `WorkflowDefinition` is a draft. Generation does not select or
+confirm a workflow or work plan. The native CLI acceptance procedure is in
+[Run CLI API cases](../guide/api-acceptance-migration.md#run-workflow-generation).
+See [workflow generation](../deep-dive/orchestration.md#generate-a-workflow-draft)
+for owner persistence and recovery behavior.
+
 ### Backlog claims
 
 Native owner prefix: `/api/projects/{projectId}/runs/{runId}/backlog`.
