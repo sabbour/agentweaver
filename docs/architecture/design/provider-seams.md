@@ -866,7 +866,10 @@ The provider returns `Failed` with `capability_unavailable` for a mode that it
 does not advertise, and changes nothing. Every provider must pass the
 conformance kit in `PlatformEgressTests.cs`. The Cilium provider does not
 advertise `egress.exact-host` until the Kata spike (#2633) proves it. The
-policy comes only from `IPlatformEgressPolicySource`. See
+opt-in Environment client reads the pending Projects artifact and compiles an
+unadmitted candidate; it does not register `IPlatformEgressPolicySource`, a
+provider, or a reconciler. Admitted policy still comes only from
+`IPlatformEgressPolicySource`. See
 [Environment egress](../environment-egress.md#platform-egress-provider-and-reconciler).
 
 ## Cost

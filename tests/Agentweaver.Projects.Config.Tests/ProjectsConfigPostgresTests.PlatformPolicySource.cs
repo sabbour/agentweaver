@@ -608,7 +608,8 @@ public sealed partial class ProjectsConfigPostgresTests
 
     private async Task<WebApplication> StartRealPlatformPolicySourceHostAsync(
         PlatformPolicySourceTlsTests.PolicySourceCertificates certificates,
-        bool includeProjectRoutes = false)
+        bool includeProjectRoutes = false,
+        Action? onSourceRequest = null)
     {
         using var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         probe.Start();
@@ -655,6 +656,15 @@ public sealed partial class ProjectsConfigPostgresTests
         builder.Services.AddScoped<NativeAcsPolicyStore>();
         var app = builder.Build();
         app.UsePlatformPolicySourceGuard(port);
+        if (onSourceRequest is not null)
+        {
+            app.Use(async (context, next) =>
+            {
+                if (context.Request.Path == PlatformPolicySourceTls.RoutePath)
+                    onSourceRequest();
+                await next(context);
+            });
+        }
         if (includeProjectRoutes)
         {
             app.UseAuthentication();

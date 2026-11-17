@@ -116,6 +116,7 @@ Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorE
     .TryAddSingleton<IRemoteMcpDiscoverySource, UnavailableRemoteMcpDiscoverySource>(builder.Services);
 builder.Services.AddScoped<RemoteMcpDiscoveryService>();
 builder.AddRemoteMcpTrustedServiceTls();
+builder.AddPlatformPolicySourceClient(projectsBaseAddress);
 var remoteMcpCurrentCallVerificationEnabled =
     builder.AddRemoteMcpCurrentCallVerification(authorityUri.AbsoluteUri);
 var remoteMcpNativeCallDispatchEnabled = builder.ConfigureRemoteMcpNativeCallDispatch();

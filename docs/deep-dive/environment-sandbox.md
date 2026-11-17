@@ -114,8 +114,10 @@ datapath enforcement.
 `CiliumPlatformEgressProvider` renders the shared AgentHost egress baseline into
 one deploy-created object, `agenthost-platform-egress`.
 `PlatformEgressReconciler` applies only an admitted policy source snapshot and
-fails closed when the snapshot is absent. Environment does not run the
-reconciler yet. See
+fails closed when the snapshot is absent. The opt-in source client reads the
+private Projects route only after an explicit call and compiles a pending
+response into an unadmitted candidate. Startup sends no source request, and
+Environment registers no admitted source or reconciler worker. See
 [Environment egress](../architecture/environment-egress.md#platform-egress-provider-and-reconciler).
 
 ### Manage workspace data
