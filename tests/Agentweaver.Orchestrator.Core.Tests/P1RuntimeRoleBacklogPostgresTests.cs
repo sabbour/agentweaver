@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator;
@@ -557,7 +558,10 @@ public sealed class P1RuntimeRoleBacklogPostgresTests(CoordinationPostgresFixtur
     private static string EmbeddedPlanHash()
     {
         using var plan = JsonDocument.Parse(PlannedRuntimeGrants.ReadEmbeddedPlan());
-        var canonical = JsonSerializer.SerializeToUtf8Bytes(plan.RootElement);
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(plan.RootElement, new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
         return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
     }
 }
