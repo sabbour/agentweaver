@@ -495,13 +495,22 @@ Because the ConfigMap is immutable, follow
 
 ### Optional Environment Policy source
 
-The private source route reads the current complete Platform Policy artifact
+The source route reads the current complete Platform Policy artifact
 for the Environment workload. `ProjectsConfig:PolicySource:Enabled` defaults
-to `false`. The checked-in runtime ConfigMap does not enable this listener.
-When enabled, the service adds the private HTTPS listener on port `8445` and
-preserves the configured public HTTPS listener on port `8443`. It uses the
-existing `ProjectsConfig__Tls__CertificatePath` and
-`ProjectsConfig__Tls__KeyPath` certificate and key.
+to `false`. When enabled, it shares the configured Projects HTTPS listener,
+normally port `8443`, and requests an optional client certificate during the
+shared handshake. Clients without a certificate retain public access but
+receive 403 on the source route. Pinned Environment mTLS protects the source;
+the shared port is reachable by all peers allowed by the Projects network policy.
+The checked-in runtime ConfigMap leaves the source disabled.
+
+Configure exactly one Projects HTTPS address, either as a named Kestrel
+endpoint or through `ASPNETCORE_URLS`. Projects represents a hosting URL as
+the named `ProjectsHttps` endpoint with the same address. The separate
+issue-sync endpoint retains its existing settings. When Broker and AgentHost
+profiles are enabled together, Projects applies Broker's server certificate
+and TLS 1.2/1.3 settings together with AgentHost's certificate validation.
+An endpoint override that changes Broker's certificate or protocols fails startup.
 
 | Setting | Contract |
 | --- | --- |
@@ -509,7 +518,12 @@ existing `ProjectsConfig__Tls__CertificatePath` and
 | `ProjectsConfig__PolicySource__BackendCaSha256` | Required when enabled. SHA-256 of the mounted backend CA certificate's DER bytes. Use 64 hexadecimal characters. Projects checks the fingerprint at startup and for each request. |
 | `ProjectsConfig__PolicySource__EnvironmentPins__<index>__Sha256` | Required for each pin. Indexes are sequential from `0`; configure one to four unique SHA-256 leaf fingerprints, each as 64 hexadecimal characters. |
 | `ProjectsConfig__PolicySource__EnvironmentPins__<index>__RetireAtUtc` | Required with each pin. Use an ISO 8601 UTC timestamp that ends in `Z`. Every configured retirement time must be later than startup. At runtime, the pin stops matching at the exact retirement instant. |
-| `Kestrel__Endpoints__EnvironmentPolicySource__Url` | Optional when `Enabled` is `true`; leave it unset when `Enabled` is false or unset. Setting it without `Enabled=true` fails startup. When enabled, it must equal `https://+:8445`; Projects supplies this value when it is absent. Reserve port `8445` for this endpoint; a conflict fails startup. |
+| `Kestrel__Endpoints__EnvironmentPolicySource__Url` | Obsolete. Remove this endpoint setting; startup rejects it. The source uses the existing Projects HTTPS address. |
+
+With the source enabled, startup rejects ambiguous addresses, duplicate ports,
+SNI overrides, HTTP/3, `PreferHostingUrls=true`, required or delayed client
+certificates, and incompatible certificate-validation callbacks. Environment,
+AgentHost and issue-sync peer pins must be distinct.
 
 The mounted CA file is
 `/var/run/service-backend-ca/ca.crt`. Each Environment leaf must chain to that
@@ -517,9 +531,22 @@ single pinned CA, include client authentication EKU, and contain exactly the
 DNS SAN `environment.agentweaver.svc.cluster.local`. Projects checks the leaf
 pin, SAN, validity, custom-root chain, and online revocation status. The
 platform certificate chain builder uses its CRL cache. A newer CRL takes effect
-after the cached CRL's `nextUpdate`. If revocation status is unavailable or
-unknown, Projects denies the request. Forwarded headers and bearer tokens do not
-authenticate this route.
+after the cached CRL's `nextUpdate`. A revoked certificate can remain accepted
+until that issuer-set time; there is no separate maximum cache age. If
+revocation status is unavailable or unknown and there is no valid cached
+status, Projects denies the request. Before activation, permit Projects DNS
+and egress to the CRL and OCSP endpoints named by the issuer, and to required
+AIA endpoints. These addresses come from the certificates, not a fixed
+Agentweaver hostname.
+
+Projects classifies a presented leaf pin before either workload validator runs.
+The preliminary TLS chain policy disables issuer downloads and revocation
+retrieval; the Environment validator then performs its own online chain
+check. AgentHost keeps its existing validator. A missing certificate completes
+TLS but grants no source identity. Forwarded headers and bearer tokens do not
+authenticate the source. An `Authorization` header is rejected after peer validation.
+Projects rechecks the Environment at the start of each source request and after
+serialization, before sending response headers, including error responses.
 
 To rotate an Environment leaf, configure the old and new pins together before
 the old pin's retirement time. Give each pin its own future `RetireAtUtc`.
@@ -530,9 +557,8 @@ because startup rejects any pin whose retirement time is at or before startup.
 
 Projects trusts one backend CA root for this route. Coordinate a CA rotation
 with the Environment certificate and Projects configuration. Projects denies
-requests when the mounted CA no longer matches `BackendCaSha256`. Port `8445`
-is not exposed by the checked-in Kubernetes Service or network policies; this
-source configuration does not deploy or enable that exposure.
+requests when the mounted CA no longer matches `BackendCaSha256`. To roll back,
+set `ProjectsConfig:PolicySource:Enabled=false` and restart Projects.
 
 The following settings are supplied to an explicit migration or bootstrap
 command. They are not part of the runtime ConfigMap:

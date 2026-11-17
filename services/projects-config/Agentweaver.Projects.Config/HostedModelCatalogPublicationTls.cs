@@ -34,7 +34,7 @@ internal sealed class HostedModelCatalogPublicationTls
     /// <summary>Enables optional TLS client certificates and rejects every peer except pinned AgentHost.</summary>
     internal static void Configure(WebApplicationBuilder builder) => Configure(builder, BackendCaFile);
 
-    internal static void Configure(WebApplicationBuilder builder, string backendCaFile)
+    internal static void Configure(WebApplicationBuilder builder, string backendCaFile, bool applyHttpsDefaults = true)
     {
         var section = builder.Configuration.GetSection(SectionName);
         if (!section.Exists())
@@ -47,12 +47,17 @@ internal sealed class HostedModelCatalogPublicationTls
 
         var identity = new HostedModelCatalogPublicationTls(pin, backendCaFile, TimeProvider.System);
         builder.Services.AddSingleton(identity);
-        builder.WebHost.ConfigureKestrel(server => server.ConfigureHttpsDefaults(https =>
-        {
-            https.ClientCertificateMode = ClientCertificateMode.AllowCertificate;
-            https.CheckCertificateRevocation = true;
-            https.ClientCertificateValidation = identity.AcceptClientCertificate;
-        }));
+        if (applyHttpsDefaults)
+            builder.WebHost.ConfigureKestrel(server => server.ConfigureHttpsDefaults(identity.Apply));
+    }
+
+    internal string CertificatePin => _agentHostCertificatePin;
+
+    internal void Apply(HttpsConnectionAdapterOptions https)
+    {
+        https.ClientCertificateMode = ClientCertificateMode.AllowCertificate;
+        https.CheckCertificateRevocation = true;
+        https.ClientCertificateValidation = AcceptClientCertificate;
     }
 
     /// <summary>Requires direct TLS and the exact AgentHost client certificate for publication.</summary>
@@ -68,7 +73,7 @@ internal sealed class HostedModelCatalogPublicationTls
             _timeProvider.GetUtcNow());
     }
 
-    private bool AcceptClientCertificate(
+    internal bool AcceptClientCertificate(
         System.Security.Cryptography.X509Certificates.X509Certificate2? certificate,
         System.Security.Cryptography.X509Certificates.X509Chain? chain,
         SslPolicyErrors errors) =>

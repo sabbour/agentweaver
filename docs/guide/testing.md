@@ -184,7 +184,7 @@ After the Release build, run the direct TLS tests with their controlled
 certificate fixtures:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~PlatformPolicySourceTlsTests
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~PlatformPolicySourceTlsTests|FullyQualifiedName~PlatformPolicySourceGuardTests|FullyQualifiedName~BrokerRunBindingTlsCompositionTests"
 ```
 
 The route and PostgreSQL snapshot tests use disposable PostgreSQL. Hosted CI
@@ -194,10 +194,23 @@ runs them:
 dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~PrivatePlatformPolicySource
 ```
 
-The TLS tests check the listener profile, peer certificate rules, certificate
-rotation, revocation, and reused connections. The PostgreSQL tests check the
-complete response, pending admission, read-only snapshot, storage bounds, and
-sanitized errors.
+The TLS tests check shared-listener composition with neither workload profile,
+Broker, AgentHost, and both; peer certificate rules; certificate rotation;
+revocation; and reused connections. The untrusted-leaf canary counts AIA and
+CRL requests before pin classification. Response checks include a final peer
+check before headers and no-store headers confined to source paths. The
+canary uses the .NET TLS client on Linux and Git for Windows' bundled OpenSSL
+on Windows. It resolves OpenSSL from `git --exec-path`; Schannel itself
+retrieves the client's issuer in LSASS and would contaminate the server-fetch
+count. Install Git for Windows before running this canary on Windows.
+The PostgreSQL tests use a real shared Kestrel request for the complete artifact
+response, plus controlled requests for the read-only snapshot, storage bounds,
+pending admission, and sanitized failures. Hosted CI runs the full Projects &
+Config suite with disposable PostgreSQL:
+
+```powershell
+node scripts\ci\v1-test-plan.mjs run projects-config
+```
 
 ## Test project-wide Knowledge discovery
 

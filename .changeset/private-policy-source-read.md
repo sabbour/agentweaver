@@ -2,4 +2,4 @@
 "Agentweaver.Projects.Config": minor
 ---
 
-Add a disabled-by-default, pinned mTLS route for complete Platform Policy source reads. The route keeps admission pending and does not write policy state or create checkpoints.
+Add a disabled-by-default Environment mTLS route for complete Platform Policy source reads on the existing Projects HTTPS listener. Preserve public, Broker, AgentHost and issue-sync access, classify workload pins before issuer retrieval, and recheck the Environment before source response headers. Admission remains pending.

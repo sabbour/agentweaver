@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Formats.Asn1;
 using System.Net;
 using System.Net.Http;
@@ -36,14 +37,14 @@ public sealed class PlatformPolicySourceTlsTests
     }
 
     [Fact]
-    public void EnabledProfileAddsPrivateAndExplicitPublicEndpoints()
+    public void EnabledProfileReusesTheConfiguredHttpsAddress()
     {
         using var certificates = new PolicySourceCertificates();
         var builder = Builder(certificates.Configuration());
 
         Assert.True(PlatformPolicySourceTls.Configure(builder, certificates.CaPath));
 
-        Assert.Equal("https://+:8445", builder.Configuration[PlatformPolicySourceTls.EndpointUrlKey]);
+        Assert.Null(builder.Configuration[PlatformPolicySourceTls.EndpointUrlKey]);
         Assert.Equal("https://+:8443", builder.Configuration["Kestrel:Endpoints:ProjectsHttps:Url"]);
         Assert.Contains(builder.Services, descriptor =>
             descriptor.ServiceType == typeof(PlatformPolicySourceTlsIdentity));
@@ -80,7 +81,35 @@ public sealed class PlatformPolicySourceTlsTests
             },
             new Dictionary<string, string?>(certificates.Configuration())
             {
-                ["Kestrel:Endpoints:Other:Url"] = "https://+:8445",
+                ["urls"] = "https://+:0",
+            },
+            new Dictionary<string, string?>(certificates.Configuration())
+            {
+                ["ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256"] =
+                    certificates.EnvironmentPin,
+            },
+            new Dictionary<string, string?>(certificates.Configuration())
+            {
+                ["ProjectsConfig:IssueSync:IdentityTls:PeerCertificateSha256Pins:0"] =
+                    certificates.EnvironmentPin,
+            },
+            new Dictionary<string, string?>(certificates.Configuration())
+            {
+                ["urls"] = "https://+:8443;https://+:9443",
+            },
+            new Dictionary<string, string?>(certificates.Configuration())
+            {
+                ["preferHostingUrls"] = "true",
+            },
+            new Dictionary<string, string?>(certificates.Configuration())
+            {
+                ["Kestrel:Endpoints:Projects:Url"] = "https://+:8443",
+                ["Kestrel:Endpoints:IssueSyncIdentity:Url"] = "https://localhost:8443",
+            },
+            new Dictionary<string, string?>(certificates.Configuration())
+            {
+                ["Kestrel:Endpoints:Projects:Url"] = "https://+:8443",
+                ["Kestrel:Endpoints:Projects:Sni:*:Certificate:Path"] = "unused.pem",
             },
         };
 
@@ -264,64 +293,79 @@ public sealed class PlatformPolicySourceTlsTests
         Assert.True(await identity.IsEnvironmentPeerAsync(client, CancellationToken.None));
     }
 
-    [Fact]
-    public async Task PrivateListenerRequiresEnvironmentTlsAndKeepsThePublicAndIssueSyncListeners()
+    [Theory]
+    [InlineData(false, false, 1)]
+    [InlineData(true, false, 1)]
+    [InlineData(false, true, 1)]
+    [InlineData(true, true, 1)]
+    [InlineData(false, false, 2)]
+    [InlineData(true, false, 2)]
+    [InlineData(false, true, 2)]
+    [InlineData(true, true, 2)]
+    public async Task SharedListenerPreservesProfilesAndRechecksEnvironmentOnReusedConnections(
+        bool brokerEnabled, bool agentHostEnabled, int httpVersion)
     {
         using var certificates = new PolicySourceCertificates();
-        using var revokedRecheckClient = certificates.CreateClient(
-            PlatformPolicySourceTls.EnvironmentDnsName, clientAuthentication: true);
         var values = certificates.Configuration();
-        values["ProjectsConfig:PolicySource:EnvironmentPins:1:Sha256"] =
-            Convert.ToHexString(SHA256.HashData(revokedRecheckClient.RawData));
-        values["ProjectsConfig:PolicySource:EnvironmentPins:1:RetireAtUtc"] =
-            values["ProjectsConfig:PolicySource:EnvironmentPins:0:RetireAtUtc"];
-        values["ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256"] =
-            certificates.AgentHostPin;
-        // The reused connection's request recheck uses this pinned leaf and its fresh CRL URL.
-        certificates.Revoke(revokedRecheckClient);
-        values["Kestrel:Endpoints:IssueSyncIdentity:Url"] = "https://localhost:8444";
+        var port = FreePort();
+        var issuePort = FreePort();
+        values["urls"] = $"https://127.0.0.1:{port}";
+        if (agentHostEnabled)
+            values["ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256"] =
+                certificates.AgentHostPin;
+        if (!brokerEnabled)
+        {
+            foreach (var key in values.Keys.Where(key => key.StartsWith("ProjectsConfig:Tls:", StringComparison.Ordinal)).ToArray())
+                values.Remove(key);
+            values["Kestrel:Certificates:Default:Path"] = certificates.ServerCertificatePath;
+            values["Kestrel:Certificates:Default:KeyPath"] = certificates.ServerKeyPath;
+        }
+        values["Kestrel:Endpoints:IssueSyncIdentity:Url"] = $"https://127.0.0.1:{issuePort}";
         AddIssueSyncProfile(values, certificates);
+        values["ProjectsConfig:IssueSync:IdentityTls:ListenerPort"] = issuePort.ToString();
         var builder = Builder(values);
         var clock = new MutableTimeProvider(DateTimeOffset.UtcNow);
-        BrokerRunBindingTlsIdentity.Configure(builder, enabled: true);
+        BrokerRunBindingTlsIdentity.Configure(builder, brokerEnabled, applyHttpsDefaults: false);
         Assert.True(IssueSyncServiceTransport.AddChannel(
             builder, "IssueSyncIdentity", "ProjectsConfig:IssueSync:IdentityTls",
             "Projects", "IdentityBroker", listener: true));
-        HostedModelCatalogPublicationTls.Configure(builder, certificates.CaPath);
+        HostedModelCatalogPublicationTls.Configure(builder, certificates.CaPath, applyHttpsDefaults: false);
         Assert.True(PlatformPolicySourceTls.Configure(builder, certificates.CaPath, clock));
         builder.Services.AddSingleton<TimeProvider>(clock);
 
         await using var app = builder.Build();
         app.UseRouting();
         var privateConnectionIds = new ConcurrentQueue<string>();
-        var useRevokedPeerForRequest = 0;
         app.Use((context, next) =>
         {
-            if (context.Connection.LocalPort == 8445)
-            {
+            if (context.Request.Path == PlatformPolicySourceTls.RoutePath)
                 privateConnectionIds.Enqueue(context.Connection.Id);
-                if (Volatile.Read(ref useRevokedPeerForRequest) != 0)
-                    context.Features.Set<ITlsConnectionFeature>(
-                        new TestTlsConnectionFeature(revokedRecheckClient));
-            }
             return next(context);
         });
-        app.UsePrivateListenerGuard();
+        app.UsePlatformPolicySourceGuard(port);
         app.MapGet(PlatformPolicySourceTls.RoutePath, () => Results.Text("environment"));
         app.MapGet("/public", () => Results.Text("public"));
+        app.MapGet("/publication-peer", (HttpContext context) =>
+            context.RequestServices.GetService<HostedModelCatalogPublicationTls>()?.IsAgentHost(context) == true
+                ? Results.Ok() : Results.StatusCode(StatusCodes.Status403Forbidden));
         await app.StartAsync();
         try
         {
-            using var publicClient = CreateClient();
-            using var publicResponse = await publicClient.GetAsync("https://127.0.0.1:8443/public");
+            using var publicClient = CreateClient(serverPin: certificates.ServerPin);
+            var address = $"https://127.0.0.1:{port}";
+            using var publicResponse = await publicClient.GetAsync(address + "/public");
             Assert.Equal(HttpStatusCode.OK, publicResponse.StatusCode);
+            Assert.Null(publicResponse.Headers.CacheControl);
 
             using var environmentClient = CreateClient(
-                certificates.EnvironmentClient);
+                certificates.EnvironmentClient, certificates.ServerPin);
+            environmentClient.DefaultRequestVersion = new Version(httpVersion, httpVersion == 1 ? 1 : 0);
+            environmentClient.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact;
             using (var privateResponse = await environmentClient.GetAsync(
-                "https://127.0.0.1:8445" + PlatformPolicySourceTls.RoutePath))
+                address + PlatformPolicySourceTls.RoutePath))
             {
                 Assert.Equal(HttpStatusCode.OK, privateResponse.StatusCode);
+                Assert.Equal(httpVersion, privateResponse.Version.Major);
                 Assert.Equal("environment", await privateResponse.Content.ReadAsStringAsync());
             }
 
@@ -333,7 +377,7 @@ public sealed class PlatformPolicySourceTlsTests
             var beforeRetirement = clock.GetUtcNow();
             clock.SetUtcNow(retirement);
             using var retiredPinResponse = await environmentClient.GetAsync(
-                "https://127.0.0.1:8445" + PlatformPolicySourceTls.RoutePath);
+                address + PlatformPolicySourceTls.RoutePath);
             Assert.Equal(HttpStatusCode.Forbidden, retiredPinResponse.StatusCode);
             using var retiredPinBody = JsonDocument.Parse(
                 await retiredPinResponse.Content.ReadAsStringAsync());
@@ -342,41 +386,173 @@ public sealed class PlatformPolicySourceTlsTests
             Assert.Equal(privateConnectionIds.ElementAt(0), privateConnectionIds.ElementAt(1));
 
             clock.SetUtcNow(beforeRetirement);
-            Volatile.Write(ref useRevokedPeerForRequest, 1);
-            using var revokedPeerResponse = await environmentClient.GetAsync(
-                "https://127.0.0.1:8445" + PlatformPolicySourceTls.RoutePath);
-            Assert.Equal(HttpStatusCode.Forbidden, revokedPeerResponse.StatusCode);
-            using var revokedPeerBody = JsonDocument.Parse(
-                await revokedPeerResponse.Content.ReadAsStringAsync());
-            Assert.Equal("policy_source_peer_denied",
-                revokedPeerBody.RootElement.GetProperty("code").GetString());
-            Assert.Equal(privateConnectionIds.ElementAt(0), privateConnectionIds.ElementAt(2));
-
-            using var otherPrivatePath = await environmentClient.GetAsync("https://127.0.0.1:8445/public");
-            Assert.Equal(HttpStatusCode.NotFound, otherPrivatePath.StatusCode);
-            Assert.True(otherPrivatePath.Headers.CacheControl?.NoStore);
-
-            using var wrongListener = await publicClient.GetAsync(
-                "https://127.0.0.1:8443" + PlatformPolicySourceTls.RoutePath);
-            Assert.Equal(HttpStatusCode.NotFound, wrongListener.StatusCode);
+            using var wrongListener = await publicClient.GetAsync(address + PlatformPolicySourceTls.RoutePath);
+            Assert.Equal(HttpStatusCode.Forbidden, wrongListener.StatusCode);
             Assert.True(wrongListener.Headers.CacheControl?.NoStore);
 
-            using var noCertificateClient = CreateClient();
-            await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
-                noCertificateClient.GetAsync("https://127.0.0.1:8445" + PlatformPolicySourceTls.RoutePath));
+            using var noCertificateClient = CreateClient(serverPin: certificates.ServerPin);
+            using var noCertificateResponse = await noCertificateClient.GetAsync(address + PlatformPolicySourceTls.RoutePath);
+            Assert.Equal(HttpStatusCode.Forbidden, noCertificateResponse.StatusCode);
             using var agentHostClient = CreateClient(
-                certificates.AgentHostClient);
-            await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
-                agentHostClient.GetAsync("https://127.0.0.1:8445" + PlatformPolicySourceTls.RoutePath));
+                certificates.AgentHostClient, certificates.ServerPin);
+            using var agentHostResponse = await agentHostClient.GetAsync(address + PlatformPolicySourceTls.RoutePath);
+            Assert.Equal(HttpStatusCode.Forbidden, agentHostResponse.StatusCode);
+            if (agentHostEnabled)
+            {
+                using var publication = await agentHostClient.GetAsync(address + "/publication-peer");
+                Assert.Equal(HttpStatusCode.OK, publication.StatusCode);
+                using var environmentPublication = await environmentClient.GetAsync(address + "/publication-peer");
+                Assert.Equal(HttpStatusCode.Forbidden, environmentPublication.StatusCode);
+            }
+
+            File.WriteAllText(certificates.CaPath, certificates.OtherCa.ExportCertificatePem());
+            using var changedCa = await environmentClient.GetAsync(address + PlatformPolicySourceTls.RoutePath);
+            Assert.Equal(HttpStatusCode.Forbidden, changedCa.StatusCode);
 
             using var issueSyncSocket = new TcpClient();
-            await issueSyncSocket.ConnectAsync(IPAddress.Loopback, 8444);
+            await issueSyncSocket.ConnectAsync(IPAddress.Loopback, issuePort);
             Assert.True(issueSyncSocket.Connected);
         }
         finally
         {
             await app.StopAsync();
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnknownLeafDoesNotFetchIssuerUrlsBeforePinClassification(bool agentHostEnabled)
+    {
+        using var certificates = new PolicySourceCertificates();
+        using var unknown = certificates.CreateCanaryClient();
+        var clientContext = SslStreamCertificateContext.Create(
+            unknown, new X509Certificate2Collection(certificates.OtherCa), offline: true);
+        Assert.Equal(0, certificates.CrlRequestCount);
+        var values = certificates.Configuration();
+        var port = FreePort();
+        values["urls"] = $"https://127.0.0.1:{port}";
+        if (agentHostEnabled)
+            values["ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256"] = certificates.AgentHostPin;
+        var builder = Builder(values);
+        BrokerRunBindingTlsIdentity.Configure(builder, true, applyHttpsDefaults: false);
+        HostedModelCatalogPublicationTls.Configure(builder, certificates.CaPath, applyHttpsDefaults: false);
+        PlatformPolicySourceTls.Configure(builder, certificates.CaPath);
+        await using var app = builder.Build();
+        app.UsePlatformPolicySourceGuard(port);
+        app.MapGet(PlatformPolicySourceTls.RoutePath, () => Results.Ok());
+        await app.StartAsync();
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                await RequestWithOpenSslAsync();
+                Assert.Equal(0, certificates.CrlRequestCount);
+                return;
+            }
+            using var socket = new TcpClient();
+            await socket.ConnectAsync(IPAddress.Loopback, port);
+            await using var stream = new SslStream(socket.GetStream(), false, (_, _, _, _) => true);
+            async Task<string> RequestAsync()
+            {
+                await stream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                {
+                    TargetHost = "127.0.0.1",
+                    EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12,
+                    ClientCertificateContext = clientContext,
+                    CertificateChainPolicy = new X509ChainPolicy
+                    {
+                        DisableCertificateDownloads = true,
+                        RevocationMode = X509RevocationMode.NoCheck,
+                    },
+                });
+                await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(
+                    $"GET {PlatformPolicySourceTls.RoutePath} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"));
+                using var reader = new StreamReader(stream);
+                return await reader.ReadToEndAsync();
+            }
+            if (agentHostEnabled)
+                await Assert.ThrowsAnyAsync<IOException>(RequestAsync);
+            else
+                Assert.Contains("403", await RequestAsync(), StringComparison.Ordinal);
+            Assert.Equal(0, certificates.CrlRequestCount);
+
+            async Task RequestWithOpenSslAsync()
+            {
+                // Schannel retrieves the client's issuer in LSASS; use Git's OpenSSL to isolate server retrieval.
+                using var git = Process.Start(new ProcessStartInfo("git", "--exec-path")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                })!;
+                var gitExecPath = (await git.StandardOutput.ReadToEndAsync()).Trim()
+                    .Replace('/', Path.DirectorySeparatorChar);
+                await git.WaitForExitAsync();
+                Assert.Equal(0, git.ExitCode);
+                var openssl = Path.GetFullPath(Path.Combine(gitExecPath, @"..\..\..\usr\bin\openssl.exe"));
+                Assert.True(File.Exists(openssl), $"Git for Windows OpenSSL is required at {openssl}.");
+                var certificatePath = Path.Combine(Path.GetDirectoryName(certificates.CaPath)!, "canary.pem");
+                var keyPath = Path.Combine(Path.GetDirectoryName(certificates.CaPath)!, "canary-key.pem");
+                File.WriteAllText(certificatePath, unknown.ExportCertificatePem());
+                using (var key = unknown.GetRSAPrivateKey()!)
+                    File.WriteAllText(keyPath, key.ExportPkcs8PrivateKeyPem());
+                var start = new ProcessStartInfo(openssl)
+                {
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                foreach (var argument in new[]
+                {
+                    "s_client", "-connect", $"127.0.0.1:{port}", "-servername", "localhost",
+                    "-cert", certificatePath, "-key", keyPath, "-tls1_2", "-quiet",
+                })
+                    start.ArgumentList.Add(argument);
+                using var process = Process.Start(start)!;
+                var output = process.StandardOutput.ReadToEndAsync();
+                var error = process.StandardError.ReadToEndAsync();
+                try
+                {
+                    await process.StandardInput.WriteAsync(
+                        $"GET {PlatformPolicySourceTls.RoutePath} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+                    await process.StandardInput.FlushAsync();
+                    await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+                    var response = await output;
+                    if (agentHostEnabled)
+                    {
+                        Assert.NotEqual(0, process.ExitCode);
+                        Assert.Contains("alert", await error, StringComparison.OrdinalIgnoreCase);
+                        Assert.DoesNotContain("HTTP/", response, StringComparison.Ordinal);
+                    }
+                    else
+                    {
+                        Assert.Contains("HTTP/1.1 403", response, StringComparison.Ordinal);
+                    }
+                }
+                finally
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                        await process.WaitForExitAsync();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
+    private static int FreePort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private sealed class TestTlsConnectionFeature(X509Certificate2? clientCertificate)
@@ -396,13 +572,15 @@ public sealed class PlatformPolicySourceTlsTests
         return builder;
     }
 
-    private static HttpClient CreateClient(X509Certificate2? clientCertificate = null)
+    private static HttpClient CreateClient(X509Certificate2? clientCertificate = null, string? serverPin = null)
     {
         var handler = new HttpClientHandler
         {
             ClientCertificateOptions = ClientCertificateOption.Manual,
             SslProtocols = PlatformPolicySourceTlsIdentity.AllowedProtocols,
-            ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate is not null,
+            ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+                certificate is not null && (serverPin is null ||
+                    Convert.ToHexString(SHA256.HashData(certificate.RawData)) == serverPin),
         };
         if (clientCertificate is not null)
             handler.ClientCertificates.Add(clientCertificate);
@@ -423,7 +601,7 @@ public sealed class PlatformPolicySourceTlsTests
         values[prefix + "PeerServiceName"] = "IdentityBroker";
         values[prefix + "PeerServicePrincipalId"] = "a18f4658-59bc-4860-8177-3dfdc0a60e39";
         values[prefix + "PeerOwnerAddress"] = "https://identity-broker.agentweaver.svc.cluster.local/";
-        values[prefix + "PeerCertificateSha256Pins:0"] = certificates.EnvironmentPin;
+        values[prefix + "PeerCertificateSha256Pins:0"] = new string('A', 64);
     }
 
     internal sealed class PolicySourceCertificates : IDisposable
@@ -489,6 +667,7 @@ public sealed class PlatformPolicySourceTlsTests
 
         internal Dictionary<string, string?> Configuration() => new()
         {
+            ["urls"] = "https://+:8443",
             ["ProjectsConfig:PolicySource:Enabled"] = "true",
             ["ProjectsConfig:PolicySource:BackendCaSha256"] = Fingerprint(_ca),
             ["ProjectsConfig:PolicySource:EnvironmentPins:0:Sha256"] = EnvironmentPin,
@@ -571,6 +750,13 @@ public sealed class PlatformPolicySourceTlsTests
             return client;
         }
 
+        internal X509Certificate2 CreateCanaryClient() =>
+            CreateLeaf("CN=untrusted canary", "untrusted.agentweaver.svc.cluster.local",
+                new Uri(_crlServer.BaseAddress, Guid.NewGuid().ToString("N")),
+                ["1.3.6.1.5.5.7.3.2"], DateTimeOffset.UtcNow.AddMinutes(-1),
+                DateTimeOffset.UtcNow.AddDays(1), _otherCa,
+                new Uri(_crlServer.BaseAddress, Guid.NewGuid().ToString("N")));
+
         private X509Certificate2 CreateClient(
             string dnsName,
             Uri? crlUri,
@@ -618,7 +804,8 @@ public sealed class PlatformPolicySourceTlsTests
             string[] purposes,
             DateTimeOffset notBefore,
             DateTimeOffset notAfter,
-            X509Certificate2 issuer)
+            X509Certificate2 issuer,
+            Uri? aiaUri = null)
         {
             using var key = RSA.Create(2048);
             var request = new CertificateRequest(
@@ -640,6 +827,18 @@ public sealed class PlatformPolicySourceTlsTests
                     critical: false));
             request.CertificateExtensions.Add(new X509Extension(
                 "2.5.29.35", CreateAuthorityKeyIdentifier(issuer), critical: false));
+            if (aiaUri is not null)
+            {
+                var aia = new AsnWriter(AsnEncodingRules.DER);
+                using (aia.PushSequence())
+                using (aia.PushSequence())
+                {
+                    aia.WriteObjectIdentifier("1.3.6.1.5.5.7.48.2");
+                    aia.WriteCharacterString(UniversalTagNumber.IA5String, aiaUri.AbsoluteUri,
+                        new Asn1Tag(TagClass.ContextSpecific, 6));
+                }
+                request.CertificateExtensions.Add(new X509Extension("1.3.6.1.5.5.7.1.1", aia.Encode(), false));
+            }
 
             using var issued = request.Create(
                 issuer,
@@ -651,7 +850,7 @@ public sealed class PlatformPolicySourceTlsTests
             try
             {
                 return X509CertificateLoader.LoadPkcs12(
-                    pkcs12, null, X509KeyStorageFlags.UserKeySet);
+                    pkcs12, null, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
             }
             finally
             {

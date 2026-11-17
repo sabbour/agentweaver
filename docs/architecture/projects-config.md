@@ -135,12 +135,13 @@ Blob credentials or provider selections. It does not publish or deploy an image.
 Applied migrations, runtime authorization, trusted TLS, and healthy owner flows
 still require separate approval and evidence.
 
-The optional Platform Policy source listener is a separate source capability.
-It is disabled by default and is not exposed by the checked-in Service or
-network policies. When enabled, Projects binds HTTPS port `8445` and accepts
-only `GET /internal/policy-source/platform` from the pinned Environment
-workload. The listener uses the existing Projects server certificate and the
-existing backend CA mount.
+The optional Platform Policy source route is disabled by default. When enabled,
+`GET /internal/policy-source/platform` shares the existing Projects HTTPS
+listener, normally port `8443`. All peers allowed to reach that listener can
+attempt the URL; pinned Environment mTLS protects the artifact. The shared
+handshake requests an optional client certificate, so public clients can
+connect without one. The source uses the existing server identity and backend
+CA mount.
 
 ## API surface
 
@@ -228,7 +229,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
 | `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
 | `GET /api/policies/platform` | Read the current canonical ACS Policy artifact as a complete, hash-verified source. Requires `api.read` and a current unbound PlatformAdmin; it does not require `projects.admin`. |
-| `GET /internal/policy-source/platform` | Private Environment source read on port `8445`. Requires native TLS 1.2/1.3, the exact Environment DNS SAN, a current pinned clientAuth leaf, the pinned backend CA, and valid online revocation status. Accepts no query or body and returns the complete artifact with Pending admission state and `Cache-Control: no-store`. |
+| `GET /internal/policy-source/platform` | Environment source read on the shared Projects HTTPS listener. Requires native TLS 1.2/1.3, the exact Environment DNS SAN, a current pinned clientAuth leaf, the pinned backend CA, and valid online revocation status. Accepts no authorization header, query or body and returns the complete artifact with Pending admission state and `Cache-Control: no-store`. |
 | `GET /api/policies/platform/revisions?pageSize={n}&cursor={token}` | Read newest-first revision metadata for the stable Platform lineage. `pageSize` defaults to 20 and ranges from 1 to 100. Every page rechecks current PlatformAdmin authority. |
 | `GET /api/policies/platform/revisions/{revision}` | Read the complete, hash-verified artifact and its original creation time from the exact retained revision. The revision is a canonical positive decimal Int64. |
 | `POST /api/policies/platform/validate` | Validate a complete Platform Policy artifact without changing stored policy state. |
@@ -251,12 +252,13 @@ The Identity broker validates upstream identity but does not forward upstream te
 ```mermaid
 sequenceDiagram
     actor E as Environment workload
-    participant K as Projects HTTPS port 8445
+    participant K as Shared Projects HTTPS
     participant T as Environment peer validator
     participant S as NativeAcsPolicyStore
     participant D as PostgreSQL
     E->>K: TLS 1.2/1.3 and client certificate
-    K->>T: Require certificate and validate CA, leaf, SAN, EKU, validity, and revocation
+    K->>K: Classify leaf pin before issuer retrieval
+    K->>T: Validate Environment CA, leaf, SAN, EKU, validity, and revocation
     T-->>K: Accept handshake or fail without an HTTP response
     E->>K: GET /internal/policy-source/platform
     K->>T: Recheck peer certificate for this request
@@ -267,6 +269,8 @@ sequenceDiagram
     S->>D: Load artifact bytes after the metadata bounds pass
     S->>S: Reconstruct artifact and verify canonical hash
     S-->>K: One complete artifact snapshot
+    K->>T: Recheck current Environment after serialization
+    T-->>K: Accept or replace response with 403
     K-->>E: 200 artifact, admission pending, no-store
 ```
 
@@ -277,14 +281,22 @@ returns `404 native_acs_policy_not_found`. A corrupt or oversized artifact
 returns `500 native_acs_policy_corrupt`. A database connection failure returns
 `503 native_acs_policy_source_unavailable`. Unexpected failures return
 `500 policy_source_internal_error` without diagnostic details. Every response
-uses `Cache-Control: no-store`. The route accepts no query or request body;
-other paths on port `8445` and this path on the public listener return 404.
-Unsupported methods return 405.
+uses `Cache-Control: no-store`. Unrelated shared-listener routes retain their
+existing headers and authentication. The source accepts no authorization
+header, query or request body. Source path variants or a request on another
+physical listener return 404. Unsupported methods return 405 with `Allow: GET`
+after peer and authorization-header checks.
 
 The request deadline is 15 seconds and includes database and response work.
-Certificate URL retrieval has a five-second timeout. The platform CRL cache
+Certificate URL retrieval has a five-second timeout per retrieval, not a total
+chain-build deadline. A connected request that reaches its deadline receives
+the sanitized 500; a disconnected client receives no response. A chain build
+can finish later on its worker, but its result is discarded. The platform CRL cache
 controls freshness: a newer CRL takes effect after the cached CRL's
-`nextUpdate`. Unavailable or unknown revocation status denies the peer. See the
+`nextUpdate`, so a revoked certificate can remain accepted until that time.
+Unavailable or unknown revocation status without a valid cached status denies
+the peer. Activation requires DNS and egress to the issuer's CRL/OCSP and
+required AIA endpoints. See the
 [Policy source TLS settings](../reference/runtime-configuration.md#optional-environment-policy-source)
 for the pin and rotation requirements.
 

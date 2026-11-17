@@ -3,11 +3,16 @@ using System.Data.Common;
 using System.Net;
 using System.Net.Security;
 using System.Security.Authentication;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
@@ -15,13 +20,91 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
 
 public sealed partial class ProjectsConfigPostgresTests
 {
+    private static readonly byte[] PolicySourceTestSigningKey = RandomNumberGenerator.GetBytes(32);
+
+    [Fact]
+    public async Task PrivatePlatformPolicySourceKeepsRealAgentHostPublicationAndBearerBoundaries()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "shared-tls-tenant-" + suffix;
+        var subject = "shared-tls-owner-" + suffix;
+        var owner = await SeedCallerAsync(db, authorityStore, subject, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System,
+            modelBindings: ProjectModelChoicesTests.SampleBindings());
+        var project = await service.CreateProjectAsync(owner, "Shared TLS publication", CancellationToken.None);
+        var connectionId = Guid.NewGuid();
+        await service.UpdateProjectConfigurationAsync(owner, project.ProjectId, project.ConfigurationRevision,
+            new ProjectConfiguration
+            {
+                ModelSelection = new ModelSelectionSettings("hosted-reasoning",
+                    SourceMode: ModelSourceMode.HostedCopilot, ConnectionId: connectionId),
+            }, CancellationToken.None);
+        var token = new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = TestIssuer,
+            Audience = "shared-listener-tests",
+            Subject = new ClaimsIdentity([new Claim("sub", subject), new Claim("scope", "api.read projects.admin")]),
+            Expires = DateTime.UtcNow.AddMinutes(5),
+            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(PolicySourceTestSigningKey),
+                SecurityAlgorithms.HmacSha256),
+        });
+        using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
+        await using var host = await StartRealPlatformPolicySourceHostAsync(certificates, includeProjectRoutes: true);
+        var address = new Uri(Assert.Single(host.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()!.Addresses));
+        using var environmentClient = Client(certificates.EnvironmentClient);
+        using var agentHostClient = Client(certificates.AgentHostClient);
+        using var bearerOnlyClient = Client(null);
+        var publicationPath = $"/api/projects/{project.ProjectId}/configuration/hosted-model-reasoning-catalog";
+        var json = $$"""{"bindingsRevision":"models-r7","reference":"hosted-reasoning","connectionId":"{{connectionId}}","supportedReasoningEfforts":["high"],"verifiedAt":"{{DateTimeOffset.UtcNow:O}}"}""";
+
+        using var environmentPublication = await environmentClient.PostAsync(publicationPath,
+            new StringContent(json, System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Forbidden, environmentPublication.StatusCode);
+        using var agentHostSource = await agentHostClient.GetAsync(PlatformPolicySourceTls.RoutePath);
+        Assert.Equal(HttpStatusCode.Forbidden, agentHostSource.StatusCode);
+        using var bearerSource = await bearerOnlyClient.GetAsync(PlatformPolicySourceTls.RoutePath);
+        Assert.Equal(HttpStatusCode.Forbidden, bearerSource.StatusCode);
+        using var publication = await agentHostClient.PostAsync(publicationPath,
+            new StringContent(json, System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.NoContent, publication.StatusCode);
+        agentHostClient.DefaultRequestHeaders.Authorization = null;
+        using var noBearerPublication = await agentHostClient.PostAsync(publicationPath,
+            new StringContent(json, System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Unauthorized, noBearerPublication.StatusCode);
+
+        HttpClient Client(System.Security.Cryptography.X509Certificates.X509Certificate2? certificate)
+        {
+            var handler = new HttpClientHandler
+            {
+                ClientCertificateOptions = ClientCertificateOption.Manual,
+                ServerCertificateCustomValidationCallback = (_, peer, _, _) =>
+                    peer is not null && peer.RawData.AsSpan().SequenceEqual(certificates.ServerCertificate.RawData),
+            };
+            if (certificate is not null)
+                handler.ClientCertificates.Add(certificate);
+            var client = new HttpClient(handler) { BaseAddress = address };
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            client.DefaultRequestHeaders.Add(ProjectAuthorizationOwner.TenantSelectorHeader, tenantId);
+            return client;
+        }
+    }
+
     [Fact]
     public async Task PrivatePlatformPolicySourceReturnsTheCompletePendingArtifactWithoutWrites()
     {
@@ -45,11 +128,19 @@ public sealed partial class ProjectsConfigPostgresTests
         var stateBeforeReads = await CapturePolicyTableStateAsync();
 
         using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
-        using var host = await StartPlatformPolicySourceEndpointHostAsync(
-            fixture.DataSource,
-            certificates.CreateIdentity(),
-            certificates.EnvironmentClient);
-        using var client = host.GetTestClient();
+        await using var host = await StartRealPlatformPolicySourceHostAsync(certificates);
+        using var handler = new HttpClientHandler
+        {
+            ClientCertificateOptions = ClientCertificateOption.Manual,
+            ServerCertificateCustomValidationCallback = (_, peer, _, _) =>
+                peer is not null && peer.RawData.AsSpan().SequenceEqual(certificates.ServerCertificate.RawData),
+        };
+        handler.ClientCertificates.Add(certificates.EnvironmentClient);
+        using var client = new HttpClient(handler)
+        {
+            BaseAddress = new Uri(Assert.Single(host.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses)),
+        };
 
         using var response = await client.GetAsync(PlatformPolicySourceTls.RoutePath);
 
@@ -358,6 +449,8 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.True(await readCanceled.Task.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.Equal("policy_source_internal_error", await ReadErrorCodeAsync(response));
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal("{\"code\":\"policy_source_internal_error\"}", await response.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -513,6 +606,66 @@ public sealed partial class ProjectsConfigPostgresTests
         return document.RootElement.GetProperty("code").GetString();
     }
 
+    private async Task<WebApplication> StartRealPlatformPolicySourceHostAsync(
+        PlatformPolicySourceTlsTests.PolicySourceCertificates certificates,
+        bool includeProjectRoutes = false)
+    {
+        using var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        var values = certificates.Configuration();
+        values["urls"] = $"https://127.0.0.1:{port}";
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
+        builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection(values);
+        BrokerRunBindingTlsIdentity.Configure(builder, true, applyHttpsDefaults: false);
+        if (includeProjectRoutes)
+        {
+            builder.Configuration[$"{HostedModelCatalogPublicationTls.SectionName}:AgentHostCertificateSha256"] =
+                certificates.AgentHostPin;
+            HostedModelCatalogPublicationTls.Configure(builder, certificates.CaPath, applyHttpsDefaults: false);
+            builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+            {
+                options.MapInboundClaims = false;
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidIssuer = TestIssuer,
+                    ValidAudience = "shared-listener-tests",
+                    IssuerSigningKey = new SymmetricSecurityKey(PolicySourceTestSigningKey),
+                    ValidateIssuerSigningKey = true,
+                };
+            });
+            builder.Services.AddAuthorization();
+            builder.Services.AddSingleton(CreateProviderCatalog());
+            builder.Services.AddSingleton(ProjectModelChoicesTests.SampleBindings());
+            builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(TestIssuer));
+            builder.Services.AddScoped<ProjectAuthorizationOwner>();
+            builder.Services.AddScoped<ProjectsConfigService>();
+            builder.Services.AddScoped<ModelProviderDraftService>();
+            builder.Services.AddScoped<ProjectSetupAuthorityAuditService>();
+            builder.Services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
+                client.BaseAddress = new Uri("https://knowledge.test/"));
+        }
+        PlatformPolicySourceTls.Configure(builder, certificates.CaPath);
+        builder.Services.AddDbContextFactory<ProjectsConfigDbContext>(options =>
+            options.UseNpgsql(fixture.DataSource,
+                npgsql => npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema)));
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddScoped<NativeAcsPolicyStore>();
+        var app = builder.Build();
+        app.UsePlatformPolicySourceGuard(port);
+        if (includeProjectRoutes)
+        {
+            app.UseAuthentication();
+            app.UseAuthorization();
+            app.MapProjectConfigEndpoints();
+        }
+        app.MapPlatformPolicySource();
+        await app.StartAsync();
+        return app;
+    }
+
     private static NativeAcsArtifact CreatePolicySourceArtifact(
         byte[] manifest,
         IEnumerable<(string RelativePath, byte[] Bytes)> files)
@@ -574,7 +727,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     app.UseRouting();
                     app.Use(async (context, next) =>
                     {
-                        context.Connection.LocalPort = 8445;
+                        context.Connection.LocalPort = 8443;
                         context.Request.Scheme = "https";
                         context.Features.Set<ITlsHandshakeFeature>(new TestTlsHandshakeFeature());
                         var tlsConnectionFeature = new TestTlsConnectionFeature
@@ -585,7 +738,7 @@ public sealed partial class ProjectsConfigPostgresTests
                         onTlsConnectionFeature?.Invoke(tlsConnectionFeature);
                         await next();
                     });
-                    app.UsePrivateListenerGuard();
+                    app.UsePlatformPolicySourceGuard(8443);
                     app.Use(async (context, next) =>
                     {
                         onAuthentication?.Invoke();

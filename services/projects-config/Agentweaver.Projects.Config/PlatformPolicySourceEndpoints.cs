@@ -13,7 +13,6 @@ namespace Agentweaver.Projects.Config;
 
 internal static class PlatformPolicySourceEndpoints
 {
-    private const int ListenerPort = 8445;
     private const int MaximumResponseBytes = 5_242_880;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
     private static readonly object DeadlineTokenKey = new();
@@ -22,11 +21,11 @@ internal static class PlatformPolicySourceEndpoints
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    internal static void UsePrivateListenerGuard(this IApplicationBuilder app)
+    internal static void UsePlatformPolicySourceGuard(this IApplicationBuilder app, int listenerPort)
     {
         app.Use(async (context, next) =>
         {
-            var isPrivateListener = context.Connection.LocalPort == ListenerPort;
+            var isSourceListener = context.Connection.LocalPort == listenerPort;
             var policySourceArea = context.Request.Path.StartsWithSegments(
                 "/internal/policy-source",
                 StringComparison.OrdinalIgnoreCase);
@@ -34,16 +33,14 @@ internal static class PlatformPolicySourceEndpoints
                 context.Request.Path.Value,
                 PlatformPolicySourceTls.RoutePath,
                 StringComparison.Ordinal);
-            if (isPrivateListener || policySourceArea)
-                context.Response.Headers.CacheControl = "no-store";
-
-            if (!isPrivateListener && !policySourceArea)
+            if (!policySourceArea)
             {
                 await next(context).ConfigureAwait(false);
                 return;
             }
 
-            if (!isPrivateListener || !exactPath)
+            context.Response.Headers.CacheControl = "no-store";
+            if (!isSourceListener || !exactPath)
             {
                 await WriteErrorAsync(
                     context,
@@ -56,6 +53,7 @@ internal static class PlatformPolicySourceEndpoints
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             deadline.CancelAfter(RequestTimeout);
             context.Items[DeadlineTokenKey] = deadline.Token;
+            var transport = context.Response.Body;
             try
             {
                 var protocol = context.Features.Get<ITlsHandshakeFeature>()?.Protocol;
@@ -73,31 +71,58 @@ internal static class PlatformPolicySourceEndpoints
                     return;
                 }
 
-                if (exactPath && context.Request.Headers.ContainsKey("Authorization"))
+                using var buffer = new BoundedMemoryStream(MaximumResponseBytes);
+                context.Response.Body = buffer;
+                if (context.Request.Headers.ContainsKey("Authorization"))
                 {
                     await WriteErrorAsync(
                         context,
                         StatusCodes.Status400BadRequest,
                         "policy_source_request_invalid",
                         context.RequestAborted).ConfigureAwait(false);
-                    return;
+                }
+                else if (!HttpMethods.IsGet(context.Request.Method))
+                {
+                    context.Response.Headers.Allow = "GET";
+                    await WriteErrorAsync(context, StatusCodes.Status405MethodNotAllowed,
+                        "policy_source_request_invalid", deadline.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await next(context).ConfigureAwait(false);
                 }
 
-                await next(context).ConfigureAwait(false);
+                context.Response.Body = transport;
+                if (!await tls.IsEnvironmentPeerAsync(
+                        context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate,
+                        deadline.Token).ConfigureAwait(false))
+                {
+                    context.Response.Clear();
+                    await WriteErrorAsync(context, StatusCodes.Status403Forbidden,
+                        "policy_source_peer_denied", context.RequestAborted).ConfigureAwait(false);
+                    return;
+                }
+                deadline.Token.ThrowIfCancellationRequested();
+                await transport.WriteAsync(
+                    buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length)),
+                    deadline.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             {
-                await WriteErrorAsync(
-                    context,
-                    StatusCodes.Status500InternalServerError,
-                    "policy_source_internal_error",
-                    context.RequestAborted).ConfigureAwait(false);
+                context.Response.Body = transport;
+                await WriteFailureAsync(context).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                context.Response.Body = transport;
+                await WriteFailureAsync(context).ConfigureAwait(false);
             }
             finally
             {
+                context.Response.Body = transport;
                 context.Items.Remove(DeadlineTokenKey);
             }
         });
@@ -120,7 +145,7 @@ internal static class PlatformPolicySourceEndpoints
                 : context.RequestAborted;
         try
         {
-            if (context.Request.Query.Count != 0 ||
+            if (context.Request.QueryString.HasValue ||
                 context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true ||
                 context.Request.ContentLength is > 0 ||
                 context.Request.ContentType is not null ||
@@ -171,19 +196,6 @@ internal static class PlatformPolicySourceEndpoints
                 return;
             }
 
-            var tls = context.RequestServices.GetRequiredService<PlatformPolicySourceTlsIdentity>();
-            if (!await tls.IsEnvironmentPeerAsync(
-                    context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate,
-                    cancellationToken).ConfigureAwait(false))
-            {
-                await WriteErrorAsync(
-                    context,
-                    StatusCodes.Status403Forbidden,
-                    "policy_source_peer_denied",
-                    cancellationToken).ConfigureAwait(false);
-                return;
-            }
-
             cancellationToken.ThrowIfCancellationRequested();
             context.Response.StatusCode = StatusCodes.Status200OK;
             context.Response.ContentType = "application/json";
@@ -227,6 +239,20 @@ internal static class PlatformPolicySourceEndpoints
                 "policy_source_internal_error",
                 context.RequestAborted).ConfigureAwait(false);
         }
+    }
+
+    private static async Task WriteFailureAsync(HttpContext context)
+    {
+        if (context.RequestAborted.IsCancellationRequested)
+            return;
+        if (context.Response.HasStarted)
+        {
+            context.Abort();
+            return;
+        }
+        context.Response.Clear();
+        await WriteErrorAsync(context, StatusCodes.Status500InternalServerError,
+            "policy_source_internal_error", context.RequestAborted).ConfigureAwait(false);
     }
 
     private static async Task WriteErrorAsync(

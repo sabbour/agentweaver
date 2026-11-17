@@ -19,7 +19,7 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
 {
     private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
     private const string TlsSection = "ProjectsConfig:Tls";
-    private static readonly SslProtocols AllowedProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+    internal const SslProtocols AllowedProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
     private BrokerRunBindingTlsIdentity(X509Certificate2 certificate) => Certificate = certificate;
 
@@ -31,7 +31,7 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
     /// <param name="builder">The service host builder to configure.</param>
     /// <param name="enabled">Whether the private Broker audience is configured.</param>
     /// <exception cref="InvalidOperationException">The TLS settings or certificate do not match the required profile.</exception>
-    internal static void Configure(WebApplicationBuilder builder, bool enabled)
+    internal static void Configure(WebApplicationBuilder builder, bool enabled, bool applyHttpsDefaults = true)
     {
         var section = builder.Configuration.GetSection(TlsSection);
         var hasTlsSettings = section.GetChildren().Any();
@@ -58,12 +58,14 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
 
         var identity = Load(certificatePath, keyPath, serverCertificateSha256);
         builder.Services.AddSingleton<BrokerRunBindingTlsIdentity>(_ => identity);
-        builder.WebHost.ConfigureKestrel(server =>
-            server.ConfigureHttpsDefaults(https =>
-            {
-                https.ServerCertificate = identity.Certificate;
-                https.SslProtocols = AllowedProtocols;
-            }));
+        if (applyHttpsDefaults)
+            builder.WebHost.ConfigureKestrel(server => server.ConfigureHttpsDefaults(identity.Apply));
+    }
+
+    internal void Apply(HttpsConnectionAdapterOptions https)
+    {
+        https.ServerCertificate = Certificate;
+        https.SslProtocols = AllowedProtocols;
     }
 
     /// <summary>
