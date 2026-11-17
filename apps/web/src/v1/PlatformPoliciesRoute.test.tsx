@@ -127,9 +127,11 @@ function policyRevision() {
 
 let popup: Window;
 let policyStatus: number;
+let validationStatus: number;
 let omitSnapshotHead: boolean;
 let delayHistory: boolean;
 let unauthorizedTenantOnce: string | null;
+let unauthorizedValidationTenantOnce: string | null;
 let resolveHistory: ((response: Response) => void) | null;
 let requests: { url: string; init?: RequestInit }[];
 
@@ -150,6 +152,10 @@ async function completeSignIn(code = 'code-1'): Promise<void> {
 
 function policyRequests() {
   return requests.filter(({ url }) => url.includes('/policies/platform/revisions'));
+}
+
+function policyValidationRequests() {
+  return requests.filter(({ url }) => url.includes('/policies/platform/validate'));
 }
 
 async function completePolicySignIn(): Promise<void> {
@@ -225,9 +231,11 @@ describe('Platform Policies served route', () => {
     window.sessionStorage.clear();
     vi.clearAllMocks();
     policyStatus = 200;
+    validationStatus = 200;
     omitSnapshotHead = false;
     delayHistory = false;
     unauthorizedTenantOnce = null;
+    unauthorizedValidationTenantOnce = null;
     resolveHistory = null;
     requests = [];
     authMocks.exchangeAuthorizationCode.mockResolvedValue({
@@ -289,6 +297,29 @@ describe('Platform Policies served route', () => {
       }
       if (url.pathname === '/api/v1/policies/platform/revisions/2')
         return jsonResponse(policyRevision());
+      if (url.pathname === '/api/v1/policies/platform/validate') {
+        const tenantSelector = new Headers(init?.headers).get('X-Agentweaver-Tenant');
+        if (unauthorizedValidationTenantOnce === tenantSelector) {
+          unauthorizedValidationTenantOnce = null;
+          return jsonResponse({ detail: 'private server detail' }, 401);
+        }
+        return validationStatus === 422
+          ? jsonResponse({
+              title: 'native_acs_policy_invalid',
+              status: 422,
+              code: 'native_acs_policy_invalid',
+              diagnostics: [{
+                code: 'yaml.invalid',
+                message: 'The manifest is invalid.',
+                relativePath: null,
+                line: 2,
+                column: 1,
+              }],
+            }, 422)
+          : validationStatus === 200
+            ? jsonResponse({ isValid: true, diagnostics: [] })
+            : jsonResponse({ detail: 'private server detail' }, validationStatus);
+      }
       return jsonResponse({ items: [], count: 0, nextCursor: null });
     });
     const controlledClient = new AgentweaverGatewayClient('/api/v1', fetcher);
@@ -303,6 +334,10 @@ describe('Platform Policies served route', () => {
     vi.spyOn(gatewayClient, 'readPlatformPolicyRevision').mockImplementation(
       (token, revision, tenant, signal) =>
         controlledClient.readPlatformPolicyRevision(token, revision, tenant, signal),
+    );
+    vi.spyOn(gatewayClient, 'validatePlatformPolicyArtifact').mockImplementation(
+      (token, tenant, artifact, signal) =>
+        controlledClient.validatePlatformPolicyArtifact(token, tenant, artifact, signal),
     );
     vi.spyOn(gatewayClient, 'listProjects').mockResolvedValue([]);
     vi.spyOn(gatewayClient, 'listNotifications').mockResolvedValue({
@@ -339,6 +374,166 @@ describe('Platform Policies served route', () => {
       expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
   });
 
+  it('loads a saved revision into a local draft and validates it without writing', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByText(policyText);
+    fireEvent.click(screen.getByRole('button', { name: 'Load viewed revision into draft' }));
+    expect((screen.getByRole('textbox', { name: 'Platform Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('name: saved-policy\n');
+    const fileContent = screen.getByRole('textbox', { name: 'Content for rules/example.yaml' });
+    expect((fileContent as HTMLTextAreaElement).value).toBe(policyText);
+    fireEvent.change(fileContent, { target: { value: `${policyText}\nallow: false` } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+
+    expect(await screen.findByText('The Platform Policy draft is valid.')).toBeTruthy();
+    const validationCall = policyValidationRequests().at(-1);
+    expect(validationCall?.url).toBe('https://app.test/api/v1/policies/platform/validate');
+    expect(validationCall?.init?.method).toBe('POST');
+    expect(new Headers(validationCall?.init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    const body = JSON.parse(String(validationCall?.init?.body));
+    expect(body.artifact.manifestBytes).toEqual(bytes('name: saved-policy\n'));
+    expect(body.artifact.files).toEqual([{
+      relativePath: 'rules/example.yaml',
+      bytes: bytes(`${policyText}\nallow: false`),
+    }]);
+    expect(body.artifact.contentSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(requests.some(({ url, init }) =>
+      url.includes('/policies/platform/') && init?.method === 'PUT')).toBe(false);
+  });
+
+  it('shows bounded server diagnostics from an invalid validation response', async () => {
+    validationStatus = 422;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(policyValidationRequests()).toHaveLength(1));
+    const diagnostics = await screen.findByRole('alert', { name: 'Validation diagnostics' });
+    expect(diagnostics.textContent)
+      .toContain('line 2, column 1: The manifest is invalid.');
+    expect(document.body.textContent).not.toContain('private server detail');
+  });
+
+  it('refreshes policy access after a validation 401 and requires validation again', async () => {
+    unauthorizedValidationTenantOnce = 'tenant-1';
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'unsaved policy draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    expect(await screen.findByText(
+      'Platform Policy access expired. Check access, then validate again.',
+    )).toBeTruthy();
+    await screen.findByText('Saved Platform Policy revisions');
+    expect((screen.getByRole('textbox', { name: 'Platform Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('unsaved policy draft');
+    expect(authMocks.refreshBrokerToken).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    const canceledMessage =
+      'Platform Policy access changed. Validate the draft again when access is ready.';
+    await waitFor(() => expect(
+      screen.queryByText('The Platform Policy draft is valid.') ||
+        screen.queryByText(canceledMessage),
+    ).toBeTruthy());
+    if (screen.queryByText(canceledMessage)) {
+      await screen.findByText('Saved Platform Policy revisions');
+      fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    }
+    expect(await screen.findByText('The Platform Policy draft is valid.')).toBeTruthy();
+
+    const calls = policyValidationRequests();
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toBe('Bearer access-1');
+    expect(new Headers(calls.at(-1)?.init?.headers).get('Authorization')).toBe('Bearer access-refreshed');
+  });
+
+  it('preserves a local draft through token refresh for a selected tenant', async () => {
+    authMocks.exchangeAuthorizationCode.mockResolvedValue({
+      access_token: 'access-1',
+      refresh_token: 'refresh-1',
+      token_type: 'Bearer',
+      expires_in: 31,
+    });
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), {
+      target: { value: 'tenant-2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Saved Platform Policy revisions');
+    await waitFor(() => expect(policyRequests().some(({ init }) =>
+      new Headers(init?.headers).get('X-Agentweaver-Tenant') === 'tenant-2')).toBe(true));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'unsaved before token refresh' },
+    });
+    const historyCount = policyRequests().length;
+    delayHistory = true;
+
+    await waitFor(() => expect(authMocks.refreshBrokerToken).toHaveBeenCalledOnce(), {
+      timeout: 5_000,
+    });
+    await waitFor(() => expect(policyRequests().length).toBeGreaterThan(historyCount), {
+      timeout: 5_000,
+    });
+    await waitFor(() => expect(resolveHistory).not.toBeNull(), { timeout: 5_000 });
+    await waitFor(() => expect(requests.some(({ url, init }) =>
+      url.endsWith('/authorization/context') &&
+      new Headers(init?.headers).get('Authorization') === 'Bearer access-refreshed')).toBe(true), {
+      timeout: 5_000,
+    });
+    expect(policyRequests().slice(historyCount).some(({ init }) =>
+      new Headers(init?.headers).get('X-Agentweaver-Tenant') === 'tenant-2')).toBe(true);
+    await act(async () => {
+      resolveHistory?.(jsonResponse(policyHistory()));
+    });
+    expect((await screen.findByRole('textbox', { name: 'Platform Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('unsaved before token refresh');
+  });
+
+  it('clears saved data and navigation when validation is denied', async () => {
+    validationStatus = 403;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'tenant-1 private draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Content for rules/policy-1.yaml' }), {
+      target: { value: 'tenant-1 private file' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    expect((await screen.findByText('You do not have permission to access Platform Policies.')).textContent)
+      .toBe('You do not have permission to access Platform Policies.');
+    expect(screen.queryByText('Saved Platform Policy revisions')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Platform Policies' })).toBeNull();
+    expect(policyValidationRequests().length).toBe(1);
+    expect(requests.some(({ url, init }) =>
+      url.includes('/policies/platform/') && init?.method === 'PUT')).toBe(false);
+
+    validationStatus = 200;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Saved Platform Policy revisions');
+    expect((screen.getByRole('textbox', { name: 'Platform Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('');
+    expect(screen.queryByRole('textbox', { name: 'Content for rules/policy-1.yaml' })).toBeNull();
+  });
+
   it('hides the route data and navigation when the policy history probe denies access', async () => {
     policyStatus = 403;
     render(<App />);
@@ -346,7 +541,7 @@ describe('Platform Policies served route', () => {
     await completeSignIn();
 
     expect((await screen.findByRole('alert')).textContent)
-      .toBe('You do not have permission to read Platform Policies.');
+      .toBe('You do not have permission to access Platform Policies.');
     expect(screen.queryByText('Saved Platform Policy revisions')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Platform Policies' })).toBeNull();
     expect(document.body.textContent).not.toContain('private server detail');
@@ -374,6 +569,9 @@ describe('Platform Policies served route', () => {
     await screen.findByText('Saved Platform Policy revisions');
     expect(await screen.findByRole('link', { name: 'Platform Policies' })).toBeTruthy();
 
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'tenant-1 private draft' },
+    });
     fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), {
       target: { value: 'tenant-2' },
     });
@@ -382,6 +580,11 @@ describe('Platform Policies served route', () => {
     expect(screen.queryByRole('link', { name: 'Platform Policies' })).toBeNull();
     expect((screen.getByRole('textbox', { name: 'Tenant ID' }) as HTMLInputElement).value)
       .toBe('tenant-2');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Saved Platform Policy revisions');
+    expect((screen.getByRole('textbox', { name: 'Platform Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('');
   });
 
   it('keeps the selected tenant for timer and visible-tab checks', async () => {
@@ -444,7 +647,7 @@ describe('Platform Policies served route', () => {
     policyStatus = 403;
     act(() => intervalHandlers.at(-1)?.());
     expect((await screen.findByRole('alert')).textContent)
-      .toBe('You do not have permission to read Platform Policies.');
+      .toBe('You do not have permission to access Platform Policies.');
     expect(screen.queryByRole('link', { name: 'Platform Policies' })).toBeNull();
     expect(screen.queryByText(policyText)).toBeNull();
     expect(screen.queryByText('Saved Platform Policy revisions')).toBeNull();

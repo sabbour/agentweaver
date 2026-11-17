@@ -36,6 +36,54 @@ describe('Platform Policy API reads', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it('posts a tenant-pinned validation request and parses invalid-policy diagnostics', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({
+        title: 'native_acs_policy_invalid',
+        status: 422,
+        code: 'native_acs_policy_invalid',
+        diagnostics: [{
+          code: 'yaml.invalid',
+          message: 'The manifest is invalid.',
+          relativePath: null,
+          line: 2,
+          column: 1,
+        }],
+      }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/problem+json' },
+      }),
+    );
+    const client = new AgentweaverGatewayClient('/api/v1', fetcher);
+    const artifact = {
+      manifestBytes: [110, 97, 109, 101],
+      files: [],
+      contentSha256: 'a'.repeat(64),
+    };
+
+    await expect(client.validatePlatformPolicyArtifact('policy-token', 'tenant-1', artifact))
+      .resolves.toEqual({
+        isValid: false,
+        diagnostics: [{
+          code: 'yaml.invalid',
+          message: 'The manifest is invalid.',
+          relativePath: null,
+          line: 2,
+          column: 1,
+        }],
+      });
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('/api/v1/policies/platform/validate');
+    expect(init?.method).toBe('POST');
+    expect(init?.credentials).toBe('omit');
+    expect(init?.cache).toBe('no-store');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer policy-token');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
+    expect(JSON.parse(String(init?.body))).toEqual({ artifact });
+  });
+
   it('rejects oversized and forbidden responses without exposing server details', async () => {
     const exactLimitFetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify(emptyHistory), {

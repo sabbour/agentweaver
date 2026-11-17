@@ -1,5 +1,6 @@
 import { Badge, Button, Field, Input, Text } from '@fluentui/react-components';
 import { usePlatformPoliciesController } from './PlatformPoliciesController';
+import { PlatformPolicyTextarea } from './PlatformPolicyTextarea';
 import { PageHeading } from './pageParts';
 
 function createdAtLabel(value: string): string {
@@ -15,7 +16,7 @@ export function PlatformPoliciesPage() {
     <>
       <PageHeading
         title="Platform Policies"
-        description="Read the saved Platform Policy source and its retained revisions."
+        description="Read saved source and revisions, edit a raw draft, and validate it."
         breadcrumb={false}
       />
       <section aria-label="Platform Policy access">
@@ -45,13 +46,96 @@ export function PlatformPoliciesPage() {
         <p role="status">Enter a tenant ID, then select Retry.</p>
       )}
       {policy.status === 'denied' && (
-        <p role="alert">You do not have permission to read Platform Policies.</p>
+        <p role="alert">You do not have permission to access Platform Policies.</p>
       )}
       {policy.status === 'unavailable' && (
         <p role="alert">Platform Policies could not load. Select Retry.</p>
       )}
+      {policy.draftError && <p role="alert">{policy.draftError}</p>}
 
       {policy.authorized && page && (
+        <>
+        <section aria-label="Platform Policy draft">
+          <h2>Draft editor</h2>
+          <p>Validation checks this draft. It does not save or apply changes.</p>
+          {policy.detail && (
+            <Button appearance="secondary" onClick={policy.loadDraftFromSavedSource}>
+              Load viewed revision into draft
+            </Button>
+          )}
+          <Field label="Manifest">
+            <PlatformPolicyTextarea
+              label="Platform Policy manifest"
+              buffer={policy.draftManifest}
+              onChange={policy.setDraftManifest}
+              rows={16}
+            />
+          </Field>
+          {policy.draftFiles.map((file) => (
+            <section key={file.id} aria-label={`Policy file ${file.relativePath}`}>
+              <div className="v1-actions">
+                <h3>Policy file</h3>
+                <Button
+                  appearance="subtle"
+                  aria-label={`Remove ${file.relativePath || 'policy file'}`}
+                  onClick={() => policy.removeDraftFile(file.id)}
+                >
+                  Remove file
+                </Button>
+              </div>
+              <Field label="Relative path">
+                <Input
+                  value={file.relativePath}
+                  onChange={(_, data) => policy.setDraftFilePath(file.id, data.value)}
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label="File content">
+                <PlatformPolicyTextarea
+                  label={`Content for ${file.relativePath || 'policy file'}`}
+                  buffer={file.content}
+                  onChange={(content) => policy.setDraftFileContent(file.id, content)}
+                  rows={12}
+                />
+              </Field>
+            </section>
+          ))}
+          <div className="v1-actions">
+            <Button appearance="secondary" onClick={policy.addDraftFile}>Add file</Button>
+            <Button
+              appearance="primary"
+              disabled={policy.status !== 'ready' || policy.validationLoading}
+              onClick={policy.validateDraft}
+            >
+              {policy.validationLoading ? 'Validating…' : 'Validate draft'}
+            </Button>
+          </div>
+          {policy.validation?.isValid && (
+            <p role="status">The Platform Policy draft is valid.</p>
+          )}
+          {policy.validation && !policy.validation.isValid && (
+            <section aria-label="Validation diagnostics" role="alert">
+              <h3>The Platform Policy draft has errors.</h3>
+              {policy.validation.diagnostics.length === 0 ? (
+                <p>The validator returned no diagnostic details.</p>
+              ) : (
+                <ul>
+                  {policy.validation.diagnostics.map((diagnostic, index) => (
+                    <li key={`${diagnostic.code}-${index}`}>
+                      {diagnostic.relativePath && <code>{diagnostic.relativePath}</code>}
+                      {diagnostic.line !== null && ` line ${diagnostic.line}`}
+                      {diagnostic.column !== null && `, column ${diagnostic.column}`}
+                      {(diagnostic.relativePath || diagnostic.line !== null ||
+                        diagnostic.column !== null) && ': '}
+                      {diagnostic.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+        </section>
+
         <section aria-label="Saved Platform Policy" aria-live="polite">
           <div className="v1-actions">
             <Badge appearance="tint" color="informative">Saved source</Badge>
@@ -110,6 +194,7 @@ export function PlatformPoliciesPage() {
             </>
           )}
         </section>
+        </>
       )}
 
       {policy.detailLoading && <p role="status" aria-live="polite">Loading saved source…</p>}

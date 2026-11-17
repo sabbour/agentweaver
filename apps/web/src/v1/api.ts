@@ -6,6 +6,7 @@ import {
   PLATFORM_POLICY_MAX_HTTP_BYTES,
   parsePlatformPolicyRevisionPage,
   parsePlatformPolicyRevisionReadResult,
+  parsePlatformPolicyValidationResult,
 } from './platformPolicyContracts';
 import type {
   AgentSuiteAgentPolicy,
@@ -137,8 +138,10 @@ import type {
   VersionedProjectConfiguration,
 } from './contracts';
 import type {
+  PlatformPolicyArtifactRequest,
   PlatformPolicyRevisionPage,
   PlatformPolicyRevisionReadResult,
+  PlatformPolicyValidationResult,
 } from './platformPolicyContracts';
 
 /** HTTP error returned by a Gateway request, including the parsed problem payload. */
@@ -347,7 +350,12 @@ export class AgentweaverGatewayClient {
     token: string,
     path: string,
     tenantSelector: string,
-    signal?: AbortSignal,
+    options: {
+      signal?: AbortSignal;
+      method?: 'GET' | 'POST';
+      body?: string;
+      acceptInvalidArtifact?: boolean;
+    } = {},
   ): Promise<T> {
     if (!token)
       throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
@@ -362,13 +370,16 @@ export class AgentweaverGatewayClient {
       Accept: 'application/json',
       'X-Agentweaver-Tenant': tenantSelector,
     });
+    if (options.body !== undefined) headers.set('Content-Type', 'application/json');
     const response = await this.fetcher.call(globalThis, `${this.baseUrl}${path}`, {
       headers,
-      signal,
+      signal: options.signal,
       credentials: 'omit',
       cache: 'no-store',
+      ...(options.method ? { method: options.method } : {}),
+      ...(options.body !== undefined ? { body: options.body } : {}),
     });
-    if (!response.ok)
+    if (!response.ok && !(options.acceptInvalidArtifact && response.status === 422))
       throw new GatewayError(response.status, { code: 'platform_policy_request_failed' },
         response.status === 403
           ? 'Platform Policy access was denied.'
@@ -2542,7 +2553,7 @@ export class AgentweaverGatewayClient {
       token,
       `/policies/platform/revisions?${query.toString()}`,
       tenantSelector,
-      options.signal,
+      { signal: options.signal },
     );
     const page = parsePlatformPolicyRevisionPage(value);
     if (!page)
@@ -2564,12 +2575,36 @@ export class AgentweaverGatewayClient {
       token,
       `/policies/platform/revisions/${revision}`,
       tenantSelector,
-      signal,
+      { signal },
     );
     const result = parsePlatformPolicyRevisionReadResult(value);
     if (!result)
       throw new GatewayError(502, { code: 'platform_policy_response_invalid' },
         'Platform Policy data could not be loaded.');
+    return result;
+  }
+
+  async validatePlatformPolicyArtifact(
+    token: string,
+    tenantSelector: string,
+    artifact: PlatformPolicyArtifactRequest,
+    signal?: AbortSignal,
+  ): Promise<PlatformPolicyValidationResult> {
+    const value = await this.requestPlatformPolicy<unknown>(
+      token,
+      '/policies/platform/validate',
+      tenantSelector,
+      {
+        signal,
+        method: 'POST',
+        body: JSON.stringify({ artifact }),
+        acceptInvalidArtifact: true,
+      },
+    );
+    const result = parsePlatformPolicyValidationResult(value);
+    if (!result)
+      throw new GatewayError(502, { code: 'platform_policy_validation_response_invalid' },
+        'Platform Policy validation results could not be read.');
     return result;
   }
 
