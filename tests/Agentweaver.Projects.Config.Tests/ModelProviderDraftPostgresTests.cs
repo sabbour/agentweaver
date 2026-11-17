@@ -353,7 +353,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var providerId = "rate-card-provider-" + Guid.NewGuid().ToString("N");
         const string actorId = "broker-agent";
         const string cardId = "manual:azure-card";
-        const string cardVersion = "opaque:2026-11-10";
+        const string cardVersion = "20261110";
         await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
         var owner = new RuntimeRateCardTestClient(false, true, true);
         var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
@@ -422,7 +422,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var providerId = "rate-card-rotation-" + Guid.NewGuid().ToString("N");
         const string actorId = "broker-agent";
         const string cardId = "manual:azure-card";
-        const string cardVersion = "opaque:2026-11-10";
+        const string cardVersion = "20261110";
         await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
         var owner = new RuntimeRateCardTestClient(true, false);
         var service = new ModelProviderDraftService(db, TimeProvider.System, owner);

@@ -10,7 +10,7 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed class RuntimeRateCardOwnerClientTests
 {
     private const string CardId = "manual:azure-card";
-    private const string Version = "2026-11-10";
+    private const string Version = "opaque:2026-11-10";
 
     [Fact]
     public async Task VerifiesCanonicalCardWithStrongHashAndEncodedQueryKey()
@@ -26,7 +26,7 @@ public sealed class RuntimeRateCardOwnerClientTests
 
         Assert.True(await client.VerifyAsync(CardId, Version, CancellationToken.None));
         Assert.Equal(
-            "/internal/runtime-rate-cards?id=manual%3Aazure-card&version=2026-11-10",
+            "/internal/runtime-rate-cards?id=manual%3Aazure-card&version=opaque%3A2026-11-10",
             observedPathAndQuery);
     }
 
