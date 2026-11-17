@@ -54,9 +54,9 @@ sequenceDiagram
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'" alt="After bearer validation, Identity.Broker passes the authenticated actor to the authorization wrapper. The wrapper checks the exact grant before and after exact-version Key Vault access, invalidates a credential on a failed postcheck, and the host invalidates it after responding." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'" alt="Identity Broker checks slot-backed BYOK identity against enabled ledger history, selects the recorded vault, and checks the exact grant before and after exact-version Key Vault access. Failed postchecks and the response path invalidate the credential." />
   </a>
-  <figcaption>This sequence starts after native bearer validation. It shows the redemption boundary, not upstream sign-in, OAuth consent, or grant issuance.</figcaption>
+  <figcaption>This sequence starts after native bearer validation. It shows slot-backed BYOK lookup and redemption, not upstream sign-in or OAuth consent.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.drawio'">Open editable draw.io source</a></p>
 
@@ -109,18 +109,25 @@ TLS 1.3 handshake. Forwarded HTTPS headers alone do not satisfy this check.
 ## Model-provider credential references
 
 The Broker ledger stores exact Key Vault reference metadata for platform and
-project model providers. A transaction advances the current head and adds an
-immutable history row. It stores no credential value or credential-derived
-hash. Rotation keeps earlier exact versions. Disable is terminal: current
-reference reads deny use, while historical reads return references from
-history rows recorded while the slot was Enabled. A historical read returns
-reference metadata only. Key Vault must still contain the exact version for
-redemption.
+project model providers, including the vault source and URI. A transaction
+advances the current head and adds an immutable history row. It stores no
+credential value or credential-derived hash. Rotation keeps earlier exact
+versions. Disable is terminal: current reference reads deny use, while
+historical reads return references from history rows recorded while the slot
+was Enabled. A historical read returns reference metadata only. Key Vault must
+still contain the exact version for redemption.
 
 The store does not authenticate users or check Projects authority. A future
 management caller must obtain fresh Projects authority before a mutation.
-Runtime use must continue to check the exact run and purpose grant before and
-after Key Vault redemption.
+For BYOK runtime use, the accepted binding carries the credential slot
+identity. The Broker checks that identity against the pinned provider, then
+reads the exact secret name and version from enabled history. The recorded
+vault source selects the redemption backend, and the recorded vault URI must
+match the configured root. The Broker never substitutes the current head or a
+newer secret version. A pin to an enabled historical version remains usable
+after the slot is disabled. Disabling a slot changes ledger state; it does not
+disable or delete the Key Vault secret. Runtime use checks the exact run and
+purpose grant before and after redemption.
 
 ```mermaid
 sequenceDiagram

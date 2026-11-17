@@ -11,7 +11,7 @@ import { applyTargetValues, targetValuePairs } from '../../release/target-values
 import { installTarget } from './targets.mjs';
 
 const NAMESPACE = 'agentweaver';
-const BASE_CONFIG_MAP = 'identity-broker-runtime-config-v3';
+const BASE_CONFIG_MAP = 'identity-broker-runtime-config-v4';
 const PROVIDER_SETUP_ANNOTATION = 'agentweaver.io/provider-setup-fingerprint';
 const SECRET_ENV_NAME = 'IdentityBroker__GitHubRepoApp__OAuthClientSecret';
 const PROVIDER_ENV_PREFIXES = [

@@ -150,6 +150,16 @@ verifier is single-use and tied to runtime configuration. Source grants support
 observation, rotation, and revocation. Model-session grants bind the current
 runtime registration to the accepted model and credential reference.
 
+For BYOK model credentials, the accepted runtime binding also carries the
+credential slot identity. The Broker checks that identity against the pinned
+provider and reads the exact secret name and version from the credential
+ledger's enabled history. The ledger row selects the Key Vault root; the
+Broker does not replace the pin with the current slot head or a newer version.
+After a slot is disabled, current-reference reads deny use while a pin to an
+enabled historical version remains usable for its accepted runtime binding.
+Disabling a slot changes ledger state; it does not disable or delete the Key
+Vault secret.
+
 GitHub Copilot, GitHub Repo App, and remote MCP OAuth connections are separate
 integrations. None grants a platform or project role. The credential-less
 sandbox gateway flow described in the architecture is a proposal, not a

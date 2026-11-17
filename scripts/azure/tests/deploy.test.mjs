@@ -331,14 +331,14 @@ test('Broker ConfigMap-only mode is default-off, isolated from ARM deployment, a
         assert.equal(config.clusterName, 'agentweaver-aks');
         assert.equal(config.keyVaultName, brokerSource.keyVaultName);
         assert.equal(config.upstreamClientId, ids.subscriptionId);
-        return { configMap: 'identity-broker-runtime-config-v3', configMapCreated: true };
+        return { configMap: 'identity-broker-runtime-config-v4', configMapCreated: true };
       },
       initializeIdentityBrokerRuntime() { throw new Error('full runtime bootstrap must not run'); },
       initializeIdentityPostgres() { throw new Error('PostgreSQL bootstrap must not run'); },
     });
     assert.deepEqual(steps, ['config-only']);
     assert.deepEqual(result.receipt.identityBrokerConfig, {
-      configMap: 'identity-broker-runtime-config-v3', configMapCreated: true,
+      configMap: 'identity-broker-runtime-config-v4', configMapCreated: true,
     });
     assert.equal(calls.some(args => args[0] === 'deployment'), false);
 

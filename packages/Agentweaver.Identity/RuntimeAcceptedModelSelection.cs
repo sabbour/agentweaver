@@ -20,6 +20,9 @@ public sealed record RuntimeAcceptedModelSelection(
     public string ReasoningEffort { get; init; } = "high";
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelCredentialIdentity? CredentialIdentity { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
 
     /// <summary>
@@ -109,6 +112,7 @@ public sealed record RuntimeAcceptedModelSelection(
             fields.ConnectionId, connectionScope)
         {
             ReasoningEffort = fields.ReasoningEffort,
+            CredentialIdentity = fields.CredentialIdentity,
             ModelBindingPin = fields.ModelBindingPin
         };
     }
@@ -121,7 +125,7 @@ public sealed record RuntimeAcceptedModelSelection(
         foreach (var property in model.EnumerateObject())
         {
             if (property.Name is not ("reference" or "sourceMode" or "credentialReference" or
-                    "connectionId" or "reasoningEffort" or "modelBindingPin") ||
+                    "credentialIdentity" or "connectionId" or "reasoningEffort" or "modelBindingPin") ||
                 !properties.Add(property.Name))
                 throw Invalid();
         }
@@ -169,6 +173,27 @@ public sealed record RuntimeAcceptedModelSelection(
                 throw Invalid();
             }
         }
+        ModelCredentialIdentity? credentialIdentity = null;
+        if (model.TryGetProperty("credentialIdentity", out var suppliedIdentity) &&
+            suppliedIdentity.ValueKind != JsonValueKind.Null)
+        {
+            try
+            {
+                credentialIdentity = suppliedIdentity.Deserialize<ModelCredentialIdentity>(
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                    {
+                        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                        Converters =
+                        {
+                            new JsonStringEnumConverter<ModelProviderBindingScope>(JsonNamingPolicy.CamelCase)
+                        }
+                    }) ?? throw Invalid();
+            }
+            catch (JsonException)
+            {
+                throw Invalid();
+            }
+        }
         RuntimeModelBindingPin? pin = null;
         if (model.TryGetProperty("modelBindingPin", out var suppliedPin) &&
             suppliedPin.ValueKind != JsonValueKind.Null)
@@ -192,7 +217,15 @@ public sealed record RuntimeAcceptedModelSelection(
                 throw Invalid();
             }
         }
-        return new(referenceValue, reasoningEffort, sourceMode, credential, connectionId, pin);
+        if ((pin?.ProviderId is null) != (credentialIdentity is null) ||
+            credentialIdentity is { } identity &&
+            (sourceMode != ModelSourceMode.Byok ||
+             credential is null ||
+             !IsValidIdentity(identity) ||
+             identity.ProviderId != referenceValue ||
+             pin!.ProviderId != identity.ProviderId))
+            throw Invalid();
+        return new(referenceValue, reasoningEffort, sourceMode, credential, connectionId, pin, credentialIdentity);
     }
 
     /// <summary>Fields extracted from one accepted model selection after shape validation.</summary>
@@ -202,7 +235,8 @@ public sealed record RuntimeAcceptedModelSelection(
         ModelSourceMode? SourceMode,
         SecretRef? CredentialReference,
         Guid? ConnectionId,
-        RuntimeModelBindingPin? ModelBindingPin);
+        RuntimeModelBindingPin? ModelBindingPin,
+        ModelCredentialIdentity? CredentialIdentity);
 
     /// <summary>
     /// For an object entry, returns true only when it has one object selection and one recognized string
@@ -271,4 +305,17 @@ public sealed record RuntimeAcceptedModelSelection(
 
     private static RuntimeAuthorizationException Invalid() =>
         new("runtime_accepted_model_selection_invalid");
+
+    private static bool IsValidIdentity(ModelCredentialIdentity identity)
+    {
+        try
+        {
+            RuntimeContractValidation.ValidateModelCredentialIdentity(identity);
+            return true;
+        }
+        catch (RuntimeAuthorizationException)
+        {
+            return false;
+        }
+    }
 }

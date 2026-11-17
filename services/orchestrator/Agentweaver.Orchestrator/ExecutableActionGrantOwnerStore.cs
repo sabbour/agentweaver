@@ -94,6 +94,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         if (selectedModel.Reference != binding.ModelSelectionReference ||
             selectedModel.SourceMode != binding.ModelSourceMode ||
             selectedModel.CredentialReference != binding.ModelCredentialReference ||
+            selectedModel.CredentialIdentity != binding.ModelCredentialIdentity ||
             selectedModel.ConnectionId != binding.ModelConnectionId ||
             selectedModel.ConnectionScope != binding.ModelConnectionScope ||
             selectedModel.ReasoningEffort != binding.ReasoningEffort ||
@@ -242,6 +243,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         if (selectedModel.Reference != binding.ModelSelectionReference ||
             selectedModel.SourceMode != binding.ModelSourceMode ||
             selectedModel.CredentialReference != binding.ModelCredentialReference ||
+            selectedModel.CredentialIdentity != binding.ModelCredentialIdentity ||
             selectedModel.ConnectionId != binding.ModelConnectionId ||
             selectedModel.ConnectionScope != binding.ModelConnectionScope ||
             selectedModel.ReasoningEffort != binding.ReasoningEffort ||
@@ -616,6 +618,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             if (selectedModel.Reference != binding.ModelSelectionReference ||
                 selectedModel.SourceMode != binding.ModelSourceMode ||
                 selectedModel.CredentialReference != binding.ModelCredentialReference ||
+                selectedModel.CredentialIdentity != binding.ModelCredentialIdentity ||
                 selectedModel.ConnectionId != binding.ModelConnectionId ||
                 selectedModel.ConnectionScope != binding.ModelConnectionScope ||
                 selectedModel.ReasoningEffort != binding.ReasoningEffort ||

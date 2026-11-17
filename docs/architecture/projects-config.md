@@ -740,12 +740,15 @@ does not produce a receipt.
   the native Copilot SDK and checks the selected model's advertised support
   before session creation or resume. Unsupported effort fails closed; BYOK
   requires explicit server-configured supported-effort evidence.
+- An override that changes only reasoning effort keeps the exact BYOK reference
+  and credential-slot identity. Each slot-backed route needs a pin that matches
+  its effort; Projects rejects a missing or mismatched pin.
 - Project configuration can name an optional `defaultWorkflowId`. Orchestrator accepts it only when it resolves to a server-registered workflow in the accepted selection's authorized catalog; project workflow references narrow that catalog when present. An unknown or unauthorized default falls back to the validated built-in workflow. The field is an identifier, not a workflow definition or an authority grant.
 - `SecretRef` values can be persisted as references. Credential values are not part of configuration or run-selection snapshots.
 - Optional `reviewedRemoteToolSnapshots` contains exact project-scoped snapshot references. Null omission preserves older configuration bytes. Duplicate references and references to another project are rejected. The accepted run retains these references, not mutable current project settings.
 - `ModelSelectionSettings.SourceMode` selects `hostedCopilot` or `byok` in the platform or project configuration. Runtime owner bindings retain that accepted mode. The runtime has no personal model-provider precedence or fallback.
 - Hosted selection requires a stable `ConnectionId` and prohibits `CredentialReference`. Identity owns the current connection revision, GitHub user identity, freshness, revocation, and exact protected secret version. Rotation does not change the accepted selection bytes or hash. A different account, owner, or scope requires a new connection and selection.
-- BYOK selection requires an exact `CredentialReference` and prohibits `ConnectionId`. Orchestrator exposes that reference only when the confirmed WorkPlan model matches the accepted selection. The reference is not grant authority and contains no credential value.
+- BYOK selection requires an exact `CredentialReference` and prohibits `ConnectionId`. A slot-backed selection also carries its credential slot identity. Identity checks that identity and exact reference against enabled ledger history, then redeems from the vault recorded on that history row. An enabled historical version remains usable after slot disable. Orchestrator exposes the reference only when the confirmed WorkPlan model matches the accepted selection; the reference is not grant authority and contains no credential value.
 - Legacy records retain their original omitted or null fields and hashes. Hosted records with a pinned secret require migration to a connection before runtime use. Missing or incompatible source modes fail closed.
 - Optional `ProjectConfiguration.SourceControl` contains one repository identity
   and either exact API/checkout SecretRefs or `authMode: "githubApp"` with an

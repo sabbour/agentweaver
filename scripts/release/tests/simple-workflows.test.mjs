@@ -35,7 +35,7 @@ const runtimeConfig = JSON.parse(readFileSync(
 const brokerRuntimeConfig = JSON.parse(readFileSync(
   path.join(root, 'deploy', 'k8s', 'runtime-configs', 'identity-broker-runtime-config.json'), 'utf8',
 ));
-const brokerRuntimeConfigName = 'identity-broker-runtime-config-v3';
+const brokerRuntimeConfigName = 'identity-broker-runtime-config-v4';
 const readYaml = relativePath => parse(readFileSync(path.join(root, relativePath), 'utf8'));
 const brokerMigrationServiceAccount = readYaml('deploy/k8s/migrations/identity-broker/serviceaccount.yaml');
 const brokerMigrationClientId =
@@ -1740,8 +1740,8 @@ test('Kustomize accepts the exact rendered Broker ConfigMap before its first wri
 
 test('Broker preflight fails closed for unreadable, malformed, missing, or invalid resources', async () => {
   const cases = [
-    ['missing live map', { missingBrokerRuntimeConfig: true }, /Live ConfigMap\/identity-broker-runtime-config-v3 is missing/],
-    ['read failure', { brokerConfigMapReadFailure: true }, /Could not read ConfigMap\/identity-broker-runtime-config-v3/],
+    ['missing live map', { missingBrokerRuntimeConfig: true }, /Live ConfigMap\/identity-broker-runtime-config-v4 is missing/],
+    ['read failure', { brokerConfigMapReadFailure: true }, /Could not read ConfigMap\/identity-broker-runtime-config-v4/],
     ['malformed JSON', { brokerConfigMapReadOutput: 'private malformed response' }, /invalid JSON/],
     ['wrong identity', {
       liveBrokerRuntimeConfig: {

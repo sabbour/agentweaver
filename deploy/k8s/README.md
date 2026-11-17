@@ -106,7 +106,7 @@ configured credential store; remove them with `docker logout <acr-login-server>`
 when finished.
 
 Before a migration or Kubernetes write, the helper checks that the live
-`identity-broker-runtime-config-v3` ConfigMap exactly matches the rendered
+`identity-broker-runtime-config-v4` ConfigMap exactly matches the rendered
 Broker map. The check covers its API version, kind, name, namespace,
 `immutable` flag, `data`, and `binaryData`. The Broker Deployment must also
 reference this map. A missing, malformed, or different map stops the command

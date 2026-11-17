@@ -77,7 +77,7 @@
       "type": "message",
       "from": "installer",
       "to": "kubernetes",
-      "label": "Read v3 map, active map, and Deployment",
+      "label": "Read v4 map, active map, and Deployment",
       "line": "solid",
       "arrow": "filled"
     },

@@ -107,6 +107,166 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void SlotBackedSelectionsRequireTheirCredentialIdentityAndConflictingRoutesFail()
+    {
+        var reference = new SecretRef("byok-project-provider", new string('a', 32));
+        var identity = new ModelCredentialIdentity(
+            Guid.NewGuid(), ModelProviderBindingScope.Project, "project-a", "provider");
+        var pin = new RuntimeModelBindingPin(
+            1, "provider", "deployment", ModelSourceMode.Byok, "revision",
+            new string('b', 64))
+        {
+            ProviderType = "openai",
+            ProviderId = "provider"
+        };
+        var slotSelection = new ModelSelectionSettings("provider", reference, ModelSourceMode.Byok)
+        {
+            ModelBindingPin = pin,
+            CredentialIdentity = identity
+        };
+        var project = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ModelSelection = slotSelection
+        });
+        Assert.Equal(identity, project.ModelSelection!.CredentialIdentity);
+
+        foreach (var invalid in new[]
+        {
+            slotSelection with { CredentialIdentity = null },
+            slotSelection with { ModelBindingPin = pin with { ProviderId = null } },
+            slotSelection with { CredentialIdentity = identity with { ProviderId = "other-provider" } }
+        })
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectConfigurationValidator.Validate(new ProjectConfiguration { ModelSelection = invalid }));
+
+        var otherIdentity = identity with { CredentialSlotId = Guid.NewGuid() };
+        var conflictingProject = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ModelTaskOverrides =
+            [
+                new ModelTaskSelectionOverride(ModelTaskKind.CodeWriting, new("provider", "high", pin)
+                {
+                    CredentialReference = reference,
+                    CredentialIdentity = otherIdentity
+                })
+            ]
+        });
+        var platform = PlatformDefaults() with
+        {
+            ModelSelection = slotSelection,
+            ModelTaskDefaults = []
+        };
+        var context = new RunSelectionContext
+        {
+            Revision = "model-routing-v1",
+            AvailableModelSelectionReferences = ImmutableHashSet.Create(StringComparer.Ordinal, "provider")
+        };
+        Assert.Equal("model_credential_identity_invalid",
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectsConfigService.ResolveModelSelections(project, PlatformDefaults(), context, "other-project")).Code);
+        var conflict = Assert.Throws<ProjectConfigException>(() =>
+            ProjectsConfigService.ResolveModelSelections(conflictingProject, platform, context, "project-a"));
+        Assert.True(conflict.Code == "model_selection_conflict", conflict.Message);
+    }
+
+    [Fact]
+    public void EffortOverrideKeepsInheritedSlotCredentialWithMatchingPin()
+    {
+        var reference = new SecretRef("byok-project-provider", new string('a', 32));
+        var identity = new ModelCredentialIdentity(
+            Guid.NewGuid(), ModelProviderBindingScope.Project, "project-a", "provider");
+        var highPin = new RuntimeModelBindingPin(
+            1, "provider", "deployment", ModelSourceMode.Byok, "revision",
+            new string('b', 64))
+        {
+            ProviderType = "openai",
+            ProviderId = "provider",
+            ReasoningEffort = "high"
+        };
+        var lowPin = highPin with { ReasoningEffort = "low" };
+        var project = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ModelTaskOverrides =
+            [
+                new ModelTaskSelectionOverride(
+                    ModelTaskKind.CodeWriting, new("provider", "low", lowPin))
+            ]
+        });
+        var platform = PlatformDefaults() with
+        {
+            ModelSelection = new ModelSelectionSettings("provider", reference, ModelSourceMode.Byok)
+            {
+                CredentialIdentity = identity,
+                ModelBindingPin = highPin,
+                ReasoningEffort = "high"
+            },
+            ModelTaskDefaults = Enum.GetValues<ModelTaskKind>()
+                .Select(taskKind => new ModelTaskSelectionOverride(
+                    taskKind, new("provider", "high", highPin)))
+                .ToImmutableArray()
+        };
+        var context = new RunSelectionContext
+        {
+            Revision = "model-routing-v1",
+            AvailableModelSelectionReferences = ImmutableHashSet.Create(StringComparer.Ordinal, "provider")
+        };
+
+        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context, "project-a");
+        var low = Assert.Single(resolved.EffectiveSelections.Where(item =>
+            item.Selection.ReasoningEffort == "low"));
+        Assert.Equal(lowPin, low.Selection.ModelBindingPin);
+        Assert.Equal(reference, low.Selection.CredentialReference);
+        Assert.Equal(identity, low.Selection.CredentialIdentity);
+
+        var unpinnedProject = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ModelTaskOverrides =
+            [
+                new ModelTaskSelectionOverride(ModelTaskKind.CodeWriting, new("provider", "low"))
+            ]
+        });
+        Assert.Throws<ProjectConfigException>(() =>
+            ProjectsConfigService.ResolveModelSelections(unpinnedProject, platform, context, "project-a"));
+    }
+
+    [Fact]
+    public void ChangingOverrideSourceClearsTheOldCredentialOrConnectionReference()
+    {
+        var hosted = new ModelSelectionSettings("provider", null, ModelSourceMode.HostedCopilot, Guid.NewGuid());
+        var byokOverride = new ModelSelectionOverride("provider", "high",
+            new RuntimeModelBindingPin(1, "provider", "deployment", ModelSourceMode.Byok,
+                "revision", new string('a', 64))
+            {
+                ProviderType = "openai"
+            })
+        {
+            CredentialReference = new SecretRef("byok-project-provider", new string('b', 32))
+        };
+        var project = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ModelTaskOverrides = Enum.GetValues<ModelTaskKind>()
+                .Select(taskKind => new ModelTaskSelectionOverride(taskKind, byokOverride))
+                .ToImmutableArray()
+        });
+        var context = new RunSelectionContext
+        {
+            Revision = "model-routing-v1",
+            AvailableModelSelectionReferences = ImmutableHashSet.Create(StringComparer.Ordinal, "provider")
+        };
+
+        var resolved = ProjectsConfigService.ResolveModelSelections(project,
+            PlatformDefaults() with { ModelSelection = hosted }, context, "project-1");
+
+        Assert.All(resolved.EffectiveSelections, selection =>
+        {
+            Assert.Equal(ModelSourceMode.Byok, selection.Selection.SourceMode);
+            Assert.Null(selection.Selection.ConnectionId);
+            Assert.Equal(new SecretRef("byok-project-provider", new string('b', 32)),
+                selection.Selection.CredentialReference);
+        });
+    }
+
+    [Fact]
     public void ResolvesTaskRoleAndAgentModelOverridesAndKeepsExplicitProjectSelectionGlobal()
     {
         var platform = PlatformDefaults() with
@@ -137,7 +297,7 @@ public sealed class ProjectConfigurationValidatorTests
                 "agent-model"),
         };
 
-        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context);
+        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context, "project-1");
         var taskRoute = Assert.Single(resolved.TaskSelections.Where(item =>
             item.TaskKind == ModelTaskKind.CodeWriting && item.RoleId is null && item.AgentId is null));
         Assert.Equal("project-code", taskRoute.ModelSelectionReference);
@@ -163,7 +323,8 @@ public sealed class ProjectConfigurationValidatorTests
         {
             AvailableModelSelectionReferences = ImmutableHashSet.Create(StringComparer.Ordinal, "manual-model"),
         };
-        var globallySelected = ProjectsConfigService.ResolveModelSelections(explicitProject, platform, explicitContext);
+        var globallySelected = ProjectsConfigService.ResolveModelSelections(
+            explicitProject, platform, explicitContext, "project-1");
         Assert.All(globallySelected.TaskSelections, item =>
         {
             Assert.Equal("manual-model", item.ModelSelectionReference);
@@ -195,7 +356,7 @@ public sealed class ProjectConfigurationValidatorTests
                 StringComparer.Ordinal, "gpt-6.1-sol", "gpt-6-luna")
         };
 
-        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context);
+        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context, "project-1");
         var effective = Assert.Single(resolved.EffectiveSelections.Where(item =>
             item.Selection.Reference == "gpt-6.1-sol" && item.Selection.ReasoningEffort == "high"));
         Assert.Equal(pin, effective.Selection.ModelBindingPin);
@@ -210,7 +371,7 @@ public sealed class ProjectConfigurationValidatorTests
         });
         Assert.Equal("model_selection_conflict",
             Assert.Throws<ProjectConfigException>(() =>
-                ProjectsConfigService.ResolveModelSelections(conflictingProject, platform, context)).Code);
+                ProjectsConfigService.ResolveModelSelections(conflictingProject, platform, context, "project-1")).Code);
     }
 
     [Fact]
@@ -250,7 +411,7 @@ public sealed class ProjectConfigurationValidatorTests
                 .ToImmutableHashSet(StringComparer.Ordinal)
         };
 
-        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context);
+        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context, "project-1");
 
         Assert.Equal(264, resolved.TaskSelections.Length);
         Assert.Equal(34, resolved.EffectiveSelections.Length);

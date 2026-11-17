@@ -274,7 +274,7 @@ select AgentHost explicitly to update it.
 #### First-install Broker dependency order
 
 The Kustomize helper requires the exact immutable
-`identity-broker-runtime-config-v3` ConfigMap before its first cluster write.
+`identity-broker-runtime-config-v4` ConfigMap before its first cluster write.
 It does not create the map. The full Broker runtime bootstrap waits for aligned
 routes, while full routing requires the private MCP Service that Kustomize
 creates. This creates a first-install dependency loop.

@@ -345,6 +345,7 @@ public static partial class CoordinationEndpoints
             WorkflowStepId = workflowStepId,
             ReasoningEffort = modelTaskSelection.ReasoningEffort,
             ModelCredentialReference = modelSelection.CredentialReference,
+            ModelCredentialIdentity = modelSelection.CredentialIdentity,
             ModelSourceMode = modelSelection.SourceMode,
             ModelBindingPin = runAdmission?.ModelBindingPin is { } runPin &&
                               string.Equals(runPin.ModelSelectionReference, modelSelectionReference,
@@ -445,6 +446,7 @@ public static partial class CoordinationEndpoints
             owner.StateVersion, decision.StateVersion)
         {
             ModelCredentialReference = modelSelection.CredentialReference,
+            ModelCredentialIdentity = modelSelection.CredentialIdentity,
             ModelSourceMode = modelSelection.SourceMode,
             ReasoningEffort = modelSelection.ReasoningEffort,
             ModelBindingPin = modelBindingPin,

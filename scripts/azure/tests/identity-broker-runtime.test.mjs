@@ -442,7 +442,7 @@ test('config-only bootstrap stages the exact source map and fails closed on drif
   const deployment = {
     apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'identity-broker', namespace },
     spec: { template: { spec: { containers: [{
-      name: 'identity-broker', envFrom: [{ configMapRef: { name: 'identity-broker-runtime-config-v3' } }],
+      name: 'identity-broker', envFrom: [{ configMapRef: { name: 'identity-broker-runtime-config-v4' } }],
     }] } } },
   };
   const certificate = (certificateNamespace, domain = `*.${zone}`) => {
@@ -535,7 +535,7 @@ test('config-only bootstrap stages the exact source map and fails closed on drif
   assert.equal(receipt.configMapCreated, true);
   assert.equal(receipt.issuer, targetMap.data.IdentityBroker__Issuer);
   assert.equal(receipt.callbackUri, sourceCallback);
-  assert.deepEqual(first.created.get('configmaps/identity-broker-runtime-config-v3').data, targetMap.data);
+  assert.deepEqual(first.created.get('configmaps/identity-broker-runtime-config-v4').data, targetMap.data);
   const createWrites = calls => calls.filter(args => args.includes('create') && !args.includes('auth')).length;
   assert.equal(createWrites(first.calls), 1);
   assert.equal(first.calls.some(args => ['httproutes', 'services', 'deployments'].includes(
@@ -564,14 +564,14 @@ test('config-only bootstrap stages the exact source map and fails closed on drif
 
   const data = createFixture();
   bootstrapIdentityBrokerConfigOnly(runtimeConfig, data.deps);
-  data.created.get('configmaps/identity-broker-runtime-config-v3').data.IdentityBroker__Issuer =
+  data.created.get('configmaps/identity-broker-runtime-config-v4').data.IdentityBroker__Issuer =
     'https://stale.example/';
   assert.throws(() => bootstrapIdentityBrokerConfigOnly(runtimeConfig, data.deps), /refusing replacement/);
   assert.equal(createWrites(data.calls), 1);
 
   const binary = createFixture({ sourceBinaryData: { 'config.bin': 'YQ==' } });
   bootstrapIdentityBrokerConfigOnly(runtimeConfig, binary.deps);
-  binary.created.get('configmaps/identity-broker-runtime-config-v3').binaryData['config.bin'] = 'Yg==';
+  binary.created.get('configmaps/identity-broker-runtime-config-v4').binaryData['config.bin'] = 'Yg==';
   assert.throws(() => bootstrapIdentityBrokerConfigOnly(runtimeConfig, binary.deps), /refusing replacement/);
   assert.equal(createWrites(binary.calls), 1);
 });
@@ -654,7 +654,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
   denyDeploymentCreate = false;
   const receipt = bootstrapIdentityBrokerRuntime(runtimeConfig, deps);
   assert.equal(receipt.configMapCreated, true);
-  assert.equal(receipt.configMap, 'identity-broker-runtime-config-v3');
+  assert.equal(receipt.configMap, 'identity-broker-runtime-config-v4');
   assert.equal(receipt.routingBlocked, true);
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(calls.filter(args => args.includes('--dry-run=client')).length, 8);

@@ -1433,9 +1433,9 @@ endpoint is not a currently mapped Broker or Gateway/BFF route.
 | `POST /internal/runtime/source/verify` | Fresh current-registration and purpose-bound nonce verification. |
 | `POST /internal/runtime/source/rotate` | New source revision and transient credential. |
 | `POST /internal/runtime/source/revoke` | Immutable revocation receipt. |
-| `POST /internal/runtime/model-session/grant` | Current-registration model grant with source mode, credential kind, exact secret version, and hosted connection revision. |
+| `POST /internal/runtime/model-session/grant` | Current-registration model grant with source mode, credential kind, exact secret version, and hosted connection revision. Slot-backed BYOK also matches the accepted slot identity and exact reference against enabled ledger history. |
 | `POST /internal/runtime/model-session/verify` | Revalidates the complete receipt against current Identity and runtime authority. |
-| `POST /internal/runtime/model-session/redeem` | Transient credential plus typed current receipt. Hosted responses contain only the user access token, never the refresh envelope or OAuth client secret. |
+| `POST /internal/runtime/model-session/redeem` | Transient credential plus typed current receipt. BYOK reads the exact pinned version from its recorded vault; an enabled historical version remains usable after slot disable. Hosted responses contain only the user access token, never the refresh envelope or OAuth client secret. |
 
 ### Copilot user connections
 
@@ -1692,9 +1692,13 @@ Missing or incompatible modes deny SDK startup without a personal provider fallb
 Hosted selections carry a stable connection ID and its accepted project or platform scope.
 Identity resolves the current connection revision and exact secret version for each model-session grant.
 BYOK selections carry an exact `SecretRef` only when the WorkPlan model matches the accepted model.
-Neither selection field is a grant or credential value. An unknown, unmapped,
-inactive, stale, or non-dispatchable child is unavailable. Caller configure JSON
-cannot set these fields.
+Slot-backed selections also carry `ModelCredentialIdentity`, which binds the slot,
+scope, project when project-scoped, and provider. Identity matches the identity
+and exact reference against enabled ledger history, then uses the recorded
+vault. A pin to an enabled historical version remains usable after slot disable.
+The reference and identity are metadata, not a grant or credential value. An
+unknown, unmapped, inactive, stale, or non-dispatchable child is unavailable.
+Caller configure JSON cannot set these fields.
 
 Identity extracts only the current user access token from its protected hosted envelope before the Host receives a response.
 BYOK sessions supply explicit SDK provider configuration and skip Copilot authentication and catalog lookup.

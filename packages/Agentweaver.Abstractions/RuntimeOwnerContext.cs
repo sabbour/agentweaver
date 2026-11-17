@@ -35,6 +35,9 @@ public sealed record RuntimeOwnerContext(
     /// <summary>Reference to an owner-held model credential; the credential value is not transported here.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? ModelCredentialReference { get; init; }
+    /// <summary>Credential-slot identity for exact-version BYOK redemption.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelCredentialIdentity? ModelCredentialIdentity { get; init; }
     /// <summary>Source mode authorized for the selected model, when explicitly pinned.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ModelSourceMode? ModelSourceMode { get; init; }

@@ -84,7 +84,7 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     ['environment-runtime-config', environment],
     ['orchestrator-runtime-config', orchestrator],
     ['events-and-sessions-runtime-config', events],
-    ['identity-broker-runtime-config-v3', identityBroker],
+    ['identity-broker-runtime-config-v4', identityBroker],
     ['projects-config-runtime-config', projects],
     ['environment-cilium-config', cilium],
   ]) {
@@ -157,6 +157,7 @@ test('Identity Broker snapshot keeps existing clients and adds versioned public 
     'IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress',
     'IdentityBroker__RuntimeBootstrap__SourceLifetime',
     'IdentityBroker__SecretRedemption__Audience',
+    'IdentityBroker__SecretRedemption__ByokVaultHost',
     'IdentityBroker__SecretRedemption__VaultHost',
     'IdentityBroker__SecretRedemption__VaultUri',
     'IdentityBroker__SecretRedemption__WorkloadIdentityClientId',
@@ -164,7 +165,7 @@ test('Identity Broker snapshot keeps existing clients and adds versioned public 
     'IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath',
     'IdentityBroker__WebOrigin',
   ].sort());
-  assert.equal(identityBroker.metadata.name, 'identity-broker-runtime-config-v3');
+  assert.equal(identityBroker.metadata.name, 'identity-broker-runtime-config-v4');
   assert.equal(identityBroker.immutable, true);
   assert.equal(identityBroker.metadata.labels?.['agentweaver.io/acceptance-run'], undefined);
   assert.equal(identityBroker.data.IdentityBroker__Clients__0__Type, 'Public');
@@ -1020,7 +1021,7 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
     .map(resource => resource.metadata.name));
   const configMapNames = namesFor('ConfigMap');
   const requiredServiceConfigMaps = [
-    'identity-broker-runtime-config-v3',
+    'identity-broker-runtime-config-v4',
     'events-and-sessions-runtime-config',
     'gateway-runtime-config',
     'mcp-runtime-config',

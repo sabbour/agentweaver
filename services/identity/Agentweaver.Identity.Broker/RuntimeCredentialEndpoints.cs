@@ -163,7 +163,9 @@ public static class RuntimeCredentialEndpoints
                 context.RequestServices.GetRequiredService<IRuntimeRegistrationOwner>(),
                 context.RequestServices.GetRequiredService<IRuntimeBootstrapDelivery>(),
                 context.RequestServices.GetRequiredService<RuntimeCredentialPolicy>(),
-                actor, time, context.RequestServices.GetService<CopilotConnectionAuthority>());
+                actor, time, context.RequestServices.GetService<CopilotConnectionAuthority>(),
+                context.RequestServices.GetService<ModelProviderCredentialStore>(),
+                context.RequestServices.GetService<ModelProviderCredentialRedemptionBackends>());
             var result = await action(authority);
             context.RequestAborted.ThrowIfCancellationRequested();
             await Results.Json(result).ExecuteAsync(context);

@@ -351,7 +351,7 @@ test('activation treats empty projected output from an optional read as absent b
     {
       op: 'test',
       path: '/spec/template/spec/containers/0/envFrom/0/configMapRef/name',
-      value: 'identity-broker-runtime-config-v3',
+      value: 'identity-broker-runtime-config-v4',
     },
   ]);
   assert.equal(fixture.apiCalls.every(call =>
@@ -364,7 +364,7 @@ test('activation treats empty projected output from an optional read as absent b
 
 test('required preflight reads remain strict when kubectl returns empty projected output', async () => {
   const fixture = createKubectlFixture({ emptyRequiredReadThroughRun: true });
-  fixture.maps.delete('identity-broker-runtime-config-v3');
+  fixture.maps.delete('identity-broker-runtime-config-v4');
   await assert.rejects(activateIdentityBrokerProviderSetup(input, target, fixture.dependencies), error => {
     assert.equal(error.error, 'identity_broker_provider_activation_partial');
     assert.equal(error.details.phase, 'preflight');
@@ -379,7 +379,7 @@ test('preflight errors expose a bounded cause and redact secret-shaped values', 
   const secret = ['a'.repeat(12), 'b'.repeat(12), 'c'.repeat(12)].join('.');
   const execKubectl = (args, settings) => {
     if (args.includes('get') && args[args.indexOf('get') + 1] === 'configmaps' &&
-        args[args.indexOf('get') + 2] === 'identity-broker-runtime-config-v3') {
+        args[args.indexOf('get') + 2] === 'identity-broker-runtime-config-v4') {
       throw new Error(`Read failed; ${secret}; ${'x'.repeat(300)}`);
     }
     return fixture.dependencies.execKubectl(args, settings);
@@ -548,14 +548,14 @@ test('activation reports a failed patch only after safe readback and keeps the o
   await assert.rejects(activateIdentityBrokerProviderSetup(input, target, fixture.dependencies), error => {
     assert.equal(error.error, 'identity_broker_provider_activation_partial');
     assert.equal(error.details.phase, 'activating_deployment');
-    assert.equal(error.details.resources.activeConfigMap, 'identity-broker-runtime-config-v3');
+    assert.equal(error.details.resources.activeConfigMap, 'identity-broker-runtime-config-v4');
     assert.equal(error.details.resources.deploymentResourceVersion, target.expectedDeploymentResourceVersion);
     assert.equal(JSON.stringify(error.toJSON()).includes('redacted patch failure'), false);
     return true;
   });
   assert.deepEqual(fixture.events, ['create-configmap', 'patch-deployment']);
   assert.equal(fixture.state.deployment.spec.template.spec.containers[0].envFrom[0].configMapRef.name,
-    'identity-broker-runtime-config-v3');
+    'identity-broker-runtime-config-v4');
 });
 
 test('activation reports the new active map and Deployment readback when rollout fails', async () => {
@@ -573,7 +573,7 @@ test('activation reports the new active map and Deployment readback when rollout
     return true;
   });
   assert.deepEqual(fixture.events, ['create-configmap', 'patch-deployment', 'rollout']);
-  assert.ok(fixture.maps.has('identity-broker-runtime-config-v3'));
+  assert.ok(fixture.maps.has('identity-broker-runtime-config-v4'));
   assert.equal(fixture.state.deployment.spec.template.spec.containers[0].envFrom[0].configMapRef.name,
     plan.configMap.metadata.name);
 });

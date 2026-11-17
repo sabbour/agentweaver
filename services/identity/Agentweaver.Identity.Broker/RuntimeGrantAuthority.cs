@@ -22,6 +22,25 @@ public sealed class RuntimeGrantAuthority(
     TimeProvider timeProvider,
     CopilotConnectionAuthority? connections = null) : IRuntimePendingBootstrapVerifier
 {
+    private ModelProviderCredentialStore? _modelCredentials;
+    private ModelProviderCredentialRedemptionBackends? _credentialBackends;
+
+    internal RuntimeGrantAuthority(
+        IdentityBrokerDbContext db,
+        IRuntimeRegistrationOwner owner,
+        IRuntimeBootstrapDelivery delivery,
+        RuntimeCredentialPolicy policy,
+        RuntimeActorAuthorization actor,
+        TimeProvider timeProvider,
+        CopilotConnectionAuthority? connections,
+        ModelProviderCredentialStore? modelCredentials,
+        ModelProviderCredentialRedemptionBackends? credentialBackends)
+        : this(db, owner, delivery, policy, actor, timeProvider, connections)
+    {
+        _modelCredentials = modelCredentials;
+        _credentialBackends = credentialBackends;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -62,6 +81,8 @@ public sealed class RuntimeGrantAuthority(
         }
         if (string.IsNullOrWhiteSpace(modelReference) || credentialReference is null)
             throw Denied("runtime_model_credential_unavailable");
+        if (binding.ModelSourceMode == ModelSourceMode.Byok)
+            _ = await ReadPinnedCredentialAsync(binding, credentialReference, cancellationToken);
         var expiresAt = connection is null || registration.ExpiresAt <= connection.FreshUntil
             ? registration.ExpiresAt : connection.FreshUntil;
         if (actor.Bearer.ExpiresAt < expiresAt)
@@ -191,6 +212,8 @@ public sealed class RuntimeGrantAuthority(
         {
             throw Denied("runtime_model_grant_receipt_invalid");
         }
+        if (binding.ModelSourceMode == ModelSourceMode.Byok)
+            _ = await ReadPinnedCredentialAsync(binding, receipt.CredentialReference, cancellationToken);
         var grant = await (
             from head in db.SecretGrantHeads.AsNoTracking()
             join revision in db.SecretGrantRevisions.AsNoTracking()
@@ -238,6 +261,11 @@ public sealed class RuntimeGrantAuthority(
         var registration = await RequireCurrentAsync(
             receipt.RuntimeInstanceId, cancellationToken, receipt.CheckpointRecoveryOperationId);
         var binding = registration.Binding;
+        var pinnedCredential = binding.ModelSourceMode == ModelSourceMode.Byok
+            ? await ReadPinnedCredentialAsync(binding, receipt.CredentialReference, cancellationToken)
+            : null;
+        if (pinnedCredential?.VaultSource == ModelProviderCredentialVaultSource.Byok)
+            backend = _credentialBackends?.Byok ?? throw Denied("runtime_model_credential_vault_unavailable");
         // The verified receipt identifies this runtime's grant when several share one secret.
         var redemption = new AuthorizedSecretRedemption(
             new TrustedActorContext(binding.ActorId, binding.ProjectId, binding.RunId),
@@ -279,6 +307,40 @@ public sealed class RuntimeGrantAuthority(
             credential.Invalidate();
             throw;
         }
+    }
+
+    private async Task<ModelProviderCredentialReference?> ReadPinnedCredentialAsync(
+        RuntimeBinding binding,
+        SecretRef reference,
+        CancellationToken cancellationToken)
+    {
+        var providerId = binding.ModelBindingPin?.ProviderId;
+        var identity = binding.ModelCredentialIdentity;
+        if (providerId is null && identity is null)
+            return null;
+        if (providerId is null || identity is null ||
+            providerId != identity.ProviderId ||
+            binding.ModelSourceMode != ModelSourceMode.Byok ||
+            binding.ModelSelectionReference != identity.ProviderId ||
+            _modelCredentials is null)
+            throw Denied("runtime_model_credential_identity_invalid");
+
+        ModelProviderCredentialPinnedRead pinned;
+        try
+        {
+            pinned = await _modelCredentials.ReadPinnedAsync(identity, reference, cancellationToken);
+        }
+        catch (ModelProviderCredentialException exception)
+        {
+            throw Denied(exception.Code == "credential_vault_unavailable"
+                ? "runtime_model_credential_vault_unavailable"
+                : "runtime_model_credential_unavailable");
+        }
+        if (pinned.Status != ModelProviderCredentialPinnedStatus.Found ||
+            pinned.Credential is not { State: ModelProviderCredentialState.Enabled } credential ||
+            credential.Reference != reference)
+            throw Denied("runtime_model_credential_unavailable");
+        return credential;
     }
 
     private static void RequireSameConnection(CopilotConnectionRecord expected, CopilotConnectionRecord current)

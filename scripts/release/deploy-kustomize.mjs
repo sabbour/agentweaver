@@ -27,7 +27,7 @@ import {
 } from './model-bindings-overlay.mjs';
 
 const NAMESPACE = 'agentweaver';
-const BROKER_RUNTIME_CONFIG = 'identity-broker-runtime-config-v3';
+const BROKER_RUNTIME_CONFIG = 'identity-broker-runtime-config-v4';
 const PROJECTS_CONFIG_RUNTIME_CONFIG = 'projects-config-runtime-config';
 const PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION = 'agentweaver.io/local-deploy-restore-replicas';
 const AGENTHOST_RUNTIME_CONFIG = 'agenthost-runtime-v1';

@@ -145,6 +145,8 @@ var vaultConfiguration = new AzureKeyVaultConfiguration(new Uri(identityOptions.
 var modelProviderCredentialVaults = ModelProviderCredentialVaults.Create(
     identityOptions.SecretRedemption.VaultUri,
     identityOptions.SecretRedemption.ByokVaultUri);
+identityOptions.SecretRedemption.ByokVaultHost = modelProviderCredentialVaults.ResolveEgressHost(
+    identityOptions.SecretRedemption.ByokVaultHost);
 var workloadIdentityOptions = new WorkloadIdentityCredentialOptions
 {
     TenantId = identityOptions.SecretRedemption.WorkloadIdentityTenantId,
@@ -221,6 +223,14 @@ builder.Services.AddSingleton<AzureKeyVaultSecretRedemption>(provider =>
         provider.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<ISecretRedemption>(provider =>
     provider.GetRequiredService<AzureKeyVaultSecretRedemption>());
+builder.Services.AddSingleton<ModelProviderCredentialRedemptionBackends>(provider =>
+    new ModelProviderCredentialRedemptionBackends(modelProviderCredentialVaults.Byok is null
+        ? null
+        : AzureKeyVaultSecretRedemption.CreateWithWorkloadIdentity(
+            modelProviderCredentialVaults.Byok,
+            provider.GetRequiredService<WorkloadIdentityCredentialOptions>(),
+            provider.GetRequiredService<SecretClientOptions>(),
+            provider.GetRequiredService<TimeProvider>())));
 builder.Services.AddSingleton<ISecretVersionWriter>(provider =>
     new AzureKeyVaultSecretVersionWriter(
         provider.GetRequiredService<AzureKeyVaultConfiguration>(),

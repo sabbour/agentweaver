@@ -606,7 +606,7 @@ the one-time identity and PostgreSQL ownership prerequisites before running
 the local command; it runs migrations and grants before applying workloads.
 
 Before a migration or Kubernetes write, the local helper requires the live
-`identity-broker-runtime-config-v3` ConfigMap to match the complete rendered
+`identity-broker-runtime-config-v4` ConfigMap to match the complete rendered
 Broker map. It also checks that the Broker Deployment references this map. A
 missing, malformed, or different map stops the command before writes. The
 helper does not create, replace, or repair the map. For a first install, use
@@ -1078,7 +1078,7 @@ data:
 kubectl config current-context
 $SubscriptionId = '<approved-subscription-guid>'
 $TenantId = '<approved-tenant-guid>'
-$ConfigResourceVersion = kubectl get configmap identity-broker-runtime-config-v3 -n agentweaver -o jsonpath='{.metadata.resourceVersion}'
+$ConfigResourceVersion = kubectl get configmap identity-broker-runtime-config-v4 -n agentweaver -o jsonpath='{.metadata.resourceVersion}'
 $DeploymentResourceVersion = kubectl get deployment identity-broker -n agentweaver -o jsonpath='{.metadata.resourceVersion}'
 ```
 
