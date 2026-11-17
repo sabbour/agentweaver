@@ -1293,6 +1293,16 @@ actionable `error_description`; when present, it includes only the numeric
 Microsoft Entra error code. Provider descriptions and account details are not
 returned.
 
+When a run-bound `GET /connect/authorize` request checks the Projects proof, the
+Broker keeps HTTP 400 `access_denied` for a denial. It maps
+`403 orchestrator_role_required` to `The Project Orchestrator role is required
+for this project.` Projects returns this code only after it confirms current
+membership and project visibility. It maps `404 run_selection_not_found` to
+`The run has no accepted selection.` Callers without project visibility,
+non-members, and unknown or inactive projects keep `The project and run
+authorization is no longer active.` The Broker does not return text from the
+Projects response.
+
 ### Native Workspace repository review
 
 The native CLI uses this review to get one Repo App repository selection for
@@ -1683,7 +1693,7 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | --- | --- |
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
-| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and matching run selection. |
+| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and matching run selection. After it confirms current membership and project visibility, a missing Orchestrator role returns `403 orchestrator_role_required`; a missing run selection returns `404 run_selection_not_found` after current membership, project visibility, and Orchestrator role checks. Other project and membership denials retain generic error codes. |
 | `GET /api/projects/{projectId}/runs/{runId}/spend-budgets` | Orchestrator-only read of `CurrentProjectSpendBudgets`. Requires `api.read`, the Orchestrator scope and current role, an exact project/run binding, and an accepted run selection. Resolves project-scope budgets from the current project and platform revisions, so a changed project budget applies to the next dispatch of every run. Returns `Cache-Control: no-store`. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.

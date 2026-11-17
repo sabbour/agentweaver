@@ -341,7 +341,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         Assert.Contains("BadRequest", boundRequestBeforeSelection.Message, StringComparison.Ordinal);
         Assert.Contains("access_denied", boundRequestBeforeSelection.Message, StringComparison.Ordinal);
         Assert.Contains(
-            "The project and run authorization is no longer active.",
+            "The run has no accepted selection.",
             boundRequestBeforeSelection.Message,
             StringComparison.Ordinal);
 
@@ -370,6 +370,141 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         Assert.Equal(project.ProjectId, acceptedSelection.ProjectId);
         Assert.Equal(runId, acceptedSelection.RunId);
         Assert.Equal(configuration.Revision, acceptedSelection.ProjectConfigurationRevision);
+
+        const string ownerOnlyUpstreamSubject = "first-selection-owner-only";
+        var ownerOnlyTokens = await IssueTokensAsync(
+            runBindingBrokerFactory,
+            "projects.orchestrator",
+            [TenantId],
+            ownerOnlyUpstreamSubject,
+            null,
+            null,
+            []);
+        var ownerOnlyToken = ownerOnlyTokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no access token.");
+        var ownerOnlySubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(ownerOnlyToken).Claims, "sub");
+        var ownerOnlyMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, ownerOnlySubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerOnlyMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner);
+
+        var ownerOnlyDenied = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IssueTokensAsync(
+                runBindingBrokerFactory,
+                "projects.orchestrator",
+                [TenantId],
+                ownerOnlyUpstreamSubject,
+                project.ProjectId,
+                runId,
+                []));
+        Assert.Contains("BadRequest", ownerOnlyDenied.Message, StringComparison.Ordinal);
+        Assert.Contains("access_denied", ownerOnlyDenied.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "The Project Orchestrator role is required for this project.",
+            ownerOnlyDenied.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "The authenticated caller is not authorized for this operation.",
+            ownerOnlyDenied.Message,
+            StringComparison.Ordinal);
+
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerOnlyMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        var ownerRunTokens = await IssueTokensAsync(
+            runBindingBrokerFactory,
+            "projects.orchestrator",
+            [TenantId],
+            ownerOnlyUpstreamSubject,
+            project.ProjectId,
+            runId,
+            []);
+        var ownerRunToken = ownerRunTokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no access token.");
+        var ownerRunClaims = new JwtSecurityTokenHandler().ReadJwtToken(ownerRunToken).Claims;
+        Assert.Equal(
+            BrokerRunBindingAuthority.ProjectsAuthorityKind,
+            SingleClaim(ownerRunClaims, BrokerRunBindingAuthority.AuthorityKindClaim));
+        Assert.Equal(project.ProjectId, SingleClaim(ownerRunClaims, "project_id"));
+        Assert.Equal(runId, SingleClaim(ownerRunClaims, "run_id"));
+
+        const string nonMemberUpstreamSubject = "first-selection-non-member";
+        var nonMemberDenied = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IssueTokensAsync(
+                runBindingBrokerFactory,
+                "projects.orchestrator",
+                [TenantId],
+                nonMemberUpstreamSubject,
+                project.ProjectId,
+                runId,
+                []));
+        Assert.Contains("BadRequest", nonMemberDenied.Message, StringComparison.Ordinal);
+        Assert.Contains("access_denied", nonMemberDenied.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "The project and run authorization is no longer active.",
+            nonMemberDenied.Message,
+            StringComparison.Ordinal);
+
+        const string tenantMemberWithoutProjectRoleSubject = "first-selection-tenant-member";
+        var tenantMemberTokens = await IssueTokensAsync(
+            runBindingBrokerFactory,
+            "projects.orchestrator",
+            [TenantId],
+            tenantMemberWithoutProjectRoleSubject,
+            null,
+            null,
+            []);
+        var tenantMemberToken = tenantMemberTokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no access token.");
+        var tenantMemberSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(tenantMemberToken).Claims, "sub");
+        await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, tenantMemberSubject, TenantId);
+        var tenantMemberDenied = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IssueTokensAsync(
+                runBindingBrokerFactory,
+                "projects.orchestrator",
+                [TenantId],
+                tenantMemberWithoutProjectRoleSubject,
+                project.ProjectId,
+                runId,
+                []));
+        Assert.Contains("BadRequest", tenantMemberDenied.Message, StringComparison.Ordinal);
+        Assert.Contains("access_denied", tenantMemberDenied.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "The project and run authorization is no longer active.",
+            tenantMemberDenied.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("The Project Orchestrator role is required", tenantMemberDenied.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("The run has no accepted selection", tenantMemberDenied.Message, StringComparison.Ordinal);
+
+        var missingProjectDenied = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IssueTokensAsync(
+                runBindingBrokerFactory,
+                "projects.orchestrator",
+                [TenantId],
+                nonMemberUpstreamSubject,
+                Guid.NewGuid().ToString("N"),
+                runId,
+                []));
+        Assert.Contains("BadRequest", missingProjectDenied.Message, StringComparison.Ordinal);
+        Assert.Contains("access_denied", missingProjectDenied.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "The project and run authorization is no longer active.",
+            missingProjectDenied.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("The Project Orchestrator role is required", nonMemberDenied.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("The run has no accepted selection", nonMemberDenied.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("The Project Orchestrator role is required", missingProjectDenied.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("The run has no accepted selection", missingProjectDenied.Message, StringComparison.Ordinal);
 
         var runTokens = await IssueTokensAsync(
             runBindingBrokerFactory,

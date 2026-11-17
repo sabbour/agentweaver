@@ -18,6 +18,96 @@ public sealed class BrokerRunBindingAuthorityTests
     private static readonly Guid UserId = Guid.Parse("7fc0a64d-a91e-4f71-88c2-32f7f8dc8531");
 
     [Theory]
+    [InlineData(HttpStatusCode.Forbidden, "orchestrator_role_required", "OrchestratorRoleRequired")]
+    [InlineData(HttpStatusCode.NotFound, "run_selection_not_found", "RunSelectionNotFound")]
+    [InlineData(HttpStatusCode.Forbidden, "run_selection_not_found", null)]
+    [InlineData(HttpStatusCode.NotFound, "orchestrator_role_required", null)]
+    [InlineData(HttpStatusCode.Forbidden, "forbidden", null)]
+    [InlineData(HttpStatusCode.NotFound, "not_found", null)]
+    public async Task DeniedReasonUsesOnlyAllowlistedCodesAndMatchingStatuses(
+        HttpStatusCode statusCode,
+        string code,
+        string? expectedReason)
+    {
+        using var rsa = RSA.Create(2048);
+        using var certificate = new CertificateRequest(
+            "CN=broker.test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        var body = JsonSerializer.Serialize(new { code, detail = "Projects text must not reach the caller." });
+        var handler = new OwnerResponseHandler(body, statusCode, "application/problem+json");
+        using var client = new HttpClient(handler);
+        var authority = new BrokerRunBindingAuthority(
+            CreateOptions(), certificate, client, TimeProvider.System);
+
+        var result = await authority.CheckAsync(UserId, ProjectId, RunId, null, CancellationToken.None);
+
+        Assert.Equal(BrokerRunBindingStatus.Denied, result.Status);
+        Assert.Null(result.Receipt);
+        Assert.Equal(expectedReason, result.ReasonCode?.ToString());
+    }
+
+    [Fact]
+    public async Task DenialReasonRequiresNoStoreProblemResponse()
+    {
+        using var rsa = RSA.Create(2048);
+        using var certificate = new CertificateRequest(
+            "CN=broker.test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        var handler = new OwnerResponseHandler(
+            """{"code":"orchestrator_role_required"}""",
+            HttpStatusCode.Forbidden,
+            "application/problem+json",
+            noStore: false);
+        using var client = new HttpClient(handler);
+        var authority = new BrokerRunBindingAuthority(
+            CreateOptions(), certificate, client, TimeProvider.System);
+
+        var result = await authority.CheckAsync(UserId, ProjectId, RunId, null, CancellationToken.None);
+
+        Assert.Equal(BrokerRunBindingStatus.Denied, result.Status);
+        Assert.Null(result.ReasonCode);
+    }
+
+    [Fact]
+    public async Task MalformedDenialReasonKeepsGenericDenial()
+    {
+        using var rsa = RSA.Create(2048);
+        using var certificate = new CertificateRequest(
+            "CN=broker.test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        var handler = new OwnerResponseHandler(
+            """{"code":"\uD800"}""",
+            HttpStatusCode.Forbidden,
+            "application/problem+json");
+        using var client = new HttpClient(handler);
+        var authority = new BrokerRunBindingAuthority(
+            CreateOptions(), certificate, client, TimeProvider.System);
+
+        var result = await authority.CheckAsync(UserId, ProjectId, RunId, null, CancellationToken.None);
+
+        Assert.Equal(BrokerRunBindingStatus.Denied, result.Status);
+        Assert.Null(result.ReasonCode);
+    }
+
+    [Fact]
+    public async Task StalledDenialBodyKeepsGenericDenial()
+    {
+        using var rsa = RSA.Create(2048);
+        using var certificate = new CertificateRequest(
+            "CN=broker.test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        using var client = new HttpClient(new StalledOwnerResponseHandler());
+        var authority = new BrokerRunBindingAuthority(
+            CreateOptions(), certificate, client, TimeProvider.System);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+
+        var result = await authority.CheckAsync(UserId, ProjectId, RunId, null, cancellation.Token);
+
+        Assert.Equal(BrokerRunBindingStatus.Denied, result.Status);
+        Assert.Null(result.ReasonCode);
+    }
+
+    [Theory]
     [InlineData("missing")]
     [InlineData("null")]
     public async Task InvalidOwnerReceiptReturnsUnavailable(string selectionHashState)
@@ -216,7 +306,11 @@ public sealed class BrokerRunBindingAuthorityTests
         return JsonSerializer.Serialize(receipt, new JsonSerializerOptions(JsonSerializerDefaults.Web));
     }
 
-    private sealed class OwnerResponseHandler(string body) : HttpMessageHandler
+    private sealed class OwnerResponseHandler(
+        string body,
+        HttpStatusCode statusCode = HttpStatusCode.OK,
+        string mediaType = "application/json",
+        bool noStore = true) : HttpMessageHandler
     {
         public Uri? RequestUri { get; private set; }
         public string? BearerToken { get; private set; }
@@ -231,16 +325,65 @@ public sealed class BrokerRunBindingAuthorityTests
             BearerToken = request.Headers.Authorization?.Parameter;
             Method = request.Method;
             HasBody = request.Content is not null;
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            var response = new HttpResponseMessage(statusCode)
             {
                 RequestMessage = request,
-                Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+                Content = new StringContent(body, System.Text.Encoding.UTF8, mediaType),
             };
+            if (noStore)
+                response.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
+                {
+                    NoStore = true,
+                };
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class StalledOwnerResponseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                RequestMessage = request,
+                Content = new StreamContent(new StalledReadStream()),
+            };
+            response.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue("application/problem+json");
             response.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
             {
                 NoStore = true,
             };
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed class StalledReadStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(System.Threading.Timeout.Infinite, cancellationToken);
+            return 0;
         }
     }
 }

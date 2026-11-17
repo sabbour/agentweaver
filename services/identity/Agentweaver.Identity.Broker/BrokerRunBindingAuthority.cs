@@ -47,6 +47,7 @@ internal sealed class BrokerRunBindingAuthority(
     private const string ContextRevisionClaim = "aw:run_binding_context_revision";
     private const string SelectionHashClaim = "aw:run_binding_selection_hash";
     private const int MaximumResponseBytes = 16 * 1024;
+    private static readonly TimeSpan DenialReasonReadTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan TokenLifetime = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -103,7 +104,8 @@ internal sealed class BrokerRunBindingAuthority(
                 return BrokerRunBindingCheck.Unavailable;
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or
                 HttpStatusCode.BadRequest or HttpStatusCode.NotFound or HttpStatusCode.Conflict)
-                return BrokerRunBindingCheck.Denied;
+                return BrokerRunBindingCheck.DeniedForReason(
+                    await ReadDenialReasonAsync(response, cancellationToken).ConfigureAwait(false));
             if (!response.IsSuccessStatusCode ||
                 response.Headers.CacheControl?.NoStore != true ||
                 !string.Equals(
@@ -377,6 +379,65 @@ internal sealed class BrokerRunBindingAuthority(
         return bytes.ToArray();
     }
 
+    private static async Task<BrokerRunBindingReasonCode?> ReadDenialReasonAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.StatusCode is not (HttpStatusCode.Forbidden or HttpStatusCode.NotFound) ||
+            response.Headers.CacheControl?.NoStore != true ||
+            !string.Equals(
+                response.Content.Headers.ContentType?.MediaType,
+                "application/problem+json",
+                StringComparison.OrdinalIgnoreCase) ||
+            response.Content.Headers.ContentLength is { } length &&
+            (length <= 0 || length > MaximumResponseBytes))
+            return null;
+
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(DenialReasonReadTimeout);
+            var bytes = await ReadBoundedAsync(response, timeout.Token).ConfigureAwait(false);
+            if (bytes is null)
+                return null;
+
+            using var document = JsonDocument.Parse(bytes);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("code", out var code) ||
+                code.ValueKind != JsonValueKind.String)
+                return null;
+
+            return (response.StatusCode, code.GetString()) switch
+            {
+                (HttpStatusCode.Forbidden, "orchestrator_role_required") =>
+                    BrokerRunBindingReasonCode.OrchestratorRoleRequired,
+                (HttpStatusCode.NotFound, "run_selection_not_found") =>
+                    BrokerRunBindingReasonCode.RunSelectionNotFound,
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
     private static bool IsValidIdentifier(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 256 &&
@@ -387,16 +448,26 @@ internal sealed class BrokerRunBindingAuthority(
 /// <summary>Outcome of a Projects-owner run-binding check; only <c>Authorized</c> carries a receipt.</summary>
 internal sealed record BrokerRunBindingCheck(
     BrokerRunBindingStatus Status,
-    BrokerRunBindingReceipt? Receipt)
+    BrokerRunBindingReceipt? Receipt,
+    BrokerRunBindingReasonCode? ReasonCode)
 {
     public static BrokerRunBindingCheck Denied { get; } =
-        new(BrokerRunBindingStatus.Denied, null);
+        new(BrokerRunBindingStatus.Denied, null, null);
 
     public static BrokerRunBindingCheck Unavailable { get; } =
-        new(BrokerRunBindingStatus.Unavailable, null);
+        new(BrokerRunBindingStatus.Unavailable, null, null);
+
+    public static BrokerRunBindingCheck DeniedForReason(BrokerRunBindingReasonCode? reasonCode) =>
+        reasonCode is null ? Denied : new(BrokerRunBindingStatus.Denied, null, reasonCode);
 
     public static BrokerRunBindingCheck Authorized(BrokerRunBindingReceipt receipt) =>
-        new(BrokerRunBindingStatus.Authorized, receipt);
+        new(BrokerRunBindingStatus.Authorized, receipt, null);
+}
+
+internal enum BrokerRunBindingReasonCode
+{
+    OrchestratorRoleRequired,
+    RunSelectionNotFound,
 }
 
 /// <summary>Separates a rejected binding from an unavailable Projects owner.</summary>
