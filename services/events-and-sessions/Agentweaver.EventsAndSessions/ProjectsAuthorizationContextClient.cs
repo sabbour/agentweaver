@@ -87,11 +87,7 @@ public sealed class ProjectsAuthorizationContextClient(
     {
         if (!IsOpaqueIdentifier(projectId))
             throw new ArgumentException("project_id_invalid");
-        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
-            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-        if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
-            !context.User.FindAll("aud").Any(claim => claim.Value == ownerAudience))
-            throw new ProjectsAuthorizationContextException("caller_scope_invalid", HttpStatusCode.Forbidden);
+        RequireApiReadCaller(context, ownerAudience);
         var current = await GetContextAsync(context, projectId, cancellationToken).ConfigureAwait(false);
         if (!current.EffectiveAuthority.Any(authority => !authority.Permissions.IsDefault &&
                 authority.Permissions.Any(permission => permission.RoleRevision > 0 &&
@@ -107,6 +103,65 @@ public sealed class ProjectsAuthorizationContextClient(
             await RequireProjectInTenantAsync(context, projectId, current.TenantId, cancellationToken)
                 .ConfigureAwait(false);
         return current;
+    }
+
+    /// <summary>Asks Projects to check a fresh role assignment before price lookup.</summary>
+    public async Task AuthorizeModelPricingSearchAsync(
+        HttpContext context,
+        string projectId,
+        string ownerAudience,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsOpaqueIdentifier(projectId))
+            throw new ProjectsAuthorizationContextException("project_id_invalid", HttpStatusCode.BadRequest);
+        RequireApiReadCaller(context, ownerAudience);
+        _ = RequireProjectReadCaller(context, projectId, ownerAudience);
+        var tenant = ReadTenantSelector(context);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(RequireOwnerUri(options),
+                $"/api/authorization/projects/{Uri.EscapeDataString(projectId)}/model-pricing-search"));
+        request.Headers.Authorization = RequireBearer(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation(TenantSelectorHeader, tenant);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException exception)
+        {
+            throw new ProjectsAuthorizationContextException(
+                "projects_authorization_unavailable", HttpStatusCode.BadGateway, exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new ProjectsAuthorizationContextException(
+                "projects_authorization_unavailable", HttpStatusCode.BadGateway, exception);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+                throw new ProjectsAuthorizationContextException("projects_authorization_denied", HttpStatusCode.Forbidden);
+            if (response.StatusCode != HttpStatusCode.NoContent)
+                throw new ProjectsAuthorizationContextException(
+                    response.StatusCode is >= HttpStatusCode.MultipleChoices and < HttpStatusCode.BadRequest
+                        ? "projects_authorization_redirect_rejected"
+                        : "projects_authorization_unavailable",
+                    HttpStatusCode.BadGateway);
+            if (response.Headers.CacheControl?.NoStore != true)
+                throw new ProjectsAuthorizationContextException(
+                    "projects_authorization_cache_policy_invalid", HttpStatusCode.BadGateway);
+        }
     }
 
     private async Task RequireProjectInTenantAsync(
@@ -285,6 +340,15 @@ public sealed class ProjectsAuthorizationContextClient(
             throw new ProjectsAuthorizationContextException(
                 "projects_authorization_caller_invalid", HttpStatusCode.Forbidden);
         return scope.Value;
+    }
+
+    private static void RequireApiReadCaller(HttpContext context, string? ownerAudience)
+    {
+        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
+            !context.User.FindAll("aud").Any(claim => claim.Value == ownerAudience))
+            throw new ProjectsAuthorizationContextException("caller_scope_invalid", HttpStatusCode.Forbidden);
     }
 
     /// <summary>Validates optional project/run bindings without relaxing the existing run-only caller path.</summary>

@@ -206,6 +206,7 @@ not confirm that the services are deployed in your environment.
 | List runs | `GET /api/v1/projects/{projectId}/runs` | Orchestrator | Returns one page of runs, newest first. The `state` filter and `cursor` select the rows. |
 | Read run metrics | `GET /api/v1/projects/{projectId}/metrics` | Orchestrator | Returns run counts and daily buckets for a UTC range of up to 92 days. |
 | Read usage | `GET /api/v1/projects/{projectId}/usage` | Events & Sessions | Returns usage and cost subtotals by model and agent for the same range. |
+| Search model prices | `GET /api/v1/projects/{projectId}/model-pricing/azure-retail?region={region}&search={text}` | Events & Sessions | Returns matching Azure Retail meters after Projects checks current PlatformAdmin or project Owner authority. |
 | Read the backlog | `GET /api/v1/projects/{projectId}/backlog` | Orchestrator | Returns the backlog graph: revision, tasks, and dependencies. |
 | Capture a task | `POST /api/v1/projects/{projectId}/backlog/tasks` | Orchestrator | Adds a task to Backlog with a client-chosen task ID and the expected graph revision. |
 | Edit a task | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Orchestrator | Replaces the title and description with the expected graph and task revisions. |

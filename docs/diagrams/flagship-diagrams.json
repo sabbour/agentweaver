@@ -55,6 +55,11 @@
       "docs": ["docs/architecture/events-sessions.md", "docs/guide/testing.md"]
     },
     {
+      "name": "v1-gateway-azure-retail-pricing",
+      "concept": "Fresh project authority check before Azure Retail lookup",
+      "docs": ["docs/architecture/events-sessions.md", "docs/deep-dive/gateway.md"]
+    },
+    {
       "name": "v1-runtime-observation-v2",
       "concept": "Owner-authorized runtime evidence with stable paging and exact attempt lookup",
       "docs": ["docs/architecture/agenthost.md"]

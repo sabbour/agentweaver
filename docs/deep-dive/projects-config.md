@@ -54,6 +54,14 @@ permissions, not a substitute for those assignments.
 effective permissions. A signed project/run binding limits its target; headers
 and token role claims cannot create authority.
 
+Events uses `GET /api/authorization/projects/{projectId}/model-pricing-search`
+for the Gateway's Azure Retail price route. Projects resolves the caller's
+current membership and roles on every request. It requires `api.read`, rejects
+conflicting project and run bindings, and returns `204` only for current
+PlatformAdmin or exact Owner authority on the requested project. The response
+uses `Cache-Control: no-store`; Events does not search Azure Retail when
+Projects denies or cannot answer.
+
 The runtime database principal reads authority records but cannot mutate them.
 Setup and revocation use a separate privileged path. Ordinary service requests
 do not bootstrap membership.

@@ -1,0 +1,214 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Azure Retail price search",
+  "alt": "A project caller sends a model price query through Gateway to Events & Sessions. Events asks Projects & Config to load current membership and role assignments. Projects allows PlatformAdmin or exact project Owner authority and rejects other roles, mismatched projects, and run-bound callers. Events calls the fixed Azure Retail endpoint only after a no-store authorization success. A denial or Projects failure stops the lookup. Events returns bounded price candidates without changing rate cards.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "gateway",
+      "label": "Gateway",
+      "subLabel": "Fixed public API route",
+      "icon": "route",
+      "badge": {
+        "text": "API",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "events",
+      "label": "Events & Sessions",
+      "subLabel": "Checks Projects before lookup",
+      "icon": "server",
+      "badge": {
+        "text": "Owner",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "projects",
+      "label": "Projects & Config",
+      "subLabel": "Current membership and role assignments",
+      "icon": "database",
+      "badge": {
+        "text": "Authority",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "retail",
+      "label": "Azure Retail Prices",
+      "subLabel": "Fixed HTTPS endpoint",
+      "icon": "globe",
+      "badge": {
+        "text": "External",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["gateway"],
+      "label": "Caller with api.read: GET /api/v1/projects/{projectId}/model-pricing/azure-retail?region=...&search=..."
+    },
+    {
+      "type": "message",
+      "from": "gateway",
+      "to": "events",
+      "label": "Forward bearer, tenant selector, project ID, and query",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "events",
+      "to": "events",
+      "label": "Validate query and caller audience",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Current Projects authorization",
+      "sections": [
+        {
+          "label": "PlatformAdmin or Owner of this project",
+          "steps": [
+            {
+              "type": "message",
+              "from": "events",
+              "to": "projects",
+              "label": "GET /api/authorization/projects/{projectId}/model-pricing-search",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "projects",
+              "to": "projects",
+              "label": "Reload active membership, bindings, and role assignments",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "projects",
+              "to": "events",
+              "label": "204 No Content; Cache-Control: no-store",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "events",
+              "to": "retail",
+              "label": "Search fixed USD Foundry Models consumption meters",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "retail",
+              "to": "events",
+              "label": "Bounded meter pages",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "events",
+              "to": "gateway",
+              "label": "200 typed result; no-store",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "gateway",
+              "to": "gateway",
+              "label": "Forward owner status, headers, and body",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "Role or binding denied",
+          "steps": [
+            {
+              "type": "message",
+              "from": "events",
+              "to": "projects",
+              "label": "GET current role check",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "projects",
+              "to": "events",
+              "label": "403 Forbidden; no-store",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "events",
+              "to": "gateway",
+              "label": "403; skip Azure Retail",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "gateway",
+              "to": "gateway",
+              "label": "Return no-store denial to caller",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "Projects is unavailable",
+          "steps": [
+            {
+              "type": "message",
+              "from": "events",
+              "to": "projects",
+              "label": "GET current role check",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "projects",
+              "to": "events",
+              "label": "Unavailable, redirected, or invalid response",
+              "line": "dashed",
+              "arrow": "cross"
+            },
+            {
+              "type": "message",
+              "from": "events",
+              "to": "gateway",
+              "label": "502; skip Azure Retail",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "gateway",
+              "to": "gateway",
+              "label": "Return no-store error to caller",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

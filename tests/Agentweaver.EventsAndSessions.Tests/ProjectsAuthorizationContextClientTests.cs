@@ -83,6 +83,75 @@ public sealed class ProjectsAuthorizationContextClientTests
         Assert.Equal(2, calls);
     }
 
+    [Fact]
+    public async Task ModelPricingSearchChecksCurrentProjectsRoleOnEveryRequest()
+    {
+        var calls = 0;
+        var handler = new CaptureHandler(_ =>
+        {
+            calls++;
+            return calls == 1
+                ? new HttpResponseMessage(HttpStatusCode.NoContent)
+                {
+                    Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+                }
+                : new HttpResponseMessage(HttpStatusCode.Forbidden);
+        });
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("sub", ActorId),
+                    new Claim("project_id", "project-1"),
+                    new Claim("aud", Audience),
+                    new Claim("aud", "events"),
+                    new Claim("scope", "api.read")
+                ],
+                "validated-bearer"))
+        };
+        context.Request.Headers.Authorization = "Bearer current-caller-token";
+        context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        var client = CreateClient(handler);
+
+        await client.AuthorizeModelPricingSearchAsync(context, "project-1", "events", default);
+        Assert.Equal(new Uri(
+            "https://projects.internal/api/authorization/projects/project-1/model-pricing-search"), handler.RequestUri);
+        Assert.Equal(HttpMethod.Get, handler.Method);
+        Assert.Equal("current-caller-token", handler.BearerToken);
+        Assert.Equal("tenant-1", handler.TenantSelector);
+
+        var revoked = await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+            () => client.AuthorizeModelPricingSearchAsync(context, "project-1", "events", default));
+        Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+        Assert.Equal("projects_authorization_denied", revoked.Code);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task ModelPricingSearchFailsClosedWhenProjectsDoesNotReturnNoStore()
+    {
+        var handler = new CaptureHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent));
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("sub", ActorId),
+                    new Claim("project_id", "project-1"),
+                    new Claim("aud", Audience),
+                    new Claim("aud", "events"),
+                    new Claim("scope", "api.read")
+                ],
+                "validated-bearer"))
+        };
+        context.Request.Headers.Authorization = "Bearer current-caller-token";
+
+        var exception = await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+            () => CreateClient(handler).AuthorizeModelPricingSearchAsync(context, "project-1", "events", default));
+
+        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+        Assert.Equal("projects_authorization_cache_policy_invalid", exception.Code);
+    }
+
     /// <summary>Accepts current project or tenant read grants and preserves optional run narrowing.</summary>
     [Theory]
     [InlineData("project", "readProjects", null, null, true)]

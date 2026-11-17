@@ -129,6 +129,7 @@ builder.Services.AddHttpClient<IProjectsAuthorizationContextClient, ProjectsAuth
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler)
     .AddTypedClient<ProjectsAuthorizationContextClient>();
 builder.Services.AddSingleton<ProjectUsageReadStore>();
+builder.Services.AddSingleton<AzureRetailPriceLookup>();
 var coordinationOwner = builder.Configuration.GetSection("EventsAndSessions:OrchestratorOwner");
 builder.Services.AddSingleton(new CoordinationOwnerClientOptions(
     coordinationOwner["OwnerBaseAddress"],
@@ -330,6 +331,7 @@ app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
 app.MapEventsAndSessionsEndpoints();
 // Project usage reads are available even when native usage ingestion is disabled.
 app.MapProjectUsageEndpoints();
+app.MapAzureRetailPriceEndpoints();
 app.MapAcceptedEffectEndpoints();
 app.MapAddressedMessageEndpoints();
 if (nativeUsageEnabled)

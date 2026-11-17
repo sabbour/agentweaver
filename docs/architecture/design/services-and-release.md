@@ -82,7 +82,9 @@ optional tenant selector without replacing owner authorization. It preserves own
 statuses and bodies; `202 Accepted` is not downstream completion. Run-event SSE reads
 committed Events journal pages and rechecks exact run-bound Projects read authority
 before each event write. Its public Orchestrator routes include run-bound task
-dispatch; Orchestrator retains the task-completion decision and evidence.
+dispatch; Orchestrator retains the task-completion decision and evidence. Its
+project-scoped Azure Retail price route delegates current PlatformAdmin or
+project Owner checks to Projects before Events performs the lookup.
 The data plane executes agents, enforces outbound traffic, and serves applications. Core service
 code depends on the versioned .NET contracts in `Agentweaver.Abstractions`; adapters implement those
 contracts and may communicate with managed services, sidecars, or Kubernetes resources. Clients do

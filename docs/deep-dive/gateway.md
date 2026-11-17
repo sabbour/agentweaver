@@ -91,6 +91,18 @@ these reads. Projects & Config resolves current membership and roles in the
 bounded list-page query and checks authority before and after other Project
 Policy reads.
 
+Project Azure Retail price search is also a fixed catalog route:
+`GET /api/v1/projects/{projectId}/model-pricing/azure-retail`. Gateway forwards
+the caller token, tenant selector, and required `region` and `search` query
+values to Events & Sessions. Events asks Projects & Config to reload current
+authority for that project before it calls the fixed Azure Retail endpoint.
+Projects allows current PlatformAdmin or exact project Owner authority and
+rejects conflicting bindings and run-bound tokens. The Gateway exposes
+`Cache-Control`, limits the response to 8 MiB, and excludes the route from the
+retained MCP adapter. The
+[Events price-search diagram](../architecture/events-sessions.md#usage-storage-and-copilot-pricing)
+shows the owner checks and failure order.
+
 Gateway preserves the owner's response status and body. In particular,
 `202 Accepted` means an owner accepted an operation; it does not prove that a
 resource, model turn, or workflow finished. Gateway has no domain database and

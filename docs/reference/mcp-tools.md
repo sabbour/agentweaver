@@ -245,6 +245,8 @@ Cost units and dispositions remain separate, unknown values remain `null`,
 and usage reads do not price or change budgets. Cross-project overview is out
 of scope. See [Project metrics and usage](./api.md#project-metrics-and-usage)
 for metric definitions and differences from the 0.x dashboard.
+The Gateway's `searchProjectAzureRetailPrices` route is excluded from this
+compatibility adapter; use the authenticated REST API.
 
 ### Source Control
 

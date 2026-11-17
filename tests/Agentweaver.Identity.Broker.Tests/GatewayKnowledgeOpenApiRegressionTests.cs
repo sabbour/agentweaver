@@ -860,6 +860,73 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     }
 
     [Fact]
+    public async Task AzureRetailPricingRoutePublishesProjectAuthorizationAndStrictResponseContract()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        var operation = root.GetProperty("paths")
+            .GetProperty("/api/v1/projects/{projectId}/model-pricing/azure-retail").GetProperty("get");
+        Assert.Equal("searchProjectAzureRetailPrices", operation.GetProperty("operationId").GetString());
+        Assert.Equal("Events", operation.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+        Assert.Contains("current PlatformAdmin authority", operation.GetProperty("description").GetString());
+        Assert.Contains("current Owner authority", operation.GetProperty("description").GetString());
+        Assert.Contains("before searching Azure Retail", operation.GetProperty("description").GetString());
+        Assert.Contains("Project-bound tokens must match the path", operation.GetProperty("description").GetString());
+        Assert.Contains("run-bound callers are denied", operation.GetProperty("description").GetString());
+        Assert.Contains("no-store", operation.GetProperty("description").GetString());
+        foreach (var name in new[] { "region", "search" })
+        {
+            var parameter = Assert.Single(operation.GetProperty("parameters").EnumerateArray(),
+                item => item.GetProperty("name").GetString() == name);
+            Assert.Equal("query", parameter.GetProperty("in").GetString());
+            Assert.True(parameter.GetProperty("required").GetBoolean());
+            Assert.True(parameter.GetProperty("schema").GetProperty("minLength").GetInt32() > 0);
+            Assert.True(parameter.GetProperty("schema").GetProperty("maxLength").GetInt32() <= 64);
+        }
+        Assert.Equal(
+            "#/components/schemas/AzureRetailPriceLookupResult",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal(
+            "no-store",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("headers")
+                .GetProperty("Cache-Control").GetProperty("schema").GetProperty("example").GetString());
+        Assert.True(operation.GetProperty("responses").TryGetProperty("400", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("403", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("502", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("503", out _));
+
+        var schemas = root.GetProperty("components").GetProperty("schemas");
+        var lookupResult = schemas.GetProperty("AzureRetailPriceLookupResult");
+        Assert.False(lookupResult.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            ["region", "sourceUrl", "retrievedOn", "items"],
+            lookupResult.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        var meter = schemas.GetProperty("AzureRetailMeterCandidate");
+        Assert.False(meter.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            ["meterId", "meterName", "productName", "skuName", "unitOfMeasure", "currencyCode",
+                "retailPrice", "tierMinimumUnits", "usdPer1M"],
+            meter.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+
+        var route = Assert.Single(GatewayHost::Agentweaver.Gateway.GatewayRouteCatalog.Routes,
+            item => item.OperationId == "searchProjectAzureRetailPrices");
+        Assert.Equal(
+            "/api/projects/{projectId}/model-pricing/azure-retail",
+            route.OwnerPath);
+        Assert.Equal((long?)(8 * 1024 * 1024), route.MaximumResponseBytes);
+        Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
+        Assert.True(route.ExcludeFromMcp);
+    }
+
+    [Fact]
     public async Task RuntimeObservationV1IsExposedWithStrictSanitizedSchemas()
     {
         using var rsa = RSA.Create(2048);

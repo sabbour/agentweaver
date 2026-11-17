@@ -73,6 +73,9 @@ public static class ProjectConfigEndpoints
             }
         }).WithName("GetAuthorizationContext");
 
+        authorization.MapGet("/projects/{projectId}/model-pricing-search", AuthorizeModelPricingSearchAsync)
+            .WithName("AuthorizeProjectModelPricingSearch");
+
         var castingCatalog = app.MapGroup("/api/casting").RequireAuthorization();
         castingCatalog.MapGet("/templates", (HttpContext context) =>
         {
@@ -1220,6 +1223,35 @@ public static class ProjectConfigEndpoints
         app.MapModelProviderDraftEndpoints();
         app.MapModelProviderCredentialPublicationEndpoints(enableBrokerRunBinding);
         return app;
+    }
+
+    internal static async Task<IResult> AuthorizeModelPricingSearchAsync(
+        string projectId,
+        HttpContext context,
+        ProjectAuthorizationOwner authorizationOwner,
+        CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            if (context.Request.Query.Count != 0)
+                throw ProjectConfigException.Forbidden();
+            var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                .ConfigureAwait(false);
+            caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+            caller.RequireResourceBinding(projectId);
+            if (!caller.IsPlatformAdmin &&
+                !caller.HasRole(
+                    ProjectAuthorityResourceType.Project,
+                    projectId,
+                    ProjectAuthorityRole.Owner))
+                throw ProjectConfigException.Forbidden();
+            return Results.NoContent();
+        }
+        catch (ProjectConfigException exception)
+        {
+            return ToProblem(exception);
+        }
     }
 
     /// <summary>Converts an owner error to a problem response while preserving its stable code and HTTP status.</summary>

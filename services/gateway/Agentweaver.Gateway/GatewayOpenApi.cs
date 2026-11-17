@@ -141,6 +141,7 @@ internal static partial class GatewayOpenApi
             // Reporting contracts stay separate across the two data owners.
             ["readProjectMetrics"] = C(null, "ProjectMetrics", "200"),
             ["readProjectUsage"] = C(null, "ProjectUsage", "200"),
+            ["searchProjectAzureRetailPrices"] = C(null, "AzureRetailPriceLookupResult", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["createProjectRun"] = C("CreateProjectRunRequest", "CreateProjectRunResponse", "201"),
             ["startProjectRun"] = C(null, "StartProjectRunResponse", "200"),
@@ -443,6 +444,7 @@ internal static partial class GatewayOpenApi
                          "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
+                        "searchProjectAzureRetailPrices" or
                         "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
                         "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
                         "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
@@ -470,6 +472,8 @@ internal static partial class GatewayOpenApi
                                                 "Privileged setup receipts are not cacheable.",
                                             "readProjectTeamSync" or "commitProjectTeamSync" =>
                                                 "Private repository team-sync responses are not cacheable.",
+                                            "searchProjectAzureRetailPrices" =>
+                                                "Azure Retail price search responses are not cacheable.",
                                             "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
                                             "writePlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
                                             "readPlatformNativeAcsPolicyRevision" =>
@@ -511,6 +515,11 @@ internal static partial class GatewayOpenApi
         if (route.OperationId == "createProject")
             responses["503"] = ProblemResponse(
                 "The creator Owner assignment is unavailable (role_assignment_unavailable); project and initial configuration creation are rolled back.");
+        if (route.OperationId == "searchProjectAzureRetailPrices")
+        {
+            responses["400"] = ProblemResponse("The region and search query are missing, invalid, repeated, or unknown.");
+            responses["503"] = ProblemResponse("Azure Retail pricing is unavailable.");
+        }
         if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent" or
             "setAllProjectBacklogTasksReady" or "setProjectBacklogTaskPosition" or
             "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or "deleteProjectBacklogTask" or
@@ -1006,6 +1015,16 @@ else if (route.OperationId is
                 "Responses are no-store. The half-open UTC interval [from,to) defaults to the preceding 30 days " +
                 "and cannot exceed 92 days. Cross-project overview is out of scope. Usage reads never price or budget.";
         }
+        else if (route.OperationId == "searchProjectAzureRetailPrices")
+        {
+            description +=
+                " Requires api.read and either current PlatformAdmin authority or current Owner authority on the " +
+                "project in the path. Events asks Projects to check current authority on every request before " +
+                "searching Azure Retail. Project-bound tokens must match the path; run-bound callers are denied. " +
+                "region contains 1 to 64 ASCII letters or digits; search contains 1 to 64 " +
+                "ASCII letters, digits, periods, hyphens, or spaces. A null usdPer1M means the meter does not use " +
+                "a supported per-token unit or base tier. Responses are no-store.";
+        }
         else if (route.OperationId == "listProjectRuns")
         {
             description +=
@@ -1276,6 +1295,7 @@ else if (route.OperationId is
     };
 
     private static bool IsRequiredQueryParameter(string operationId, string name) =>
+        operationId == "searchProjectAzureRetailPrices" && name is "region" or "search" ||
         operationId == "removeMarketplaceSource" && name == "expectedRevision" ||
         operationId == "revokeProjectRoleAssignment" && name == "expectedRevision" ||
         operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision" ||
@@ -1287,6 +1307,10 @@ else if (route.OperationId is
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId == "searchProjectAzureRetailPrices")
+            return name == "region"
+                ? new { type = "string", minLength = 1, maxLength = 64, pattern = "^[A-Za-z0-9]{1,64}$" }
+                : new { type = "string", minLength = 1, maxLength = 64, pattern = "^[A-Za-z0-9 .-]{1,64}$" };
         if (operationId is "listPlatformByokProviderDrafts" or "listProjectByokProviderDrafts")
             return name switch
             {
@@ -2377,6 +2401,16 @@ else if (route.OperationId is
         ["ProjectUsage"] = StrictObj(["projectId", "from", "to", "usageByModel", "usageByAgent"],
             ("projectId", Str()), ("from", Date()), ("to", Date()),
             ("usageByModel", Arr(Ref("ProjectUsageItem"))), ("usageByAgent", Arr(Ref("ProjectUsageItem")))),
+        ["AzureRetailMeterCandidate"] = StrictObj(
+            ["meterId", "meterName", "productName", "skuName", "unitOfMeasure", "currencyCode",
+                "retailPrice", "tierMinimumUnits", "usdPer1M"],
+            ("meterId", Str()), ("meterName", Str()), ("productName", Str()), ("skuName", Str()),
+            ("unitOfMeasure", Str()), ("currencyCode", Str()), ("retailPrice", NullableNumber()),
+            ("tierMinimumUnits", NullableNumber()), ("usdPer1M", NullableNumber())),
+        ["AzureRetailPriceLookupResult"] = StrictObj(
+            ["region", "sourceUrl", "retrievedOn", "items"],
+            ("region", Str()), ("sourceUrl", new { type = "string", format = "uri" }),
+            ("retrievedOn", Date()), ("items", Arr(Ref("AzureRetailMeterCandidate")))),
         ["BindChiefOfStaffConversationRequest"] = StrictObj(["projectId", "runId"],
             ("projectId", Str()), ("runId", Str())),
         // An unavailable conversation keeps only its identifier, access, and creation time.
