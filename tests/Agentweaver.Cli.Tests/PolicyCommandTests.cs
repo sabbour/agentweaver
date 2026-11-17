@@ -389,6 +389,406 @@ public sealed class PolicyCommandTests
         }
     }
 
+    [Theory]
+    [InlineData("4", 4L)]
+    [InlineData("none", null)]
+    public async Task ApplySendsPlatformArtifactWithDurableIdsAndProjectsReceipt(string expectedText, long? expectedRevision)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        fixture.ApplyResponse = (attempt, body, _) =>
+            Task.FromResult(JsonResponse(HttpStatusCode.OK, ApplyReceipt(body, replayed: false)));
+        fixture.BeforePolicyApply = body =>
+        {
+            var request = JsonNode.Parse(body)!.AsObject();
+            var records = Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json");
+            Assert.Single(records);
+            var saved = JsonNode.Parse(File.ReadAllText(records[0]))!.AsObject();
+            Assert.Equal(request["idempotencyKey"]!.GetValue<string>(), saved["idempotencyKey"]!.GetValue<string>());
+            Assert.Equal(request["correlationId"]!.GetValue<string>(), saved["correlationId"]!.GetValue<string>());
+            Assert.DoesNotContain("Approve reviewed policy update", File.ReadAllText(records[0]), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, File.ReadAllText(records[0]), StringComparison.Ordinal);
+        };
+        try
+        {
+            Assert.Equal(0, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", expectedText, "--reason", "Approve reviewed policy update"));
+
+            Assert.Equal("PUT", fixture.PolicyMethod);
+            Assert.Equal("/api/v1/policies/platform", fixture.PolicyPath);
+            var request = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            Assert.Equal(
+                new[] { "artifact", "correlationId", "expectedRevision", "idempotencyKey", "reason" },
+                request.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Equal(expectedRevision, request["expectedRevision"]?.GetValue<long>());
+            Assert.Equal("Approve reviewed policy update", request["reason"]!.GetValue<string>());
+            Assert.Matches("^[0-9a-f]{32}$", request["idempotencyKey"]!.GetValue<string>());
+            Assert.Matches("^[0-9a-f]{32}$", request["correlationId"]!.GetValue<string>());
+            Assert.Equal(
+                new byte[] { 67, 65, 78, 65, 82, 89 },
+                request["artifact"]!["manifestBytes"]!.AsArray()
+                    .Select(value => value!.GetValue<byte>()).ToArray());
+
+            var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal(
+                ["contentSha256", "policyId", "replayed", "revision", "scopeId", "scopeType"],
+                output.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Equal("platform", output["scopeType"]!.GetValue<string>());
+            Assert.Equal("default", output["scopeId"]!.GetValue<string>());
+            Assert.Equal(expectedRevision is null ? 1L : expectedRevision.Value + 1, output["revision"]!.GetValue<long>());
+            Assert.False(output["replayed"]!.GetValue<bool>());
+            Assert.DoesNotContain(ArtifactCanary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.Null(fixture.Authentication.Identity!.ProjectId);
+            Assert.Null(fixture.Authentication.Identity.RunId);
+            Assert.Equal(["openid", "api.read", "offline_access", "projects.admin"], fixture.Authentication.Identity.Scopes);
+            Assert.Equal(InteractionPolicy.Never, fixture.Authentication.Interaction);
+            Assert.Empty(Directory.GetFiles(fixture.PolicyApplyStateDirectory));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyReusesSavedIdsAfterResponseLossAndRecoversTheReceipt()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        fixture.ApplyResponse = (attempt, body, _) =>
+        {
+            if (attempt == 1)
+                throw new HttpRequestException("POLICY_PRIVATE_CANARY");
+            return Task.FromResult(JsonResponse(HttpStatusCode.OK, ApplyReceipt(body, replayed: true)));
+        };
+        try
+        {
+            var args = new[]
+            {
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Recover response",
+            };
+            Assert.Equal(1, await fixture.Run(args));
+            Assert.Contains("saved recovery record remains", fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            var first = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            var firstKey = first["idempotencyKey"]!.GetValue<string>();
+            var firstCorrelation = first["correlationId"]!.GetValue<string>();
+            Assert.Single(Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json"));
+
+            Assert.Equal(0, await fixture.Run(args));
+            var second = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            Assert.Equal(firstKey, second["idempotencyKey"]!.GetValue<string>());
+            Assert.Equal(firstCorrelation, second["correlationId"]!.GetValue<string>());
+            Assert.True(JsonNode.Parse(fixture.Output.ToString())!["replayed"]!.GetValue<bool>());
+            Assert.Empty(Directory.GetFiles(fixture.PolicyApplyStateDirectory));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyKeepsRecoveryIdsAcrossDisabledGateDuringAnEarlierInFlightWrite()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.ApplyResponse = async (attempt, body, ct) =>
+        {
+            if (attempt == 1)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(ct);
+                throw new HttpRequestException("response lost after commit");
+            }
+            if (attempt == 2)
+            {
+                await firstStarted.Task.WaitAsync(ct);
+                return JsonResponse(HttpStatusCode.ServiceUnavailable,
+                    """{"code":"native_acs_policy_writes_unavailable","detail":"POLICY_PRIVATE_CANARY"}""",
+                    "application/problem+json");
+            }
+            return JsonResponse(HttpStatusCode.OK, ApplyReceipt(body, replayed: true));
+        };
+        try
+        {
+            var args = new[]
+            {
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Recover in-flight write",
+            };
+            var firstTask = fixture.Run(args);
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, await fixture.Run(args));
+            Assert.Contains("native_acs_policy_writes_unavailable", fixture.Error.ToString(), StringComparison.Ordinal);
+            var first = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            var firstKey = first["idempotencyKey"]!.GetValue<string>();
+            Assert.Single(Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json"));
+
+            releaseFirst.TrySetResult();
+            Assert.Equal(1, await firstTask);
+            Assert.Single(Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json"));
+
+            Assert.Equal(0, await fixture.Run(args));
+            var replay = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            Assert.Equal(firstKey, replay["idempotencyKey"]!.GetValue<string>());
+            Assert.True(JsonNode.Parse(fixture.Output.ToString())!["replayed"]!.GetValue<bool>());
+            Assert.Empty(Directory.GetFiles(fixture.PolicyApplyStateDirectory));
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyAllowsCorrectedExpectedRevisionWithItsOwnKey()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture { Status = HttpStatusCode.Conflict, Body = """{"code":"conflict"}""" };
+        var keys = new List<string>();
+        fixture.ApplyResponse = (attempt, body, _) =>
+        {
+            keys.Add(JsonNode.Parse(body)!["idempotencyKey"]!.GetValue<string>());
+            return Task.FromResult(attempt == 1
+                ? JsonResponse(HttpStatusCode.Conflict, """{"code":"conflict"}""", "application/problem+json")
+                : JsonResponse(HttpStatusCode.OK, ApplyReceipt(body, replayed: false)));
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "First attempt"));
+            Assert.Equal(0, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "5", "--reason", "Corrected revision"));
+            Assert.Equal(2, keys.Count);
+            Assert.NotEqual(keys[0], keys[1]);
+            Assert.Equal(6, JsonNode.Parse(fixture.Output.ToString())!["revision"]!.GetValue<long>());
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyUsesANewKeyForACorrectedArtifactAfterAnUncertainResponse()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        fixture.ApplyResponse = (attempt, body, _) =>
+        {
+            if (attempt == 1)
+                throw new HttpRequestException("response lost");
+            return Task.FromResult(JsonResponse(HttpStatusCode.OK, ApplyReceipt(body, replayed: false)));
+        };
+        try
+        {
+            var args = new[]
+            {
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Corrected artifact",
+            };
+            Assert.Equal(1, await fixture.Run(args));
+            var first = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            var firstKey = first["idempotencyKey"]!.GetValue<string>();
+
+            var corrected = JsonNode.Parse(ExportInput(exact: false))!.AsObject();
+            corrected["artifact"]!["manifestBytes"]![0] = 68;
+            RehashExport(corrected);
+            await File.WriteAllTextAsync(inputPath, corrected.ToJsonString());
+
+            Assert.Equal(0, await fixture.Run(args));
+            var second = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            Assert.NotEqual(firstKey, second["idempotencyKey"]!.GetValue<string>());
+            Assert.Equal(second["artifact"]!["contentSha256"]!.GetValue<string>(),
+                JsonNode.Parse(fixture.Output.ToString())!["contentSha256"]!.GetValue<string>());
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyReportsDisabledGateWithoutLeakingBodyAndKeepsItsKey()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            Status = HttpStatusCode.ServiceUnavailable,
+            Body = $$"""{"code":"native_acs_policy_writes_unavailable","detail":"{{Canary}}","manifestBytes":[67,65,78,65,82,89]}""",
+            MediaType = "application/problem+json",
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Disabled gate"));
+            Assert.Contains("Platform Policy writes are disabled", fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("native_acs_policy_writes_unavailable", fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.DoesNotContain(Canary, fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+            Assert.Single(Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json"));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyDoesNotSendWhenItCannotSaveTheRecoveryRecord()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        var statePath = fixture.PolicyApplyStateDirectory;
+        await File.WriteAllTextAsync(statePath, "not a directory");
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Recovery record failure"));
+            Assert.Contains("recovery record is unavailable", fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Equal(0, fixture.ApplyRequestCount);
+            Assert.False(Directory.Exists(statePath));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            if (File.Exists(statePath))
+                File.Delete(statePath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("01")]
+    [InlineData("+1")]
+    [InlineData(" 1")]
+    [InlineData("1 ")]
+    [InlineData("9223372036854775808")]
+    public async Task ApplyRejectsInvalidExpectedRevisionBeforeNetwork(string expectedRevision)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", expectedRevision, "--reason", "Invalid revision"));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.False(Directory.Exists(fixture.PolicyApplyStateDirectory));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyRequiresReasonAndPlatformInputBeforeNetwork()
+    {
+        var inputPath = NewInputPath();
+        var export = JsonNode.Parse(ExportInput(exact: false))!.AsObject();
+        export["scopeType"] = "project";
+        await File.WriteAllTextAsync(inputPath, export.ToJsonString());
+        var fixture = new Fixture();
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath, "--expected-revision", "4"));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "   "));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Valid reason"));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Contains("invalid or could not be read", fixture.Error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyRejectsUnsafeOperationBoundsAndWrongPath()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture { UnsafePolicyApplyRequestBound = true };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Unsafe bound"));
+            Assert.Null(fixture.PolicyPath);
+            fixture = new Fixture { UnsafePolicyApplyResponseBound = true };
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Unsafe response bound"));
+            Assert.Null(fixture.PolicyPath);
+            fixture = new Fixture { WrongPolicyApplyPath = true };
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Wrong path"));
+            Assert.Null(fixture.PolicyPath);
+            fixture = new Fixture { WrongPolicyApplyMethod = true };
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Wrong method"));
+            Assert.Null(fixture.PolicyPath);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
     [Fact]
     public async Task ValidateDispatchesAgainstThePublishedGatewayContract()
     {
@@ -409,6 +809,33 @@ public sealed class PolicyCommandTests
         {
             if (File.Exists(inputPath))
                 File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyDispatchesAgainstThePublishedGatewayContract()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+        };
+        fixture.ApplyResponse = (attempt, body, _) =>
+            Task.FromResult(JsonResponse(HttpStatusCode.OK, ApplyReceipt(body, replayed: false)));
+        try
+        {
+            Assert.Equal(0, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Published contract"));
+            Assert.Equal("PUT", fixture.PolicyMethod);
+            Assert.Equal("/api/v1/policies/platform", fixture.PolicyPath);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
         }
     }
 
@@ -904,12 +1331,35 @@ public sealed class PolicyCommandTests
     private static string NewInputPath() =>
         Path.Combine(AppContext.BaseDirectory, $"policy-input-{Guid.NewGuid():N}.json");
 
+    private static string ApplyReceipt(string requestBody, bool replayed)
+    {
+        var request = JsonNode.Parse(requestBody)!.AsObject();
+        var expectedRevision = request["expectedRevision"]?.GetValue<long>();
+        var revision = expectedRevision is null ? 1 : expectedRevision.Value + 1;
+        var hash = request["artifact"]!["contentSha256"]!.GetValue<string>();
+        return $$"""{"scopeType":"platform","scopeId":"default","policyId":"canonical","revision":{{revision}},"contentSha256":"{{hash}}","auditId":"00000000-0000-0000-0000-000000000001","outboxId":"00000000-0000-0000-0000-000000000002","replayed":{{replayed.ToString().ToLowerInvariant()}}}""";
+    }
+
+    private static HttpResponseMessage JsonResponse(
+        HttpStatusCode status,
+        string body,
+        string mediaType = "application/json") =>
+        new(status) { Content = new StringContent(body, Encoding.UTF8, mediaType) };
+
     private sealed class Fixture : HttpMessageHandler, IGatewayClientFactory
     {
         public readonly StringWriter Output = new();
         public readonly StringWriter Error = new();
         public readonly Authentication Authentication = new();
         public GatewayClient? Client;
+        public Func<int, string, CancellationToken, Task<HttpResponseMessage>>? ApplyResponse;
+        public Action<string>? BeforePolicyApply;
+        public string PolicyApplyStateDirectory = Path.Combine(
+            AppContext.BaseDirectory, $"policy-apply-state-{Guid.NewGuid():N}");
+        public bool UnsafePolicyApplyRequestBound;
+        public bool UnsafePolicyApplyResponseBound;
+        public bool WrongPolicyApplyPath;
+        public bool WrongPolicyApplyMethod;
         public string Body = ShowBody(false);
         public HttpStatusCode Status = HttpStatusCode.OK;
         public string MediaType = "application/json";
@@ -923,13 +1373,24 @@ public sealed class PolicyCommandTests
         public string? PolicyQuery;
         public string? PolicyMethod;
         public string? PolicyBody;
+        private int _applyRequestCount;
+        public int ApplyRequestCount => Volatile.Read(ref _applyRequestCount);
 
         public IGatewayClient Create(CliIdentity identity) =>
             Client = new GatewayClient(new HttpClient(this, disposeHandler: false), identity, Authentication);
 
         public Task<int> Run(params string[] args) => CliApplication.RunAsync(
             ["policy", .. args, .. Target],
-            new CliRuntimeOptions(GatewayClientFactory: this, Authentication: Authentication, Output: Output, Error: Error));
+            new CliRuntimeOptions(GatewayClientFactory: this, Authentication: Authentication, Output: Output, Error: Error)
+            {
+                PolicyApplyStateDirectory = this.PolicyApplyStateDirectory,
+            });
+
+        public void CleanupPolicyState()
+        {
+            if (Directory.Exists(PolicyApplyStateDirectory))
+                Directory.Delete(PolicyApplyStateDirectory, recursive: true);
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -945,6 +1406,13 @@ public sealed class PolicyCommandTests
             PolicyQuery = request.RequestUri.Query;
             PolicyMethod = request.Method.Method;
             PolicyBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (path == "/api/v1/policies/platform" && request.Method == HttpMethod.Put)
+            {
+                BeforePolicyApply?.Invoke(PolicyBody!);
+                var attempt = Interlocked.Increment(ref _applyRequestCount);
+                if (ApplyResponse is not null)
+                    return await ApplyResponse(attempt, PolicyBody!, ct).ConfigureAwait(false);
+            }
             return await Response(Status, Body, MediaType).ConfigureAwait(false);
         }
 
@@ -972,9 +1440,17 @@ public sealed class PolicyCommandTests
                 ? "/api/v1/policies/platform/invalid"
                 : "/api/v1/policies/platform/validate";
             var requestLimit = UnsafeValidationRequestBound ? 6000000 : 5242880;
+            var applyPath = WrongPolicyApplyPath
+                ? "/api/v1/policies/platform/invalid-write"
+                : "/api/v1/policies/platform";
+            var applyMethod = WrongPolicyApplyMethod ? "post" : "put";
+            var applyRequestLimit = UnsafePolicyApplyRequestBound ? 6000000 : 5242880;
+            var applyResponseLimit = UnsafePolicyApplyResponseBound ? 6000000 : 5242880;
+            var applyRequestBody = """{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}}""";
+            var applyResponse = """{"200":{"content":{"application/json":{"schema":{"type":"object"}}}},"403":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"409":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"422":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"429":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"503":{"content":{"application/problem+json":{"schema":{"type":"object"}}}}}""";
             var document = JsonNode.Parse(
                 """{"openapi":"3.1.0","security":[{"Bearer":[]}],"components":{"securitySchemes":{"Bearer":{"type":"http","scheme":"bearer"}}}}""")!.AsObject();
-            document["paths"] = new JsonObject
+            var paths = new JsonObject
             {
                 ["/api/v1/authorization/context"] = new JsonObject { ["get"] = JsonNode.Parse(Operation("getAuthorizationContext", tenant)) },
                 [headPath] = new JsonObject { ["get"] = JsonNode.Parse(Operation("readPlatformNativeAcsPolicy", tenant)) },
@@ -986,6 +1462,11 @@ public sealed class PolicyCommandTests
                         $$"""{"operationId":"validatePlatformNativeAcsPolicy","x-agentweaver-max-request-body-bytes":{{requestLimit}},"x-agentweaver-max-response-bytes":5242880,"parameters":[{{tenant}}],"requestBody":{{validationRequestBody}},"responses":{{validationResponse}}}"""),
                 },
             };
+            if (paths[applyPath] is not JsonObject applyPathItem)
+                paths[applyPath] = applyPathItem = [];
+            applyPathItem[applyMethod] = JsonNode.Parse(
+                $$"""{"operationId":"writePlatformNativeAcsPolicy","x-agentweaver-max-request-body-bytes":{{applyRequestLimit}},"x-agentweaver-max-response-bytes":{{applyResponseLimit}},"parameters":[{{tenant}}],"requestBody":{{applyRequestBody}},"responses":{{applyResponse}}}""");
+            document["paths"] = paths;
             return document.ToJsonString();
         }
     }

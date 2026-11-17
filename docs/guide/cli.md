@@ -173,19 +173,27 @@ Broker rejects the change if another request changes that revision first.
 `disconnect` revokes the connection. `status` and these changes return safe
 connection details; they do not return GitHub credentials.
 
-## Read Platform Policy revisions
+## Read, validate, and apply Platform Policy
 
-The policy commands show the identity, revision and hash of the canonical
-Platform Policy. You need an active membership and current PlatformAdmin
-authority. Sign in with `agentweaver auth login` for the selected target.
-These commands use an unbound identity and do not accept `--project-id` or
-`--run-id`. If `AGENTWEAVER_PROJECT_ID` and `AGENTWEAVER_RUN_ID` are set,
-clear them before you sign in. The policy commands ignore those variables.
+The policy commands read, validate, export, and apply the canonical Platform
+Policy. Read and validation commands require active membership and current
+PlatformAdmin authority. Apply also requires the `projects.admin` OAuth scope
+and current PlatformAdmin authority. The server checks authority for every
+request; the scope does not grant a role.
+
+All policy commands use an unbound identity. They reject `--project-id` and
+`--run-id` and ignore `AGENTWEAVER_PROJECT_ID` and `AGENTWEAVER_RUN_ID`.
 
 ```powershell
 $env:AGENTWEAVER_PROJECT_ID = $null
 $env:AGENTWEAVER_RUN_ID = $null
 agentweaver auth login
+```
+
+For apply, sign in with the required scope:
+
+```powershell
+agentweaver auth login --scope projects.admin
 ```
 
 ```powershell
@@ -231,6 +239,36 @@ The command prints JSON with `isValid` and `diagnostics`. It exits with code 0
 when the artifact is valid and code 1 when it is invalid or the request fails.
 Invalid artifacts include the server's bounded diagnostics. The command does
 not print the artifact bytes.
+
+`apply` sends a complete Platform export file to the existing policy write
+route. It requires the expected current revision and a reason:
+
+```powershell
+agentweaver policy apply --scope platform --input .\platform-policy.json --expected-revision 4 --reason "Approve reviewed policy update"
+```
+
+Give `--expected-revision` a canonical positive decimal Int64. Use `none` to
+require an empty Platform Policy head. This value is the current head to
+compare, not the revision recorded in the input file. A stale value returns
+HTTP 409. `--reason` must contain non-whitespace text and no more than 1,024
+characters.
+
+The CLI checks that the input has Platform scope and a valid artifact hash
+before it sends the request. The request must fit the Gateway's 5 MiB limit.
+The server checks current PlatformAdmin write authority and the expected
+revision. A successful response prints the policy ID, new revision, hash, and
+whether the server replayed a saved receipt. It does not print the artifact.
+
+The CLI saves an idempotency key and correlation ID in per-user state before it
+sends the write. It does not save the artifact or reason there. If the result
+is uncertain, run the same command again with the same input, expected
+revision, and reason. The CLI reuses the saved IDs. A different artifact,
+revision, or reason uses a different key.
+
+The server write gate stays disabled by default. When the gate is disabled,
+apply reports `native_acs_policy_writes_unavailable` and keeps the recovery
+record. Run the same command again when writes are enabled. Apply changes the
+saved policy source; it does not activate or enforce policy.
 
 History returns the newest revision first. Each item contains `revision`,
 `contentSha256` and `createdAt`. The response also contains
