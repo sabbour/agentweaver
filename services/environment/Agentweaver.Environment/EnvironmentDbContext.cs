@@ -18,6 +18,12 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
         Set<EnvironmentProviderLifecycleReportRow>();
     internal DbSet<EnvironmentPlatformPolicyApplyReservationRow> PlatformPolicyApplyReservations =>
         Set<EnvironmentPlatformPolicyApplyReservationRow>();
+    internal DbSet<EnvironmentSandboxOwnerMappingRow> SandboxOwnerMappings =>
+        Set<EnvironmentSandboxOwnerMappingRow>();
+    internal DbSet<EnvironmentAttributedEgressFlowRow> AttributedEgressFlows =>
+        Set<EnvironmentAttributedEgressFlowRow>();
+    internal DbSet<EnvironmentUnattributedEgressFlowRow> UnattributedEgressFlows =>
+        Set<EnvironmentUnattributedEgressFlowRow>();
     internal DbSet<RemoteMcpConnectionRow> RemoteMcpConnections => Set<RemoteMcpConnectionRow>();
     internal DbSet<RemoteMcpConnectionConfigurationRow> RemoteMcpConnectionConfigurations =>
         Set<RemoteMcpConnectionConfigurationRow>();
@@ -31,6 +37,7 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
     {
         modelBuilder.HasDefaultSchema(Schema);
         RemoteMcpConnectionModel.Configure(modelBuilder);
+        EnvironmentEgressAuditModel.Configure(modelBuilder);
 
         modelBuilder.Entity<EnvironmentOwnerRow>(entity =>
         {

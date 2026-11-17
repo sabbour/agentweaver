@@ -153,6 +153,22 @@ BuildTest provider tests also model RuntimeClass selector admission and reject
 missing, malformed, duplicate, extra, conflicting, or changed selector
 entries. They use the same in-memory handler, not a live Kubernetes cluster.
 
+Run the PostgreSQL egress-audit and runtime-grant regressions:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~EnvironmentEgressAuditPostgresTests|FullyQualifiedName~EnvironmentRuntimeRunStartManagerTests|FullyQualifiedName~RuntimeRoleCanWriteOnlyTheHeadAndAppendOnlyConnectionRows" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These tests check that Environment saves the owner mapping before provider
+creation, records flows with known and unknown owners, rejects a conflicting
+fingerprint binding, deduplicates replayed flows, and rolls the migration back
+and reapplies it. They also check that the runtime role cannot update, delete,
+or truncate audit records. A simulated source cursor remains unchanged when a
+flow write fails. The tests use disposable PostgreSQL databases; they do not
+collect live Cilium or Log Analytics flows.
+
 BuildTest command contracts, checkpoint verification, configuration, and
 migration/model consistency have a separate selection:
 
@@ -362,6 +378,23 @@ dotnet build services\environment\Agentweaver.Environment\Agentweaver.Environmen
 The build verifies compilation only. Use the test selections above for
 contract and database behavior, and [Azure acceptance](./azure-acceptance)
 for the separate live-environment checks.
+
+## 10. Test durable Sandbox egress audit
+
+Run the PostgreSQL audit and owner-provisioning tests:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~EnvironmentEgressAuditPostgresTests|FullyQualifiedName~EnvironmentRuntimeRunStartManagerTests|FullyQualifiedName~EnvironmentRemoteMcpConnectionPostgresTests.RuntimeRoleCanWriteOnlyTheHeadAndAppendOnlyConnectionRows" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These tests check durable owner mappings, mapping-before-provision order,
+attributed and unattributed flow records, lifecycle release, migration
+rollback and reapply, and runtime database grants. A failed insert leaves the
+test reader's cursor unchanged so it can retry the same flow. This slice does
+not collect Cilium or Log Analytics flow logs. It defines no retention period
+or automatic expiry.
 
 ## Expected result
 

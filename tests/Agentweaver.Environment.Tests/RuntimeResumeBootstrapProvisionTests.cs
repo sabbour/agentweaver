@@ -75,7 +75,8 @@ public sealed partial class RuntimeResumeBootstrapTests
         });
         var provider = new ProvisionSandbox(options);
         var manager = new EnvironmentSandboxManager(projects, lifecycle, leases, provider, options,
-            kubernetes, EnvironmentEgressManagerTests.Options(), egress);
+            kubernetes, EnvironmentEgressManagerTests.Options(), egress,
+            egressAuditStore: new TestEgressAuditStore());
         var guardCalls = 0;
         // Deny a different authorization check in each run to track which effects have started.
         var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => manager.ProvisionResumeAsync(
@@ -305,7 +306,8 @@ public sealed partial class RuntimeResumeBootstrapTests
             kubernetes,
             networkOptions,
             egress,
-            p1BindingReader: bindingReader);
+            p1BindingReader: bindingReader,
+            egressAuditStore: new TestEgressAuditStore());
         var request = new SandboxProvisionApiRequest(
             "workspace", 1, 8, "/workspace/agentweaver/project", false, 1, "p1-sandbox-provision")
         {
@@ -367,6 +369,19 @@ public sealed partial class RuntimeResumeBootstrapTests
             specification,
             storage,
             binding);
+    }
+
+    private sealed class TestEgressAuditStore : IEnvironmentEgressAuditStore
+    {
+        public Task<string> RegisterOwnerAsync(
+            EnvironmentOwnerIdentity owner,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(AgentSandboxProvider.GetOwnerFingerprint(owner));
+
+        public Task<EnvironmentEgressAuditWriteResult> AppendFlowAsync(
+            EgressFlowObservation flow,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new EnvironmentEgressAuditWriteResult(new string('a', 64), Attributed: false));
     }
 
     private static SecretCredential NewP1Credential() =>

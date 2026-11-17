@@ -7,7 +7,7 @@ namespace Agentweaver.Environment;
 public static class EnvironmentMigrator
 {
     private const string LockName = "agentweaver.environment.migrate";
-    private const int CurrentSchemaVersion = 13;
+    private const int CurrentSchemaVersion = 14;
     private static readonly string[] SupportedMigrationIds =
     [
         "20261006150000_InitialEnvironmentLifecycle",
@@ -23,6 +23,7 @@ public static class EnvironmentMigrator
         "20261023074226_AddRemoteMcpConnectionAdapterPin",
         "20261027123000_EnvironmentP1CreationLinks",
         "20261117145425_PlatformEgressApplyReservations",
+        "20261117221544_EnvironmentSandboxEgressAudit",
     ];
 
     /// <summary>Ordered versions assigned to the EF migration history for maintenance planning.</summary>
@@ -70,6 +71,9 @@ public static class EnvironmentMigrator
                AND pg_catalog.to_regclass('"environment"."remote_mcp_connection_idempotency"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."p1_creation_links"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."platform_policy_apply_reservations"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."sandbox_owner_mappings"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."sandbox_egress_flows_attributed"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."sandbox_egress_flows_unattributed"') IS NOT NULL
             """,
             connection);
         if (await schemaCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
@@ -164,11 +168,26 @@ public static class EnvironmentMigrator
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.sandbox_owner_mappings', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.sandbox_owner_mappings', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_owner_mappings', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_owner_mappings', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_owner_mappings', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.sandbox_egress_flows_attributed', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.sandbox_egress_flows_attributed', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_attributed', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_attributed', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_attributed', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'TRUNCATE')
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Environment runtime principal must have required owner-scoped lifecycle and connection DML, append-only history/catalog/idempotency/reservation access, no schema CREATE, and no physical DELETE/TRUNCATE authority.");
+                "The Environment runtime principal must have required owner-scoped lifecycle and connection DML, append-only history/catalog/idempotency/reservation/egress access, no schema CREATE, and no physical DELETE/TRUNCATE authority.");
     }
 
     /// <summary>Applies pending migrations while holding a database advisory lock shared by migration instances.</summary>

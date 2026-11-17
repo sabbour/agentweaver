@@ -75,14 +75,16 @@ candidate, a bound workspace, and applied network-policy evidence.
 
 1. Environment validates the current owner fence and exact accepted candidate.
 2. It verifies the bound workspace and applied network-policy generation.
-3. It reserves the lease and workspace attachment, then records the provider
-   attempt.
-4. `AgentSandboxProvider` verifies the RuntimeClass and exact PVC identity. It
-   creates a fenced `SandboxTemplate`, a zero-replica `SandboxWarmPool`, and a
-   `SandboxClaim`.
-5. Observation checks the controller-owned Sandbox and Pod, workspace mount,
+3. It reserves the lease and workspace attachment.
+4. Before it records the provider attempt, Environment commits the owner
+   fingerprint mapping for the tenant, project, run, and Environment.
+5. Environment records the provider attempt, then calls
+   `AgentSandboxProvider`. The provider verifies the RuntimeClass and exact PVC
+   identity. It creates a fenced `SandboxTemplate`, a zero-replica
+   `SandboxWarmPool`, and a `SandboxClaim`.
+6. Observation checks the controller-owned Sandbox and Pod, workspace mount,
    image, isolation settings, and startup evidence.
-6. Environment rechecks authority and network evidence before reporting
+7. Environment rechecks authority and network evidence before reporting
    `ReadyForDispatch`.
 
 The adapter disables automatic service-account token mounting and validates
@@ -125,6 +127,20 @@ registered or called. See
 The composed ACS profile has a separate candidate compiler that reads the
 platform-network domain and retains the hash of the full artifact. Existing
 compiler entrypoints still require the finite network profile.
+
+### Store Sandbox egress audit records
+
+Environment maps the AgentSandbox owner fingerprint to the tenant, project,
+run, and Environment IDs before it calls the Sandbox provider. It stores flows
+with known owner fingerprints as attributed records. It stores flows with
+unknown or missing fingerprints as unattributed records. Each flow commits
+before the store returns success, so a failed write does not advance a reader's
+source cursor. The runtime role can read and insert these rows, but it cannot
+update, delete, or truncate them.
+
+This slice adds no flow-log source reader, retention period, or automatic
+expiry. The [egress architecture](../architecture/environment-egress.md#sandbox-egress-audit-persistence)
+describes the tables and write contract.
 
 ### Manage workspace data
 

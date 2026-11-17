@@ -106,6 +106,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
 builder.Services.AddScoped<IEnvironmentProviderLifecycleReportStore, EnvironmentProviderLifecycleReportStore>();
 builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
+builder.Services.AddScoped<IEnvironmentEgressAuditStore, EnvironmentEgressAuditStore>();
 builder.Services.AddScoped<
     IEnvironmentRuntimeBootstrapProfileReplacementStore,
     EnvironmentRuntimeBootstrapProfileReplacementStore>();
