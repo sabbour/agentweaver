@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Npgsql;
+using System.Security.Claims;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -407,6 +408,80 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(admin.MembershipId, creatorOwner.MembershipId);
         Assert.Equal(ProjectAuthorityRole.Owner, creatorOwner.Role);
         Assert.Equal(1, creatorOwner.Revision);
+    }
+
+    [Fact]
+    public async Task ModelPricingSearchRequiresPlatformAdminOrCurrentOwnerOfTheRequestedProject()
+    {
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var roles = new ProjectRoleAssignmentService(
+            new PooledDbContextFactory<ProjectsConfigDbContext>(CreateDbContextOptions()), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "model-pricing-" + suffix;
+        var admin = await SeedCallerAsync(db, store, "model-pricing-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await projects.CreateProjectAsync(admin, "Pricing project", CancellationToken.None);
+        var otherProject = await projects.CreateProjectAsync(admin, "Other pricing project", CancellationToken.None);
+        var ownerSubject = "model-pricing-owner-" + suffix;
+        var foreignOwnerSubject = "model-pricing-foreign-owner-" + suffix;
+        var viewerSubject = "model-pricing-viewer-" + suffix;
+        foreach (var subject in new[] { ownerSubject, foreignOwnerSubject, viewerSubject })
+            await SeedMembershipAsync(store, subject, tenantId);
+        var ownerAssignment = await roles.AssignAsync(admin, project.ProjectId,
+            new AssignProjectRoleRequest { PrincipalId = ownerSubject, Role = ProjectAuthorityRole.Owner },
+            CancellationToken.None);
+        await roles.AssignAsync(admin, otherProject.ProjectId,
+            new AssignProjectRoleRequest { PrincipalId = foreignOwnerSubject, Role = ProjectAuthorityRole.Owner },
+            CancellationToken.None);
+        await roles.AssignAsync(admin, project.ProjectId,
+            new AssignProjectRoleRequest { PrincipalId = viewerSubject, Role = ProjectAuthorityRole.Viewer },
+            CancellationToken.None);
+        var platformAdmin = await SeedCallerAsync(db, store, "model-pricing-platform-" + suffix, tenantId,
+            ["api.read"], ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var authorizationOwner = new ProjectAuthorizationOwner(db, new ProjectsConfigIdentityOptions(TestIssuer));
+
+        async Task<int?> Authorize(string pathProjectId, string subject, string? boundProjectId = null, string? runId = null)
+        {
+            var claims = new List<Claim>
+            {
+                new("sub", subject),
+                new("scope", "api.read")
+            };
+            if (boundProjectId is not null)
+                claims.Add(new Claim("project_id", boundProjectId));
+            if (runId is not null)
+                claims.Add(new Claim("run_id", runId));
+            var context = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"))
+            };
+            context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader] = tenantId;
+            var result = await ProjectConfigEndpoints.AuthorizeModelPricingSearchAsync(
+                pathProjectId, context, authorizationOwner, CancellationToken.None);
+            return Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode;
+        }
+
+        Assert.Equal(StatusCodes.Status204NoContent,
+            await Authorize(project.ProjectId, platformAdmin.ActorId));
+        Assert.Equal(StatusCodes.Status204NoContent,
+            await Authorize(project.ProjectId, ownerSubject));
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            await Authorize(project.ProjectId, viewerSubject));
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            await Authorize(project.ProjectId, foreignOwnerSubject));
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            await Authorize(project.ProjectId, ownerSubject, project.ProjectId, "run-1"));
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            await Authorize(project.ProjectId, ownerSubject, otherProject.ProjectId));
+
+        await roles.RevokeAsync(
+            admin, project.ProjectId, ownerAssignment.AssignmentId, ownerAssignment.Revision, CancellationToken.None);
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            await Authorize(project.ProjectId, ownerSubject));
     }
 
     [Fact]

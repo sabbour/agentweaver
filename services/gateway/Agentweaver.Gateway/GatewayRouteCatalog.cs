@@ -365,6 +365,11 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Events, "/projects/{projectId}/usage",
             "/api/projects/{projectId}/usage", "readProjectUsage", "Read project usage",
             ["from", "to"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, "/projects/{projectId}/model-pricing/azure-retail",
+            "/api/projects/{projectId}/model-pricing/azure-retail", "searchProjectAzureRetailPrices",
+            "Search Azure Retail model prices", ["region", "search"], forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: 8 * 1024 * 1024,
+            excludeFromMcp: true);
         // Chief of Staff routes are caller-private and require an unbound token.
         var chiefOfStaff = "/chief-of-staff";
         Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations", "/api" + chiefOfStaff + "/conversations",

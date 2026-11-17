@@ -151,20 +151,24 @@ for this change.
 
 ## Test the Events & Sessions Azure Retail lookup
 
-The Azure Retail lookup tests use an in-memory HTTP handler. They do not call
-the live Azure Retail API. The lookup has no startup registration or public
-route.
+The Azure Retail lookup and Events route tests use in-memory HTTP handlers.
+They do not call the live Azure Retail API or Projects service. The route tests
+check that Events calls Projects before the price lookup. The Projects role
+route test uses PostgreSQL fixtures to check current PlatformAdmin and project
+Owner access, denial for other roles and projects, and Owner revocation.
 
-Run the focused lookup and configured-cost tests from the repository root:
+Run the focused tests from the repository root:
 
 ```powershell
 dotnet build services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj --configuration Release
 dotnet build tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release
-dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~AzureRetailPriceLookupTests|FullyQualifiedName~AzureCostProviderTests"
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~AzureRetailPriceLookupTests|FullyQualifiedName~AzureRetailPriceEndpointsTests|FullyQualifiedName~ProjectsAuthorizationContextClientTests"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~ModelPricingSearchRequiresPlatformAdminOrCurrentOwnerOfTheRequestedProject"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~AzureRetailPricingRoutePublishesProjectAuthorizationAndStrictResponseContract"
 ```
 
-PostgreSQL-backed rate-card and hard-budget regressions run in hosted GitHub CI.
-They need the CI test database and are not part of this offline lookup test.
+The Projects role test needs PostgreSQL. Rate-card and hard-budget regressions
+also use PostgreSQL. These tests do not create or change Azure resources.
 
 ## Lint exported ACS artifacts
 

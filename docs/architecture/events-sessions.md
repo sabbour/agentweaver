@@ -189,9 +189,24 @@ manual or Azure Retail provenance with the canonical `CostRateCard`. Events
 reads these cards locally. The owner-local `AzureRetailPriceLookup` searches
 the fixed Azure Retail endpoint for USD consumption meters. It normalizes
 positive tier-zero `1K` and `1M` prices to USD per million tokens; unsupported
-or unavailable prices remain null. The lookup does not save cards, fetch prices
-at startup, or expose a public route. The configured Azure Cost provider and
-immutable card store remain separate.
+or unavailable prices remain null. The project-scoped
+`GET /api/projects/{projectId}/model-pricing/azure-retail` route requires
+`api.read` and current PlatformAdmin or project Owner authority. Events asks
+Projects to check the caller's current role for the requested project on every
+request. Projects rejects conflicting project bindings and all run-bound
+tokens. Events calls Azure Retail only after Projects returns `204` with
+`Cache-Control: no-store`; a denial or unavailable Projects response stops the
+lookup. The route returns prices without saving cards or changing the
+configured Azure Cost provider.
+
+<figure class="aw-figure">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-gateway-azure-retail-pricing.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-gateway-azure-retail-pricing.png'" alt="A project-scoped caller sends a price search through Gateway to Events & Sessions. Events asks Projects & Config to check current PlatformAdmin or project Owner authority before it searches the fixed Azure Retail endpoint. Projects denial or failure stops the lookup. The result is no-store and does not change rate cards." />
+  </a>
+  <figcaption>Project-scoped Azure Retail price search checks current Projects authority before lookup.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-gateway-azure-retail-pricing.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-gateway-azure-retail-pricing.drawio'">Open editable draw.io source</a></p>
+
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
 receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`

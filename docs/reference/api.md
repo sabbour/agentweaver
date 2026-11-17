@@ -1120,6 +1120,33 @@ Cross-project overview is out of scope. The Gateway proxies each owner; it
 does not combine metrics and usage into one response. Clients that need
 aligned intervals should pass the same explicit bounds to both routes.
 
+### Azure Retail model price search
+
+| Method and Gateway path | Owner path | Operation ID |
+| --- | --- | --- |
+| `GET /api/v1/projects/{projectId}/model-pricing/azure-retail?region={region}&search={text}` | Events & Sessions `/api/projects/{projectId}/model-pricing/azure-retail` | `searchProjectAzureRetailPrices` |
+
+The caller needs `api.read` and current PlatformAdmin authority or current
+Owner authority on the project in the path. Events asks Projects & Config to
+check current authority on every request before it calls Azure Retail.
+Project-bound tokens must name the same project. Run-bound tokens are denied.
+The response uses `Cache-Control: no-store`.
+
+`region` is required and contains 1 to 64 ASCII letters or digits.
+`search` is required and contains 1 to 64 ASCII letters, digits, periods,
+hyphens, or spaces. The route rejects unknown and repeated query keys.
+The search uses USD consumption meters for Foundry Models in the requested
+region. The response has `region`, `sourceUrl`, `retrievedOn`, and `items`.
+Each item has `meterId`, `meterName`, `productName`, `skuName`,
+`unitOfMeasure`, `currencyCode`, `retailPrice`, `tierMinimumUnits`, and
+`usdPer1M`. A null `usdPer1M` means the meter does not use a positive
+tier-zero `1K` or `1M` unit price.
+
+Invalid input returns `400 query_invalid`. Projects denies unauthorized
+callers with `403`; an unavailable or invalid Projects response returns `502`.
+Azure Retail errors return `503 pricing_unavailable`. The lookup does not
+store prices or change a project's rate cards.
+
 ### Chief of Staff
 
 Native prefix: `/api/chief-of-staff`.

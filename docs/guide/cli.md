@@ -576,6 +576,9 @@ environment binding. The
 input contains a Key Vault secret name and version, never an API key. For the
 full procedure, see
 [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).
+The `prices` command reads Azure Retail directly. The separate project-scoped
+Gateway route serves authenticated API clients; see
+[Search Azure Retail model prices](./gateway.md#search-azure-retail-model-prices).
 
 ## Run workflow generation through the Gateway
 

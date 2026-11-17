@@ -333,6 +333,29 @@ separate cost units.
 These routes do not price usage or change budgets. Cross-project overview
 is out of scope.
 
+## Search Azure Retail model prices
+
+Send `GET /api/v1/projects/{projectId}/model-pricing/azure-retail` with
+required `region` and `search` query values. The Gateway forwards the request
+to Events & Sessions. Events asks Projects & Config to check the caller's
+current role on every request before it searches the fixed Azure Retail
+endpoint.
+
+The caller needs `api.read` and either current PlatformAdmin authority or
+current Owner authority on the project in the path. Project-bound tokens must
+name the same project. Events rejects run-bound tokens. The response uses
+`Cache-Control: no-store`.
+
+`region` accepts 1 to 64 ASCII letters or digits. `search` accepts 1 to 64
+ASCII letters, digits, periods, hyphens, or spaces. The response includes the
+region, source URL, retrieval date, and matching meters. `usdPer1M` is null
+when the meter does not use a supported per-token unit or base tier. Invalid
+queries return `400`; denied project authority returns `403`; unavailable
+Projects or Azure Retail requests return `502` or `503`.
+
+See the [API reference](../reference/api.md#azure-retail-model-price-search)
+for the response fields.
+
 ## Review project casting
 
 Casting routes use the Projects & Config owner. The Gateway forwards the

@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "v1-gateway-azure-retail-pricing.json",
+    "sha256": "f3e05e93b97bcd88e5ef6dbf158f9ad5bb77c004d4540a54d97c1cef25c37d2d"
+  },
+  "drawio": {
+    "file": "v1-gateway-azure-retail-pricing.drawio",
+    "sha256": "96dd0853c56858233492febfb84108838b0f56ec2bfe2486704d0d2b153623fd"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "format": "png",
+    "border": 16,
+    "scale": 2,
+    "rendererVersion": "32.6.10"
+  },
+  "png": {
+    "file": "v1-gateway-azure-retail-pricing.png",
+    "sha256": "5517e07c5a46dcfc8034373653af45d00e5faaac4a1c7c69b03abe21c623d31a"
+  }
+}

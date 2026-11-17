@@ -11,6 +11,9 @@ For runtime settings, see
 [Runtime configuration](./runtime-configuration.md). For provider binding,
 receipt admission, storage, and recovery, see
 [Events & Sessions architecture](../architecture/events-sessions.md).
+Events & Sessions also handles the Gateway's project-scoped Azure Retail price
+search. It checks current Projects authority before lookup and does not add
+price searches to the journal. See the [API reference](./api.md#azure-retail-model-price-search).
 
 ## Journal envelope
 

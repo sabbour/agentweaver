@@ -193,6 +193,10 @@
         "scripts/acceptance/api/tests/workflow-generation.test.mjs",
         "scripts/acceptance/api/examples/workflow-generation.json"
       ],
+      "sourceExclusions": [
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs"
+      ],
       "required": [
         "docs/reference/api.md",
         "docs/guide/cli.md",
@@ -220,6 +224,10 @@
         "scripts/acceptance/api/examples/task-model-completion.json",
         "tests/Agentweaver.Identity.Broker.Tests/GatewayTaskDispatchTests.cs",
         "tests/fixtures/critical-paths.json"
+      ],
+      "sourceExclusions": [
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs"
       ],
       "required": [
         "docs/reference/api.md",
@@ -371,7 +379,10 @@
       "sourceExclusions": [
         "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj",
         "services/orchestrator/Agentweaver.Orchestrator/Dockerfile",
-        "services/orchestrator/Agentweaver.Orchestrator/packages.lock.json"
+        "services/orchestrator/Agentweaver.Orchestrator/packages.lock.json",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Cost/AzureRetailPriceEndpoints.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/ProjectsAuthorizationContextClient.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Program.cs"
       ],
       "required": [
         "docs/architecture/overview.md",
@@ -408,12 +419,50 @@
         "packages/Agentweaver.Abstractions/SessionsContracts.cs",
         "services/events-and-sessions/"
       ],
+      "sourceExclusions": [
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Cost/AzureRetailPriceEndpoints.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/ProjectsAuthorizationContextClient.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Program.cs"
+      ],
       "required": [
         "docs/architecture/events-sessions.md",
         "docs/architecture/providers-models.md",
         "docs/reference/contracts.md",
         "docs/guide/testing.md",
         "docs/diagrams/src/flagship/v1-sessions-journal.json"
+      ]
+    },
+    {
+      "name": "Project Azure Retail price search",
+      "sourcePrefixes": [
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Cost/AzureRetailPriceEndpoints.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/ProjectsAuthorizationContextClient.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Program.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectConfigEndpoints.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs",
+        "tests/Agentweaver.EventsAndSessions.Tests/AzureRetailPriceEndpointsTests.cs",
+        "tests/Agentweaver.EventsAndSessions.Tests/ProjectsAuthorizationContextClientTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RoleAssignments.cs",
+        "tests/Agentweaver.Identity.Broker.Tests/GatewayKnowledgeOpenApiRegressionTests.cs",
+        "docs/diagrams/src/flagship/v1-gateway-azure-retail-pricing.json"
+      ],
+      "required": [
+        "docs/architecture/design/services-and-release.md",
+        "docs/architecture/events-sessions.md",
+        "docs/architecture/projects-config.md",
+        "docs/deep-dive/events-sessions.md",
+        "docs/deep-dive/gateway.md",
+        "docs/deep-dive/projects-config.md",
+        "docs/reference/api.md",
+        "docs/reference/contracts.md",
+        "docs/reference/events.md",
+        "docs/reference/mcp-tools.md",
+        "docs/guide/gateway.md",
+        "docs/guide/cli.md",
+        "docs/guide/testing.md",
+        "docs/experience/projects.md",
+        "docs/diagrams/src/flagship/v1-gateway-azure-retail-pricing.json"
       ]
     },
     {
@@ -538,6 +587,9 @@
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RuntimeGrants.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigMigrationInventoryTests.cs"
+      ],
+      "sourceExclusions": [
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RoleAssignments.cs"
       ],
       "required": [
         "docs/architecture/environment-egress.md",
@@ -827,6 +879,11 @@
       "sourcePrefixes": [
         "services/events-and-sessions/"
       ],
+      "sourceExclusions": [
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Cost/AzureRetailPriceEndpoints.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/ProjectsAuthorizationContextClient.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/Program.cs"
+      ],
       "required": [
         "docs/deep-dive/events-sessions.md",
         "docs/reference/events.md"
@@ -869,6 +926,9 @@
       "name": "Deep dive: projects and configuration",
       "sourcePrefixes": [
         "services/projects-config/"
+      ],
+      "sourceExclusions": [
+        "services/projects-config/Agentweaver.Projects.Config/ProjectConfigEndpoints.cs"
       ],
       "required": [
         "docs/deep-dive/projects-config.md",
@@ -956,6 +1016,12 @@
         "scripts/ui-harness/",
         "scripts/mcp-harness/",
         "scripts/coverage/"
+      ],
+      "sourceExclusions": [
+        "tests/Agentweaver.EventsAndSessions.Tests/AzureRetailPriceEndpointsTests.cs",
+        "tests/Agentweaver.EventsAndSessions.Tests/ProjectsAuthorizationContextClientTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RoleAssignments.cs",
+        "tests/Agentweaver.Identity.Broker.Tests/GatewayKnowledgeOpenApiRegressionTests.cs"
       ],
       "required": [
         "docs/deep-dive/testing-strategy.md"
