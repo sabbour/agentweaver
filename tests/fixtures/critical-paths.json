@@ -26,14 +26,22 @@
         "readWorkspaceRepositoryTree",
         "readWorkspaceRepositoryFile"
       ]
+    },
+    {
+      "id": "cp3-workflow-generation",
+      "title": "Generate and read a workflow through the native CLI",
+      "caseScript": "scripts/acceptance/api/workflow-generation.mjs",
+      "watchRoutePrefixes": [
+        "/projects/{projectId}/workflows"
+      ],
+      "coveredOperations": [
+        "generateProjectWorkflow",
+        "readProjectWorkflowGenerationJob",
+        "readProjectWorkflowGenerationResult"
+      ]
     }
   ],
   "knownGaps": [
-    {
-      "stage": "workflow-generation",
-      "routePrefix": "/workflows",
-      "reason": "The v1 Gateway has no workflow generation route yet."
-    },
     {
       "stage": "task-model-completion",
       "routePrefix": "/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch",

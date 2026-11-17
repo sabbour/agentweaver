@@ -44,9 +44,9 @@ public sealed class CriticalPathCoverageTests
 
         string script = File.ReadAllText(Path.Combine(
             AppContext.BaseDirectory, "Scripts", "acceptance", "api", Path.GetFileName(caseScript)));
-        HashSet<string> describedOperations = Regex.Matches(
+        HashSet<string> invokedOperations = Regex.Matches(
                 script,
-                @"args\s*:\s*\[\s*'api'\s*,\s*'(?:describe|invoke)'\s*,\s*'(?<operation>[^']+)'",
+                @"args\s*:\s*\[\s*'api'\s*,\s*'invoke'\s*,\s*'(?<operation>[^']+)'",
                 RegexOptions.CultureInvariant)
             .Select(match => match.Groups["operation"].Value)
             .ToHashSet(StringComparer.Ordinal);
@@ -61,16 +61,22 @@ public sealed class CriticalPathCoverageTests
 
         foreach (string operation in covered)
         {
-            GatewayRoute route = Routes.Single(item => item.OperationId == operation);
+            Assert.Contains(operation, Routes.Select(item => item.OperationId));
             if (workspaceOperations.Contains(operation))
                 continue;
 
-            Assert.Contains(operation, describedOperations);
-            Match restCommand = Regex.Match(
+            Assert.Contains(operation, invokedOperations);
+        }
+
+        Match restCommand = Regex.Match(
                 script,
                 @"\{\s*id:\s*'rest-authorization-context'\s*,\s*args:\s*\[\s*'rest',(?<args>[\s\S]*?)\]\s*,?\s*\}",
                 RegexOptions.CultureInvariant);
-            Assert.True(restCommand.Success, "The named case must execute a literal agentweaver rest command.");
+        if (covered.Contains("getAuthorizationContext"))
+            Assert.True(restCommand.Success, "The authorization-context case must keep its literal agentweaver rest check.");
+        if (restCommand.Success)
+        {
+            GatewayRoute route = Routes.Single(item => item.OperationId == "getAuthorizationContext");
             Match method = Regex.Match(restCommand.Groups["args"].Value, @"'--method'\s*,\s*'(?<value>[^']+)'");
             Match url = Regex.Match(restCommand.Groups["args"].Value, @"'--url'\s*,\s*'(?<value>[^']+)'");
             Assert.True(method.Success && url.Success, "The rest command must declare its method and route.");

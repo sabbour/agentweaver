@@ -960,6 +960,28 @@ to read one project repository file through the `agentweaver workspace`
 commands. It opens browser approvals, so it needs `--interactive` and a person
 who approves each review.
 
+## Test workflow generation through the Gateway
+
+The workflow-generation case exercises the public POST, status, and result
+operations through native CLI `api invoke` commands. It checks the accepted
+selection, a generated draft and artifact hash, native completion evidence,
+and cleanup of the disposable run.
+
+Run its controlled case tests from the repository root:
+
+```powershell
+node --test scripts\acceptance\api\tests\workflow-generation.test.mjs
+```
+
+These tests use controlled CLI responses. They do not contact a live Gateway
+or run a model. Run the live case only with the exact native apphost, an
+approved non-production target, and an approved disposable run. Follow
+[Run workflow generation](./api-acceptance-migration.md#run-workflow-generation)
+for the input and retained evidence.
+
+This route-specific case checks workflow generation. It does not replace full
+P1 API acceptance.
+
 ## Record release acceptance results
 
 For version-level coverage and sign-off, use the single

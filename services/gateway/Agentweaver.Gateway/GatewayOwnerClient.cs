@@ -110,12 +110,37 @@ public sealed partial class GatewayOwnerClient(
                 return;
             }
             using var boundedBody = await BufferBoundedRequestAsync(context, route, timeout.Token).ConfigureAwait(false);
+            WorkflowGenerationRequestIdentity? workflowRequest = null;
+            if (IsWorkflowGenerationOperation(route.OperationId) && context.Request.Query.Count != 0)
+                throw WorkflowGenerationRequestFailure("workflow_generation_request_invalid");
+            if (route.OperationId == "generateProjectWorkflow")
+            {
+                var projectBearer = RequireProjectAuthorizationBearer(context);
+                workflowRequest = ReadWorkflowGenerationRequestIdentity(boundedBody);
+                if (workflowRequest is not { IsValid: true })
+                    throw WorkflowGenerationRequestFailure("workflow_generation_request_invalid");
+                var projectId = RequireRouteValue(context, "projectId");
+                var tenantSelector = ReadTenantSelector(context);
+                var projectAuthorization = await ReadCastingAuthorizationContextAsync(
+                    context, projectBearer, tenantSelector, timeout.Token).ConfigureAwait(false);
+                var runAuthorization = await ReadCastingAuthorizationContextAsync(
+                    context, bearer, tenantSelector, timeout.Token).ConfigureAwait(false);
+                ValidateWorkflowGenerationAuthorities(
+                    context, projectId, workflowRequest?.RunId, projectAuthorization, runAuthorization,
+                    tenantSelector);
+            }
             using var request = CreateOwnerRequest(context, route, bearer, boundedBody);
             using var response = await SendAsync(route.Owner, request, timeout.Token).ConfigureAwait(false);
             if (IsRedirect(response.StatusCode))
             {
                 await WriteProblemAsync(context, "owner_redirect_rejected", StatusCodes.Status502BadGateway)
                     .ConfigureAwait(false);
+                return;
+            }
+            if (IsWorkflowGenerationOperation(route.OperationId) && response.IsSuccessStatusCode)
+            {
+                await WriteWorkflowGenerationResponseAsync(
+                    context, route, response, workflowRequest, timeout.Token).ConfigureAwait(false);
                 return;
             }
             // Check a replay page and its query, then return the projected page. The Gateway reads the
@@ -194,6 +219,12 @@ public sealed partial class GatewayOwnerClient(
         catch (GatewayOwnerFailureException exception)
         {
             await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (JsonException) when (IsWorkflowGenerationOperation(route.OperationId))
+        {
+            await WriteProblemAsync(
+                context, "workflow_generation_owner_contract_invalid", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -508,6 +539,261 @@ public sealed partial class GatewayOwnerClient(
                 "application/problem+json",
                 ProblemBody("casting_generation_authority_mismatch", StatusCodes.Status403Forbidden));
     }
+
+    private void ValidateWorkflowGenerationAuthorities(
+        HttpContext context,
+        string projectId,
+        string? requestedRunId,
+        ProjectAuthorizationContextResponse projectAuthorization,
+        ProjectAuthorizationContextResponse runAuthorization,
+        string? tenantSelector)
+    {
+        var runIsValid = IsValidAuthorizationContext(runAuthorization, context.User, tenantSelector) &&
+            runAuthorization.BoundProjectId == projectId &&
+            runAuthorization.BoundRunId is not null &&
+            (requestedRunId is null || runAuthorization.BoundRunId == requestedRunId);
+        var writerIsValid = IsValidAuthorizationContext(
+                projectAuthorization, context.User, tenantSelector, matchCallerBindings: false) &&
+            projectAuthorization.BoundProjectId is null &&
+            projectAuthorization.BoundRunId is null &&
+            projectAuthorization.EffectiveAuthority.Any(grant =>
+                grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                grant.ResourceId == projectId &&
+                grant.Permissions.Any(permission =>
+                    permission.Permission == ProjectAuthorizationPermission.WriteProjects));
+        if (!runIsValid ||
+            !writerIsValid ||
+            !string.Equals(projectAuthorization.Issuer, runAuthorization.Issuer, StringComparison.Ordinal) ||
+            !string.Equals(projectAuthorization.ActorId, runAuthorization.ActorId, StringComparison.Ordinal) ||
+            !string.Equals(projectAuthorization.TenantId, runAuthorization.TenantId, StringComparison.Ordinal))
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status403Forbidden,
+                "application/problem+json",
+                ProblemBody("workflow_generation_authority_mismatch", StatusCodes.Status403Forbidden));
+    }
+
+    private static WorkflowGenerationRequestIdentity? ReadWorkflowGenerationRequestIdentity(Stream? body)
+    {
+        if (body is null || !body.CanSeek)
+            return null;
+
+        var position = body.Position;
+        try
+        {
+            body.Position = 0;
+            using var document = JsonDocument.Parse(body, new JsonDocumentOptions { MaxDepth = 16 });
+            var value = document.RootElement;
+            if (value.ValueKind != JsonValueKind.Object)
+                return null;
+            var runId = ReadString(value, "runId");
+            var sessionId = ReadString(value, "sessionId");
+            var valid = HasExactPropertyNames(
+                    value, ["runId", "sessionId", "expectedDecisionStateVersion", "prompt"]) &&
+                !string.IsNullOrWhiteSpace(runId) &&
+                !string.IsNullOrWhiteSpace(sessionId) &&
+                value.TryGetProperty("expectedDecisionStateVersion", out var stateVersion) &&
+                TryGetWorkflowInt64(stateVersion, out var version) && version > 0 &&
+                !string.IsNullOrWhiteSpace(ReadString(value, "prompt"));
+            return new(runId, sessionId, valid);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        finally
+        {
+            body.Position = position;
+        }
+
+        static string? ReadString(JsonElement value, string name) =>
+            value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+    }
+
+    private async Task WriteWorkflowGenerationResponseAsync(
+        HttpContext context,
+        GatewayRoute route,
+        HttpResponseMessage response,
+        WorkflowGenerationRequestIdentity? request,
+        CancellationToken cancellationToken)
+    {
+        var isSubmission = route.OperationId == "generateProjectWorkflow";
+        var expectedStatus = isSubmission ? HttpStatusCode.Accepted : HttpStatusCode.OK;
+        if (response.StatusCode != expectedStatus ||
+            response.Headers.CacheControl?.NoStore != true ||
+            response.Content.Headers.ContentType?.MediaType is not { } mediaType ||
+            !(mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+              mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
+            throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+
+        var body = await ReadBoundedAsync(response.Content, MaximumProxyResponseBytes, cancellationToken)
+            .ConfigureAwait(false);
+        using var document = JsonDocument.Parse(body, new JsonDocumentOptions { MaxDepth = 16 });
+        var root = document.RootElement;
+        var projectId = RequireRouteValue(context, "projectId");
+        Guid jobId;
+        string ownerStatusUrl;
+        string publicStatusUrl;
+        JsonObject projected;
+
+        if (route.OperationId is "generateProjectWorkflow" or "readProjectWorkflowGenerationJob")
+        {
+            if (!HasExactPropertyNames(root,
+                    ["jobId", "status", "projectId", "runId", "sessionId", "createdAt", "updatedAt",
+                        "statusUrl", "resultUrl", "artifact", "failure"]) ||
+                !root.TryGetProperty("jobId", out var jobIdValue) ||
+                !TryGetWorkflowGuid(jobIdValue, out jobId) ||
+                !root.TryGetProperty("status", out var statusValue) || statusValue.ValueKind != JsonValueKind.String ||
+                statusValue.GetString() is not ("queued" or "running" or "completed" or "failed" or "cancelled") ||
+                ReadString(root, "projectId") != projectId ||
+                string.IsNullOrWhiteSpace(ReadString(root, "runId")) ||
+                string.IsNullOrWhiteSpace(ReadString(root, "sessionId")) ||
+                !IsWorkflowGenerationEnvelopePartValid(root, "artifact", ["artifactId", "workflowId", "definitionRevision"]) ||
+                !IsWorkflowGenerationEnvelopePartValid(root, "failure", ["code", "message"]))
+                throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+
+            if (isSubmission &&
+                (request is not { IsValid: true } ||
+                 ReadString(root, "runId") != request.RunId ||
+                 ReadString(root, "sessionId") != request.SessionId))
+                throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+
+            if (!isSubmission &&
+                (!Guid.TryParse(context.Request.RouteValues["jobId"]?.ToString(), out var requestedJobId) ||
+                 requestedJobId != jobId))
+                throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+            if (route.OperationId == "readProjectWorkflowGenerationJob" &&
+                (!MatchesOptionalCallerClaim(context.User, "project_id", projectId) ||
+                 !MatchesOptionalCallerClaim(context.User, "run_id", ReadString(root, "runId"))))
+                throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+
+            ownerStatusUrl =
+                $"/api/projects/{Uri.EscapeDataString(projectId)}/workflows/generation-jobs/{jobId:D}";
+            var ownerResultUrl = ownerStatusUrl + "/result";
+            if (ReadString(root, "statusUrl") != ownerStatusUrl ||
+                ReadString(root, "resultUrl") != ownerResultUrl)
+                throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+            if (isSubmission && !IsExpectedOwnerLocation(response.Headers.Location, ownerStatusUrl, route.Owner) ||
+                !isSubmission && response.Headers.Location is not null)
+                throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+
+            projected = JsonNode.Parse(body)?.AsObject()
+                ?? throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+            publicStatusUrl = VersionPrefixLocation(ownerStatusUrl);
+            projected["statusUrl"] = publicStatusUrl;
+            projected["resultUrl"] = publicStatusUrl + "/result";
+        }
+        else
+        {
+            if (!Guid.TryParse(context.Request.RouteValues["jobId"]?.ToString(), out jobId) ||
+                !HasExactPropertyNames(root,
+                    ["jobId", "artifactId", "workflowDefinition", "definitionSha256", "nativeCompletion",
+                        "configurationRevision", "acceptedSelectionHash"]) ||
+                !root.TryGetProperty("jobId", out var jobIdValue) ||
+                !TryGetWorkflowGuid(jobIdValue, out var resultJobId) || resultJobId != jobId ||
+                !root.TryGetProperty("artifactId", out var artifactId) ||
+                !TryGetWorkflowGuid(artifactId, out _) ||
+                !root.TryGetProperty("workflowDefinition", out var definition) ||
+                definition.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("nativeCompletion", out var completion) ||
+                completion.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("configurationRevision", out var revision) ||
+                !TryGetWorkflowInt64(revision, out var revisionValue) || revisionValue < 1 ||
+                !IsSha256(ReadString(root, "definitionSha256")) ||
+                !IsSha256(ReadString(root, "acceptedSelectionHash")) ||
+                response.Headers.Location is not null)
+                throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+
+            projected = JsonNode.Parse(body)?.AsObject()
+                ?? throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
+            ownerStatusUrl = "";
+            publicStatusUrl = "";
+        }
+
+        var projectedBody = JsonSerializer.SerializeToUtf8Bytes(projected, JsonOptions);
+        context.Response.StatusCode = (int)response.StatusCode;
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
+        CopyExposedResponseHeaders(context, response, route);
+        if (isSubmission)
+            context.Response.Headers.Location = publicStatusUrl;
+        context.Response.ContentType = response.Content.Headers.ContentType!.ToString();
+        context.Response.ContentLength = projectedBody.Length;
+        await context.Response.Body.WriteAsync(projectedBody, cancellationToken).ConfigureAwait(false);
+
+        static string? ReadString(JsonElement value, string name) =>
+            value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+    }
+
+    private static bool IsWorkflowGenerationEnvelopePartValid(
+        JsonElement envelope,
+        string propertyName,
+        string[] propertyNames)
+    {
+        if (!envelope.TryGetProperty(propertyName, out var part))
+            return false;
+        if (part.ValueKind == JsonValueKind.Null)
+            return true;
+        if (!HasExactPropertyNames(part, propertyNames))
+            return false;
+        return propertyName == "artifact"
+            ? part.TryGetProperty("artifactId", out var artifactId) &&
+              TryGetWorkflowGuid(artifactId, out _) &&
+              !string.IsNullOrWhiteSpace(ReadString(part, "workflowId")) &&
+              !string.IsNullOrWhiteSpace(ReadString(part, "definitionRevision"))
+            : !string.IsNullOrWhiteSpace(ReadString(part, "code")) &&
+              !string.IsNullOrWhiteSpace(ReadString(part, "message"));
+
+        static string? ReadString(JsonElement value, string name) =>
+            value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+    }
+
+    private bool IsExpectedOwnerLocation(Uri? location, string expectedPath, GatewayOwner owner)
+    {
+        if (location is null)
+            return false;
+        if (location.IsAbsoluteUri)
+        {
+            var baseAddress = options.GetOwnerBaseAddress(owner);
+            return baseAddress.IsBaseOf(location) && location.PathAndQuery == expectedPath;
+        }
+        return location.OriginalString == expectedPath;
+    }
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool IsWorkflowGenerationOperation(string operationId) => operationId is
+        "generateProjectWorkflow" or
+        "readProjectWorkflowGenerationJob" or
+        "readProjectWorkflowGenerationResult";
+
+    private static bool TryGetWorkflowGuid(JsonElement value, out Guid result)
+    {
+        result = default;
+        return value.ValueKind == JsonValueKind.String && value.TryGetGuid(out result);
+    }
+
+    private static bool TryGetWorkflowInt64(JsonElement value, out long result)
+    {
+        result = default;
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out result);
+    }
+
+    private static string RequireRouteValue(HttpContext context, string name) =>
+        context.Request.RouteValues[name]?.ToString()
+        ?? throw WorkflowGenerationRequestFailure("workflow_generation_request_invalid");
+
+    private static GatewayOwnerFailureException WorkflowGenerationRequestFailure(string code) =>
+        new(StatusCodes.Status400BadRequest, "application/problem+json",
+            ProblemBody(code, StatusCodes.Status400BadRequest));
 
     private async Task<GatewayCastingProjectConfiguration> ReadCastingProjectConfigurationAsync(
         HttpContext context,
@@ -1107,7 +1393,8 @@ public sealed partial class GatewayOwnerClient(
     private bool IsValidAuthorizationContext(
         ProjectAuthorizationContextResponse? value,
         ClaimsPrincipal caller,
-        string? tenantSelector)
+        string? tenantSelector,
+        bool matchCallerBindings = true)
     {
         var subjects = caller.FindAll("sub").Take(2).ToArray();
         return value is not null &&
@@ -1119,8 +1406,9 @@ public sealed partial class GatewayOwnerClient(
         !string.IsNullOrWhiteSpace(value.TenantId) &&
         (tenantSelector is null ||
             string.Equals(value.TenantId, tenantSelector, StringComparison.Ordinal)) &&
-        MatchesOptionalCallerClaim(caller, "project_id", value.BoundProjectId) &&
-        MatchesOptionalCallerClaim(caller, "run_id", value.BoundRunId) &&
+        (!matchCallerBindings ||
+            MatchesOptionalCallerClaim(caller, "project_id", value.BoundProjectId) &&
+            MatchesOptionalCallerClaim(caller, "run_id", value.BoundRunId)) &&
         value.MembershipRevision > 0 &&
         (value.BoundRunId is null || value.BoundProjectId is not null) &&
         !value.EffectiveAuthority.IsDefault &&
@@ -1922,6 +2210,8 @@ public sealed partial class GatewayOwnerClient(
             foreach (var header in route.ForwardRequestHeaders)
                 CopySingleRequestHeader(context, request, header);
         }
+        if (route.OperationId == "generateProjectWorkflow")
+            CopySingleRequestHeader(context, request, "X-Agentweaver-Project-Authorization");
         var hasRequestBody = context.Request.ContentLength is > 0 ||
             context.Request.ContentType is not null ||
             context.Request.Headers.ContainsKey("Transfer-Encoding");
@@ -2318,6 +2608,11 @@ public sealed partial class GatewayOwnerClient(
             status = statusCode,
             code,
         }, JsonOptions);
+
+    private sealed record WorkflowGenerationRequestIdentity(
+        string? RunId,
+        string? SessionId,
+        bool IsValid);
 
     private sealed record CastingGenerationInput(
         long ExpectedConfigurationRevision,

@@ -84,6 +84,10 @@ internal static partial class GatewayOpenApi
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
+            ["generateProjectWorkflow"] = C(
+                "GenerateProjectWorkflowRequest", "WorkflowGenerationJobEnvelope", "202"),
+            ["readProjectWorkflowGenerationJob"] = C(null, "WorkflowGenerationJobEnvelope", "200"),
+            ["readProjectWorkflowGenerationResult"] = C(null, "WorkflowGenerationJobResult", "200"),
             ["getPlatformRuntimeDefaults"] = C(null, "VersionedPlatformRuntimeDefaults", "200"),
             ["updatePlatformRuntimeDefaults"] = C("UpdatePlatformRuntimeDefaultsRequest", "VersionedPlatformRuntimeDefaults", "200"),
             ["getPlatformComponents"] = C(null, "PlatformComponentReport", "200"),
@@ -328,13 +332,14 @@ internal static partial class GatewayOpenApi
                 required = route.RequiresTenantSelector,
                 schema = new { type = "string" },
             }).ToArray();
-        if (route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal")
+        if (route.OperationId is
+            "formulateCastingProposal" or "analyzeCastingProposal" or "generateProjectWorkflow")
             parameters = parameters.Append(new
             {
                 name = "X-Agentweaver-Project-Authorization",
                 @in = "header",
                 required = true,
-                description = "Unbound project-writer bearer used only for Projects & Config. Authorization remains the exact run-bound bearer used by Orchestrator.",
+                description = "Unbound project-writer bearer used only for current Projects & Config write authority. Authorization remains the exact run-bound bearer used by Orchestrator.",
                 schema = new { type = "string", pattern = "^Bearer .+$" },
             }).ToArray();
         if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)
@@ -372,6 +377,22 @@ internal static partial class GatewayOpenApi
                     minLength = 1,
                     maxLength = 128,
                     pattern = "^[A-Za-z0-9._:-]+$",
+                },
+            }).ToArray();
+        }
+        if (route.OperationId == "generateProjectWorkflow")
+        {
+            parameters = parameters.Append(new
+            {
+                name = "Idempotency-Key",
+                @in = "header",
+                required = true,
+                schema = new
+                {
+                    type = "string",
+                    minLength = 1,
+                    maxLength = 256,
+                    pattern = "^[\\x21-\\x7E]{1,256}$",
                 },
             }).ToArray();
         }
@@ -418,7 +439,8 @@ internal static partial class GatewayOpenApi
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
                         "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
                         "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
-                        "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy" ||
+                        "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
+                        "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         IsModelProviderDraftRoute(route.OperationId)) && status == "200")
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
@@ -452,6 +474,25 @@ internal static partial class GatewayOpenApi
                                 },
                             }
                             : null);
+        }
+        if (route.OperationId == "generateProjectWorkflow")
+        {
+            responses["202"] = JsonResponse(
+                Ref("WorkflowGenerationJobEnvelope"),
+                "The owner accepted or reattached the generation job. This does not mean generation is complete.",
+                new Dictionary<string, object>(StringComparer.Ordinal)
+                {
+                    ["Cache-Control"] = new
+                    {
+                        description = "Generation job responses are not cacheable.",
+                        schema = new { type = "string", example = "no-store" },
+                    },
+                    ["Location"] = new
+                    {
+                        description = "Public status URL for the accepted generation job.",
+                        schema = new { type = "string", format = "uri-reference" },
+                    },
+                });
         }
         if (route.OperationId == "createProject")
             responses["503"] = ProblemResponse(
@@ -576,6 +617,20 @@ internal static partial class GatewayOpenApi
             responses["404"] = ProblemResponse("The owner did not find the project or imported agent.");
             responses["500"] = ProblemResponse("The owner reported an import record integrity error.");
             responses["503"] = ProblemResponse("The AgentSuite object store is not configured.");
+        }
+        else if (route.OperationId is
+            "generateProjectWorkflow" or
+            "readProjectWorkflowGenerationJob" or
+            "readProjectWorkflowGenerationResult")
+        {
+            responses["400"] = ProblemResponse("The request body, query, or idempotency key is invalid.");
+            responses["404"] = ProblemResponse("The project, accepted run, or job is not visible to the caller.");
+            responses["409"] = ProblemResponse(
+                "The job conflicts with current state or workflow generation has not completed.");
+            responses["503"] = ProblemResponse(
+                "The owner, accepted run, runtime, or completed result is unavailable.");
+            if (route.OperationId == "generateProjectWorkflow")
+                responses["413"] = ProblemResponse("The request body exceeds 64 KiB.");
         }
         else if (route.OperationId is "readProjectMetrics" or "readProjectUsage")
         {
@@ -931,6 +986,21 @@ else if (route.OperationId is
                 "Items are ordered by recordedAt descending, then runId, pinId, and number descending. The " +
                 "opaque cursor is valid only with the same project, state filter, and page size, and multiple " +
                 "pages are not a snapshot.";
+        }
+        else if (route.OperationId is
+            "generateProjectWorkflow" or
+            "readProjectWorkflowGenerationJob" or
+            "readProjectWorkflowGenerationResult")
+        {
+            description += route.OperationId == "generateProjectWorkflow"
+                ? " This accepted operation creates or reattaches one durable workflow-generation job. The run-bound " +
+                  "Authorization bearer supplies run authority. The separate, unbound " +
+                  "X-Agentweaver-Project-Authorization bearer supplies current writeProjects authority for this exact " +
+                  "project. Both bearers must identify the same actor and tenant. The public Location, statusUrl, and " +
+                  "resultUrl identify this project and job. An accepted response does not mean generation is complete."
+                : " This read uses the run-bound Authorization bearer and current owner checks. The project-writer " +
+                  "header is not required. Job reads remain bound to the stored job's project, run, actor, tenant, " +
+                  "and accepted selection.";
         }
         else if (route.OperationId.Contains("Casting", StringComparison.Ordinal))
         {
@@ -2320,6 +2390,28 @@ else if (route.OperationId is
         ["SelectCoordinatorWorkflowRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),
             ("workflowId", NullableStr()), ("proposedDefinition", NullableRef("WorkflowDefinition"))),
+        ["GenerateProjectWorkflowRequest"] = StrictObj(
+            ["runId", "sessionId", "expectedDecisionStateVersion", "prompt"],
+            ("runId", Str()), ("sessionId", Str()), ("expectedDecisionStateVersion", Int()), ("prompt", Str())),
+        ["WorkflowGenerationArtifactSummary"] = StrictObj(
+            ["artifactId", "workflowId", "definitionRevision"],
+            ("artifactId", Uuid()), ("workflowId", Str()), ("definitionRevision", Str())),
+        ["WorkflowGenerationFailure"] = StrictObj(
+            ["code", "message"], ("code", Str()), ("message", Str())),
+        ["WorkflowGenerationJobEnvelope"] = StrictObj(
+            ["jobId", "status", "projectId", "runId", "sessionId", "createdAt", "updatedAt",
+                "statusUrl", "resultUrl", "artifact", "failure"],
+            ("jobId", Uuid()), ("status", Enum("queued", "running", "completed", "failed", "cancelled")),
+            ("projectId", Str()), ("runId", Str()), ("sessionId", Str()),
+            ("createdAt", Date()), ("updatedAt", Date()), ("statusUrl", Str()), ("resultUrl", Str()),
+            ("artifact", NullableRef("WorkflowGenerationArtifactSummary")),
+            ("failure", NullableRef("WorkflowGenerationFailure"))),
+        ["WorkflowGenerationJobResult"] = StrictObj(
+            ["jobId", "artifactId", "workflowDefinition", "definitionSha256", "nativeCompletion",
+                "configurationRevision", "acceptedSelectionHash"],
+            ("jobId", Uuid()), ("artifactId", Uuid()), ("workflowDefinition", Ref("WorkflowDefinition")),
+            ("definitionSha256", Str()), ("nativeCompletion", Ref("RuntimeRootTurnCompletionEvidence")),
+            ("configurationRevision", Int()), ("acceptedSelectionHash", Str())),
         ["WorkflowDefinition"] = Obj(["id", "revision", "catalogVersion", "origin", "maximumWorkItems", "steps"],
             ("id", Str()), ("revision", Str()), ("catalogVersion", Str()), ("origin", Enum("builtIn", "generated")),
             ("maximumWorkItems", Int()), ("steps", Arr(Ref("WorkflowStepDefinition")))),

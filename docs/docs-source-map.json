@@ -152,6 +152,31 @@
       ]
     },
     {
+      "name": "Public workflow generation",
+      "sourcePrefixes": [
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOwnerClient.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayWebCors.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/WorkflowGenerationEndpoints.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/ProjectsRunSelectionClient.cs",
+        "scripts/acceptance/api/workflow-generation.mjs",
+        "scripts/acceptance/api/tests/workflow-generation.test.mjs",
+        "scripts/acceptance/api/examples/workflow-generation.json"
+      ],
+      "required": [
+        "docs/reference/api.md",
+        "docs/guide/cli.md",
+        "docs/guide/testing.md",
+        "docs/guide/api-acceptance-migration.md",
+        "docs/guide/identity-scopes.md",
+        "docs/deep-dive/orchestration.md",
+        "docs/deep-dive/testing-strategy.md",
+        "docs/reference/web-ui-parity.md",
+        "docs/specs/native-cli-api-acceptance.md"
+      ]
+    },
+    {
       "name": "Checkpoint recovery observation",
       "sourcePrefixes": [
         "scripts/acceptance/api/checkpoint-recovery-observation.mjs",
