@@ -217,7 +217,7 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
-    public void MutationDenialReadbackRequiresEnabledExactTriggersAndNonExecutableRejectingFunctions()
+    public void MutationGuardReadbackRequiresEnabledExactTriggersAndNonExecutableFunctions()
     {
         foreach (var service in MutationServices().Where(service => service.Tables.Any(table =>
             table.LockColumn is not null || table.MutationDenialRequired || table.MutationDenialGuard is not null)))
@@ -805,26 +805,47 @@ public sealed class P1PostgresInitializerTests
                 ]),
                 AppendOnlyTable("native_acs_policy_preparations"),
                 AppendOnlyTable("native_acs_policy_revisions"),
-                new("native_acs_policy_artifact_files", ["SELECT", "INSERT"], null, true, null,
-                [
-                    new("native_acs_policy_artifact_files_immutable", "reject_immutable_record_mutation()",
-                        27, "records in %.% are immutable", "55000"),
-                    new("native_acs_policy_artifact_files_no_truncate", "reject_immutable_record_mutation()",
-                        34, "records in %.% are immutable", "55000"),
-                    new("native_acs_policy_artifact_files_insert_with_revision",
-                        "require_native_acs_policy_file_insert_in_revision_transaction()", 7,
-                        "native ACS policy files must be inserted with their revision", "55000",
-                        NativeAcsPolicyFileRevisionFunctionSource),
-                ]),
+                NativeAcsPolicyFilesTable(),
                 AppendOnlyTable("native_acs_policy_idempotency"),
                 AppendOnlyTable("native_acs_policy_change_audit"),
                 AppendOnlyTable("native_acs_policy_outbox"),
+                new("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("project_governance_decision_heads_no_delete",
+                        "reject_governance_decision_head_removal()", 11,
+                        "governance decision stream heads cannot be removed", "55000"),
+                    new("project_governance_decision_heads_no_truncate",
+                        "reject_governance_decision_head_removal()", 34,
+                        "governance decision stream heads cannot be removed", "55000"),
+                ]),
+                AppendOnlyTable("project_governance_decisions") with
+                {
+                    MutationDenialGuards =
+                    [
+                        .. AppendOnlyTable("project_governance_decisions").MutationDenialGuards!,
+                        new("project_governance_decisions_stamp_transaction",
+                            "stamp_governance_decision_transaction_id()", 7,
+                            FunctionSource: "BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END"),
+                    ],
+                },
+                AppendOnlyTable("project_governance_decision_outbox") with
+                {
+                    MutationDenialGuards =
+                    [
+                        .. AppendOnlyTable("project_governance_decision_outbox").MutationDenialGuards!,
+                        new("project_governance_decision_outbox_stamp_transaction",
+                            "stamp_governance_decision_transaction_id()", 7,
+                            FunctionSource: "BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END"),
+                    ],
+                },
             ],
             Functions =
             [
                 new("reject_immutable_record_mutation()", false),
-                new("require_native_acs_policy_head_advance()", false),
                 new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
+                new("require_native_acs_policy_head_advance()", false),
+                new("reject_governance_decision_head_removal()", false),
+                new("stamp_governance_decision_transaction_id()", false),
             ],
         };
         services[1] = services[1] with
@@ -1004,15 +1025,29 @@ public sealed class P1PostgresInitializerTests
             RETURN NEW;
         END;
         """;
+    private static TablePlan NativeAcsPolicyFilesTable()
+    {
+        var table = AppendOnlyTable("native_acs_policy_artifact_files");
+        return table with
+        {
+            MutationDenialGuards =
+            [
+                .. table.MutationDenialGuards!,
+                new("native_acs_policy_artifact_files_insert_with_revision",
+                    "require_native_acs_policy_file_insert_in_revision_transaction()", 7,
+                    "native ACS policy files must be inserted with their revision", "55000",
+                   FunctionSource: NativeAcsPolicyFileRevisionFunctionSource),
+            ],
+        };
+    }
 
     private static MutationGuardState[] MutationGuardReadbacks(ServicePlan service, TablePlan table)
     {
         return InitializerChecks.GetMutationDenialGuards(table).Select(guard =>
         {
-            var source = guard.FunctionSource ??
-                $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
-                   (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
-                   "; END";
+            var source = guard.FunctionSource ?? $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
+                (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
+                "; END";
             return new MutationGuardState(table.Table, guard.Trigger, service.Schema, guard.Function,
                 guard.TriggerType, "O", false, true, true, 0, Owner, false, source);
         }).ToArray();

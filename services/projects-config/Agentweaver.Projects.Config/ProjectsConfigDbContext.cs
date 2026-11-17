@@ -47,6 +47,12 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
         Set<NativeAcsPolicyChangeAuditRecord>();
     public DbSet<NativeAcsPolicyOutboxRecord> NativeAcsPolicyOutbox =>
         Set<NativeAcsPolicyOutboxRecord>();
+    public DbSet<ProjectGovernanceDecisionStreamHeadRecord> GovernanceDecisionStreamHeads =>
+        Set<ProjectGovernanceDecisionStreamHeadRecord>();
+    public DbSet<ProjectGovernanceDecisionRecord> GovernanceDecisions =>
+        Set<ProjectGovernanceDecisionRecord>();
+    public DbSet<ProjectGovernanceDecisionOutboxRecord> GovernanceDecisionOutbox =>
+        Set<ProjectGovernanceDecisionOutboxRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -950,6 +956,129 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(item => item.PayloadJson).HasColumnName("payload").HasColumnType("jsonb");
             entity.Property(item => item.CreatedAt).HasColumnName("created_at");
             entity.HasIndex(item => item.CreatedAt);
+        });
+
+        modelBuilder.Entity<ProjectGovernanceDecisionStreamHeadRecord>(entity =>
+        {
+            entity.ToTable("project_governance_decision_stream_heads", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_project_governance_decision_stream_heads_scope",
+                    "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                table.HasCheckConstraint(
+                    "ck_project_governance_decision_stream_heads_position",
+                    "sequence >= 0 AND fence_generation = sequence");
+                table.HasCheckConstraint(
+                    "ck_project_governance_decision_stream_heads_hash",
+                    "head_hash ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(head => new
+            {
+                head.ScopeType,
+                head.ScopeId,
+                head.ResourceType,
+                head.ResourceId,
+            });
+            entity.Property(head => head.ScopeType).HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(head => head.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(head => head.ResourceType).HasColumnName("resource_type").HasMaxLength(64);
+            entity.Property(head => head.ResourceId).HasColumnName("resource_id").HasMaxLength(256);
+            entity.Property(head => head.Sequence).HasColumnName("sequence");
+            entity.Property(head => head.FenceGeneration).HasColumnName("fence_generation");
+            entity.Property(head => head.HeadHash).HasColumnName("head_hash").HasMaxLength(64);
+            entity.Property(head => head.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<ProjectGovernanceDecisionRecord>(entity =>
+        {
+            entity.ToTable("project_governance_decisions", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_project_governance_decisions_scope",
+                    "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                table.HasCheckConstraint("ck_project_governance_decisions_sequence", "sequence > 0");
+                table.HasCheckConstraint(
+                    "ck_project_governance_decisions_hash",
+                    "request_digest ~ '^[0-9a-f]{64}$' AND previous_hash ~ '^[0-9a-f]{64}$' AND record_hash ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_project_governance_decisions_size",
+                    "octet_length(canonical_record) BETWEEN 1 AND 65536");
+            });
+            entity.HasKey(record => new
+            {
+                record.ScopeType,
+                record.ScopeId,
+                record.ResourceType,
+                record.ResourceId,
+                record.Sequence,
+            });
+            entity.HasIndex(record => new
+            {
+                record.ScopeType,
+                record.ScopeId,
+                record.ResourceType,
+                record.ResourceId,
+                record.IdempotencyKey,
+            }).IsUnique();
+            entity.Property(record => record.ScopeType).HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(record => record.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(record => record.ResourceType).HasColumnName("resource_type").HasMaxLength(64);
+            entity.Property(record => record.ResourceId).HasColumnName("resource_id").HasMaxLength(256);
+            entity.Property(record => record.Sequence).HasColumnName("sequence");
+            entity.Property(record => record.DecisionId).HasColumnName("decision_id");
+            entity.Property(record => record.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
+            entity.Property(record => record.RequestDigest).HasColumnName("request_digest").HasMaxLength(64);
+            entity.Property(record => record.PreviousHash).HasColumnName("previous_hash").HasMaxLength(64);
+            entity.Property(record => record.RecordHash).HasColumnName("record_hash").HasMaxLength(64);
+            entity.Property(record => record.CanonicalRecord).HasColumnName("canonical_record").HasColumnType("bytea");
+            entity.Property(record => record.WriteTransactionId)
+                .HasColumnName("write_transaction_id")
+                .HasColumnType("text")
+                .HasDefaultValueSql("pg_current_xact_id()::text")
+                .ValueGeneratedOnAdd();
+            entity.Property(record => record.RecordedAt).HasColumnName("recorded_at");
+            entity.HasOne<ProjectGovernanceDecisionStreamHeadRecord>()
+                .WithMany()
+                .HasForeignKey(record => new
+                {
+                    record.ScopeType,
+                    record.ScopeId,
+                    record.ResourceType,
+                    record.ResourceId,
+                })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ProjectGovernanceDecisionOutboxRecord>(entity =>
+        {
+            entity.ToTable("project_governance_decision_outbox", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_project_governance_decision_outbox_event",
+                    "event_type = 'project.governance_decision_appended.v1'");
+                table.HasCheckConstraint(
+                    "ck_project_governance_decision_outbox_hash",
+                    "record_hash ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(item => item.OutboxId);
+            entity.HasIndex(item => item.DecisionId).IsUnique();
+            entity.Property(item => item.OutboxId).HasColumnName("outbox_id");
+            entity.Property(item => item.DecisionId).HasColumnName("decision_id");
+            entity.Property(item => item.EventType).HasColumnName("event_type").HasMaxLength(96);
+            entity.Property(item => item.Sequence).HasColumnName("sequence");
+            entity.Property(item => item.RecordHash).HasColumnName("record_hash").HasMaxLength(64);
+            entity.Property(item => item.WriteTransactionId)
+                .HasColumnName("write_transaction_id")
+                .HasColumnType("text")
+                .HasDefaultValueSql("pg_current_xact_id()::text")
+                .ValueGeneratedOnAdd();
+            entity.Property(item => item.CreatedAt).HasColumnName("created_at");
+            entity.Property(item => item.PayloadJson).HasColumnName("payload").HasColumnType("jsonb");
+            entity.HasOne<ProjectGovernanceDecisionRecord>()
+                .WithOne()
+                .HasForeignKey<ProjectGovernanceDecisionOutboxRecord>(item => item.DecisionId)
+                .HasPrincipalKey<ProjectGovernanceDecisionRecord>(record => record.DecisionId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

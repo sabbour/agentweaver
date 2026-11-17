@@ -97,6 +97,8 @@ test('Only exact table DML is planned; history and memberships stay SELECT-only'
           'require_native_acs_policy_file_insert_in_revision_transaction()', 7]]
         : []),
     ]);
+    if (name === 'native_acs_policy_artifact_files')
+      assert.match(table.mutationDenialGuards[2].functionSource, /revision\.write_transaction_id = NEW\.write_transaction_id/);
   }
   const providerRevisions = projectsConfig.tables.find(item => item.table === 'model_provider_revisions');
   assert.deepEqual(providerRevisions.privileges, ['SELECT', 'INSERT']);
@@ -122,21 +124,45 @@ test('Only exact table DML is planned; history and memberships stay SELECT-only'
   }
 });
 
-test('Role assignment writes are insert-only plus the exact revoke columns', () => {
+test('Projects column updates use exact grants', () => {
   const projectsConfig = buildP1PostgresPlan().services.find(item => item.schema === 'projects_config');
   const table = name => projectsConfig.tables.find(item => item.table === name);
-  // Projects Config accepts these grants only as a complete set: INSERT on both tables, UPDATE only on
-  // the revoke columns, and never table-level UPDATE, DELETE, or TRUNCATE.
+  // Role assignment and decision-head writes use column-scoped UPDATE, never table-level UPDATE.
   assert.deepEqual(table('project_role_assignments').privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(table('project_role_assignments').updateColumns,
     ['state', 'revision', 'revoked_by', 'revoked_at']);
   assert.ok(!('lockColumn' in table('project_role_assignments')));
   assert.deepEqual(table('authority_audit').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(table('project_governance_decision_stream_heads').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(table('project_governance_decision_stream_heads').updateColumns,
+    ['sequence', 'fence_generation', 'head_hash', 'updated_at']);
+  assert.deepEqual(table('project_governance_decision_stream_heads').mutationDenialGuards.map(guard =>
+    [guard.trigger, guard.function, guard.triggerType]), [
+    ['project_governance_decision_heads_no_delete', 'reject_governance_decision_head_removal()', 11],
+    ['project_governance_decision_heads_no_truncate', 'reject_governance_decision_head_removal()', 34],
+  ]);
+  assert.deepEqual(table('project_governance_decisions').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(table('project_governance_decision_outbox').privileges, ['SELECT', 'INSERT']);
+  for (const [name, trigger] of [
+    ['project_governance_decisions', 'project_governance_decisions_stamp_transaction'],
+    ['project_governance_decision_outbox', 'project_governance_decision_outbox_stamp_transaction'],
+  ]) {
+    const tablePlan = table(name);
+    assert.deepEqual(tablePlan.mutationDenialGuards.map(guard =>
+      [guard.trigger, guard.function, guard.triggerType]), [
+      [`${name}_immutable`, 'reject_immutable_record_mutation()', 27],
+      [`${name}_no_truncate`, 'reject_immutable_record_mutation()', 34],
+      [trigger, 'stamp_governance_decision_transaction_id()', 7],
+    ]);
+    assert.equal(tablePlan.mutationDenialGuards[2].functionSource,
+      'BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END');
+  }
   const withUpdateColumns = buildP1PostgresPlan().services.flatMap(service =>
     service.tables.filter(item => 'updateColumns' in item).map(item => `${service.schema}.${item.table}`));
   assert.deepEqual(withUpdateColumns, [
     'projects_config.project_role_assignments',
     'projects_config.native_acs_policy_heads',
+    'projects_config.project_governance_decision_stream_heads',
   ]);
 });
 
@@ -456,7 +482,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 136);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 139);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -474,8 +500,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [9, 3, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 46);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [13, 3, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 50);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });
