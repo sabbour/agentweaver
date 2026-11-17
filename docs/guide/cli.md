@@ -191,6 +191,7 @@ agentweaver auth login
 ```powershell
 agentweaver policy show --scope platform
 agentweaver policy history --scope platform --page-size 20
+agentweaver policy validate --scope platform --input .\platform-policy.json
 ```
 
 `show` returns JSON with `scopeType`, `scopeId`, `policyId`, `revision`,
@@ -215,6 +216,21 @@ the API's `manifestBytes` and `files[].bytes` arrays. The CLI recomputes the
 hash before it writes the file. The command does not overwrite an existing
 file. Standard output contains the scope, policy ID, revision, hash, timestamp,
 and output path; it does not print the policy artifact.
+
+`validate` reads an export file of up to 64 MiB. It checks the export metadata
+and artifact hash, then sends the `artifact` object to the Platform Policy
+validation route. The serialized request must fit the Gateway's 5 MiB limit.
+The server checks current Platform Policy reader authority and runs validation
+without changing policy state.
+
+```powershell
+agentweaver policy validate --scope platform --input .\platform-policy.json
+```
+
+The command prints JSON with `isValid` and `diagnostics`. It exits with code 0
+when the artifact is valid and code 1 when it is invalid or the request fails.
+Invalid artifacts include the server's bounded diagnostics. The command does
+not print the artifact bytes.
 
 History returns the newest revision first. Each item contains `revision`,
 `contentSha256` and `createdAt`. The response also contains

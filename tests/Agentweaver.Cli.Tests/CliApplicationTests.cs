@@ -25,6 +25,7 @@ public sealed class CliApplicationTests
         Assert.Contains("agentweaver workspace refs --project", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("agentweaver workspace tree --project", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("agentweaver workspace file --project", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("agentweaver policy validate --scope platform --input <export-file>", output.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("agentweaver test", output.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Agentweaver 1.x CLI 1.0.0 (source unbound, tree unbound)", output.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("1.0.0+", output.ToString(), StringComparison.Ordinal);

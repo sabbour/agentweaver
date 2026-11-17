@@ -789,13 +789,14 @@ public sealed partial class GatewayClient : IGatewayClient
     {
         var requestId = Guid.NewGuid();
         var started = Stopwatch.GetTimestamp();
+        var hidePolicyRequest = operationId == "validatePlatformNativeAcsPolicy";
         var evidence = new JsonObject
         {
             ["requestId"] = requestId.ToString("D"),
             ["method"] = method,
             ["path"] = pathAndQuery.Split('?', 2)[0],
             ["query"] = RedactQuery(ParseQuery(pathAndQuery)),
-            ["requestBody"] = body is null ? null : RedactJson(ParseJson(body)),
+            ["requestBody"] = body is null ? null : hidePolicyRequest ? "[REDACTED]" : RedactJson(ParseJson(body)),
             ["status"] = null,
             ["traceId"] = null,
             ["responseBody"] = null,
@@ -804,7 +805,7 @@ public sealed partial class GatewayClient : IGatewayClient
             ["operationId"] = operationId,
         };
         var hidePolicyEvidence = operationId is
-            "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision";
+            "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or "validatePlatformNativeAcsPolicy";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 
