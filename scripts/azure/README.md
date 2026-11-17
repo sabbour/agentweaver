@@ -22,7 +22,7 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`5cf2c73ef75b4ea113f280219d9fcb6fd0ebd87a5a6fd1dd34af2b4af71de292`.
+`2609601d3db9b41087c0af2df57417d7559452b7d6be06114d4689a7eed156c4`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16, 18-33, and 35-51; 034 is not in the
@@ -301,9 +301,9 @@ not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source plan lists 38 Core versions: 1 through 16, 18 through 33, and 35 through 40.
+The source plan lists 49 Core versions: 1 through 16, 18 through 33, and 35 through 51.
 The current image requires 1 through 16 and 18 through 31. Versions 32, 33,
-and 35 through 40 are optional during rollout; versions 17 and 34 remain intentionally absent.
+and 35 through 51 are optional during rollout; versions 17 and 34 remain intentionally absent.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
@@ -336,10 +336,10 @@ to `backlog_plan_promotions`, so it requires migrations 025 and 030.
 The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 `backlog_plan_promotions` until commit. Its runtime role needs only
 `SELECT,INSERT` on the new table.
-Events requires versions 1 through 10 and preserves the earlier version-2 layout.
+Events requires versions 1 through 11 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 136 tables and fourteen exact row-lock columns.
+The plan lists 139 tables and fourteen exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

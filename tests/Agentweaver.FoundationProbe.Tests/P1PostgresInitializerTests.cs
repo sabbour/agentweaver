@@ -10,6 +10,44 @@ public sealed class P1PostgresInitializerTests
     private const uint Owner = 10;
     private const uint Runtime = 100;
     private const string Tenant = "00000000-0000-0000-0000-000000000099";
+    private const string GovernanceDecisionHeadInitializeFunctionSource = """
+        BEGIN
+            IF NEW.sequence <> 0 OR NEW.fence_generation <> 0
+               OR NEW.head_hash <> repeat('0', 64) THEN
+                RAISE EXCEPTION 'governance decision stream head must start at genesis'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+    private const string GovernanceDecisionHeadAdvanceFunctionSource = """
+        BEGIN
+            IF NEW.sequence <> OLD.sequence + 1
+               OR NEW.fence_generation <> OLD.fence_generation + 1
+               OR NEW.head_hash !~ '^[0-9a-f]{64}$'
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM projects_config.project_governance_decisions AS decision
+                   JOIN projects_config.project_governance_decision_outbox AS outbox
+                     ON outbox.decision_id = decision.decision_id
+                   WHERE decision.scope_type = NEW.scope_type
+                     AND decision.scope_id = NEW.scope_id
+                     AND decision.resource_type = NEW.resource_type
+                     AND decision.resource_id = NEW.resource_id
+                     AND decision.sequence = NEW.sequence
+                     AND decision.previous_hash = OLD.head_hash
+                     AND decision.record_hash = NEW.head_hash
+                     AND decision.write_transaction_id = pg_current_xact_id()::text
+                     AND outbox.sequence = decision.sequence
+                     AND outbox.record_hash = decision.record_hash
+                     AND outbox.write_transaction_id = pg_current_xact_id()::text
+               ) THEN
+                RAISE EXCEPTION 'governance decision head must advance with its record and outbox'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
     private static readonly AclGrant OwnerConnect = new(Owner, Owner, "CONNECT", false);
     private static readonly AclGrant PublicConnect = new(Owner, 0, "CONNECT", false);
     private static readonly AclGrant RuntimeConnect = new(Owner, Runtime, "CONNECT", false);
@@ -811,6 +849,24 @@ public sealed class P1PostgresInitializerTests
         throw new DirectoryNotFoundException("The P1 PostgreSQL source plan was not found above the test output directory.");
     }
 
+    private static MutationDenialGuardPlan[] GovernanceDecisionHeadGuards() =>
+    [
+        new("project_governance_decision_head_initialize",
+            "require_governance_decision_head_initialize()", 7,
+            "governance decision stream head must start at genesis", "55000",
+            GovernanceDecisionHeadInitializeFunctionSource),
+        new("project_governance_decision_head_advance",
+            "require_governance_decision_head_advance()", 19,
+            "governance decision head must advance with its record and outbox", "55000",
+            GovernanceDecisionHeadAdvanceFunctionSource),
+        new("project_governance_decision_heads_no_delete",
+            "reject_governance_decision_head_removal()", 11,
+            "governance decision stream heads cannot be removed", "55000"),
+        new("project_governance_decision_heads_no_truncate",
+            "reject_governance_decision_head_removal()", 34,
+            "governance decision stream heads cannot be removed", "55000"),
+    ];
+
     private static ServicePlan[] ColumnUpdateServices()
     {
         var services = Services();
@@ -829,14 +885,7 @@ public sealed class P1PostgresInitializerTests
                     UpdateColumns = ["current_revision", "updated_at"],
                 },
                 new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
-                [
-                    new("project_governance_decision_heads_no_delete",
-                        "reject_governance_decision_head_removal()", 11,
-                        "governance decision stream heads cannot be removed", "55000"),
-                    new("project_governance_decision_heads_no_truncate",
-                        "reject_governance_decision_head_removal()", 34,
-                        "governance decision stream heads cannot be removed", "55000"),
-                ])
+                    GovernanceDecisionHeadGuards())
                 {
                     UpdateColumns = ["sequence", "fence_generation", "head_hash", "updated_at"],
                 },
@@ -909,14 +958,7 @@ public sealed class P1PostgresInitializerTests
                 AppendOnlyTable("native_acs_policy_change_audit"),
                 AppendOnlyTable("native_acs_policy_outbox"),
                 new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
-                [
-                    new("project_governance_decision_heads_no_delete",
-                        "reject_governance_decision_head_removal()", 11,
-                        "governance decision stream heads cannot be removed", "55000"),
-                    new("project_governance_decision_heads_no_truncate",
-                        "reject_governance_decision_head_removal()", 34,
-                        "governance decision stream heads cannot be removed", "55000"),
-                ]) with
+                    GovernanceDecisionHeadGuards()) with
                 {
                     UpdateColumns = ["sequence", "fence_generation", "head_hash", "updated_at"],
                 },
@@ -946,6 +988,8 @@ public sealed class P1PostgresInitializerTests
                 new("reject_immutable_record_mutation()", false),
                 new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
                 new("require_native_acs_policy_head_advance()", false),
+                new("require_governance_decision_head_initialize()", false),
+                new("require_governance_decision_head_advance()", false),
                 new("reject_governance_decision_head_removal()", false),
                 new("stamp_governance_decision_transaction_id()", false),
             ],

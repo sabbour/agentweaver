@@ -341,6 +341,112 @@
               "sqlState": "55000"
             }
           ]
+        },
+        {
+          "table": "project_governance_decision_stream_heads",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "updateColumns": [
+            "sequence",
+            "fence_generation",
+            "head_hash",
+            "updated_at"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_governance_decision_head_initialize",
+              "function": "require_governance_decision_head_initialize()",
+              "triggerType": 7,
+              "message": "governance decision stream head must start at genesis",
+              "sqlState": "55000",
+              "functionSource": "BEGIN\n          IF NEW.sequence <> 0 OR NEW.fence_generation <> 0\n              OR NEW.head_hash <> repeat('0', 64) THEN\n              RAISE EXCEPTION 'governance decision stream head must start at genesis'\n                  USING ERRCODE = '55000';\n          END IF;\n          RETURN NEW;\n        END;"
+            },
+            {
+              "trigger": "project_governance_decision_head_advance",
+              "function": "require_governance_decision_head_advance()",
+              "triggerType": 19,
+              "message": "governance decision head must advance with its record and outbox",
+              "sqlState": "55000",
+              "functionSource": "BEGIN\n          IF NEW.sequence <> OLD.sequence + 1\n              OR NEW.fence_generation <> OLD.fence_generation + 1\n              OR NEW.head_hash !~ '^[0-9a-f]{64}$'\n              OR NOT EXISTS (\n                  SELECT 1\n                  FROM projects_config.project_governance_decisions AS decision\n                  JOIN projects_config.project_governance_decision_outbox AS outbox\n                    ON outbox.decision_id = decision.decision_id\n                  WHERE decision.scope_type = NEW.scope_type\n                    AND decision.scope_id = NEW.scope_id\n                    AND decision.resource_type = NEW.resource_type\n                    AND decision.resource_id = NEW.resource_id\n                    AND decision.sequence = NEW.sequence\n                    AND decision.previous_hash = OLD.head_hash\n                    AND decision.record_hash = NEW.head_hash\n                    AND decision.write_transaction_id = pg_current_xact_id()::text\n                    AND outbox.sequence = decision.sequence\n                    AND outbox.record_hash = decision.record_hash\n                    AND outbox.write_transaction_id = pg_current_xact_id()::text\n              ) THEN\n              RAISE EXCEPTION 'governance decision head must advance with its record and outbox'\n                  USING ERRCODE = '55000';\n          END IF;\n          RETURN NEW;\n        END;"
+            },
+            {
+              "trigger": "project_governance_decision_heads_no_delete",
+              "function": "reject_governance_decision_head_removal()",
+              "triggerType": 11,
+              "message": "governance decision stream heads cannot be removed",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_governance_decision_heads_no_truncate",
+              "function": "reject_governance_decision_head_removal()",
+              "triggerType": 34,
+              "message": "governance decision stream heads cannot be removed",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
+          "table": "project_governance_decisions",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_governance_decisions_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_governance_decisions_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_governance_decisions_stamp_transaction",
+              "function": "stamp_governance_decision_transaction_id()",
+              "triggerType": 7,
+              "functionSource": "BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END"
+            }
+          ]
+        },
+        {
+          "table": "project_governance_decision_outbox",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_governance_decision_outbox_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_governance_decision_outbox_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_governance_decision_outbox_stamp_transaction",
+              "function": "stamp_governance_decision_transaction_id()",
+              "triggerType": 7,
+              "functionSource": "BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END"
+            }
+          ]
         }
       ],
       "functions": [
@@ -354,6 +460,22 @@
         },
         {
           "signature": "require_native_acs_policy_head_advance()",
+          "execute": false
+        },
+        {
+          "signature": "require_governance_decision_head_initialize()",
+          "execute": false
+        },
+        {
+          "signature": "require_governance_decision_head_advance()",
+          "execute": false
+        },
+        {
+          "signature": "reject_governance_decision_head_removal()",
+          "execute": false
+        },
+        {
+          "signature": "stamp_governance_decision_transaction_id()",
           "execute": false
         },
         {

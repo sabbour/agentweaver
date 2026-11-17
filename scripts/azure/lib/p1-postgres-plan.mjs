@@ -296,6 +296,50 @@ const APPEND_ONLY_GUARDS = {
     ],
     project_governance_decision_stream_heads: [
       {
+        trigger: 'project_governance_decision_head_initialize',
+        function: 'require_governance_decision_head_initialize()', triggerType: 7,
+        message: 'governance decision stream head must start at genesis', sqlState: '55000',
+        functionSource: `BEGIN
+          IF NEW.sequence <> 0 OR NEW.fence_generation <> 0
+              OR NEW.head_hash <> repeat('0', 64) THEN
+              RAISE EXCEPTION 'governance decision stream head must start at genesis'
+                  USING ERRCODE = '55000';
+          END IF;
+          RETURN NEW;
+        END;`,
+      },
+      {
+        trigger: 'project_governance_decision_head_advance',
+        function: 'require_governance_decision_head_advance()', triggerType: 19,
+        message: 'governance decision head must advance with its record and outbox', sqlState: '55000',
+        functionSource: `BEGIN
+          IF NEW.sequence <> OLD.sequence + 1
+              OR NEW.fence_generation <> OLD.fence_generation + 1
+              OR NEW.head_hash !~ '^[0-9a-f]{64}$'
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM projects_config.project_governance_decisions AS decision
+                  JOIN projects_config.project_governance_decision_outbox AS outbox
+                    ON outbox.decision_id = decision.decision_id
+                  WHERE decision.scope_type = NEW.scope_type
+                    AND decision.scope_id = NEW.scope_id
+                    AND decision.resource_type = NEW.resource_type
+                    AND decision.resource_id = NEW.resource_id
+                    AND decision.sequence = NEW.sequence
+                    AND decision.previous_hash = OLD.head_hash
+                    AND decision.record_hash = NEW.head_hash
+                    AND decision.write_transaction_id = pg_current_xact_id()::text
+                    AND outbox.sequence = decision.sequence
+                    AND outbox.record_hash = decision.record_hash
+                    AND outbox.write_transaction_id = pg_current_xact_id()::text
+              ) THEN
+              RAISE EXCEPTION 'governance decision head must advance with its record and outbox'
+                  USING ERRCODE = '55000';
+          END IF;
+          RETURN NEW;
+        END;`,
+      },
+      {
         trigger: 'project_governance_decision_heads_no_delete',
         function: 'reject_governance_decision_head_removal()', triggerType: 11,
         message: 'governance decision stream heads cannot be removed', sqlState: '55000',
