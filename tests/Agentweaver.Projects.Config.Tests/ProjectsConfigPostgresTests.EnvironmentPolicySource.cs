@@ -87,6 +87,12 @@ public sealed partial class ProjectsConfigPostgresTests
                 $"GRANT SELECT, INSERT, UPDATE ON environment.p1_creation_links TO \"{runtimeRole}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON environment.platform_policy_apply_reservations TO \"{runtimeRole}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON environment.sandbox_owner_mappings TO \"{runtimeRole}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON environment.sandbox_egress_flows_attributed TO \"{runtimeRole}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON environment.sandbox_egress_flows_unattributed TO \"{runtimeRole}\"");
 
             var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
             {

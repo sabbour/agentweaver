@@ -1944,6 +1944,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             services.AddRouting();
                             services.AddSingleton(dataSource);
                             services.AddSingleton(TimeProvider.System);
+                            services.AddScoped<IEnvironmentEgressAuditStore, EnvironmentEgressAuditStore>();
                             services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
                             services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
                             services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
