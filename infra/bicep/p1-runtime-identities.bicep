@@ -36,7 +36,9 @@ var services = [for name in serviceNames: {
   namespace: namespace
   serviceAccountName: name
 }]
+var environmentIndex = indexOf(serviceNames, 'environment')
 var eventsAndSessionsIndex = indexOf(serviceNames, 'events-and-sessions')
+var logAnalyticsReaderRoleId = '73c42c96-874c-492b-b04d-ab87d138a893'
 
 resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = [
   for service in services: {
@@ -49,6 +51,10 @@ resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31
   }
 ]
 
+resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: '${namePrefix}-law'
+}
+
 module federatedCredentials 'modules/workload-identity-federation.bicep' = {
   name: '${namePrefix}-p1-runtime-federation'
   params: {
@@ -59,6 +65,16 @@ module federatedCredentials 'modules/workload-identity-federation.bicep' = {
   dependsOn: [
     identities
   ]
+}
+
+resource environmentLogAnalyticsReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(workspace.id, identities[environmentIndex].id, logAnalyticsReaderRoleId)
+  scope: workspace
+  properties: {
+    principalId: identities[environmentIndex].properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', logAnalyticsReaderRoleId)
+  }
 }
 
 // Events stores typed session material in this container and needs no account-wide Blob role.
@@ -86,3 +102,4 @@ output runtimeIdentities array = [for (service, i) in services: {
 
 output oidcIssuerUrl string = aks.properties.oidcIssuerProfile.issuerURL
 output eventsSessionMaterialBlobRoleAssignmentId string = eventsSessionMaterialBlobRole.outputs.roleAssignmentId
+output environmentLogAnalyticsReaderRoleAssignmentId string = environmentLogAnalyticsReaderRole.id

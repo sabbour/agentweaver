@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,7 @@ import test from 'node:test';
 import { parse, stringify } from 'yaml';
 import {
   assertTargetContext,
+  deleteContainerNetworkLog,
   deployKustomize,
   ENVIRONMENT_RBAC_REQUIREMENTS,
   ensureAgentHostPlatformEgressSeed,
@@ -406,6 +408,7 @@ function fakeExec(calls, {
     numberReady: 3, numberAvailable: 3, updatedNumberScheduled: 3 } },
   amaLogsPods, denyKubeSystemPodList = false,
   smokePod = { status: { phase: 'Succeeded' } }, smokeLogs = 'SMOKE_OK\n', smokeCreateError,
+  networkLogApiAvailable = false, networkLogResource, networkLogRace,
   liveProviderSetup,
   activateProviderDuringMigration,
   selectedAgentHostImage = selectedAgentHostRegistry,
@@ -414,11 +417,30 @@ function fakeExec(calls, {
   const live = state ?? { runtimeConfig: structuredClone(liveRuntimeConfig), deployments: {} };
   live.configMaps ??= {};
   live.migrationResources ??= {};
+  if (networkLogResource !== undefined) live.networkLogResource = structuredClone(networkLogResource);
   const withIdentity = resource => {
     const value = structuredClone(resource);
     value.metadata.uid ??= `uid-${value.metadata.name}`;
     value.metadata.resourceVersion ??= '1';
     return value;
+  };
+  if (live.networkLogResource) live.networkLogResource = withIdentity(live.networkLogResource);
+  let pendingNetworkLogRace = networkLogRace;
+  const raceNetworkLogWrite = operation => {
+    if (pendingNetworkLogRace !== operation) return;
+    pendingNetworkLogRace = undefined;
+    if (operation === 'create') {
+      live.networkLogResource = withIdentity({
+        apiVersion: 'acn.azure.com/v1alpha1',
+        kind: 'ContainerNetworkLog',
+        metadata: { name: 'agentweaver-agenthost-egress', labels: { 'agentweaver.dev/managed-by': 'third-party' } },
+        spec: {},
+      });
+    } else {
+      live.networkLogResource.metadata.labels['agentweaver.dev/managed-by'] = 'third-party';
+      live.networkLogResource.metadata.resourceVersion =
+        String(Number(live.networkLogResource.metadata.resourceVersion) + 1);
+    }
   };
   for (const resource of brokerMigrationLiveResources) {
     const value = withIdentity(resource);
@@ -558,6 +580,9 @@ function fakeExec(calls, {
     }
     if (command !== 'kubectl') return { status: 1, stdout: '', stderr: `unexpected command ${command}` };
     if (args[0] === 'config') return { status: 0, stdout: `${selectedContextServer}\n`, stderr: '' };
+    if (args[0] === 'api-resources' && args.includes('--api-group=acn.azure.com')) {
+      return { status: 0, stdout: networkLogApiAvailable ? 'containernetworklogs.acn.azure.com\n' : '', stderr: '' };
+    }
     if (args[0] === 'auth') {
       if (args.some(arg => arg === '--resource-name' || arg.startsWith('--resource-name='))) {
         return { status: 1, stdout: '', stderr: 'error: unknown flag: --resource-name' };
@@ -584,6 +609,14 @@ function fakeExec(calls, {
       return {
         status: 0,
         stdout: live.platformEgressPolicy ? JSON.stringify(live.platformEgressPolicy) : '',
+        stderr: '',
+      };
+    }
+    if (args[0] === 'get' && args[1] === 'containernetworklogs.acn.azure.com' &&
+        args[2] === 'agentweaver-agenthost-egress') {
+      return {
+        status: 0,
+        stdout: live.networkLogResource ? JSON.stringify(live.networkLogResource) : '',
         stderr: '',
       };
     }
@@ -729,6 +762,17 @@ function fakeExec(calls, {
     }
     if (args[0] === 'create') {
       const resource = parse(options.input);
+      if (resource.kind === 'ContainerNetworkLog') {
+        raceNetworkLogWrite('create');
+        if (live.networkLogResource) {
+          return {
+            status: 1, stdout: '',
+            stderr: 'Error from server (AlreadyExists): containernetworklog "agentweaver-agenthost-egress" already exists',
+          };
+        }
+        live.networkLogResource = withIdentity(resource);
+        return { status: 0, stdout: 'containernetworklog created\n', stderr: '' };
+      }
       if (args.includes('--dry-run=server')) {
         if (raceBrokerMigrationCreate(
           resource, brokerMigrationDryRunRace, brokerMigrationDryRunRaceConflict,
@@ -795,6 +839,21 @@ function fakeExec(calls, {
       }
       delete live.configMaps[name];
       return { status: 0, stdout: 'configmap deleted\n', stderr: '' };
+    }
+    if (args[0] === 'delete' && args[1] === 'containernetworklogs.acn.azure.com' &&
+        args[2] === 'agentweaver-agenthost-egress') {
+      raceNetworkLogWrite('delete');
+      const preconditionArg = args.find(arg => arg.startsWith('--preconditions='));
+      if (preconditionArg) {
+        const preconditions = Object.fromEntries(preconditionArg.slice('--preconditions='.length)
+          .split(',').map(value => value.split('=')));
+        if (preconditions.uid !== live.networkLogResource?.metadata.uid ||
+            preconditions.resourceVersion !== live.networkLogResource?.metadata.resourceVersion) {
+          return { status: 1, stdout: '', stderr: 'Conflict: UID or resourceVersion precondition failed' };
+        }
+      }
+      live.networkLogResource = undefined;
+      return { status: 0, stdout: 'containernetworklog deleted\n', stderr: '' };
     }
     if (args[0] === 'delete' && args[1] === 'configmap') {
       live.runtimeConfig = undefined;
@@ -865,12 +924,40 @@ function fakeExec(calls, {
       deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1);
       return { status: 0, stdout: 'deployment patched\n', stderr: '' };
     }
+    if (args[0] === 'patch' && args[1] === 'containernetworklogs.acn.azure.com' &&
+        args[2] === 'agentweaver-agenthost-egress') {
+      raceNetworkLogWrite('update');
+      const patch = JSON.parse(args[args.indexOf('--patch') + 1]);
+      for (const operation of patch.filter(value => value.op === 'test')) {
+        const actual = operation.path === '/metadata/uid'
+          ? live.networkLogResource?.metadata.uid
+          : operation.path === '/metadata/resourceVersion'
+            ? live.networkLogResource?.metadata.resourceVersion
+            : operation.path === '/metadata/labels/agentweaver.dev~1managed-by'
+              ? live.networkLogResource?.metadata.labels?.['agentweaver.dev/managed-by']
+              : undefined;
+        if (actual !== operation.value) {
+          return { status: 1, stdout: '', stderr: 'Conflict: collector ownership or resourceVersion changed' };
+        }
+      }
+      const spec = patch.find(value => value.op === 'replace' && value.path === '/spec');
+      live.networkLogResource.spec = structuredClone(spec.value);
+      live.networkLogResource.metadata.resourceVersion =
+        String(Number(live.networkLogResource.metadata.resourceVersion) + 1);
+      return { status: 0, stdout: 'containernetworklog patched\n', stderr: '' };
+    }
     if (args[0] === 'apply') {
       if (failedApplies > 0) {
         failedApplies -= 1;
         return { status: 1, stdout: '', stderr: 'simulated workload apply failure' };
       }
-      const resources = parse(options.input).items;
+      const applied = parse(options.input);
+      if (applied.kind === 'ContainerNetworkLog') {
+        raceNetworkLogWrite('update');
+        live.networkLogResource = withIdentity(applied);
+        return { status: 0, stdout: 'containernetworklog applied\n', stderr: '' };
+      }
+      const resources = applied.items;
       for (const resource of resources) {
         if (resource.kind === 'ConfigMap') {
           const name = resource.metadata.name;
@@ -2274,6 +2361,19 @@ test('image manifest arguments select exactly one input and require execution', 
     '--image-tag', selectedTag, '--model-bindings', 'bindings.json',
     '--remove-model-binding', 'a', '--remove-model-binding', 'b', '--execute',
   ]), { imageTag: selectedTag, modelBindings: 'bindings.json', removeModelBindings: ['a', 'b'] });
+  assert.deepEqual(parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--agenthost-egress-audit', 'denied', '--execute',
+  ]), { imageTag: selectedTag, agentHostEgressAudit: 'denied' });
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--agenthost-egress-audit', 'all', '--execute',
+  ]), /must be off, allowed, or denied/);
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--agenthost-egress-audit', '--execute',
+  ]), /must be off, allowed, or denied/);
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--agenthost-egress-audit', 'off',
+    '--agenthost-egress-audit', 'allowed', '--execute',
+  ]), /may be specified only once/);
   assert.throws(() => parseDeployKustomizeArgs([
     '--image-tag', selectedTag, '--model-bindings', '--execute',
   ]), /--model-bindings requires a file path/);
@@ -3276,6 +3376,13 @@ test('deploy continues without ama-logs only when every node is in a canary regi
       });
       assert.match(lines.join('\n'), /ama-logs is missing and every node is in a canary \(EUAP\) region.*not collected/);
       assert.ok(calls.some(call => call.args[0] === 'auth' && call.args[2] === 'list' && call.args[3] === 'nodes'));
+      const auditCalls = [];
+      await assert.rejects(deployKustomize({ imageTag: selectedTag, agentHostEgressAudit: 'allowed' }, {
+        root: directory, exec: fakeExec(auditCalls, {
+          amaLogs: null, clusterNodes: [canaryNode(region), canaryNode(region)], networkLogApiAvailable: true,
+        }), log() {},
+      }), /AgentHost egress audit requires DaemonSet\/ama-logs/);
+      assert.deepEqual(kubernetesWriteCalls(auditCalls), []);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -3306,6 +3413,12 @@ test('deploy skips unready ama-logs pods only on sandbox nodes', async () => {
       call.args.includes('kube-system'));
     assert.equal(podList.args[podList.args.indexOf('--selector') + 1], 'component=ama-logs-agent,tier=node');
 
+    const auditCalls = [];
+    await assert.rejects(deployKustomize({ imageTag: selectedTag, agentHostEgressAudit: 'allowed' }, {
+      root: directory, exec: fakeExec(auditCalls, { ...base, networkLogApiAvailable: true }), log() {},
+    }), /AgentHost egress audit requires DaemonSet\/ama-logs to be ready on sandbox nodes/);
+    assert.deepEqual(kubernetesWriteCalls(auditCalls), []);
+
     const failures = [
       { amaLogsPods: [pod('system-0', false), pod('user-0', true), pod('kata-0', false)] },
       { amaLogsPods: [pod('system-0', true), pod('kata-0', false)] },
@@ -3325,6 +3438,46 @@ test('deploy skips unready ama-logs pods only on sandbox nodes', async () => {
       root: directory, exec: fakeExec(deniedCalls, { ...base, denyKubeSystemPodList: true }), log() {},
     }), /ama-logs is not ready \(2\/3 ready\)\. The selected identity cannot list pods in namespace kube-system/);
     assert.deepEqual(kubernetesWriteCalls(deniedCalls), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('AgentHost egress audit requires a ready ama-logs pod on every sandbox node', async () => {
+  const directory = scratch();
+  const ready = [{ type: 'Ready', status: 'True' }];
+  const node = name => ({ metadata: { name }, spec: {}, status: { conditions: ready } });
+  const pod = nodeName => ({
+    metadata: { ownerReferences: [{ uid: 'ama-uid' }] },
+    spec: { nodeName },
+    status: { conditions: ready },
+  });
+  const calls = [];
+  try {
+    await assert.rejects(deployKustomize({
+      imageTag: selectedTag,
+      agentHostEgressAudit: 'allowed',
+    }, {
+      root: directory,
+      exec: fakeExec(calls, {
+        kataNodes: [node('kata-0'), node('kata-1')],
+        amaLogs: {
+          metadata: { generation: 1, uid: 'ama-uid' },
+          spec: { selector: { matchLabels: { component: 'ama-logs-agent', tier: 'node' } } },
+          status: {
+            observedGeneration: 1,
+            desiredNumberScheduled: 3,
+            numberReady: 3,
+            numberAvailable: 3,
+            updatedNumberScheduled: 3,
+          },
+        },
+        amaLogsPods: [pod('system-0'), pod('user-0'), pod('kata-0')],
+        networkLogApiAvailable: true,
+      }),
+      log() {},
+    }), /ready, DaemonSet-owned ama-logs pod on every sandbox node.*kata-1/);
+    assert.deepEqual(kubernetesWriteCalls(calls), []);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -3403,6 +3556,9 @@ test('install smoke check runs an AgentHost-labelled sandbox pod and always clea
     assert.match(container.command[2], /getent hosts environment\.agentweaver\.svc\.cluster\.local/);
     assert.match(container.command[2], /\/dev\/tcp\/environment\.agentweaver\.svc\.cluster\.local\/8443/);
     assert.deepEqual(container.command.slice(3), ['smoke']);
+    assert.doesNotMatch(container.command[2], /SMOKE_EGRESS_PROBE|192\.0\.2\.1/);
+    assert.equal(calls.some(call => call.args[0] === 'apply' &&
+      parse(call.options.input).kind === 'ContainerNetworkLog'), false);
     const staleCleanup = calls.findIndex(call => call.args[0] === 'delete' &&
       call.args.includes('agentweaver.io/install-smoke-check=true'));
     assert.ok(staleCleanup > lastRollout && staleCleanup < smokeCreate);
@@ -3412,6 +3568,185 @@ test('install smoke check runs an AgentHost-labelled sandbox pod and always clea
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('AgentHost egress audit selects flows, owns collector cleanup, and tags the denied smoke probe', async () => {
+  const directory = scratch();
+  const ready = [{ type: 'Ready', status: 'True' }];
+  const pod = nodeName => ({
+    metadata: { ownerReferences: [{ uid: 'ama-uid' }] },
+    spec: { nodeName },
+    status: { conditions: ready },
+  });
+  const auditReadiness = {
+    kataNodes: [{ metadata: { name: 'kata-0' }, spec: {}, status: { conditions: ready } }],
+    amaLogs: {
+      metadata: { generation: 1, uid: 'ama-uid' },
+      spec: { selector: { matchLabels: { component: 'ama-logs-agent', tier: 'node' } } },
+      status: {
+        observedGeneration: 1,
+        desiredNumberScheduled: 3,
+        numberReady: 3,
+        numberAvailable: 3,
+        updatedNumberScheduled: 3,
+      },
+    },
+    amaLogsPods: [pod('system-0'), pod('user-0'), pod('kata-0')],
+  };
+  const ownedCollector = {
+    apiVersion: 'acn.azure.com/v1alpha1',
+    kind: 'ContainerNetworkLog',
+    metadata: {
+      name: 'agentweaver-agenthost-egress',
+      labels: { 'agentweaver.dev/managed-by': 'agentweaver' },
+    },
+  };
+  const run = async (mode, options = {}) => {
+    const calls = [];
+    const exec = fakeExec(calls, {
+      networkLogApiAvailable: true,
+      ...(mode === 'off' ? {} : auditReadiness),
+      ...options,
+    });
+    await deployKustomize({ imageTag: selectedTag, agentHostEgressAudit: mode }, {
+      root: directory, exec, log() {},
+      deleteCollector: async ({ context, root, uid, resourceVersion }) => {
+        const result = exec('kubectl', ['delete', 'containernetworklogs.acn.azure.com',
+          'agentweaver-agenthost-egress', `--preconditions=uid=${uid},resourceVersion=${resourceVersion}`,
+          '--context', context], { check: false, cwd: root });
+        if (result.status !== 0) throw new Error(result.stderr);
+      },
+    });
+    return calls;
+  };
+  try {
+    const allowedCalls = await run('allowed');
+    const allowed = allowedCalls.find(call => call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'ContainerNetworkLog');
+    const allowedCollector = parse(allowed.options.input);
+    assert.equal(allowedCollector.metadata.name, 'agentweaver-agenthost-egress');
+    assert.equal(allowedCollector.metadata.namespace, undefined);
+    assert.deepEqual(allowedCollector.spec.includefilters[0].from.namespacedPod, ['agentweaver/']);
+    assert.deepEqual(allowedCollector.spec.includefilters[0].from.labelSelector.matchLabels,
+      { 'agentweaver.io/workload': 'agenthost' });
+    assert.deepEqual(allowedCollector.spec.includefilters[0].verdict, ['dropped', 'forwarded']);
+    assert.deepEqual(allowedCollector.spec.aggregation.additionalFields,
+      ['source.labels', 'IP.destination', 'destination_names']);
+    const smokeCall = allowedCalls.find(call => call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'List');
+    const smokePod = parse(smokeCall.options.input).items.find(item => item.kind === 'Pod');
+    const ownerLabel = smokePod.metadata.labels['agentweaver.dev/sandbox-owner'];
+    assert.match(ownerLabel, /^[0-9a-f]{40}$/);
+    assert.match(smokePod.spec.containers[0].command[2], new RegExp(
+      `SMOKE_EGRESS_PROBE ${ownerLabel} 192\\.0\\.2\\.1:443`));
+    assert.match(smokePod.spec.containers[0].command[2], /fail egress-deny/);
+
+    const deniedCalls = await run('denied');
+    const denied = deniedCalls.find(call => call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'ContainerNetworkLog');
+    assert.deepEqual(parse(denied.options.input).spec.includefilters[0].verdict, ['dropped']);
+
+    const reconciledCalls = await run('denied', { networkLogResource: ownedCollector });
+    const reconciled = reconciledCalls.find(call => call.args[0] === 'patch' &&
+      call.args[1] === 'containernetworklogs.acn.azure.com');
+    const patch = JSON.parse(reconciled.args[reconciled.args.indexOf('--patch') + 1]);
+    assert.deepEqual(patch.slice(0, 3), [
+      { op: 'test', path: '/metadata/uid', value: 'uid-agentweaver-agenthost-egress' },
+      { op: 'test', path: '/metadata/resourceVersion', value: '1' },
+      { op: 'test', path: '/metadata/labels/agentweaver.dev~1managed-by', value: 'agentweaver' },
+    ]);
+    assert.deepEqual(patch.find(operation => operation.path === '/spec').value.includefilters[0].verdict,
+      ['dropped']);
+
+    const absentCalls = await run('off');
+    assert.equal(absentCalls.some(call => call.args[0] === 'delete' &&
+      call.args[1] === 'containernetworklogs.acn.azure.com'), false);
+
+    const offCalls = await run('off', { networkLogResource: ownedCollector });
+    assert.ok(offCalls.some(call => call.args[0] === 'delete' &&
+      call.args[1] === 'containernetworklogs.acn.azure.com' &&
+      call.args[2] === 'agentweaver-agenthost-egress'));
+
+    const unownedOffCalls = await run('off', { networkLogResource: {
+      ...ownedCollector, metadata: { name: ownedCollector.metadata.name, labels: {} },
+    } });
+    assert.equal(unownedOffCalls.some(call => call.args[0] === 'delete' &&
+      call.args[1] === 'containernetworklogs.acn.azure.com'), false);
+
+    for (const race of ['create', 'update', 'delete']) {
+      const calls = [];
+      const state = { runtimeConfig: structuredClone(runtimeConfig), deployments: {} };
+      const initial = race === 'create' ? undefined : ownedCollector;
+      const exec = fakeExec(calls, {
+        ...auditReadiness, networkLogApiAvailable: true, networkLogResource: initial, networkLogRace: race, state,
+      });
+      await assert.rejects(deployKustomize({
+        imageTag: selectedTag, agentHostEgressAudit: race === 'delete' ? 'off' : 'allowed',
+      }, {
+        root: directory,
+        exec,
+        deleteCollector: async ({ context, root, uid, resourceVersion }) => {
+          const result = exec('kubectl', ['delete', 'containernetworklogs.acn.azure.com',
+            'agentweaver-agenthost-egress', `--preconditions=uid=${uid},resourceVersion=${resourceVersion}`,
+            '--context', context], { check: false, cwd: root });
+          if (result.status !== 0) throw new Error(result.stderr);
+        },
+        log() {},
+      }), /already exists|ownership or resourceVersion changed|precondition failed/);
+      assert.equal(state.networkLogResource?.metadata.labels['agentweaver.dev/managed-by'], 'third-party');
+    }
+
+    const conflictCalls = [];
+    await assert.rejects(deployKustomize({ imageTag: selectedTag, agentHostEgressAudit: 'allowed' }, {
+      root: directory,
+      exec: fakeExec(conflictCalls, {
+        ...auditReadiness,
+        networkLogApiAvailable: true,
+        networkLogResource: { ...ownedCollector, metadata: { name: ownedCollector.metadata.name, labels: {} } },
+      }),
+      log() {},
+    }), /is not managed by Agentweaver/);
+    assert.deepEqual(kubernetesWriteCalls(conflictCalls), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('collector deletion sends UID and resourceVersion preconditions through kubectl proxy', async () => {
+  const requests = [];
+  let command;
+  const proxy = new EventEmitter();
+  proxy.exitCode = null;
+  proxy.signalCode = null;
+  proxy.kill = () => {
+    proxy.signalCode = 'SIGTERM';
+    queueMicrotask(() => proxy.emit('close'));
+    return true;
+  };
+  await deleteContainerNetworkLog({
+    context: 'selected-context', root: 'repo', uid: 'collector-uid', resourceVersion: '17',
+  }, {
+    availableLoopbackPort: async () => 32123,
+    spawn(...args) {
+      command = args;
+      return proxy;
+    },
+    async fetch(url, options = {}) {
+      requests.push({ url, options });
+      return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) };
+    },
+  });
+  assert.deepEqual(command, ['kubectl', [
+    'proxy', '--port=32123', '--address=127.0.0.1', '--context', 'selected-context',
+  ], { cwd: 'repo', stdio: 'ignore', windowsHide: true }]);
+  assert.equal(requests[0].url, 'http://127.0.0.1:32123/version');
+  assert.equal(requests[1].url,
+    'http://127.0.0.1:32123/apis/acn.azure.com/v1alpha1/containernetworklogs/agentweaver-agenthost-egress');
+  assert.equal(requests[1].options.method, 'DELETE');
+  assert.deepEqual(JSON.parse(requests[1].options.body), {
+    preconditions: { uid: 'collector-uid', resourceVersion: '17' },
+  });
+  assert.equal(proxy.signalCode, 'SIGTERM');
 });
 
 test('install smoke check failures name the cause and clean up', async () => {

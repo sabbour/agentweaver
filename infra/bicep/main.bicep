@@ -85,6 +85,9 @@ param nodePoolVmSize string = 'Standard_D2s_v5'
 @description('VM size of the kata node pool: a Generation 2 size with nested virtualization.')
 param kataVmSize string = 'Standard_D4s_v5'
 
+@description('Enable ACNS observability for AgentHost egress audit collection.')
+param enableContainerNetworkLogs bool = false
+
 @description('Optional new AKS managed resource group name.')
 param nodeResourceGroup string = ''
 
@@ -118,6 +121,7 @@ module aks 'modules/aks.bicep' = {
     nodePoolMinCount: nodePoolMinCount
     nodePoolMaxCount: nodePoolMaxCount
     nodePoolVmSize: nodePoolVmSize
+    enableContainerNetworkLogs: enableContainerNetworkLogs
     nodeResourceGroup: nodeResourceGroup
   }
 }

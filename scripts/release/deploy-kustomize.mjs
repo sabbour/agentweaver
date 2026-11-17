@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -124,6 +126,9 @@ Model options:
   --model-bindings <file.json>         Add the environment BYOK model bindings in this file.
   --remove-model-binding <reference>   Remove this live BYOK model binding. You can repeat it.
 
+Audit option:
+  --agenthost-egress-audit <mode>      off, allowed, or denied. Default off.
+
 Target option:
   --resource-group <name>              Registered install target. Default agentweaver. The selected
                                        kubectl context must point at the API server of that target.
@@ -138,6 +143,7 @@ sandbox smoke check.
 export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
 export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
 export const DEPLOY_KUSTOMIZE_TARGET_OPTION = true;
+export const DEPLOY_KUSTOMIZE_AUDIT_OPTION = true;
 
 function fail(message) {
   throw new Error(`Kustomize deployment: ${message}`);
@@ -151,6 +157,8 @@ export function parseDeployKustomizeArgs(argv) {
   let execute = false;
   let modelBindings;
   let resourceGroup;
+  let agentHostEgressAudit = 'off';
+  let hasAgentHostEgressAudit = false;
   const removeModelBindings = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -159,6 +167,14 @@ export function parseDeployKustomizeArgs(argv) {
       if (resourceGroup !== undefined) fail('--resource-group may be specified only once.');
       resourceGroup = argv[++index];
       if (!installTarget(resourceGroup)) fail('--resource-group must name a registered install target.');
+    }
+    else if (arg === '--agenthost-egress-audit') {
+      if (hasAgentHostEgressAudit) fail('--agenthost-egress-audit may be specified only once.');
+      hasAgentHostEgressAudit = true;
+      agentHostEgressAudit = argv[++index];
+      if (!['off', 'allowed', 'denied'].includes(agentHostEgressAudit)) {
+        fail('--agenthost-egress-audit must be off, allowed, or denied.');
+      }
     }
     else if (arg === '--model-bindings') {
       if (modelBindings !== undefined) fail('--model-bindings may be specified only once.');
@@ -201,6 +217,7 @@ export function parseDeployKustomizeArgs(argv) {
     ...(modelBindings === undefined ? {} : { modelBindings }),
     ...(removeModelBindings.length ? { removeModelBindings } : {}),
     ...(resourceGroup === undefined || resourceGroup === 'agentweaver' ? {} : { resourceGroup }),
+    ...(hasAgentHostEgressAudit ? { agentHostEgressAudit } : {}),
   };
   return imageManifest === undefined
     ? { imageTag, ...options }
@@ -302,6 +319,11 @@ const WORKSPACE_MOUNT_OPTIONS = [
 const WORKSPACE_STORAGE_CLASS_FILE = path.join('deploy', 'k8s', 'cluster', 'workspace-storageclass.yaml');
 const KATA_POOL_REMEDY = 'Run the infrastructure deployment (npm run azure:deploy) to create the kata node pool.';
 const SMOKE_LABEL = 'agentweaver.io/install-smoke-check';
+const EGRESS_AUDIT_LABEL = 'agentweaver.dev/managed-by';
+const EGRESS_AUDIT_OWNER = 'agentweaver';
+const EGRESS_AUDIT_COLLECTOR = 'agentweaver-agenthost-egress';
+const EGRESS_AUDIT_API_RESOURCE = 'containernetworklogs.acn.azure.com';
+const SMOKE_OWNER_LABEL = '0'.repeat(40);
 const SMOKE_AUTHORIZATION = [
   ...['create', 'get', 'list', 'delete'].flatMap(verb => [[verb, 'pods'], [verb, 'persistentvolumeclaims']]),
   ['get', 'pods/log'],
@@ -332,7 +354,7 @@ function readClusterResourceAsEnvironment(exec, context, root, kind, name) {
  * schedulable node is required.
  * Returns the product StorageClass to create when it is missing.
  */
-function verifyClusterPrerequisites(exec, context, root, resources, log) {
+function verifyClusterPrerequisites(exec, context, root, resources, auditMode, log) {
   const data = resources.find(resource => resource.kind === 'ConfigMap' &&
     resource.metadata?.name === ENVIRONMENT_RUNTIME_CONFIG)?.data ?? {};
   const storageClassName = data.Environment__Storage__AzureFiles__StorageClassName;
@@ -396,7 +418,7 @@ function verifyClusterPrerequisites(exec, context, root, resources, log) {
     }
     sandboxNodeNames = new Set(nodes.map(node => node.metadata?.name).filter(Boolean));
   }
-  verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames);
+  verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames, auditMode);
   return { storageClassName, runtimeClassName, createStorageClass };
 }
 
@@ -409,7 +431,7 @@ const REGION_LABEL = 'topology.kubernetes.io/region';
  * all have region labels matching `^[a-z0-9]+euap$` (case-insensitive), or it is settled with the desired
  * number of owned pods and at least one unready pod, all on sandbox nodes. The sandbox-node exception logs a warning.
  */
-function verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames) {
+function verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames, auditMode) {
   const permission = exec('kubectl', ['auth', 'can-i', 'get', 'daemonsets.apps/ama-logs',
     '--namespace', 'kube-system', '--context', context], { check: false, cwd: root });
   if (permission.status !== 0 || permission.stdout.trim().toLowerCase() !== 'yes') {
@@ -421,6 +443,9 @@ function verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames) {
   'Could not read DaemonSet/ama-logs').stdout;
   if (!output.trim()) {
     if (canaryRegionCluster(exec, context, root)) {
+      if (auditMode !== 'off') {
+        fail('AgentHost egress audit requires DaemonSet/ama-logs, but it is missing on this canary-region cluster.');
+      }
       log('Warning: DaemonSet/ama-logs is missing and every node is in a canary (EUAP) region. The AKS Azure Monitor ' +
         'add-on is not available in this layout; Container Insights, ContainerNetworkLogs, and egress audit data ' +
         'are not collected.');
@@ -439,10 +464,26 @@ function verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames) {
   const notReady = `DaemonSet/ama-logs is not ready (${status.numberReady ?? 0}/${desired} ready).`;
   const settled = desired >= 1 && status.updatedNumberScheduled === desired &&
     (status.observedGeneration ?? 0) >= (daemonSet.metadata?.generation ?? 1);
-  if (settled && status.numberReady === desired && status.numberAvailable === desired) return;
+  if (settled && status.numberReady === desired && status.numberAvailable === desired) {
+    if (auditMode !== 'off') {
+      if (!sandboxNodeNames.size) {
+        fail('AgentHost egress audit requires sandbox nodes selected by the RuntimeClass.');
+      }
+      const missing = sandboxNodesWithoutReadyAmaLogs(exec, context, root, daemonSet, sandboxNodeNames);
+      if (missing.length) {
+        fail('AgentHost egress audit requires a ready, DaemonSet-owned ama-logs pod on every sandbox node; ' +
+          `missing or unready on: ${missing.join(', ')}. ${AZURE_MONITOR_REMEDY}`);
+      }
+    }
+    return;
+  }
   if (!settled || !sandboxNodeNames.size) fail(`${notReady} ${AZURE_MONITOR_REMEDY}`);
   const skipped = sandboxOnlyUnreadyNodes(exec, context, root, daemonSet, sandboxNodeNames, notReady);
   if (!skipped) fail(`${notReady} ${AZURE_MONITOR_REMEDY}`);
+  if (auditMode !== 'off') {
+    fail(`${notReady} AgentHost egress audit requires DaemonSet/ama-logs to be ready on sandbox nodes. ` +
+      AZURE_MONITOR_REMEDY);
+  }
   log(`Warning: DaemonSet/ama-logs is not ready on sandbox node(s) ${skipped.join(', ')}. The agent is ready on ` +
     'every other node. This is a known AKS add-on failure on Kata VM isolation nodes. Container Insights, ' +
     'ContainerNetworkLogs, and egress audit data from these nodes are not collected.');
@@ -453,11 +494,30 @@ function verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames) {
  * pods on sandbox nodes are unready. Returns undefined in every other case.
  */
 function sandboxOnlyUnreadyNodes(exec, context, root, daemonSet, sandboxNodeNames, notReady) {
+  const owned = listOwnedAmaLogsPods(exec, context, root, daemonSet, notReady);
+  if (!owned || owned.length !== daemonSet.status.desiredNumberScheduled) return undefined;
+  const unready = owned.filter(pod => !pod.status?.conditions?.some(condition =>
+    condition.type === 'Ready' && condition.status === 'True'));
+  if (!unready.length || unready.some(pod => !sandboxNodeNames.has(pod.spec?.nodeName))) return undefined;
+  return [...new Set(unready.map(pod => pod.spec.nodeName))].sort();
+}
+
+function sandboxNodesWithoutReadyAmaLogs(exec, context, root, daemonSet, sandboxNodeNames) {
+  const owned = listOwnedAmaLogsPods(exec, context, root, daemonSet, 'AgentHost egress audit readiness check failed.');
+  const readyNodes = new Set((owned ?? [])
+    .filter(pod => pod.status?.conditions?.some(condition =>
+      condition.type === 'Ready' && condition.status === 'True'))
+    .map(pod => pod.spec?.nodeName)
+    .filter(Boolean));
+  return [...sandboxNodeNames].filter(nodeName => !readyNodes.has(nodeName)).sort();
+}
+
+function listOwnedAmaLogsPods(exec, context, root, daemonSet, notReady) {
   const permission = exec('kubectl', ['auth', 'can-i', 'list', 'pods', '--namespace', 'kube-system',
     '--context', context], { check: false, cwd: root });
   if (permission.status !== 0 || permission.stdout.trim().toLowerCase() !== 'yes') {
     fail(`${notReady} The selected identity cannot list pods in namespace kube-system; this permission is ` +
-      'required to check whether the agent is unready only on sandbox nodes.');
+      'required to check ama-logs pod readiness on sandbox nodes.');
   }
   const labels = Object.entries(daemonSet.spec?.selector?.matchLabels ?? {})
     .map(([key, value]) => `${key}=${value}`).join(',');
@@ -471,12 +531,7 @@ function sandboxOnlyUnreadyNodes(exec, context, root, daemonSet, sandboxNodeName
     fail('Kubernetes returned invalid JSON for the ama-logs pod list.');
   }
   if (!Array.isArray(pods)) return undefined;
-  const owned = pods.filter(pod => pod.metadata?.ownerReferences?.some(owner => owner.uid === daemonSet.metadata.uid));
-  if (owned.length !== daemonSet.status.desiredNumberScheduled) return undefined;
-  const unready = owned.filter(pod => !pod.status?.conditions?.some(condition =>
-    condition.type === 'Ready' && condition.status === 'True'));
-  if (!unready.length || unready.some(pod => !sandboxNodeNames.has(pod.spec?.nodeName))) return undefined;
-  return [...new Set(unready.map(pod => pod.spec.nodeName))].sort();
+  return pods.filter(pod => pod.metadata?.ownerReferences?.some(owner => owner.uid === daemonSet.metadata.uid));
 }
 
 /** True only when the unfiltered node list is not empty and every node has a canary-region label. */
@@ -503,6 +558,159 @@ function requireClusterPermission(exec, context, root, verb, resource, purpose) 
   }
 }
 
+async function availableLoopbackPort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = server.address().port;
+  await new Promise(resolve => server.close(resolve));
+  return port;
+}
+
+export async function deleteContainerNetworkLog({ context, root, uid, resourceVersion }, overrides = {}) {
+  const port = await (overrides.availableLoopbackPort ?? availableLoopbackPort)();
+  const proxy = (overrides.spawn ?? spawn)('kubectl',
+    ['proxy', `--port=${port}`, '--address=127.0.0.1', '--context', context], {
+    cwd: root, stdio: 'ignore', windowsHide: true,
+  });
+  const request = overrides.fetch ?? fetch;
+  let spawnError;
+  proxy.once('error', error => { spawnError = error; });
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const apiPath = `/apis/acn.azure.com/v1alpha1/containernetworklogs/${EGRESS_AUDIT_COLLECTOR}`;
+
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (spawnError) throw new Error(`Could not start kubectl proxy: ${spawnError.message}`);
+      if (proxy.exitCode !== null) throw new Error('kubectl proxy stopped before it became ready.');
+      try {
+        const response = await request(`${baseUrl}/version`, { signal: AbortSignal.timeout(250) });
+        await response.arrayBuffer();
+        if (response.ok) {
+          ready = true;
+          break;
+        }
+      } catch {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    if (!ready) throw new Error('kubectl proxy did not become ready.');
+    // kubectl delete has no precondition flag; its authenticated proxy accepts Kubernetes DeleteOptions.
+    const response = await request(`${baseUrl}${apiPath}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ preconditions: { uid, resourceVersion } }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      throw new Error(`Kubernetes rejected the version-guarded collector delete (HTTP ${response.status}).`);
+    }
+  } finally {
+    if (proxy.exitCode === null && proxy.signalCode === null) {
+      const closed = new Promise(resolve => proxy.once('close', resolve));
+      proxy.kill();
+      await closed;
+    }
+  }
+}
+
+function agentHostEgressCollector(auditMode) {
+  if (!['allowed', 'denied'].includes(auditMode)) {
+    fail('AgentHost egress audit collector requires allowed or denied mode.');
+  }
+  return {
+    apiVersion: 'acn.azure.com/v1alpha1',
+    kind: 'ContainerNetworkLog',
+    metadata: {
+      name: EGRESS_AUDIT_COLLECTOR,
+      labels: { [EGRESS_AUDIT_LABEL]: EGRESS_AUDIT_OWNER },
+    },
+    spec: {
+      includefilters: [{
+        name: 'agenthost-egress',
+        from: {
+          namespacedPod: ['agentweaver/'],
+          labelSelector: { matchLabels: { 'agentweaver.io/workload': 'agenthost' } },
+        },
+        protocol: ['tcp', 'udp', 'dns'],
+        verdict: auditMode === 'denied' ? ['dropped'] : ['dropped', 'forwarded'],
+      }],
+      aggregation: { additionalFields: ['source.labels', 'IP.destination', 'destination_names'] },
+    },
+  };
+}
+
+async function reconcileAgentHostEgressCollector(exec, context, root, auditMode, log,
+  deleteCollector = deleteContainerNetworkLog) {
+  const resources = must(exec, 'kubectl', ['api-resources', '--api-group=acn.azure.com', '--output=name',
+    '--context', context], { cwd: root }, 'Could not discover ACNS container network logs').stdout
+    .split(/\s+/).filter(Boolean);
+  const available = resources.includes(EGRESS_AUDIT_API_RESOURCE);
+  if (!available) {
+    if (auditMode === 'off') return;
+    fail('The ACNS ContainerNetworkLog API is unavailable; enable ACNS observability before the workload deploy.');
+  }
+
+  requireClusterPermission(exec, context, root, 'get', EGRESS_AUDIT_API_RESOURCE,
+    'inspect the AgentHost egress collector');
+  const read = must(exec, 'kubectl', ['get', EGRESS_AUDIT_API_RESOURCE, EGRESS_AUDIT_COLLECTOR,
+    '--ignore-not-found=true', '--output=json', '--context', context], { cwd: root },
+  'Could not read the AgentHost egress collector');
+  let existing;
+  if (read.stdout.trim()) {
+    try { existing = JSON.parse(read.stdout); } catch { fail('Kubernetes returned invalid AgentHost egress collector JSON.'); }
+  }
+  const owned = existing?.metadata?.labels?.[EGRESS_AUDIT_LABEL] === EGRESS_AUDIT_OWNER;
+  if (existing && !owned) {
+    if (auditMode !== 'off') fail(`ContainerNetworkLog/${EGRESS_AUDIT_COLLECTOR} is not managed by Agentweaver.`);
+    log(`Kept unowned ContainerNetworkLog/${EGRESS_AUDIT_COLLECTOR}.`);
+    return;
+  }
+  if (auditMode === 'off') {
+    if (!existing) return;
+    requireClusterPermission(exec, context, root, 'delete', EGRESS_AUDIT_API_RESOURCE,
+      'remove the Agentweaver egress collector');
+    const { uid, resourceVersion } = existing.metadata ?? {};
+    if (typeof uid !== 'string' || !uid || typeof resourceVersion !== 'string' || !resourceVersion) {
+      fail(`ContainerNetworkLog/${EGRESS_AUDIT_COLLECTOR} has no UID or resourceVersion; refusing to delete it.`);
+    }
+    await deleteCollector({ context, root, uid, resourceVersion });
+    log(`Removed ContainerNetworkLog/${EGRESS_AUDIT_COLLECTOR}.`);
+    return;
+  }
+
+  const desired = agentHostEgressCollector(auditMode);
+  if (!existing) {
+    requireClusterPermission(exec, context, root, 'create', EGRESS_AUDIT_API_RESOURCE,
+      'create the AgentHost egress collector');
+    must(exec, 'kubectl', ['create', '--filename', '-', '--context', context], { cwd: root,
+      input: stringify(desired) }, 'Could not create the AgentHost egress collector');
+    log(`Created ContainerNetworkLog/${EGRESS_AUDIT_COLLECTOR} in ${auditMode} mode.`);
+    return;
+  }
+
+  const { uid, resourceVersion } = existing.metadata ?? {};
+  if (typeof uid !== 'string' || !uid || typeof resourceVersion !== 'string' || !resourceVersion) {
+    fail(`ContainerNetworkLog/${EGRESS_AUDIT_COLLECTOR} has no UID or resourceVersion; refusing to update it.`);
+  }
+  requireClusterPermission(exec, context, root, 'patch', EGRESS_AUDIT_API_RESOURCE,
+    'reconcile the AgentHost egress collector');
+  const ownerLabelPath = `/metadata/labels/${EGRESS_AUDIT_LABEL.replace(/~/g, '~0').replace(/\//g, '~1')}`;
+  const patch = [
+    { op: 'test', path: '/metadata/uid', value: uid },
+    { op: 'test', path: '/metadata/resourceVersion', value: resourceVersion },
+    { op: 'test', path: ownerLabelPath, value: EGRESS_AUDIT_OWNER },
+    { op: 'replace', path: '/spec', value: desired.spec },
+  ];
+  must(exec, 'kubectl', ['patch', EGRESS_AUDIT_API_RESOURCE, EGRESS_AUDIT_COLLECTOR,
+    '--type=json', '--patch', JSON.stringify(patch), '--context', context], { cwd: root },
+  'Could not reconcile the AgentHost egress collector');
+  log(`Reconciled ContainerNetworkLog/${EGRESS_AUDIT_COLLECTOR} in ${auditMode} mode.`);
+}
+
 function smokePodFailure(pod) {
   const scheduled = pod.status?.conditions?.find(condition => condition.type === 'PodScheduled');
   if (scheduled?.status === 'False') return `not scheduled: ${scheduled.reason ?? ''} ${scheduled.message ?? ''}`.trim();
@@ -518,6 +726,7 @@ const SMOKE_FAILURES = {
   'storage-write': 'could not write and read a file on the workspace volume',
   'storage-symlink': 'could not create a symbolic link on the workspace volume; the mfsymlinks mount option is missing',
   'storage-owner': 'workspace files are not owned by UID 1000; check the uid and gid mount options',
+  'egress-deny': 'the denied AgentHost smoke connection reached 192.0.2.1:443',
 };
 
 /**
@@ -558,7 +767,7 @@ export function byokEndpointProbeUrls(resources) {
  * Starts a short-lived pod with the AgentHost labels, sandbox RuntimeClass, and a workspace volume.
  * The pod uses the same network policies as real AgentHost pods. It has no token, Secret, or settings.
  */
-async function runInstallSmokeCheck(exec, context, root, prerequisites, image, probeUrls, sleep, log) {
+async function runInstallSmokeCheck(exec, context, root, prerequisites, image, probeUrls, auditMode, sleep, log) {
   const name = `agentweaver-install-smoke-${randomUUID().slice(0, 8)}`;
   const selector = `${SMOKE_LABEL}=true`;
   kubectl(exec, context, ['delete', 'pods,persistentvolumeclaims', '--selector', selector,
@@ -569,6 +778,7 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, p
     'agentweaver.io/workload': 'agenthost',
     'agentweaver.io/identity-client': 'true',
     [SMOKE_LABEL]: 'true',
+    ...(auditMode === 'off' ? {} : { 'agentweaver.dev/sandbox-owner': SMOKE_OWNER_LABEL }),
   };
   const script = [
     'fail() { echo "SMOKE_FAIL $1"; exit 1; }',
@@ -577,6 +787,10 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, p
     'echo ok > /workspace/smoke.txt && [ "$(cat /workspace/smoke.txt)" = ok ] || fail storage-write',
     'ln -s smoke.txt /workspace/smoke-link && [ "$(cat /workspace/smoke-link)" = ok ] || fail storage-symlink',
     '[ "$(stat -c %u /workspace/smoke.txt)" = 1000 ] || fail storage-owner',
+    ...(auditMode === 'off' ? [] : [
+      `echo "SMOKE_EGRESS_PROBE ${SMOKE_OWNER_LABEL} 192.0.2.1:443"`,
+      'timeout 5 bash -c ": </dev/tcp/192.0.2.1/443" >/dev/null 2>&1 && fail egress-deny',
+    ]),
     // Keyless HTTPS GET for each BYOK URL (positional arguments). git has no credential or prompt here.
     // The trailing "#" makes libcurl drop the "/info/refs?service=..." suffix that git appends,
     // so libcurl sends GET <url>; any HTTP response confirms DNS, egress, and TLS.
@@ -1832,6 +2046,10 @@ export async function deployKustomize(options, overrides = {}) {
   const fetchImpl = overrides.fetchImpl ?? exec.fetchImpl ?? globalThis.fetch;
   const log = overrides.log ?? (message => console.log(message));
   const now = overrides.now ?? Date.now;
+  const auditMode = options.agentHostEgressAudit ?? 'off';
+  if (!['off', 'allowed', 'denied'].includes(auditMode)) {
+    fail('AgentHost egress audit must be off, allowed, or denied.');
+  }
   const selectedRegistry = options.registry ?? DEFAULT_REGISTRY;
   try {
     parseRegistryTarget(selectedRegistry);
@@ -1938,7 +2156,7 @@ export async function deployKustomize(options, overrides = {}) {
         desiredRuntimeMaps.some(resource => resource.metadata?.namespace !== NAMESPACE || resource.immutable !== true)) {
       fail('Kustomize must render both immutable AgentHost runtime ConfigMaps in namespace agentweaver.');
     }
-    const prerequisites = verifyClusterPrerequisites(exec, context, root, resources, log);
+    const prerequisites = verifyClusterPrerequisites(exec, context, root, resources, auditMode, log);
     const existingRuntimeMaps = new Map([...RUNTIME_CONFIG_MAPS].map(name => [
       name, readExistingNamedRuntimeConfigMap(exec, context, root, name),
     ]));
@@ -2020,6 +2238,7 @@ export async function deployKustomize(options, overrides = {}) {
       root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs,
     );
 
+    await reconcileAgentHostEgressCollector(exec, context, root, auditMode, log, overrides.deleteCollector);
     if (brokerMigrationResources) {
       ensureBrokerMigrationResources(brokerMigrationResources, exec, context, root, log);
     }
@@ -2087,7 +2306,7 @@ export async function deployKustomize(options, overrides = {}) {
         'annotate', 'deployment/environment', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
       ], root, 'Could not clear the Environment AgentHost ConfigMap recovery marker');
     }
-    await runInstallSmokeCheck(exec, context, root, prerequisites, agentHostTuple.image, probeUrls,
+    await runInstallSmokeCheck(exec, context, root, prerequisites, agentHostTuple.image, probeUrls, auditMode,
       overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))), log);
     return { context, namespace: NAMESPACE, deployments, images: Object.fromEntries(digests) };
   } finally {

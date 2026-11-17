@@ -692,6 +692,7 @@
         "infra/bicep/",
         "deploy/k8s/",
         "scripts/azure/",
+        "scripts/release/deploy-kustomize.mjs",
         "tools/Agentweaver.FoundationProbe/"
       ],
       "required": [

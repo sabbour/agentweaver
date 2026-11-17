@@ -10,8 +10,18 @@ test('what-if uses identical source and account/ownership guards without mutatio
   assert.equal(result.status, 0);
   assert.equal(JSON.parse(result.stdout).nestedDeploymentChanges, undefined);
   assert.ok(calls.at(-1).includes('what-if'));
+  assert.ok(calls.at(-1).includes('enableContainerNetworkLogs=false'));
   assert.ok(!calls.some(args => args.includes('create')));
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
+});
+
+test('standalone what-if carries the requested AgentHost audit mode into the Bicep parameters', () => {
+  const calls = [];
+  plan({ ...fixture, agentHostEgressAudit: 'denied' }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({}, calls),
+  });
+  assert.ok(calls.at(-1).includes('enableContainerNetworkLogs=true'));
 });
 
 test('plan rejects identity-routing-only before source resolution or Azure calls', () => {
@@ -46,6 +56,12 @@ test('AKS-only what-if lists the nested federated credential create-or-update op
   const nestedChanges = output.nestedDeploymentChanges;
 
   assert.deepEqual(output.changes, []);
+  assert.deepEqual(output.postDeploymentChanges, [{
+    operation: 'ACNS ContainerNetworkLogs forwarding update',
+    agentHostEgressAudit: 'off',
+    command: ['az', 'aks', 'update', '--resource-group', 'agentweaver', '--name', 'agentweaver-aks',
+      '--disable-container-network-logs', '-o', 'none'],
+  }]);
   assert.match(nestedChanges.note, /top-level what-if omits resources/);
   assert.match(nestedChanges.note, /existing FIC and node pool state was not queried/);
   assert.deepEqual(nestedChanges.agentPools.map(pool => [pool.name, pool.workloadRuntime, pool.sshAccess]),
@@ -74,6 +90,29 @@ test('AKS-only what-if lists the nested federated credential create-or-update op
     },
   ]);
   assert.ok(!calls.some(args => args.includes('create')));
+});
+
+test('AKS-only what-if reports the audit mode and later ACNS forwarding update', () => {
+  const calls = [];
+  const aksOnlySource = {
+    ...source,
+    scope: 'aks-only',
+    template: 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
+  };
+  const result = plan({ ...fixture, agentHostEgressAudit: 'denied' }, {
+    sourceResolver: () => aksOnlySource,
+    execAz: fakeAzure({ whatIf: { status: 0, stdout: '{"changes":[]}', stderr: '' } }, calls),
+  });
+  const output = JSON.parse(result.stdout);
+
+  assert.deepEqual(output.postDeploymentChanges, [{
+    operation: 'ACNS ContainerNetworkLogs forwarding update',
+    agentHostEgressAudit: 'denied',
+    command: ['az', 'aks', 'update', '--resource-group', 'agentweaver', '--name', 'agentweaver-aks',
+      '--enable-acns', '--enable-container-network-logs', '-o', 'none'],
+  }]);
+  assert.ok(!calls.at(-1).some(arg => arg.startsWith('enableContainerNetworkLogs=')));
 });
 
 test('AKS-only what-if names the federated identities and kata size of the selected target', () => {

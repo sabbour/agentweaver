@@ -85,6 +85,7 @@ function setup({
       modelBindings: options.modelBindings,
       removeModelBindings: options.removeModelBindings,
       resourceGroup: options.resourceGroup,
+      agentHostEgressAudit: options.agentHostEgressAudit,
       images: JSON.parse(readFileSync(options.imageManifest, 'utf8')).images,
     };
   };
@@ -95,7 +96,7 @@ function setup({
 }
 
 function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true,
-  modelOptions = {}, modelAwareHelper = true, targetAwareHelper = true) {
+  modelOptions = {}, modelAwareHelper = true, targetAwareHelper = true, auditAwareHelper = true) {
   return deployFromCommit({ sourceSha, registry, ...modelOptions }, {
     root,
     worktreePath: fixture.worktreePath,
@@ -106,6 +107,7 @@ function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = 
       DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper,
       DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION: modelAwareHelper,
       DEPLOY_KUSTOMIZE_TARGET_OPTION: targetAwareHelper,
+      DEPLOY_KUSTOMIZE_AUDIT_OPTION: auditAwareHelper,
     },
   });
 }
@@ -186,6 +188,44 @@ test('passes a registered separate target and rejects it for an older Kustomize 
   }
 });
 
+test('validates and forwards AgentHost egress audit mode to the exact-source helper', async () => {
+  assert.deepEqual(parseDeployFromCommitArgs([
+    sourceSha, '--agenthost-egress-audit', 'denied', '--execute',
+  ]), { sourceSha, agentHostEgressAudit: 'denied' });
+  for (const args of [
+    [sourceSha, '--agenthost-egress-audit', 'all', '--execute'],
+    [sourceSha, '--agenthost-egress-audit', '--execute'],
+    [sourceSha, '--agenthost-egress-audit', 'off', '--agenthost-egress-audit', 'allowed', '--execute'],
+  ]) {
+    assert.throws(() => parseDeployFromCommitArgs(args), /AgentHost egress audit|Usage:/);
+  }
+
+  const invalid = setup();
+  try {
+    await assert.rejects(runDeploy(invalid, undefined, true, { agentHostEgressAudit: 'all' }),
+      /AgentHost egress audit must be off, allowed, or denied/);
+    assert.equal(invalid.calls.length, 0);
+  } finally {
+    rmSync(invalid.testRoot, { recursive: true, force: true });
+  }
+
+  const fixture = setup();
+  try {
+    await runDeploy(fixture, undefined, true, { agentHostEgressAudit: 'denied' });
+    assert.equal(fixture.deployment.agentHostEgressAudit, 'denied');
+    const older = setup();
+    try {
+      await assert.rejects(runDeploy(older, undefined, true, { agentHostEgressAudit: 'allowed' },
+        true, true, false), /predates AgentHost egress audit support/);
+      assert.equal(older.deployment, undefined);
+    } finally {
+      rmSync(older.testRoot, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(fixture.testRoot, { recursive: true, force: true });
+  }
+});
+
 test('rejects model binding options when the selected source has an older Kustomize helper', async () => {
   const fixture = setup();
   try {
@@ -210,6 +250,7 @@ test('fetches v1, verifies all image labels, passes only digests, and leaves the
     assert.deepEqual(Object.keys(fixture.deployment.images), IMAGE_REPOSITORIES);
     assert.deepEqual(fixture.deployment.images, fixture.digests);
     assert.equal(fixture.deployment.root, fixture.worktreePath);
+    assert.equal(fixture.deployment.agentHostEgressAudit, 'off');
     assert.ok(fixture.calls.findIndex(({ name, args }) => name === 'npm' && args[0] === 'ci') <
       fixture.calls.findIndex(({ name }) => name === 'docker'));
     assert.deepEqual(fixture.calls.find(({ name, args }) => name === 'git' && args[0] === 'fetch').args,

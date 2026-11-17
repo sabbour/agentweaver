@@ -231,6 +231,24 @@ collected. For the required permissions, the cost, and the canary-region
 limit, see
 [Azure Monitor add-on](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/README.md#azure-monitor-add-on).
 
+ACNS flow-log collection is a separate opt-in. The default audit mode is
+`off`. For `allowed` or `denied`, pass the same
+`--agenthost-egress-audit` value to `scripts/azure/deploy.mjs` and
+`npm run deploy:kustomize`. The infrastructure command checks the exact
+workspace and region pair before it runs a what-if. Kustomize creates the
+AgentHost collector and adds a denied-flow probe to its install smoke check.
+Pass the same option to `node scripts/azure/plan.mjs` so its what-if includes
+the forwarding setting. AKS-only plans show the selected mode and the later
+`az aks update` command. For an exact-source deployment, pass the same option
+to `npm run azure:deploy-from-commit`. It defaults to `off` and passes the mode
+to the Kustomize helper from that commit. Enabled modes require audit support
+in the selected source commit. Kustomize stops before Kubernetes writes unless
+DaemonSet `ama-logs` is fully ready and has a ready, DaemonSet-owned pod on
+every sandbox node.
+The Environment identity receives `Log Analytics Reader` on the install
+workspace. See the [ACNS forwarding details](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/README.md#acns-flow-log-forwarding)
+and [Kustomize audit behavior](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#agenthost-egress-audit).
+
 The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It never creates, requires, or verifies a human
 `Azure Kubernetes Service RBAC Cluster Admin` assignment. Cluster connectivity

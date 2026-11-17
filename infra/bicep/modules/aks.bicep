@@ -40,6 +40,9 @@ param nodeResourceGroup string = ''
 @description('Optional existing application DNS zone resource IDs for custom routing domains.')
 param appRoutingDnsZoneResourceIds array = []
 
+@description('Enable ACNS observability for AgentHost egress audit collection.')
+param enableContainerNetworkLogs bool = false
+
 var clusterName = '${namePrefix}-aks'
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
 // The managed default domain is enabled only when no custom DNS zones are configured.
@@ -123,7 +126,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' = {
           enabled: true
         }
         observability: {
-          enabled: false
+          enabled: enableContainerNetworkLogs
         }
       }
       serviceCidr: '172.20.0.0/16'
