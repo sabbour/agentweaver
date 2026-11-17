@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Agentweaver.Abstractions;
 using Agentweaver.Cli.Api;
 
 namespace Agentweaver.Cli;
@@ -19,19 +21,23 @@ internal static class PolicyCommands
     internal static async Task<int> RunAsync(
         string[] args, CliRuntimeOptions runtime, HttpClient httpClient, TextWriter output, CancellationToken ct)
     {
-        if (args.Length == 0 || args[0] is not ("show" or "history"))
-            throw new CliUsageException("Choose `show` or `history`.");
+        if (args.Length == 0 || args[0] is not ("show" or "export" or "history"))
+            throw new CliUsageException("Choose `show`, `export`, or `history`.");
         var command = args[0];
         var options = CliOptions.Parse(args[1..], new HashSet<string>(StringComparer.Ordinal));
         if (options.Many("project-id").Count > 0 || options.Many("run-id").Count > 0)
             throw new CliUsageException("Policy commands use an unbound identity. Do not set --project-id or --run-id.");
-        var commandOptions = command == "show"
-            ? new[] { "scope", "revision" }
-            : new[] { "scope", "page-size", "cursor" };
+        var commandOptions = command switch
+        {
+            "show" => new[] { "scope", "revision" },
+            "export" => new[] { "scope", "revision", "output" },
+            _ => new[] { "scope", "page-size", "cursor" },
+        };
         options.RequireOnly(commandOptions.Concat(
             CliConfiguration.TargetOptionNames.Where(name => name is not ("project-id" or "run-id"))).ToArray());
         if (options.Single("scope") != "platform")
             throw new CliUsageException("Policy commands require --scope platform.");
+        var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
 
         var revisionText = options.Single("revision");
         long? revision = null;
@@ -69,6 +75,7 @@ internal static class PolicyCommands
         var identity = CliConfiguration.ReadIdentity(options: options, unbound: true);
         var gateway = (runtime.GatewayClientFactory ?? new GatewayClientFactory(httpClient, runtime.Authentication))
             .Create(identity);
+        JsonObject result;
         try
         {
             var operations = GatewayContract.Parse(await gateway.DiscoverAsync(ct).ConfigureAwait(false));
@@ -77,16 +84,17 @@ internal static class PolicyCommands
                 operation.MaximumResponseBytes > MaximumResponseBytes ||
                 operation.Parameters.Any(p => p.Location == "header" &&
                     p.Name.Equals("X-Agentweaver-Project-Authorization", StringComparison.OrdinalIgnoreCase)))
-                throw new PolicyFailureException("The Gateway does not support this policy read.");
+                throw new PolicyFailureException("The Gateway does not support this policy operation.");
             var response = await gateway.InvokeAsync(operationId, new GatewayInvocation(pathParameters, query), ct)
                 .ConfigureAwait(false);
             if (response.Status != 200)
                 throw new PolicyFailureException(ErrorMessage(response.Status, response.Body));
-            var result = command == "history"
-                ? ProjectHistory(response.Body, pageSize)
-                : ProjectShow(response.Body, revision);
-            await output.WriteLineAsync(result.ToJsonString(OutputJson)).ConfigureAwait(false);
-            return 0;
+            result = command switch
+            {
+                "history" => ProjectHistory(response.Body, pageSize),
+                "export" => ProjectExport(response.Body, revision),
+                _ => ProjectShow(response.Body, revision),
+            };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -100,6 +108,39 @@ internal static class PolicyCommands
         {
             throw new PolicyFailureException("The policy request failed.");
         }
+
+        if (command == "export")
+        {
+            try
+            {
+                await WriteNewFileAsync(
+                    outputPath!,
+                    Encoding.UTF8.GetBytes(result.ToJsonString(OutputJson) + Environment.NewLine),
+                    ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                throw new PolicyFailureException("The policy export file could not be written.");
+            }
+            result = ExportSummary(result, outputPath!);
+        }
+
+        await output.WriteLineAsync(result.ToJsonString(OutputJson)).ConfigureAwait(false);
+        return 0;
+    }
+
+    private static string OutputFilePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new CliUsageException("Policy export requires --output <new-file>.");
+        var path = Path.GetFullPath(value);
+        if (File.Exists(path) || Directory.Exists(path))
+            throw new CliUsageException("The policy export output file already exists.");
+        return path;
     }
 
     private static JsonObject ProjectShow(JsonNode? body, long? requestedRevision)
@@ -121,6 +162,98 @@ internal static class PolicyCommands
             ["scopeType"] = "platform", ["scopeId"] = "default", ["policyId"] = policyId,
             ["revision"] = revision, ["contentSha256"] = hash, [timeField] = time,
         };
+    }
+
+    private static JsonObject ProjectExport(JsonNode? body, long? requestedRevision)
+    {
+        if (body is not JsonObject obj)
+            throw UnexpectedResponse();
+        var policyId = PolicyId(obj);
+        var revision = PositiveNumber(obj, "revision");
+        var hash = Hash(obj);
+        var timeField = requestedRevision is null ? "updatedAt" : "createdAt";
+        var time = Timestamp(obj, timeField);
+        if (requestedRevision is not null && revision != requestedRevision ||
+            obj["artifact"] is not JsonObject artifact ||
+            artifact["manifestBytes"] is not JsonArray manifestBytes ||
+            manifestBytes.Count == 0 ||
+            artifact["files"] is not JsonArray files ||
+            files.Count > 64 ||
+            Hash(artifact) != hash)
+            throw UnexpectedResponse();
+        foreach (var item in files)
+        {
+            if (item is not JsonObject file ||
+                file["relativePath"] is not JsonValue path ||
+                !path.TryGetValue<string>(out var relativePath) ||
+                string.IsNullOrEmpty(relativePath) ||
+                file["bytes"] is not JsonArray)
+                throw UnexpectedResponse();
+        }
+
+        NativeAcsArtifact artifactValue;
+        string computedHash;
+        try
+        {
+            artifactValue = JsonSerializer.Deserialize<NativeAcsArtifact>(artifact.ToJsonString(), OutputJson)
+                ?? throw UnexpectedResponse();
+            if (artifactValue.ManifestBytes.IsDefaultOrEmpty)
+                throw UnexpectedResponse();
+            computedHash = NativeAcsArtifactHash.Compute(artifactValue);
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException or NotSupportedException)
+        {
+            throw UnexpectedResponse();
+        }
+        if (!string.Equals(artifactValue.ContentSha256, hash, StringComparison.Ordinal) ||
+            !string.Equals(computedHash, hash, StringComparison.Ordinal))
+            throw UnexpectedResponse();
+
+        obj.Remove("artifact");
+        return new JsonObject
+        {
+            ["scopeType"] = "platform",
+            ["scopeId"] = "default",
+            ["policyId"] = policyId,
+            ["revision"] = revision,
+            ["contentSha256"] = hash,
+            ["artifact"] = artifact,
+            [timeField] = time,
+        };
+    }
+
+    private static JsonObject ExportSummary(JsonObject exported, string outputPath)
+    {
+        var timeField = exported.ContainsKey("updatedAt") ? "updatedAt" : "createdAt";
+        return new JsonObject
+        {
+            ["scopeType"] = "platform",
+            ["scopeId"] = "default",
+            ["policyId"] = PolicyId(exported),
+            ["revision"] = PositiveNumber(exported, "revision"),
+            ["contentSha256"] = Hash(exported),
+            [timeField] = Timestamp(exported, timeField),
+            ["output"] = outputPath,
+        };
+    }
+
+    private static async Task WriteNewFileAsync(string path, byte[] bytes, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        await using var stream = new FileStream(
+            path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920,
+            FileOptions.Asynchronous | FileOptions.WriteThrough);
+        try
+        {
+            await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+            await stream.FlushAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+            File.Delete(path);
+            throw;
+        }
     }
 
     private static JsonObject ProjectHistory(JsonNode? body, int pageSize)
