@@ -19,8 +19,8 @@ workload updates. Do not retry an uncertain effect.
 The runner applies these migrations, in this order:
 
 1. Identity Broker EF Core migrations, when you pass a Broker digest.
-2. Environment EF Core migrations 1 to 12.
-3. Orchestrator (Core) migrations 1 to 16, 18 to 33, and 35 to 45. Reserved gaps are not applied.
+2. Environment EF Core migrations 1 to 13.
+3. Orchestrator (Core) migrations 1 to 16, 18 to 33, and 35 to 51. Reserved gaps are not applied.
 4. Events & Sessions migrations 1 to 11.
 
 The reviewed plan fixes these versions by hash. Core migration 017 is not in the
@@ -277,7 +277,7 @@ For every target image and each different running image, the runner:
    Reserved migration 034 is not accepted by this source revision.
 
 Environment uses EF Core timestamp migration IDs. The source assigns their
-catalog order to schema versions 1 through 11, and startup rejects pending
+catalog order to schema versions 1 through 13, and startup rejects pending
 migrations, so the runner treats an Environment image as accepting its exact
 catalog version.
 

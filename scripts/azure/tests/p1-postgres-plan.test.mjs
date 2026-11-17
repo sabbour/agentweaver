@@ -199,6 +199,20 @@ test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
     assert.ok(orchestrator.functions.some(item =>
       item.signature === guard.function && !item.execute));
 
+  const environment = plan.services.find(service => service.schema === 'environment');
+  const reservations = environment.tables.find(table => table.table === 'platform_policy_apply_reservations');
+  assert.deepEqual(reservations.privileges, ['SELECT', 'INSERT']);
+  assert.equal(reservations.mutationDenialRequired, true);
+  assert.deepEqual(reservations.mutationDenialGuards.map(guard =>
+    [guard.trigger, guard.function, guard.triggerType]), [
+    ['platform_policy_apply_reservations_consistent_identity', 'enforce_platform_policy_apply_reservation_identity()', 7],
+    ['platform_policy_apply_reservations_immutable', 'reject_platform_policy_apply_reservation_mutation()', 27],
+    ['platform_policy_apply_reservations_no_truncate', 'reject_platform_policy_apply_reservation_mutation()', 34],
+  ]);
+  for (const guard of reservations.mutationDenialGuards)
+    assert.ok(environment.functions.some(item =>
+      item.signature === guard.function && !item.execute));
+
   for (const name of ['p1_run_request_provenance', 'p1_invocation_bindings']) {
     const table = orchestrator.tables.find(item => item.table === name);
     assert.deepEqual(table.privileges, ['SELECT', 'INSERT']);
@@ -426,7 +440,7 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
 
   assert.deepEqual(catalog, migrationIds);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
-  assert.match(source, /private const int CurrentSchemaVersion = 12;/);
+  assert.match(source, /private const int CurrentSchemaVersion = 13;/);
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 
@@ -442,7 +456,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 135);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 136);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -460,15 +474,25 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [9, 1, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 44);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [9, 3, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 46);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });
-  assert.deepEqual(plan.services.find(service => service.schema === 'environment').functions, [{
-    signature: 'enforce_p1_creation_link_immutability()',
-    execute: false,
-  }]);
+  assert.deepEqual(plan.services.find(service => service.schema === 'environment').functions, [
+    {
+      signature: 'enforce_p1_creation_link_immutability()',
+      execute: false,
+    },
+    {
+      signature: 'enforce_platform_policy_apply_reservation_identity()',
+      execute: false,
+    },
+    {
+      signature: 'reject_platform_policy_apply_reservation_mutation()',
+      execute: false,
+    },
+  ]);
   const projectSetupGuard = plan.services
     .find(service => service.schema === 'projects_config')
     ?.functions.find(item => item.signature === 'reject_project_setup_operation_mutation()');

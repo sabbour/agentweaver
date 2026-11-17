@@ -157,10 +157,10 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 22 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 10)
+        if (services.Length != 5 || protectedTables.Length != 23 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 11)
             throw new InvalidOperationException(
-                "The exact fourteen row-lock columns and ten append-only ledger mutation guards are required.");
+                "The exact fourteen row-lock columns and eleven append-only ledger mutation guards are required.");
 
         foreach (var (service, table) in protectedTables)
         {

@@ -25,6 +25,7 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
 {
     public const string PolicyName = "agenthost-platform-egress";
     public const string GenerationAnnotation = "agentweaver.io/egress-generation";
+    public const string SourceEpochAnnotation = "agentweaver.io/egress-source-epoch";
     public const string IntentHashAnnotation = "agentweaver.io/egress-intent-hash";
     public const string SourceHashAnnotation = "agentweaver.io/egress-source-hash";
 
@@ -42,6 +43,7 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
     private readonly ICiliumPolicyResourceStore _store;
     private readonly CiliumPlatformEgressOptions _options;
     private readonly TimeProvider _time;
+    private readonly IPlatformEgressApplyReservationReader? _reservationReader;
     private readonly ImmutableArray<string> _excludedV4;
     private readonly ImmutableArray<string> _excludedV6;
 
@@ -49,13 +51,15 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
         ICiliumPolicyResourceStore store,
         CiliumEgressProviderOptions providerOptions,
         CiliumPlatformEgressOptions options,
-        TimeProvider time)
+        TimeProvider time,
+        IPlatformEgressApplyReservationReader? reservationReader = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(options);
         _store = store;
         _options = options;
         _time = time;
+        _reservationReader = reservationReader;
         var ranges = PlatformEgressExcludedRanges.Create(
             options.AdditionalExcludedRanges.IsDefault ? [] : options.AdditionalExcludedRanges);
         _excludedV4 = ranges.Where(range => range.BaseAddress.AddressFamily == AddressFamily.InterNetwork)
@@ -100,14 +104,152 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
                 : Failed("generation_conflict");
         if (currentGeneration > policy.Generation)
             return Failed("stale_generation");
+        if (string.IsNullOrWhiteSpace(current.Metadata.Uid))
+            return Failed("invalid_object_uid");
         if (string.IsNullOrWhiteSpace(current.Metadata.ResourceVersion))
             return Failed("invalid_resource_version");
 
         try
         {
-            var replaced = await _store.ReplaceAsync(desired, current.Metadata.ResourceVersion, cancellationToken)
+            desired = desired with
+            {
+                Metadata = desired.Metadata with
+                {
+                    Uid = current.Metadata.Uid,
+                    ResourceVersion = current.Metadata.ResourceVersion,
+                },
+            };
+            var replaced = await _store.ReplaceAsync(
+                    desired, current.Metadata.Uid, current.Metadata.ResourceVersion, cancellationToken)
                 .ConfigureAwait(false);
             return Observe(Normalize(replaced)!);
+        }
+        catch (CiliumPolicyException exception)
+        {
+            return Failed(exception.Code);
+        }
+    }
+
+    /// <summary>Applies only the immutable request and Kubernetes object fence saved in a reservation.</summary>
+    public async Task<PlatformEgressStatus> ApplyReservedAsync(
+        PlatformEgressApplyReservation reservation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reservation);
+        var policy = reservation.Policy;
+        if (policy is null || reservation.SourceEpoch <= 0 ||
+            reservation.Generation != policy.Generation ||
+            !IsValidPolicy(policy) ||
+            !PlatformEgressCapabilities.CanApply(Descriptor.AdvertisedCapabilities, policy.Mode))
+            return Failed("invalid_apply_reservation");
+
+        string targetId;
+        try
+        {
+            targetId = _store.GetTargetId(_options.Namespace, PolicyName);
+        }
+        catch (CiliumPolicyException exception)
+        {
+            return Failed(exception.Code);
+        }
+        if (reservation.TargetId != targetId)
+            return Failed("provider_target_mismatch");
+        if (_reservationReader is null)
+            return Failed("apply_reservation_store_unavailable");
+
+        try
+        {
+            var saved = await _reservationReader.FindAsync(
+                reservation.TargetId, reservation.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+            if (saved is null ||
+                saved.ReservationId != reservation.ReservationId ||
+                saved.RequestFingerprint != reservation.RequestFingerprint)
+                return Failed("unknown_apply_reservation");
+            if (saved.SourceEpoch != reservation.SourceEpoch ||
+                saved.Generation != reservation.Generation ||
+                saved.SourceRevision != reservation.SourceRevision ||
+                saved.SourceId != reservation.SourceId ||
+                saved.ObjectUid != reservation.ObjectUid ||
+                saved.ResourceVersion != reservation.ResourceVersion ||
+                !SamePolicy(policy, saved.Policy))
+                return Failed("invalid_apply_reservation");
+            reservation = saved;
+            policy = reservation.Policy;
+
+            var latest = await _reservationReader.FindLatestAsync(targetId, cancellationToken).ConfigureAwait(false);
+            if (latest?.ReservationId != reservation.ReservationId)
+                return Failed("stale_apply_reservation");
+
+            var current = Normalize(await _store.GetAsync(_options.Namespace, PolicyName, cancellationToken)
+                .ConfigureAwait(false));
+            if (current is null)
+                return Failed("policy_object_missing");
+            if (string.IsNullOrWhiteSpace(current.Metadata.Uid) ||
+                string.IsNullOrWhiteSpace(reservation.ObjectUid))
+                return Failed("invalid_object_uid");
+            if (current.Metadata.Uid != reservation.ObjectUid)
+                return Failed("stale_object_uid");
+            if (string.IsNullOrWhiteSpace(current.Metadata.ResourceVersion))
+                return Failed("invalid_resource_version");
+
+            var currentEpoch = ReadSourceEpoch(current);
+            var currentGeneration = ReadGeneration(current);
+            if (currentEpoch is null)
+                return Failed("invalid_source_epoch");
+            if (currentGeneration is null)
+                return Failed("invalid_applied_generation");
+            if (currentEpoch > 0 && currentGeneration == 0)
+                return Failed("invalid_source_epoch");
+
+            var desired = Render(current, policy, reservation.SourceEpoch);
+            if (currentEpoch == reservation.SourceEpoch &&
+                currentGeneration == reservation.Generation)
+            {
+                latest = await _reservationReader.FindLatestAsync(targetId, cancellationToken).ConfigureAwait(false);
+                if (latest?.ReservationId != reservation.ReservationId)
+                    return Failed("stale_apply_reservation");
+                return CiliumEgressPolicyAdapter.SameSpec(current.Spec, desired.Spec) &&
+                    Annotations(current).GetValueOrDefault(IntentHashAnnotation) == policy.IntentHash &&
+                    Annotations(current).GetValueOrDefault(SourceHashAnnotation) == policy.SourceHash
+                    ? Observe(current)
+                    : Failed("generation_conflict");
+            }
+
+            if (currentEpoch > reservation.SourceEpoch)
+                return Failed("stale_source_epoch");
+            if (currentEpoch == reservation.SourceEpoch &&
+                currentGeneration > 0 &&
+                (Annotations(current).GetValueOrDefault(IntentHashAnnotation) != policy.IntentHash ||
+                 Annotations(current).GetValueOrDefault(SourceHashAnnotation) != policy.SourceHash))
+                return Failed("source_epoch_conflict");
+            if (currentGeneration >= reservation.Generation)
+                return Failed("stale_generation");
+            if (current.Metadata.ResourceVersion != reservation.ResourceVersion)
+                return Failed("stale_resource_version");
+
+            latest = await _reservationReader.FindLatestAsync(targetId, cancellationToken).ConfigureAwait(false);
+            if (latest?.ReservationId != reservation.ReservationId)
+                return Failed("stale_apply_reservation");
+
+            desired = desired with
+            {
+                Metadata = desired.Metadata with
+                {
+                    Uid = reservation.ObjectUid,
+                    ResourceVersion = reservation.ResourceVersion,
+                },
+            };
+            var replaced = Normalize(await _store.ReplaceAsync(
+                desired,
+                reservation.ObjectUid,
+                reservation.ResourceVersion,
+                cancellationToken).ConfigureAwait(false))!;
+            var status = Observe(replaced);
+            return status.Matches(policy.IntentHash, policy.SourceHash) &&
+                ReadSourceEpoch(replaced) == reservation.SourceEpoch &&
+                replaced.Metadata.Uid == reservation.ObjectUid
+                ? status
+                : Failed("readback_mismatch");
         }
         catch (CiliumPolicyException exception)
         {
@@ -136,6 +278,8 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
             .ConfigureAwait(false));
         if (current is null)
             return;
+        if (string.IsNullOrWhiteSpace(current.Metadata.Uid))
+            throw new CiliumPolicyException("invalid_object_uid", "Kubernetes returned a policy without an object UID.");
         if (string.IsNullOrWhiteSpace(current.Metadata.ResourceVersion))
             throw new CiliumPolicyException("invalid_resource_version", "Kubernetes returned a policy without a resource version.");
         var seed = current with
@@ -143,11 +287,20 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
             Metadata = current.Metadata with
             {
                 Annotations = Annotations(current).RemoveRange(
-                    [GenerationAnnotation, IntentHashAnnotation, SourceHashAnnotation]),
+                    [GenerationAnnotation, SourceEpochAnnotation, IntentHashAnnotation, SourceHashAnnotation]),
             },
             Spec = new CiliumPolicySpec(new CiliumEndpointSelector(WorkloadLabels), [DnsRule(null)]),
         };
-        await _store.ReplaceAsync(seed, current.Metadata.ResourceVersion, cancellationToken).ConfigureAwait(false);
+        seed = seed with
+        {
+            Metadata = seed.Metadata with
+            {
+                Uid = current.Metadata.Uid,
+                ResourceVersion = current.Metadata.ResourceVersion,
+            },
+        };
+        await _store.ReplaceAsync(
+            seed, current.Metadata.Uid, current.Metadata.ResourceVersion, cancellationToken).ConfigureAwait(false);
     }
 
     public IAsyncEnumerable<EgressFlowObservation> ReadFlowsAsync(
@@ -215,7 +368,10 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
         }
     }
 
-    private CiliumNetworkPolicyDocument Render(CiliumNetworkPolicyDocument current, PlatformEgressPolicy policy)
+    private CiliumNetworkPolicyDocument Render(
+        CiliumNetworkPolicyDocument current,
+        PlatformEgressPolicy policy,
+        long? sourceEpoch = null)
     {
         var https = ImmutableArray.Create(new CiliumPortRules([new CiliumPort("443", "TCP")]));
         var hosts = policy.Destinations.Select(destination => destination.Host).ToImmutableArray();
@@ -238,17 +394,20 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
 
         var deny = new CiliumEgressRuleDocument(
             ToCidrSet: _excludedV4.Concat(_excludedV6).Select(range => new CiliumCidrSelector(range)).ToImmutableArray());
+        var annotations = Annotations(current).SetItems(
+        [
+            new KeyValuePair<string, string>(
+                GenerationAnnotation, policy.Generation.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string>(IntentHashAnnotation, policy.IntentHash),
+            new KeyValuePair<string, string>(SourceHashAnnotation, policy.SourceHash),
+        ]);
+        if (sourceEpoch is { } epoch)
+            annotations = annotations.SetItem(SourceEpochAnnotation, epoch.ToString(CultureInfo.InvariantCulture));
         return current with
         {
             Metadata = current.Metadata with
             {
-                Annotations = Annotations(current).SetItems(
-                [
-                    new KeyValuePair<string, string>(
-                        GenerationAnnotation, policy.Generation.ToString(CultureInfo.InvariantCulture)),
-                    new KeyValuePair<string, string>(IntentHashAnnotation, policy.IntentHash),
-                    new KeyValuePair<string, string>(SourceHashAnnotation, policy.SourceHash),
-                ]),
+                Annotations = annotations,
             },
             Spec = new CiliumPolicySpec(new CiliumEndpointSelector(WorkloadLabels), egress.ToImmutable(), [deny]),
         };
@@ -276,6 +435,46 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
             ? generation
             : null;
     }
+
+    private static long? ReadSourceEpoch(CiliumNetworkPolicyDocument policy)
+    {
+        if (!Annotations(policy).TryGetValue(SourceEpochAnnotation, out var value))
+            return 0;
+        return long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var epoch) && epoch > 0
+            ? epoch
+            : null;
+    }
+
+    private static bool IsValidPolicy(PlatformEgressPolicy policy)
+    {
+        if (policy.Generation <= 0 || !Enum.IsDefined(policy.Mode) ||
+            policy.Destinations.IsDefault ||
+            policy.SourceHash is not { Length: 64 } ||
+            policy.SourceHash.Any(character => !char.IsAsciiDigit(character) && character is not (>= 'a' and <= 'f')))
+            return false;
+        try
+        {
+            if (!policy.Destinations.All(destination => destination is not null &&
+                    PlatformEgressHostValidator.Validate(destination.Host, destination.Port) is null))
+                return false;
+            var canonical = PlatformEgressPolicy.Create(
+                policy.Generation, policy.Mode, policy.Destinations, policy.SourceHash);
+            return policy.Destinations.SequenceEqual(canonical.Destinations) &&
+                policy.IntentHash == canonical.IntentHash &&
+                (policy.Mode != PlatformEgressMode.PublicHttps || policy.Destinations.IsEmpty);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool SamePolicy(PlatformEgressPolicy left, PlatformEgressPolicy right) =>
+        left.Generation == right.Generation &&
+        left.Mode == right.Mode &&
+        left.IntentHash == right.IntentHash &&
+        left.SourceHash == right.SourceHash &&
+        left.Destinations.SequenceEqual(right.Destinations);
 
     // Kubernetes responses can omit an empty annotation map.
     private static ImmutableDictionary<string, string> Annotations(CiliumNetworkPolicyDocument policy) =>

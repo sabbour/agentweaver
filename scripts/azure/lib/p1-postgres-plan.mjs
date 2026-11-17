@@ -72,7 +72,7 @@ const GROUPS = {
   environment: {
     SELECT: '__ef_migrations_history',
     'SELECT,INSERT,UPDATE': 'owners owner_effects workspace_volume_cleanup sandbox_leases sandbox_provider_attempts sandbox_late_resource_cleanups remote_mcp_connections p1_creation_links',
-    'SELECT,INSERT': 'lifecycle_operations remote_mcp_connection_configurations remote_mcp_catalog_snapshots remote_mcp_connection_idempotency provider_lifecycle_reports runtime_bootstrap_profile_replacements',
+    'SELECT,INSERT': 'lifecycle_operations remote_mcp_connection_configurations remote_mcp_catalog_snapshots remote_mcp_connection_idempotency provider_lifecycle_reports runtime_bootstrap_profile_replacements platform_policy_apply_reservations',
   },
   knowledge: {
     SELECT: 'knowledge_schema_migrations outbox_schema_migrations',
@@ -280,6 +280,25 @@ const APPEND_ONLY_GUARDS = {
       },
     ],
   },
+  environment: {
+    platform_policy_apply_reservations: [
+      {
+        trigger: 'platform_policy_apply_reservations_consistent_identity',
+        function: 'enforce_platform_policy_apply_reservation_identity()', triggerType: 7,
+        message: 'platform policy apply reservation content conflicts', sqlState: '23514',
+      },
+      {
+        trigger: 'platform_policy_apply_reservations_immutable',
+        function: 'reject_platform_policy_apply_reservation_mutation()', triggerType: 27,
+        message: 'platform policy apply reservations are append-only', sqlState: '55000',
+      },
+      {
+        trigger: 'platform_policy_apply_reservations_no_truncate',
+        function: 'reject_platform_policy_apply_reservation_mutation()', triggerType: 34,
+        message: 'platform policy apply reservations are append-only', sqlState: '55000',
+      },
+    ],
+  },
   orchestrator: {
     maf_runtime_evidence_receipts: [
       {
@@ -322,7 +341,11 @@ const FUNCTIONS = {
     'issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
     'read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
   ],
-  environment: ['enforce_p1_creation_link_immutability()'],
+  environment: [
+    'enforce_p1_creation_link_immutability()',
+    'enforce_platform_policy_apply_reservation_identity()',
+    'reject_platform_policy_apply_reservation_mutation()',
+  ],
   knowledge: [
     'reject_knowledge_revision_mutation()',
     'reject_memory_binding_mutation()',
@@ -452,14 +475,14 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 051 adds immutable native-child rebind receipts.
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
     // Bind each owner migration catalog into the reviewed plan hash.
-    environmentVersions: Array.from({ length: 12 }, (_, index) => index + 1),
+    environmentVersions: Array.from({ length: 13 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',
       'The Environment bootstrap profile replacement store receives exactly SELECT,INSERT on environment.runtime_bootstrap_profile_replacements and receives no UPDATE, DELETE, or default privileges.',
       'Every principal object ID must come from the current target identity deployment; unresolved markers block initialization before credential requests.',
-      'The exact installed row-lock mutation-denial triggers are read back before grants; restricted-role PostgreSQL tests prove row locks, mutation denial, and every source-owned DELETE grant.',
+      'The exact installed row-lock and append-only mutation-denial triggers are read back before grants; restricted-role PostgreSQL tests prove row locks, mutation denial, and every source-owned DELETE grant.',
       'The already approved private connection is ready; this command does not create a tunnel or cloud resources.',
     ],
   };

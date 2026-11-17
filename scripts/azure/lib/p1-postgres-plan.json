@@ -500,11 +500,50 @@
             "SELECT",
             "INSERT"
           ]
+        },
+        {
+          "table": "platform_policy_apply_reservations",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "platform_policy_apply_reservations_consistent_identity",
+              "function": "enforce_platform_policy_apply_reservation_identity()",
+              "triggerType": 7,
+              "message": "platform policy apply reservation content conflicts",
+              "sqlState": "23514"
+            },
+            {
+              "trigger": "platform_policy_apply_reservations_immutable",
+              "function": "reject_platform_policy_apply_reservation_mutation()",
+              "triggerType": 27,
+              "message": "platform policy apply reservations are append-only",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "platform_policy_apply_reservations_no_truncate",
+              "function": "reject_platform_policy_apply_reservation_mutation()",
+              "triggerType": 34,
+              "message": "platform policy apply reservations are append-only",
+              "sqlState": "55000"
+            }
+          ]
         }
       ],
       "functions": [
         {
           "signature": "enforce_p1_creation_link_immutability()",
+          "execute": false
+        },
+        {
+          "signature": "enforce_platform_policy_apply_reservation_identity()",
+          "execute": false
+        },
+        {
+          "signature": "reject_platform_policy_apply_reservation_mutation()",
           "execute": false
         }
       ]
@@ -1612,7 +1651,8 @@
     9,
     10,
     11,
-    12
+    12,
+    13
   ],
   "eventsVersions": [
     1,
@@ -1632,7 +1672,7 @@
     "A separate approval permits the five SQL login mappings, schema initialization, and exact grants.",
     "The Environment bootstrap profile replacement store receives exactly SELECT,INSERT on environment.runtime_bootstrap_profile_replacements and receives no UPDATE, DELETE, or default privileges.",
     "Every principal object ID must come from the current target identity deployment; unresolved markers block initialization before credential requests.",
-    "The exact installed row-lock mutation-denial triggers are read back before grants; restricted-role PostgreSQL tests prove row locks, mutation denial, and every source-owned DELETE grant.",
+    "The exact installed row-lock and append-only mutation-denial triggers are read back before grants; restricted-role PostgreSQL tests prove row locks, mutation denial, and every source-owned DELETE grant.",
     "The already approved private connection is ready; this command does not create a tunnel or cloud resources."
   ]
 }

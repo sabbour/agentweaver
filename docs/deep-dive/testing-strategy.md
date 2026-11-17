@@ -223,6 +223,7 @@ CLI/API compatibility policy.
 | A job produces no expected test/coverage receipt | Guard fails rather than count an empty run as passing | CI/coverage contract tests |
 | A live acceptance prerequisite or cleanup result is missing | Preserve failed/blocked status; do not aggregate into pass | Harness/CLI result tests; complete model-dependent live acceptance is separate |
 | A new platform egress provider is added | It must pass the shared conformance kit in `PlatformEgressTests.cs` | Controlled tests with a fake store; not datapath proof |
+| A reserved egress request is retried or delayed | PostgreSQL recovers the exact reservation after restart; fake Kubernetes tests cover lost-response replay and reject a delayed PUT with a stale `resourceVersion`; the provider rejects a recreated object with a stale UID | PostgreSQL and fake API tests; not live Kubernetes or datapath proof |
 
 The principal risk is overclaiming evidence. Source owners must identify the
 exact revision, executable, environment, executed suite and limitations.
