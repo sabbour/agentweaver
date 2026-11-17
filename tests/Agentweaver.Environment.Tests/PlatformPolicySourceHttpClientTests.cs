@@ -47,9 +47,9 @@ public sealed class PlatformPolicySourceHttpClientTests
         Assert.Equal(PlatformEgressMode.Allowlist, compiled.Candidate!.Mode);
         Assert.Equal(artifact.ContentSha256, compiled.Candidate.SourceHash);
         Assert.Equal(PlatformEgressAcsCompiler.CompilerVersion, compiled.Candidate.CompilerVersion);
-        Assert.Contains(compiled.Candidate.Destinations,
+        Assert.Contains(compiled.Candidate.ApprovedDestinations,
             destination => destination.Host == "approved.example.com");
-        Assert.Contains(compiled.Candidate.Destinations,
+        Assert.Contains(compiled.Candidate.SystemDestinations,
             destination => destination.Host == "api.github.com");
 
         var admitted = PlatformEgressAcsCompiler.Compile(

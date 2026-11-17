@@ -46,11 +46,167 @@ public sealed class PlatformEgressAcsCompilerTests
         var candidate = PlatformEgressAcsCompiler.CompileCandidate(
             artifact, "canonical-policy", "source-revision-1");
         Assert.True(candidate.IsSuccess, candidate.Failure?.Code);
-        Assert.Equal(expectedMode, candidate.Candidate!.Mode);
-        Assert.Equal(artifact.ContentSha256, candidate.Candidate.SourceHash);
+        var compiledCandidate = candidate.Candidate!;
+        Assert.Equal(expectedMode, compiledCandidate.Mode);
+        Assert.Equal(artifact.ContentSha256, compiledCandidate.SourceHash);
         Assert.Equal(
-            result.Snapshot.Destinations.Select(destination => (destination.Host, destination.Port)),
-            candidate.Candidate.Destinations.Select(destination => (destination.Host, destination.Port)));
+            ["a.example.com", "z.example.com"],
+            compiledCandidate.ApprovedDestinations.Select(destination => destination.Host));
+        Assert.Equal(
+            SystemHosts.OrderBy(host => host, StringComparer.Ordinal),
+            compiledCandidate.SystemDestinations.Select(destination => destination.Host));
+    }
+
+    [Theory]
+    [InlineData("Allowlist", true)]
+    [InlineData("Allowlist", false)]
+    [InlineData("PublicHttps", true)]
+    [InlineData("PublicHttps", false)]
+    public void CompilesSystemOnlyCandidateAsAllowlistWithValidatedMetadata(
+        string sourceMode,
+        bool includeApproval)
+    {
+        string[] approved = includeApproval ? ["approved.example.com"] : [];
+        var artifact = CreateArtifact(sourceMode, approved);
+
+        var result = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            artifact,
+            "canonical-policy",
+            "source-revision-1");
+
+        Assert.True(result.IsSuccess, result.Failure?.Code);
+        var candidate = result.Candidate!;
+        Assert.Equal(PlatformEgressMode.Allowlist, candidate.Mode);
+        Assert.Empty(candidate.ApprovedDestinations);
+        Assert.Equal(
+            SystemHosts.OrderBy(host => host, StringComparer.Ordinal),
+            candidate.SystemDestinations.Select(destination => destination.Host));
+        Assert.All(candidate.SystemDestinations, destination => Assert.Equal(443, destination.Port));
+        Assert.Equal("canonical-policy", candidate.SourceId);
+        Assert.Equal("source-revision-1", candidate.SourceRevision);
+        Assert.Equal(artifact.ContentSha256, candidate.SourceHash);
+        Assert.Equal(PlatformEgressAcsCompiler.CompilerVersion, candidate.CompilerVersion);
+    }
+
+    [Fact]
+    public void SystemOnlyCompilationPreservesTheNormalCandidate()
+    {
+        var artifact = CreateArtifact("PublicHttps", ["approved.example.com"]);
+        var original = PlatformEgressAcsCompiler.CompileCandidate(
+            artifact, "canonical-policy", "source-revision-1").Candidate!;
+        var approvedBefore = original.ApprovedDestinations
+            .Select(destination => (destination.Host, destination.Port))
+            .ToArray();
+        var systemBefore = original.SystemDestinations
+            .Select(destination => (destination.Host, destination.Port))
+            .ToArray();
+
+        var systemOnly = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            artifact, "canonical-policy", "source-revision-1");
+        var after = PlatformEgressAcsCompiler.CompileCandidate(
+            artifact, "canonical-policy", "source-revision-1").Candidate!;
+
+        Assert.True(systemOnly.IsSuccess, systemOnly.Failure?.Code);
+        Assert.Equal(PlatformEgressMode.PublicHttps, original.Mode);
+        Assert.Equal(approvedBefore, original.ApprovedDestinations
+            .Select(destination => (destination.Host, destination.Port)));
+        Assert.Equal(systemBefore, original.SystemDestinations
+            .Select(destination => (destination.Host, destination.Port)));
+        Assert.Equal(original.Mode, after.Mode);
+        Assert.Equal(approvedBefore, after.ApprovedDestinations
+            .Select(destination => (destination.Host, destination.Port)));
+        Assert.Equal(systemBefore, after.SystemDestinations
+            .Select(destination => (destination.Host, destination.Port)));
+    }
+
+    [Fact]
+    public void SystemOnlyCompilationRejectsInvalidApprovalsAndOverlap()
+    {
+        var invalidApproval = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            CreateArtifact("PublicHttps", ["contoso.vault.azure.net"]),
+            "canonical-policy",
+            "source-revision-1");
+        var overlap = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            CreateArtifact("Allowlist", ["api.github.com"]),
+            "canonical-policy",
+            "source-revision-1");
+
+        Assert.False(invalidApproval.IsSuccess);
+        Assert.Null(invalidApproval.Candidate);
+        Assert.Equal("network_destination_invalid", invalidApproval.Failure?.Code);
+        Assert.False(overlap.IsSuccess);
+        Assert.Null(overlap.Candidate);
+        Assert.Equal("network_destination_duplicate", overlap.Failure?.Code);
+    }
+
+    [Fact]
+    public void SystemOnlyCompilationRejectsTamperedCatalogAndMalformedArtifact()
+    {
+        var valid = CreateArtifact("PublicHttps", ["approved.example.com"]);
+        var data = Encoding.UTF8.GetString(
+            valid.Files.Single(file => file.RelativePath == "policy/data.json").Bytes.AsSpan());
+        var tampered = ReplaceData(
+            valid,
+            data.Replace("api.business.githubcopilot.com", "added.example.com", StringComparison.Ordinal));
+        var malformed = ReplaceData(valid, "{");
+
+        var catalogResult = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            tampered, "canonical-policy", "source-revision-1");
+        var malformedResult = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            malformed, "canonical-policy", "source-revision-1");
+
+        Assert.False(catalogResult.IsSuccess);
+        Assert.Null(catalogResult.Candidate);
+        Assert.Equal("network_catalog_mismatch", catalogResult.Failure?.Code);
+        Assert.False(malformedResult.IsSuccess);
+        Assert.Null(malformedResult.Candidate);
+        Assert.Equal("network_data_json", malformedResult.Failure?.Code);
+    }
+
+    [Fact]
+    public void ReorderedApprovalsKeepSortedDestinationsAndEachArtifactHash()
+    {
+        var firstArtifact = CreateArtifact("PublicHttps", ["z.example.com", "a.example.com"]);
+        var secondArtifact = CreateArtifact("PublicHttps", ["a.example.com", "z.example.com"]);
+        var firstNormal = PlatformEgressAcsCompiler.CompileCandidate(
+            firstArtifact, "canonical-policy", "source-revision-1").Candidate!;
+        var secondNormal = PlatformEgressAcsCompiler.CompileCandidate(
+            secondArtifact, "canonical-policy", "source-revision-1").Candidate!;
+        var firstSystemOnly = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            firstArtifact, "canonical-policy", "source-revision-1").Candidate!;
+        var secondSystemOnly = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            secondArtifact, "canonical-policy", "source-revision-1").Candidate!;
+
+        Assert.NotEqual(firstArtifact.ContentSha256, secondArtifact.ContentSha256);
+        Assert.Equal(firstArtifact.ContentSha256, firstNormal.SourceHash);
+        Assert.Equal(secondArtifact.ContentSha256, secondNormal.SourceHash);
+        Assert.Equal(firstArtifact.ContentSha256, firstSystemOnly.SourceHash);
+        Assert.Equal(secondArtifact.ContentSha256, secondSystemOnly.SourceHash);
+        Assert.Equal(
+            firstNormal.ApprovedDestinations.Select(destination => (destination.Host, destination.Port)),
+            secondNormal.ApprovedDestinations.Select(destination => (destination.Host, destination.Port)));
+        Assert.Equal(
+            firstNormal.SystemDestinations.Select(destination => (destination.Host, destination.Port)),
+            secondNormal.SystemDestinations.Select(destination => (destination.Host, destination.Port)));
+        Assert.Equal(
+            firstSystemOnly.SystemDestinations.Select(destination => (destination.Host, destination.Port)),
+            secondSystemOnly.SystemDestinations.Select(destination => (destination.Host, destination.Port)));
+    }
+
+    [Fact]
+    public void ApprovedOnlyChangeKeepsSystemBaselineAndChangesSourceHash()
+    {
+        var withApproval = CreateArtifact("Allowlist", ["approved.example.com"]);
+        var withoutApproval = CreateArtifact("Allowlist", []);
+        var first = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            withApproval, "canonical-policy", "source-revision-1").Candidate!;
+        var second = PlatformEgressAcsCompiler.CompileSystemOnlyCandidate(
+            withoutApproval, "canonical-policy", "source-revision-1").Candidate!;
+
+        Assert.NotEqual(first.SourceHash, second.SourceHash);
+        Assert.Equal(
+            first.SystemDestinations.Select(destination => (destination.Host, destination.Port)),
+            second.SystemDestinations.Select(destination => (destination.Host, destination.Port)));
     }
 
     [Fact]
