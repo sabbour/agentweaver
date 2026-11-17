@@ -1,8 +1,10 @@
+using System.Collections.Immutable;
 using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Agentweaver.Abstractions;
 using Agentweaver.Cli;
 using Agentweaver.Cli.Api;
 using Agentweaver.Gateway;
@@ -12,9 +14,9 @@ namespace Agentweaver.Cli.Tests;
 [Collection(CliEnvironmentCollection.Name)]
 public sealed class PolicyCommandTests
 {
-    private const string Hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     private const string Time = "2026-11-16T00:00:00+00:00";
     private const string Canary = "POLICY_PRIVATE_CANARY";
+    private static readonly string Hash = ArtifactHash(3);
     private static readonly string[] Target =
     [
         "--gateway-url", "https://gateway.example/", "--broker-issuer", "https://identity.example/",
@@ -46,6 +48,157 @@ public sealed class PolicyCommandTests
         Assert.Null(fixture.Authentication.Identity.RunId);
         Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
         Assert.Equal(InteractionPolicy.Never, fixture.Authentication.Interaction);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExportWritesCompleteArtifactAndOnlyMetadataToStandardOutput(bool exact)
+    {
+        var outputPath = NewOutputPath();
+        var fixture = new Fixture { Body = ShowBody(exact) };
+        try
+        {
+            Assert.Equal(0, await fixture.Run(exact
+                ? ["export", "--scope", "platform", "--revision", "2", "--output", outputPath]
+                : ["export", "--scope", "platform", "--output", outputPath]));
+
+            var exported = JsonNode.Parse(await File.ReadAllTextAsync(outputPath))!.AsObject();
+            Assert.Equal(
+                (exact
+                    ? new[] { "artifact", "contentSha256", "createdAt", "policyId", "revision", "scopeId", "scopeType" }
+                    : new[] { "artifact", "contentSha256", "policyId", "revision", "scopeId", "scopeType", "updatedAt" }),
+                exported.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Equal("platform", exported["scopeType"]!.GetValue<string>());
+            Assert.Equal("default", exported["scopeId"]!.GetValue<string>());
+            Assert.Equal("canonical", exported["policyId"]!.GetValue<string>());
+            Assert.Equal(2, exported["revision"]!.GetValue<long>());
+            Assert.Equal(Hash, exported["contentSha256"]!.GetValue<string>());
+            Assert.Equal(Time, exported[exact ? "createdAt" : "updatedAt"]!.GetValue<string>());
+
+            var artifact = exported["artifact"]!.AsObject();
+            Assert.Equal(["contentSha256", "files", "manifestBytes"],
+                artifact.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Equal(Hash, artifact["contentSha256"]!.GetValue<string>());
+            Assert.Equal(new byte[] { 65, 65, 65 },
+                artifact["manifestBytes"]!.AsArray().Select(value => value!.GetValue<byte>()).ToArray());
+            var files = artifact["files"]!.AsArray();
+            Assert.Equal(2, files.Count);
+            Assert.Equal("modules/network.rego", files[0]!["relativePath"]!.GetValue<string>());
+            Assert.Equal(new byte[] { 80, 79, 76, 73, 67, 89 },
+                files[0]!["bytes"]!.AsArray().Select(value => value!.GetValue<byte>()).ToArray());
+            Assert.Equal("data/policy.json", files[1]!["relativePath"]!.GetValue<string>());
+            Assert.Equal(new byte[] { 123, 34, 101, 110, 97, 98, 108, 101, 100, 34, 58, 116, 114, 117, 101, 125 },
+                files[1]!["bytes"]!.AsArray().Select(value => value!.GetValue<byte>()).ToArray());
+            Assert.DoesNotContain("private", exported.ToJsonString(), StringComparison.Ordinal);
+
+            var summary = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal(
+                (exact
+                    ? new[] { "contentSha256", "createdAt", "output", "policyId", "revision", "scopeId", "scopeType" }
+                    : new[] { "contentSha256", "output", "policyId", "revision", "scopeId", "scopeType", "updatedAt" }),
+                summary.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Equal(outputPath, summary["output"]!.GetValue<string>());
+            Assert.DoesNotContain("manifestBytes", fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.Equal(exact
+                    ? "/api/v1/policies/platform/revisions/2"
+                    : "/api/v1/policies/platform",
+                fixture.PolicyPath);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.Null(fixture.Authentication.Identity!.ProjectId);
+            Assert.Null(fixture.Authentication.Identity.RunId);
+            Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
+            Assert.Equal(InteractionPolicy.Never, fixture.Authentication.Interaction);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExportRejectsHashMismatchWithoutCreatingAFile()
+    {
+        var outputPath = NewOutputPath();
+        var body = JsonNode.Parse(ShowBody(exact: false))!.AsObject();
+        body["artifact"]!["manifestBytes"]![0] = 66;
+        var fixture = new Fixture { Body = body.ToJsonString() };
+        try
+        {
+            Assert.Equal(1, await fixture.Run("export", "--scope", "platform", "--output", outputPath));
+            Assert.False(File.Exists(outputPath));
+            Assert.Empty(fixture.Output.ToString());
+            Assert.Contains("invalid policy response", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.DoesNotContain("65,65,65", fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("65,65,65", fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExportRequiresANewOutputFileBeforeNetworkAccess()
+    {
+        var fixture = new Fixture();
+        Assert.Equal(1, await fixture.Run("export", "--scope", "platform"));
+        Assert.Equal(0, fixture.RequestCount);
+
+        var outputPath = NewOutputPath();
+        try
+        {
+            await File.WriteAllTextAsync(outputPath, "keep");
+            fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run("export", "--scope", "platform", "--output", outputPath));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Equal("keep", await File.ReadAllTextAsync(outputPath));
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExportDispatchesAgainstThePublishedGatewayContract()
+    {
+        var outputPath = NewOutputPath();
+        var fixture = new Fixture { UseGatewayContract = true };
+        try
+        {
+            Assert.Equal(0, await fixture.Run("export", "--scope", "platform", "--output", outputPath));
+            Assert.Equal("/api/v1/policies/platform", fixture.PolicyPath);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExportRejectsWrongRevisionBeforeWritingAFile()
+    {
+        var outputPath = NewOutputPath();
+        var fixture = new Fixture { Body = ShowBody(exact: true, revision: 3) };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "export", "--scope", "platform", "--revision", "2", "--output", outputPath));
+            Assert.False(File.Exists(outputPath));
+            Assert.Empty(fixture.Output.ToString());
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+        }
     }
 
     [Fact]
@@ -312,6 +465,26 @@ public sealed class PolicyCommandTests
         Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task LargeExportWritesArtifactToFileWithoutPrintingItsBytes()
+    {
+        var outputPath = NewOutputPath();
+        var fixture = new Fixture { Body = ShowBody(false, bytes: 400_000) };
+        try
+        {
+            Assert.Equal(0, await fixture.Run("export", "--scope", "platform", "--output", outputPath));
+            Assert.True(fixture.Body.Length > 1_000_000);
+            Assert.True(new FileInfo(outputPath).Length > 1_000_000);
+            Assert.True(fixture.Output.ToString().Length < 1000);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+        }
+    }
+
     private static string[] Args(string command) => command switch
     {
         "exact" => ["show", "--scope", "platform", "--revision", "2"],
@@ -325,8 +498,29 @@ public sealed class PolicyCommandTests
         _ => ShowBody(exact: false, timestamp: timestamp),
     };
 
-    private static string ShowBody(bool exact, int revision = 2, int bytes = 3, string timestamp = Time) =>
-        $$"""{"scopeType":"platform","scopeId":"default","policyId":"canonical","revision":{{revision}},"contentSha256":"{{Hash}}","{{(exact ? "createdAt" : "updatedAt")}}":"{{timestamp}}","artifact":{"manifestBytes":[{{string.Join(',', Enumerable.Repeat(65, bytes))}}],"files":[{"relativePath":"{{Canary}}","bytes":[80,79,76,73,67,89]}],"contentSha256":"{{Hash}}"},"private":"{{Canary}}"}""";
+    private static string ShowBody(bool exact, int revision = 2, int bytes = 3, string timestamp = Time)
+    {
+        var hash = ArtifactHash(bytes);
+        return $$"""{"scopeType":"platform","scopeId":"default","policyId":"canonical","revision":{{revision}},"contentSha256":"{{hash}}","{{(exact ? "createdAt" : "updatedAt")}}":"{{timestamp}}","artifact":{"manifestBytes":[{{string.Join(',', Enumerable.Repeat(65, bytes))}}],"files":[{"relativePath":"modules/network.rego","bytes":[80,79,76,73,67,89]},{"relativePath":"data/policy.json","bytes":[123,34,101,110,97,98,108,101,100,34,58,116,114,117,101,125]}],"contentSha256":"{{hash}}"},"private":"{{Canary}}"}""";
+    }
+
+    private static string ArtifactHash(int manifestBytes)
+    {
+        var artifact = new NativeAcsArtifact(
+            ImmutableArray.CreateRange(Enumerable.Repeat((byte)65, manifestBytes)),
+            ImmutableArray.Create(
+                new NativeAcsArtifactFile(
+                    "modules/network.rego",
+                    ImmutableArray.Create<byte>(80, 79, 76, 73, 67, 89)),
+                new NativeAcsArtifactFile(
+                    "data/policy.json",
+                    ImmutableArray.Create<byte>(123, 34, 101, 110, 97, 98, 108, 101, 100, 34, 58, 116, 114, 117, 101, 125))),
+            string.Empty);
+        return NativeAcsArtifactHash.Compute(artifact);
+    }
+
+    private static string NewOutputPath() =>
+        Path.Combine(AppContext.BaseDirectory, $"policy-export-{Guid.NewGuid():N}.json");
 
     private sealed class Fixture : HttpMessageHandler, IGatewayClientFactory
     {

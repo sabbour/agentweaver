@@ -202,6 +202,20 @@ of `updatedAt`.
 agentweaver policy show --scope platform --revision 1
 ```
 
+To export the complete current artifact, give `--output` a new file path:
+
+```powershell
+agentweaver policy export --scope platform --output .\platform-policy.json
+agentweaver policy export --scope platform --revision 1 --output .\platform-policy-revision-1.json
+```
+
+The JSON file contains the manifest bytes, every module and data file, the
+complete content hash, and the exact revision. The artifact bytes remain in
+the API's `manifestBytes` and `files[].bytes` arrays. The CLI recomputes the
+hash before it writes the file. The command does not overwrite an existing
+file. Standard output contains the scope, policy ID, revision, hash, timestamp,
+and output path; it does not print the policy artifact.
+
 History returns the newest revision first. Each item contains `revision`,
 `contentSha256` and `createdAt`. The response also contains
 `snapshotRevision` and `nextCursor`. To continue, pass `nextCursor` unchanged
@@ -214,8 +228,9 @@ agentweaver policy history --scope platform --page-size 20 --cursor CURSOR
 Replace `CURSOR` with the returned value. An empty scope returns an empty
 history; a show request returns `native_acs_policy_not_found`. The head and
 exact revision reads verify the stored artifact hash. History shows stored
-hashes without verifying each artifact. The commands return metadata, not
-artifact files or enforcement status.
+hashes without verifying each artifact. `show` and `history` return metadata,
+not artifact files or enforcement status. `export` writes source data; it does
+not activate or enforce policy.
 
 ## Discover and invoke API operations
 
