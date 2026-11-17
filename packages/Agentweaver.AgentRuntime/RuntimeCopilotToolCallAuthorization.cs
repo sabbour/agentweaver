@@ -18,6 +18,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
     Func<RuntimeActionRequest, CancellationToken, Task> requireAuthority,
     RuntimeCopilotTurnObserver turns,
     RuntimeNativeCallSequence nativeCalls,
+    string workspaceRoot,
     Func<RuntimeNativeToolPermissionRejectionRequest, CancellationToken, Task>?
         recordToolPermissionRejection = null)
 {
@@ -37,6 +38,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
             return Deny("runtime_tool_read_only");
         try
         {
+            RuntimeNativeWorkspaceContainment.RequirePreToolUse(workspaceRoot, input);
             var context = ReadContext();
             // This callback has no native call ID; it checks policy without reserving a tool slot.
             var request = CreateRequest(
@@ -44,6 +46,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                 isInvocation: false);
             await requireAuthority(request, context.Token).ConfigureAwait(false);
             RequireContext(context);
+            RuntimeNativeWorkspaceContainment.RequirePreToolUse(workspaceRoot, input);
             return new PreToolUseHookOutput { PermissionDecision = "ask" };
         }
         catch (RuntimeAuthorizationException failure)
@@ -73,6 +76,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                 // Recheck the restriction at permission time; a prior pre-tool hook is not an approval.
                 if (context.ReadOnlyToolsOnly && hook.ToolName != "view")
                     return PermissionDecision.Reject("runtime_tool_read_only");
+                RuntimeNativeWorkspaceContainment.RequirePermissionRequest(workspaceRoot, request);
                 var ownerRequest = CreateRequest(
                     CreateEventId(context.MessageId, hook.ToolCallId!, "invocation"),
                     action,
@@ -88,6 +92,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                     return PermissionDecision.Reject("runtime_tool_read_only");
                 if (!MatchesPermission(call.Request.ActionId, kind))
                     return PermissionDecision.Reject("runtime_permission_not_registered");
+                RuntimeNativeWorkspaceContainment.RequirePermissionRequest(workspaceRoot, request);
                 secondary = GetSecondary(call, kind, RuntimeContractValidation.Hash(
                     JsonSerializer.SerializeToUtf8Bytes(request)));
             }
@@ -132,6 +137,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                 await requireAuthority(secondary, context.Token).ConfigureAwait(false);
                 RequireCall(context, call);
             }
+            RuntimeNativeWorkspaceContainment.RequirePermissionRequest(workspaceRoot, request);
             return PermissionDecision.ApproveOnce();
         }
         catch (RuntimeAuthorizationException failure)

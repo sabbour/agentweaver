@@ -232,7 +232,7 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
             toolAuthorization = requireActionAuthority is null ? null :
                 new RuntimeCopilotToolCallAuthorization(
                     registration, sdkSessionId, requireActionAuthority, turns, nativeCalls,
-                    recordToolPermissionRejection);
+                    _workingDirectory, recordToolPermissionRejection);
             if (recovery is not null)
             {
                 var recordedLimit = recovery.Cache?.Material.Reference.Material?.MaxPromptTokens;

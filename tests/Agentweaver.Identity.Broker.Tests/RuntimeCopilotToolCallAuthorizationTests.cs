@@ -13,6 +13,8 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class RuntimeCopilotToolCallAuthorizationTests
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string WorkspaceRoot =
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
 
     [Theory]
     [InlineData("view", "tool.read")]
@@ -39,19 +41,21 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                 return Task.CompletedTask;
             },
             ActiveTurn(),
-            nativeCalls);
+            nativeCalls,
+            WorkspaceRoot);
         var input = Create<PreToolUseHookInput>(new
         {
             sessionId,
             timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            workingDirectory = "/workspace",
+            cwd = WorkspaceRoot,
             toolName,
-            toolArgs = new { command = "bounded" }
+            toolArgs = ToolArguments(toolName)
         });
+        Assert.Equal(WorkspaceRoot, input.WorkingDirectory);
         var hookInvocation = CreateHookInvocation(sessionId);
 
         var hook = await authorization.OnPreToolUseAsync(input, hookInvocation);
-        Assert.Equal("ask", hook?.PermissionDecision);
+        Assert.True(hook?.PermissionDecision == "ask", hook?.PermissionDecisionReason);
         Assert.False(Assert.Single(calls).IsToolInvocation);
         Assert.Equal(0, nativeCalls.Snapshot().ToolEffectSequence);
 
@@ -107,7 +111,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                 return Task.CompletedTask;
             },
             ActiveTurn(),
-            nativeCalls);
+            nativeCalls,
+            WorkspaceRoot);
 
         var readInput = Create<PreToolUseHookInput>(HookInput(sessionId, "read_bash"));
         var writeInput = Create<PreToolUseHookInput>(HookInput(sessionId, "write_bash"));
@@ -146,7 +151,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                 throw new RuntimeAuthorizationException("runtime_action_denied");
             },
             ActiveTurn(),
-            nativeCalls);
+            nativeCalls,
+            WorkspaceRoot);
         var hookInvocation = CreateHookInvocation(sessionId);
         var permissionInvocation = CreatePermissionInvocation(sessionId);
         var hook = await authorization.OnPreToolUseAsync(
@@ -180,6 +186,368 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     }
 
     [Fact]
+    public async Task PathTraversalIsDeniedBeforeOwnerAuthorization()
+    {
+        var ownerCalls = 0;
+        var nativeCalls = new RuntimeNativeCallSequence();
+        var sessionId = SessionId();
+        var authorization = new RuntimeCopilotToolCallAuthorization(
+            RuntimeCopilotSessionTests.Registration(),
+            sessionId,
+            (_, _) =>
+            {
+                ownerCalls++;
+                return Task.CompletedTask;
+            },
+            ActiveTurn(),
+            nativeCalls,
+            WorkspaceRoot);
+
+        var preTool = await authorization.OnPreToolUseAsync(
+            Create<PreToolUseHookInput>(HookInput(sessionId, "view", new { path = "../outside.txt" })),
+            CreateHookInvocation(sessionId));
+        Assert.Equal("deny", preTool?.PermissionDecision);
+
+        var permission = await authorization.OnPermissionRequestAsync(
+            PermissionRequest("view", "traversal", new { path = "../outside.txt" }),
+            CreatePermissionInvocation(sessionId));
+        Assert.Equal(
+            PermissionDecision.Reject("runtime_tool_workspace_containment_denied").Kind,
+            permission.Kind);
+        Assert.Equal(0, ownerCalls);
+        Assert.Equal(0, nativeCalls.Snapshot().ToolEffectSequence);
+    }
+
+    [Fact]
+    public async Task SymlinkEscapeIsDeniedByPreToolAndPermissionCallbacks()
+    {
+        var nested = WorkspacePath($"nested-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(nested);
+        var link = Path.Combine(nested, $"link-{Guid.NewGuid():N}.txt");
+        var outside = Path.Combine(Path.GetDirectoryName(WorkspaceRoot)!, $"outside-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(outside, "outside");
+        try
+        {
+            File.CreateSymbolicLink(link, outside);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            File.Delete(outside);
+            Directory.Delete(nested);
+            return;
+        }
+        catch (IOException)
+        {
+            File.Delete(outside);
+            Directory.Delete(nested);
+            return;
+        }
+
+        try
+        {
+            var ownerCalls = 0;
+            var nativeCalls = new RuntimeNativeCallSequence();
+            var sessionId = SessionId();
+            var authorization = new RuntimeCopilotToolCallAuthorization(
+                RuntimeCopilotSessionTests.Registration(),
+                sessionId,
+                (_, _) =>
+                {
+                    ownerCalls++;
+                    return Task.CompletedTask;
+                },
+                ActiveTurn(),
+                nativeCalls,
+                WorkspaceRoot);
+            var input = await authorization.OnPreToolUseAsync(
+                Create<PreToolUseHookInput>(
+                    HookInput(sessionId, "view", new { path = Path.GetFileName(link) }, nested)),
+                CreateHookInvocation(sessionId));
+            Assert.Equal("deny", input?.PermissionDecision);
+
+            var permission = await authorization.OnPermissionRequestAsync(
+                PermissionRequest("view", "symlink", new { path = link }),
+                CreatePermissionInvocation(sessionId));
+            Assert.Equal(
+                PermissionDecision.Reject("runtime_tool_workspace_containment_denied").Kind,
+                permission.Kind);
+            Assert.Equal(0, ownerCalls);
+            Assert.Equal(0, nativeCalls.Snapshot().ToolEffectSequence);
+        }
+        finally
+        {
+            File.Delete(link);
+            File.Delete(outside);
+            Directory.Delete(nested);
+        }
+    }
+
+    [Fact]
+    public async Task ShellRelativePathsUseTheResolvedWorkingDirectory()
+    {
+        var nested = WorkspacePath($"nested-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(nested);
+        var link = Path.Combine(nested, $"link-{Guid.NewGuid():N}.txt");
+        var outside = Path.Combine(Path.GetDirectoryName(WorkspaceRoot)!, $"outside-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(outside, "outside");
+        try
+        {
+            File.CreateSymbolicLink(link, outside);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            File.Delete(outside);
+            Directory.Delete(nested);
+            return;
+        }
+        catch (IOException)
+        {
+            File.Delete(outside);
+            Directory.Delete(nested);
+            return;
+        }
+
+        try
+        {
+            var ownerCalls = new List<RuntimeActionRequest>();
+            var callId = "nested-shell-path";
+            var authorization = new RuntimeCopilotToolCallAuthorization(
+                RuntimeCopilotSessionTests.Registration(),
+                SessionId(),
+                (request, _) =>
+                {
+                    ownerCalls.Add(request);
+                    return Task.CompletedTask;
+                },
+                ActiveTurn(),
+                new RuntimeNativeCallSequence(),
+                WorkspaceRoot);
+
+            Approved(await authorization.OnPermissionRequestAsync(
+                PermissionRequest("bash", callId),
+                CurrentInvocation()));
+            var shell = await authorization.OnPermissionRequestAsync(
+                ShellPermissionRequest(
+                    callId, nested, [Path.GetFileName(link)]),
+                CurrentInvocation());
+
+            Assert.Equal(
+                PermissionDecision.Reject("runtime_tool_workspace_containment_denied").Kind,
+                shell.Kind);
+            Assert.Single(ownerCalls);
+        }
+        finally
+        {
+            File.Delete(link);
+            File.Delete(outside);
+            Directory.Delete(nested);
+        }
+    }
+
+    [Fact]
+    public async Task BackslashInUnixFilenameDoesNotHideSymlink()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var link = WorkspacePath($"link-{Guid.NewGuid():N}\\file.txt");
+        var outside = Path.Combine(Path.GetDirectoryName(WorkspaceRoot)!, $"outside-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(outside, "outside");
+        try
+        {
+            File.CreateSymbolicLink(link, outside);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            File.Delete(outside);
+            return;
+        }
+        catch (IOException)
+        {
+            File.Delete(outside);
+            return;
+        }
+
+        try
+        {
+            var sessionId = SessionId();
+            var authorization = new RuntimeCopilotToolCallAuthorization(
+                RuntimeCopilotSessionTests.Registration(),
+                sessionId,
+                (_, _) => Task.CompletedTask,
+                ActiveTurn(),
+                new RuntimeNativeCallSequence(),
+                WorkspaceRoot);
+            var preTool = await authorization.OnPreToolUseAsync(
+                Create<PreToolUseHookInput>(
+                    HookInput(sessionId, "view", new { path = link })),
+                CreateHookInvocation(sessionId));
+
+            Assert.Equal("deny", preTool?.PermissionDecision);
+        }
+        finally
+        {
+            File.Delete(link);
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
+    public async Task CallbacksRecheckPathsAfterOwnerAuthorization()
+    {
+        var link = WorkspacePath($"link-{Guid.NewGuid():N}.txt");
+        var outside = Path.Combine(Path.GetDirectoryName(WorkspaceRoot)!, $"outside-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(outside, "outside");
+        try
+        {
+            File.CreateSymbolicLink(link, outside);
+            File.Delete(link);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            File.Delete(outside);
+            return;
+        }
+        catch (IOException)
+        {
+            File.Delete(outside);
+            return;
+        }
+
+        try
+        {
+            var ownerCalls = 0;
+            var authorization = new RuntimeCopilotToolCallAuthorization(
+                RuntimeCopilotSessionTests.Registration(),
+                SessionId(),
+                (_, _) =>
+                {
+                    ownerCalls++;
+                    File.CreateSymbolicLink(link, outside);
+                    return Task.CompletedTask;
+                },
+                ActiveTurn(),
+                new RuntimeNativeCallSequence(),
+                WorkspaceRoot);
+            var sessionId = SessionId();
+            var preTool = await authorization.OnPreToolUseAsync(
+                Create<PreToolUseHookInput>(HookInput(sessionId, "view", new { path = link })),
+                CreateHookInvocation(sessionId));
+            Assert.Equal("deny", preTool?.PermissionDecision);
+            Assert.Equal(1, ownerCalls);
+
+            File.Delete(link);
+            var permission = await authorization.OnPermissionRequestAsync(
+                PermissionRequest("view", "late-symlink", new { path = link }),
+                CreatePermissionInvocation(sessionId));
+            Assert.Equal(
+                PermissionDecision.Reject("runtime_tool_workspace_containment_denied").Kind,
+                permission.Kind);
+            Assert.Equal(2, ownerCalls);
+        }
+        finally
+        {
+            File.Delete(link);
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
+    public async Task PatchWithOutsideTargetIsDeniedBeforeWriteAuthorization()
+    {
+        var ownerCalls = new List<RuntimeActionRequest>();
+        var nativeCalls = new RuntimeNativeCallSequence();
+        var callId = "outside-patch";
+        var authorization = new RuntimeCopilotToolCallAuthorization(
+            RuntimeCopilotSessionTests.Registration(),
+            SessionId(),
+            (request, _) =>
+            {
+                ownerCalls.Add(request);
+                return Task.CompletedTask;
+            },
+            ActiveTurn(),
+            nativeCalls,
+            WorkspaceRoot);
+
+        Approved(await authorization.OnPermissionRequestAsync(
+            PermissionRequest("edit", callId),
+            CurrentInvocation()));
+        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
+
+        var outside = Path.Combine(Path.GetDirectoryName(WorkspaceRoot)!, "outside-patch.txt");
+        var write = Create<PermissionRequestWrite>(new
+        {
+            kind = "write",
+            toolCallId = callId,
+            requestSandboxBypass = false,
+            managedApprovalRequired = false,
+            fileName = WorkspacePath("patched.txt"),
+            fileEdits = new[]
+            {
+                new
+                {
+                    before = new { path = WorkspacePath("source.txt"), content = "old" },
+                    after = new { path = outside, content = "new" }
+                }
+            },
+            canOfferSessionApproval = false,
+            diff = "patch",
+            intention = "apply a patch"
+        });
+
+        var decision = await authorization.OnPermissionRequestAsync(write, CurrentInvocation());
+
+        Assert.Equal(
+            PermissionDecision.Reject("runtime_tool_workspace_containment_denied").Kind,
+            decision.Kind);
+        Assert.Single(ownerCalls);
+        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
+    }
+
+    [Fact]
+    public async Task OutsideWorkingDirectoriesAreDeniedAtPreToolAndShellPermissionHooks()
+    {
+        var ownerCalls = new List<RuntimeActionRequest>();
+        var nativeCalls = new RuntimeNativeCallSequence();
+        var sessionId = SessionId();
+        var outside = Path.GetFullPath(Path.Combine(WorkspaceRoot, "..", "outside"));
+        var authorization = new RuntimeCopilotToolCallAuthorization(
+            RuntimeCopilotSessionTests.Registration(),
+            sessionId,
+            (request, _) =>
+            {
+                ownerCalls.Add(request);
+                return Task.CompletedTask;
+            },
+            ActiveTurn(),
+            nativeCalls,
+            WorkspaceRoot);
+
+        var preTool = await authorization.OnPreToolUseAsync(
+            Create<PreToolUseHookInput>(HookInput(sessionId, "bash", workingDirectory: outside)),
+            CreateHookInvocation(sessionId));
+        Assert.Equal("deny", preTool?.PermissionDecision);
+        Assert.Empty(ownerCalls);
+        Assert.Equal(0, nativeCalls.Snapshot().ToolEffectSequence);
+
+        var callId = "outside-cwd";
+        Approved(await authorization.OnPermissionRequestAsync(
+            PermissionRequest("bash", callId),
+            CurrentInvocation()));
+        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
+
+        var shell = await authorization.OnPermissionRequestAsync(
+            ShellPermissionRequest(callId, outside),
+            CurrentInvocation());
+        Assert.Equal(
+            PermissionDecision.Reject("runtime_tool_workspace_containment_denied").Kind,
+            shell.Kind);
+        Assert.Single(ownerCalls);
+        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
+    }
+
+    [Fact]
     public async Task NumericToolDenialRecordsBoundedRejectionBeforeReturningReject()
     {
         var registration = RuntimeCopilotSessionTests.Registration();
@@ -200,6 +568,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             },
             turns,
             new RuntimeNativeCallSequence(),
+            WorkspaceRoot,
             (request, _) =>
             {
                 rejections.Add(request);
@@ -235,6 +604,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                 : Task.CompletedTask,
             ActiveTurn(),
             new RuntimeNativeCallSequence(),
+                WorkspaceRoot,
             (_, _) => Task.FromException(new OperationCanceledException()));
 
         var decision = await authorization.OnPermissionRequestAsync(
@@ -257,6 +627,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                     RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode)),
             ActiveTurn(),
             new RuntimeNativeCallSequence(),
+            WorkspaceRoot,
             (_, _) =>
             {
                 rejections++;
@@ -285,7 +656,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             {
                 calls.Add(request);
                 return Task.CompletedTask;
-            }, turns, nativeCalls);
+            }, turns, nativeCalls, WorkspaceRoot);
         var hookInvocation = CreateHookInvocation(SessionId());
         var permissionInvocation = CurrentInvocation();
 
@@ -405,7 +776,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var registration = RuntimeCopilotSessionTests.Registration() with { Revision = 2 };
         var recovered = new RuntimeCopilotToolCallAuthorization(
             registration, SessionId(), (request, _) => { requests.Add(request); return Task.CompletedTask; }, turns,
-            new RuntimeNativeCallSequence());
+            new RuntimeNativeCallSequence(), WorkspaceRoot);
         Rejected(await recovered.OnPermissionRequestAsync(
             SecondaryPermission("view", "native-call-1"), CurrentInvocation()));
         Approved(await recovered.OnPermissionRequestAsync(
@@ -416,7 +787,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     private static RuntimeCopilotToolCallAuthorization Authorization(
         Func<RuntimeActionRequest, CancellationToken, Task> authority, RuntimeCopilotTurnObserver? turns = null) =>
         new(RuntimeCopilotSessionTests.Registration(), SessionId(), authority, turns ?? ActiveTurn(),
-            new RuntimeNativeCallSequence());
+            new RuntimeNativeCallSequence(), WorkspaceRoot);
 
     private static RuntimeCopilotTurnObserver ActiveTurn(bool readOnlyToolsOnly = false)
     {
@@ -436,13 +807,17 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     private static void Rejected(PermissionDecision decision) =>
         Assert.Equal(PermissionDecision.Reject("denied").Kind, decision.Kind);
 
-    private static object HookInput(string sessionId, string toolName) => new
+    private static object HookInput(
+        string sessionId,
+        string toolName,
+        object? toolArgs = null,
+        string? workingDirectory = null) => new
     {
         sessionId,
         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        workingDirectory = "/workspace",
+        cwd = workingDirectory ?? WorkspaceRoot,
         toolName,
-        toolArgs = new { command = "bounded" }
+        toolArgs = toolArgs ?? ToolArguments(toolName)
     };
 
     private static HookInvocation CreateHookInvocation(string sessionId) =>
@@ -451,20 +826,27 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     private static PermissionInvocation CreatePermissionInvocation(string sessionId) =>
     Create<PermissionInvocation>(new { sessionId });
 
-    private static PermissionRequest PermissionRequest(string toolName, string callId) =>
+    private static PermissionRequest PermissionRequest(
+        string toolName,
+        string callId,
+        object? toolArgs = null) =>
     Create<PermissionRequestHook>(new
     {
-        kind = "hook", toolName, toolCallId = callId, toolArgs = new { command = "bounded" }
+        kind = "hook", toolName, toolCallId = callId, toolArgs = toolArgs ?? ToolArguments(toolName)
     });
 
-    private static PermissionRequest ShellPermissionRequest(string callId) =>
+    private static PermissionRequest ShellPermissionRequest(
+        string callId,
+        string? resolvedWorkingDirectory = null,
+        string[]? possiblePaths = null) =>
     Create<PermissionRequestShell>(new
     {
         kind = "shell", toolCallId = callId, requestSandboxBypass = false,
         managedApprovalRequired = false, fullCommandText = "echo bounded",
         canOfferSessionApproval = false, hasWriteFileRedirection = false,
         commands = new[] { new { identifier = "echo", readOnly = true } },
-        possiblePaths = Array.Empty<string>(), possibleUrls = Array.Empty<object>(),
+        possiblePaths = possiblePaths ?? Array.Empty<string>(), possibleUrls = Array.Empty<object>(),
+        resolvedWorkingDirectory = resolvedWorkingDirectory ?? WorkspaceRoot,
         intention = "run a bounded command"
     });
 
@@ -473,17 +855,26 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     "view" => Create<PermissionRequestRead>(new
     {
         kind = "read", toolCallId = callId, requestSandboxBypass = false,
-        managedApprovalRequired = false, path = "/workspace/input.txt",
+        managedApprovalRequired = false, path = WorkspacePath("input.txt"),
         intention = "read a bounded input"
     }),
     "create" or "edit" => Create<PermissionRequestWrite>(new
     {
         kind = "write", toolCallId = callId, requestSandboxBypass = false,
-        managedApprovalRequired = false, fileName = "/workspace/output.txt", newFileContents = "bounded",
+        managedApprovalRequired = false, fileName = WorkspacePath("output.txt"), newFileContents = "bounded",
         canOfferSessionApproval = false, diff = "", intention = "write a bounded output"
     }),
     _ => ShellPermissionRequest(callId)
     };
+
+    private static object ToolArguments(string toolName) => toolName switch
+    {
+        "view" => new { path = WorkspacePath("input.txt") },
+        "create" or "edit" => new { file_path = WorkspacePath("output.txt") },
+        _ => new { command = "bounded" }
+    };
+
+    private static string WorkspacePath(string path) => Path.Combine(WorkspaceRoot, path);
 
     private static T Create<T>(object value) =>
         JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value), JsonOptions)

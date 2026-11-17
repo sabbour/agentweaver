@@ -58,7 +58,8 @@ public sealed class RuntimeActionHttpClientTests
         };
         var registration = RuntimeCopilotSessionTests.Registration();
         var actions = new List<RuntimeActionRequest>();
-        await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
+        await using var session = await RuntimeCopilotSessionTests.Factory(
+            external, workingDirectory: AppContext.BaseDirectory).CreateAsync(
             registration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
             requireActionAuthority: (request, token) =>
@@ -81,7 +82,7 @@ public sealed class RuntimeActionHttpClientTests
                 input = new
                 {
                     sessionId = session.Facts.SdkSessionId, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    workingDirectory = "/workspace", toolName = "view", toolArgs = new { path = "readme.txt" }
+                    cwd = AppContext.BaseDirectory, toolName = "view", toolArgs = new { path = "readme.txt" }
                 }
 
                 #pragma warning restore GHCP001
@@ -228,7 +229,11 @@ public sealed class RuntimeActionHttpClientTests
         };
         var registration = RuntimeCopilotSessionTests.Registration();
         var actions = new List<RuntimeActionRequest>();
-        await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
+        object toolArgs = tool is "view" or "edit"
+            ? new { path = Path.Combine(AppContext.BaseDirectory, "input.txt") }
+            : new { command = "bounded" };
+        await using var session = await RuntimeCopilotSessionTests.Factory(
+            external, workingDirectory: AppContext.BaseDirectory).CreateAsync(
             registration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
             requireActionAuthority: (request, token) =>
@@ -247,7 +252,7 @@ public sealed class RuntimeActionHttpClientTests
             input = new
             {
                 sessionId = session.Facts.SdkSessionId, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                workingDirectory = "/workspace", toolName = tool, toolArgs = new { command = "bounded" }
+                cwd = AppContext.BaseDirectory, toolName = tool, toolArgs
             }
         }, timeout.Token);
         Assert.Equal(tool == "unregistered-tool" ? "deny" : "ask",
@@ -273,7 +278,8 @@ public sealed class RuntimeActionHttpClientTests
         var registration = RuntimeCopilotSessionTests.Registration();
         var authorized = new TaskCompletionSource<RuntimeActionRequest>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
+        await using var session = await RuntimeCopilotSessionTests.Factory(
+            external, workingDirectory: AppContext.BaseDirectory).CreateAsync(
             registration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
             requireActionAuthority: (request, token) =>
