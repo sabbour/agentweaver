@@ -1,0 +1,22 @@
+{
+  "caseId": "numeric-admitted-completion",
+  "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "targetCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "apphostSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "approvedNonProduction": true,
+  "approvedModelAndSpend": true,
+  "approvedProposalCleanup": true,
+  "expectedActorId": "replace-with-approved-actor-id",
+  "expectedConfigurationRevision": 1,
+  "expectedMaxModelTurns": 1,
+  "target": {
+    "gatewayUrl": "https://gateway.example.invalid",
+    "brokerIssuer": "https://broker.example.invalid",
+    "clientId": "replace-with-cli-client-id",
+    "apiAudience": "replace-with-api-audience",
+    "tenantId": "replace-with-tenant-id",
+    "projectId": "replace-with-project-id",
+    "runId": "replace-with-run-id",
+    "sessionId": "replace-with-root-session-id"
+  }
+}

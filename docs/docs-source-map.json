@@ -144,9 +144,28 @@
       "sourcePrefixes": [
         "scripts/acceptance/api/"
       ],
+      "sourceExclusions": [
+        "scripts/acceptance/api/numeric-",
+        "scripts/acceptance/api/examples/numeric-",
+        "scripts/acceptance/api/tests/numeric-"
+      ],
       "required": [
         "docs/guide/api-acceptance-migration.md",
         "docs/guide/checkpoint-recovery-observation-acceptance.md",
+        "docs/guide/numeric-runtime-observation-acceptance.md",
+        "docs/guide/testing.md",
+        "docs/guide/cli.md"
+      ]
+    },
+    {
+      "name": "Numeric runtime observation",
+      "sourcePrefixes": [
+        "scripts/acceptance/api/numeric-",
+        "scripts/acceptance/api/examples/numeric-",
+        "scripts/acceptance/api/tests/numeric-"
+      ],
+      "required": [
+        "docs/guide/numeric-runtime-observation-acceptance.md",
         "docs/guide/testing.md",
         "docs/guide/cli.md"
       ]

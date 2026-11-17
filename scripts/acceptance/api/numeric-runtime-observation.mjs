@@ -6,6 +6,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from '../../harness-shared/safe-jsonl.mjs';
+import { buildNumericMatrix, compareBoundary, warningFloorTransition } from './numeric-case-matrix.mjs';
 
 const CASE_ID = 'numeric-runtime-observation';
 const MODEL_TURN_CASE_ID = 'numeric-model-turn-no-send';
@@ -263,8 +264,8 @@ function matchesToolLimitRejection(fact) {
     && fact.limitKind === 'toolCalls'
     && fact.stage === 'toolPermission'
     && fact.reasonCode === TOOL_LIMIT_DENIAL
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fact.attemptId ?? '')
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fact.dispatchId ?? '')
+    && isUuid(fact.attemptId)
+    && isUuid(fact.dispatchId)
     && fact.ownerDecision?.state === 'available'
     && fact.toolPermission?.state === 'available'
     && fact.nativeNoSend?.state === 'unavailable'
@@ -310,6 +311,9 @@ function responseBindingMismatch(response, binding, expected, isRoot) {
   if (actual.runId !== expected.runId) return 'another run';
   if (actual.sessionId !== expected.sessionId) return 'another session';
   if (actual.isRoot !== isRoot) return 'another session type';
+  if (actual.rootSessionId !== binding.rootSessionId
+    || actual.runtimeInstanceId !== binding.runtimeInstanceId
+    || actual.registrationRevision !== binding.registrationRevision) return 'another runtime registration';
   if (actual.currentExecutionFence !== binding.currentExecutionFence
     || actual.sessionExecutionFence !== binding.sessionExecutionFence) return 'a stale or different execution fence';
   if (actual.acceptedSelectionHash !== binding.acceptedSelectionHash) return 'another accepted selection';
@@ -338,6 +342,10 @@ function toolHistoryEvidence(input, pages) {
     || first.binding?.runId !== expected.runId
     || first.binding?.sessionId !== expected.sessionId
     || first.binding?.isRoot !== false
+    || !nonEmpty(first.binding?.rootSessionId)
+    || !isUuid(first.binding?.runtimeInstanceId)
+    || !Number.isSafeInteger(first.binding?.registrationRevision)
+    || first.binding.registrationRevision < 1
     || !Number.isInteger(first.binding?.currentExecutionFence)
     || first.binding?.currentExecutionFence !== first.binding?.sessionExecutionFence
     || !nonEmpty(first.binding?.acceptedSelectionHash)) {
@@ -368,15 +376,29 @@ function toolHistoryEvidence(input, pages) {
   if (total?.state !== 'available' || total.value !== input.expectedMaxToolCalls) {
     throw new Error('Run-wide tool reservations do not match the configured test limit.');
   }
-  return { binding: first.binding, facts, rejection, total };
+  const validReservations = reservations.filter(fact => Number.isSafeInteger(fact.configuredValue)
+    && fact.configuredValue === input.expectedMaxToolCalls
+    && Number.isSafeInteger(fact.observedValue)
+    && fact.observedValue === fact.reservedCount
+    && fact.unit === 'count'
+    && fact.scope === 'copilotRun');
+  const atCap = validReservations.some(fact => fact.observedValue === input.expectedMaxToolCalls);
+  const belowCap = validReservations.some(fact => fact.observedValue === input.expectedMaxToolCalls - 1
+    && validReservations.some(last => last.observedValue === input.expectedMaxToolCalls
+      && fact.sequence < last.sequence));
+  return { binding: first.binding, facts, rejection, reservations, validReservations, atCap, belowCap, total };
 }
 
 function validateToolObservation(input, pages, exact, restExact) {
-  const { binding, facts, rejection, total } = toolHistoryEvidence(input, pages);
+  const { binding, facts, rejection, reservations, atCap, belowCap, total } =
+    toolHistoryEvidence(input, pages);
   const expected = input.target;
   requireResponseBindings([exact], binding, expected, false, 'Exact attempt lookup');
   const exactItems = exact?.history?.items;
   if (exact?.history?.exactAttempt !== true
+    || exact.history.complete !== true
+    || exact.history.nextCursor !== null
+    || exact.history.exactUnavailableReason !== null
     || !Array.isArray(exactItems)
     || !exactItems.some(fact => isDeepStrictEqual(fact, rejection)
       && matchesToolLimitRejection(fact)
@@ -386,6 +408,9 @@ function validateToolObservation(input, pages, exact, restExact) {
   requireResponseBindings([restExact], binding, expected, false, 'REST exact lookup');
   const restItems = restExact?.history?.items;
   if (restExact?.history?.exactAttempt !== true
+    || restExact.history.complete !== true
+    || restExact.history.nextCursor !== null
+    || restExact.history.exactUnavailableReason !== null
     || !Array.isArray(restItems)
     || !restItems.some(fact => isDeepStrictEqual(fact, rejection)
       && matchesToolLimitRejection(fact)
@@ -399,12 +424,22 @@ function validateToolObservation(input, pages, exact, restExact) {
     pagesRead: pages.length,
     totalFacts: facts.length,
     runWideToolSlotsReserved: total.value,
+    numericMatrix: buildNumericMatrix({
+      'tool-below-cap': belowCap ? 'passed' : 'blocked',
+      'tool-at-cap': atCap ? 'passed' : 'blocked',
+      'tool-next-denial': rejection.configuredValue === input.expectedMaxToolCalls
+        && Number.isSafeInteger(rejection.observedValue)
+        && rejection.observedValue === input.expectedMaxToolCalls
+        ? 'passed' : 'blocked',
+    }),
     conclusion: 'The owner recorded a tool-permission rejection. This does not prove that the SDK received it or that the tool did not run.',
   };
 }
 
 function isUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '');
+  return typeof value === 'string'
+    && value !== '00000000-0000-0000-0000-000000000000'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 // The history of a root binding contains facts from all sessions, fences, and selections of the run.
@@ -412,6 +447,8 @@ function authorityMismatch(fact, binding, sessionId) {
   if (fact?.sessionId !== sessionId) return 'another session';
   if (fact.executionFence !== binding.currentExecutionFence) return 'a stale or different execution fence';
   if (fact.acceptedSelectionHash !== binding.acceptedSelectionHash) return 'another accepted selection';
+  if (fact.runtimeInstanceId !== binding.runtimeInstanceId
+    || fact.registrationRevision !== binding.registrationRevision) return 'another runtime registration';
   return null;
 }
 
@@ -443,6 +480,10 @@ function rootHistory(input, pages) {
     || binding?.runId !== expected.runId
     || binding?.sessionId !== expected.sessionId
     || binding?.isRoot !== true
+    || binding?.rootSessionId !== expected.sessionId
+    || !isUuid(binding?.runtimeInstanceId)
+    || !Number.isSafeInteger(binding?.registrationRevision)
+    || binding.registrationRevision < 1
     || !Number.isInteger(binding?.currentExecutionFence)
     || binding.currentExecutionFence !== binding.sessionExecutionFence
     || !nonEmpty(binding.acceptedSelectionHash)) {
@@ -501,7 +542,10 @@ function hardCreditEvidence(input, pages) {
   const { first, binding, facts } = rootHistory(input, pages);
   const sessionId = input.target.sessionId;
   const limit = first.acceptedLimits?.copilotHardCreditLimit;
-  if (typeof limit !== 'number') {
+  if (!Number.isFinite(limit)
+    || Math.abs(limit) > Number.MAX_SAFE_INTEGER
+    || first.acceptedLimits?.creditUnit !== 'nanoAiu'
+    || first.acceptedLimits?.creditScope !== 'copilotRun') {
     throw new Error('The accepted copilotHardCreditLimit value is not set.');
   }
   const denials = currentAuthorityFacts(
@@ -510,6 +554,7 @@ function hardCreditEvidence(input, pages) {
       && fact.stage === 'nativeTurnBegin'
       && fact.reasonCode === 'hard_credit_limit_reached'
       && fact.unit === 'nanoAiu'
+      && fact.scope === 'copilotRun'
       && fact.ownerDecision?.state === 'available'
       && isUuid(fact.attemptId)
       && isUuid(fact.dispatchId)),
@@ -520,7 +565,7 @@ function hardCreditEvidence(input, pages) {
   if (configured.length === 0) {
     throw new Error('The current hard-credit denial has a configured value that is different from the accepted copilotHardCreditLimit. The denial is from an old configuration.');
   }
-  const exceeded = configured.filter(fact => typeof fact.observedValue === 'number'
+  const exceeded = configured.filter(fact => Number.isFinite(fact.observedValue)
     && fact.observedValue >= fact.configuredValue);
   if (exceeded.length === 0) {
     throw new Error('The hard-credit denial observed value is less than its configured value.');
@@ -546,7 +591,9 @@ function hardCreditEvidence(input, pages) {
     facts.filter(fact => fact?.kind === 'creditGuardChanged'),
     binding, sessionId, 'credit-guard fact',
   );
-  if (guards.some(fact => !Number.isInteger(fact.sequence) || typeof fact.observedValue !== 'number')) {
+  if (guards.some(fact => !Number.isSafeInteger(fact.sequence)
+    || !Number.isFinite(fact.observedValue)
+    || Math.abs(fact.observedValue) > Number.MAX_SAFE_INTEGER)) {
     throw new Error('A credit-guard fact has no sequence or observed value.');
   }
   guards.sort((left, right) => left.sequence - right.sequence);
@@ -561,13 +608,26 @@ function hardCreditEvidence(input, pages) {
   if (input.expectedSoftWarning && !guards.some(fact => fact.softWarningEmitted === true)) {
     throw new Error('No current credit-guard fact shows the expected soft warning.');
   }
-  return { binding, facts, denial, noSend, guards, limit };
+  return {
+    binding,
+    facts,
+    denial,
+    noSend,
+    guards,
+    limit,
+    softLimit: first.acceptedLimits?.copilotSoftCreditLimit,
+    configuredDenials: configured,
+  };
 }
 
 function requireExactNoSend(response, noSend, binding, expected, label) {
   requireResponseBindings([response], binding, expected, true, label);
   const items = response?.history?.items;
-  if (response?.history?.exactAttempt !== true || !Array.isArray(items)) {
+  if (response?.history?.exactAttempt !== true
+    || response.history.complete !== true
+    || response.history.nextCursor !== null
+    || response.history.exactUnavailableReason !== null
+    || !Array.isArray(items)) {
     throw new Error(`${label} did not return an exact attempt history.`);
   }
   const match = items.find(fact => fact?.factId === noSend.factId);
@@ -595,6 +655,34 @@ function validateModelTurnObservation(input, pages, exact, restExact) {
     totalFacts: evidence.facts.length,
     currentModelTurnReservations: evidence.reservations.length,
     runWideModelSlotsReserved: evidence.total.value,
+    numericMatrix: buildNumericMatrix({
+      'model-turn-below-cap': evidence.reservations.some(fact =>
+        Number.isSafeInteger(fact.sequence)
+        && fact.configuredValue === input.expectedMaxModelTurns
+        && Number.isSafeInteger(fact.observedValue)
+        && fact.observedValue === input.expectedMaxModelTurns - 1
+        && fact.reservedCount === fact.observedValue
+        && fact.unit === 'count'
+        && fact.scope === 'copilotRun'
+        && evidence.reservations.some(last => last.sequence > fact.sequence
+          && last.configuredValue === input.expectedMaxModelTurns
+          && last.observedValue === input.expectedMaxModelTurns
+          && last.reservedCount === input.expectedMaxModelTurns
+          && last.unit === 'count'
+          && last.scope === 'copilotRun')) ? 'passed' : 'blocked',
+      'model-turn-at-cap': evidence.reservations.some(fact =>
+        fact.configuredValue === input.expectedMaxModelTurns
+        && Number.isSafeInteger(fact.observedValue)
+        && fact.observedValue === input.expectedMaxModelTurns
+        && fact.reservedCount === input.expectedMaxModelTurns
+        && fact.unit === 'count'
+        && fact.scope === 'copilotRun') ? 'passed' : 'blocked',
+      'model-turn-next-denial': evidence.denial.configuredValue === input.expectedMaxModelTurns
+        && Number.isSafeInteger(evidence.denial.observedValue)
+        && evidence.denial.observedValue === input.expectedMaxModelTurns
+        ? 'passed' : 'blocked',
+      'model-turn-exact-replay': 'blocked',
+    }),
     conclusion: 'The owner recorded a root model-turn denial and a native no-send witness for the same attempt in the current execution fence and selection. This does not cover child sessions or prompt-token limits.',
   };
 }
@@ -615,6 +703,16 @@ function validateHardCreditObservation(input, pages, exact, restExact) {
     observedCreditsNanoAiu: evidence.denial.observedValue,
     creditGuardFacts: evidence.guards.length,
     softWarningObserved: evidence.guards.some(fact => fact.softWarningEmitted === true),
+    numericMatrix: buildNumericMatrix({
+      'credit-below': evidence.guards.some(fact => fact.unit === 'nanoAiu'
+        && fact.scope === 'copilotRun'
+        && compareBoundary(fact.observedValue, evidence.limit) === 'below') ? 'passed' : 'blocked',
+      'credit-equality': compareBoundary(evidence.denial.observedValue, evidence.limit) === 'equal'
+        ? 'passed' : 'blocked',
+      'credit-overshoot': compareBoundary(evidence.denial.observedValue, evidence.limit) === 'overshoot'
+        ? 'passed' : 'blocked',
+      'credit-warning-floor': warningFloorTransition(evidence.guards, evidence.softLimit) ? 'passed' : 'blocked',
+    }),
     conclusion: 'The owner recorded a root hard-credit denial at native turn begin and a native no-send witness for the same dispatch in the current execution fence and selection. This does not prove the exact spend of other model turns.',
   };
 }
@@ -844,6 +942,7 @@ async function runCase(options, env = process.env) {
       ...common,
       status: 'blocked',
       reason: error instanceof Error ? error.message : 'The case did not complete.',
+      numericMatrix: buildNumericMatrix(),
       finishedAt: new Date().toISOString(),
     };
     await persistResult(handle, result);

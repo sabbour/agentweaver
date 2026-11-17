@@ -407,6 +407,9 @@ The [numeric runtime observation case](./numeric-runtime-observation-acceptance.
 checks a retained child-session denial through both `api invoke` and `rest`.
 Its root model-turn and hard-credit cases check a retained root-session denial
 and its native no-send witness in the same way.
+The [admitted root-completion case](./numeric-runtime-observation-acceptance.md#check-an-admitted-root-completion)
+sends one model request and rejects the generated proposal. It requires
+separate non-production, model-spend, and cleanup approval.
 
 ## Make a direct Gateway request
 
