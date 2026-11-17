@@ -6,6 +6,44 @@ namespace Agentweaver.P1PostgresInitializer;
 internal static class InitializerChecks
 {
     private const string GovernanceDecisionHeadTable = "project_governance_decision_stream_heads";
+    private const string GovernanceDecisionHeadInitializeFunctionSource = """
+        BEGIN
+            IF NEW.sequence <> 0 OR NEW.fence_generation <> 0
+               OR NEW.head_hash <> repeat('0', 64) THEN
+                RAISE EXCEPTION 'governance decision stream head must start at genesis'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+    private const string GovernanceDecisionHeadAdvanceFunctionSource = """
+        BEGIN
+            IF NEW.sequence <> OLD.sequence + 1
+               OR NEW.fence_generation <> OLD.fence_generation + 1
+               OR NEW.head_hash !~ '^[0-9a-f]{64}$'
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM projects_config.project_governance_decisions AS decision
+                   JOIN projects_config.project_governance_decision_outbox AS outbox
+                     ON outbox.decision_id = decision.decision_id
+                   WHERE decision.scope_type = NEW.scope_type
+                     AND decision.scope_id = NEW.scope_id
+                     AND decision.resource_type = NEW.resource_type
+                     AND decision.resource_id = NEW.resource_id
+                     AND decision.sequence = NEW.sequence
+                     AND decision.previous_hash = OLD.head_hash
+                     AND decision.record_hash = NEW.head_hash
+                     AND decision.write_transaction_id = pg_current_xact_id()::text
+                     AND outbox.sequence = decision.sequence
+                     AND outbox.record_hash = decision.record_hash
+                     AND outbox.write_transaction_id = pg_current_xact_id()::text
+               ) THEN
+                RAISE EXCEPTION 'governance decision head must advance with its record and outbox'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
     private static readonly string[] GovernanceDecisionHeadUpdateColumns =
         ["sequence", "fence_generation", "head_hash", "updated_at"];
 
@@ -205,11 +243,31 @@ internal static class InitializerChecks
                 typeSevenGuards[0].Message is null &&
                 typeSevenGuards[0].SqlState is null &&
                 typeSevenGuards[0].FunctionSource == governanceStampFunctionSource;
-            var hasKnownTypeSevenGuard =
-                hasReservationIdentityGuard || hasNativeAcsRevisionGuard || hasGovernanceStampGuard;
-            var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var governanceDecisionHead = service.Service == "projects-config" &&
                 service.Schema == "projects_config" && table.Table == GovernanceDecisionHeadTable;
+            var hasGovernanceHeadInitializeGuard =
+                governanceDecisionHead &&
+                typeSevenGuards.Length == 1 &&
+                typeSevenGuards[0].Trigger == "project_governance_decision_head_initialize" &&
+                typeSevenGuards[0].Function == "require_governance_decision_head_initialize()" &&
+                typeSevenGuards[0].Message == "governance decision stream head must start at genesis" &&
+                typeSevenGuards[0].SqlState == "55000" &&
+                typeSevenGuards[0].FunctionSource is { } initializeSource &&
+                NormalizeGuardSource(initializeSource) == NormalizeGuardSource(GovernanceDecisionHeadInitializeFunctionSource);
+            var typeNineteenGuards = guards.Where(guard => guard.TriggerType == 19).ToArray();
+            var hasGovernanceHeadAdvanceGuard =
+                governanceDecisionHead &&
+                typeNineteenGuards.Length == 1 &&
+                typeNineteenGuards[0].Trigger == "project_governance_decision_head_advance" &&
+                typeNineteenGuards[0].Function == "require_governance_decision_head_advance()" &&
+                typeNineteenGuards[0].Message == "governance decision head must advance with its record and outbox" &&
+                typeNineteenGuards[0].SqlState == "55000" &&
+                typeNineteenGuards[0].FunctionSource is { } advanceSource &&
+                NormalizeGuardSource(advanceSource) == NormalizeGuardSource(GovernanceDecisionHeadAdvanceFunctionSource);
+            var hasKnownTypeSevenGuard =
+                hasReservationIdentityGuard || hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
+                hasGovernanceHeadInitializeGuard;
+            var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead
                 ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
                 : table.UpdateColumns is { Length: > 0 };
@@ -219,9 +277,11 @@ internal static class InitializerChecks
                 table.Privileges.Contains("UPDATE") ||
                 (table.LockColumn is not null &&
                  mutationGuardCount != (table.MutationDenialGuards is { Length: > 0 } ? 2 : 1)) ||
-                (table.LockColumn is null && mutationGuardCount != 2) ||
+                (table.LockColumn is null && mutationGuardCount != (governanceDecisionHead ? 3 : 2)) ||
                 invalidColumnUpdates ||
                 (governanceDecisionHead && table.LockColumn is not null) ||
+                (governanceDecisionHead &&
+                 (!hasGovernanceHeadInitializeGuard || !hasGovernanceHeadAdvanceGuard)) ||
                 (table.LockColumn is not null && table.MutationDenialGuards is { Length: > 0 } &&
                  (table.MutationDenialGuards.Length != 1 || table.MutationDenialGuards[0].TriggerType != 34)) ||
                 guards.Any(guard =>
@@ -235,8 +295,11 @@ internal static class InitializerChecks
                          (guard.FunctionSource is null ||
                           (!hasGovernanceStampGuard &&
                            (!guard.FunctionSource.Contains($"RAISE EXCEPTION '{guard.Message}'", StringComparison.Ordinal) ||
-                            !guard.FunctionSource.Contains($"USING ERRCODE = '{guard.SqlState}'", StringComparison.Ordinal)))) ||
-                        (guard.TriggerType != 7 && guard.FunctionSource is not null) ||
+                            !guard.FunctionSource.Contains($"USING ERRCODE = '{guard.SqlState}'", StringComparison.Ordinal))))) ||
+                        (guard.TriggerType != 7 && guard.FunctionSource is not null &&
+                         !(hasGovernanceHeadAdvanceGuard && guard.TriggerType == 19 &&
+                           guard.Trigger == "project_governance_decision_head_advance" &&
+                           guard.Function == "require_governance_decision_head_advance()")) ||
                         (string.IsNullOrWhiteSpace(guard.Message) && !hasGovernanceStampGuard) ||
                         (guard.SqlState is not null &&
                          !System.Text.RegularExpressions.Regex.IsMatch(guard.SqlState, "^[0-9A-Z]{5}$")) ||
@@ -284,7 +347,7 @@ internal static class InitializerChecks
             var guarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
                 table.Table == GovernanceDecisionHeadTable;
             if (table.LockColumn is not null || table.MutationDenialRequired != guarded ||
-                GetMutationDenialGuards(table).Length != (guarded ? 2 : 0))
+                GetMutationDenialGuards(table).Length != (guarded ? 4 : 0))
                 throw new InvalidOperationException(
                     "Column-scoped UPDATE grants require the reviewed governance-head guards and no row-lock guard.");
         }

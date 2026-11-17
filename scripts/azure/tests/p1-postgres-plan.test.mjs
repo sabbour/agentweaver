@@ -138,6 +138,8 @@ test('Projects column updates use exact grants', () => {
     ['sequence', 'fence_generation', 'head_hash', 'updated_at']);
   assert.deepEqual(table('project_governance_decision_stream_heads').mutationDenialGuards.map(guard =>
     [guard.trigger, guard.function, guard.triggerType]), [
+    ['project_governance_decision_head_initialize', 'require_governance_decision_head_initialize()', 7],
+    ['project_governance_decision_head_advance', 'require_governance_decision_head_advance()', 19],
     ['project_governance_decision_heads_no_delete', 'reject_governance_decision_head_removal()', 11],
     ['project_governance_decision_heads_no_truncate', 'reject_governance_decision_head_removal()', 34],
   ]);
