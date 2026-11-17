@@ -2248,7 +2248,7 @@ else if (route.OperationId is
             ("base_url", Str()), ("model", Str()), ("wire_api", Nullable(Enum("completions", "responses"))),
             ("azure_api_version", NullableStr()), ("reasoning_efforts", Arr(Enum("none", "minimal", "low", "medium", "high", "xhigh"))),
             ("prompt_capacity_tokens", NullableInt()), ("scope", Enum("platform", "project")),
-            ("projectId", NullableStr()), ("state", Const("Draft")), ("revision", Int()),
+            ("projectId", NullableStr()), ("state", Enum("Draft", "Available")), ("revision", Int()),
             ("configurationHash", Str()), ("has_api_key", Bool()), ("is_active", Bool()),
             ("hasCredential", Bool())),
         ["ModelProviderDraftPage"] = Obj(

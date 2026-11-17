@@ -347,6 +347,105 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task CredentialPublicationRequiresVerifiedRateCardAndAReplyUsesAFreshOperationToRetry()
+    {
+        await using var db = CreateDbContext();
+        var providerId = "rate-card-provider-" + Guid.NewGuid().ToString("N");
+        const string actorId = "broker-agent";
+        const string cardId = "manual:azure-card";
+        const string cardVersion = "opaque:2026-11-10";
+        await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
+        var owner = new RuntimeRateCardTestClient(false, true, true);
+        var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
+        var firstRequest = new ModelProviderCredentialPublicationRequest(
+            Guid.NewGuid(),
+            1,
+            ModelProviderBindingScope.Platform,
+            null,
+            providerId,
+            "0123456789abcdef0123456789abcdef");
+
+        var firstReceipt = await service.PublishCredentialAsync(firstRequest, actorId, CancellationToken.None);
+        Assert.Equal(2, firstReceipt.ProviderRevision);
+        Assert.Equal(
+            ModelProviderDraftState.Draft,
+            await db.ModelProviderDrafts.AsNoTracking()
+                .Where(head => head.ProviderId == providerId)
+                .Select(head => head.State)
+                .SingleAsync());
+
+        var replay = await service.PublishCredentialAsync(firstRequest, actorId, CancellationToken.None);
+        Assert.Equal(firstReceipt, replay);
+        Assert.Single(owner.Requests);
+        Assert.Equal((cardId, cardVersion), Assert.Single(owner.Requests));
+
+        var retryRequest = firstRequest with
+        {
+            OperationId = Guid.NewGuid(),
+            ExpectedProviderRevision = firstReceipt.ProviderRevision,
+        };
+        var retryReceipt = await service.PublishCredentialAsync(retryRequest, actorId, CancellationToken.None);
+        Assert.Equal(3, retryReceipt.ProviderRevision);
+        Assert.Equal(
+            ModelProviderDraftState.Available,
+            await db.ModelProviderDrafts.AsNoTracking()
+                .Where(head => head.ProviderId == providerId)
+                .Select(head => head.State)
+                .SingleAsync());
+        Assert.Equal(2, owner.Requests.Count);
+        Assert.All(owner.Requests, request => Assert.Equal((cardId, cardVersion), request));
+
+        var rotation = await service.PublishCredentialAsync(
+            retryRequest with
+            {
+                OperationId = Guid.NewGuid(),
+                ExpectedProviderRevision = retryReceipt.ProviderRevision,
+                CredentialVersion = "fedcba9876543210fedcba9876543210",
+            },
+            actorId,
+            CancellationToken.None);
+        Assert.Equal(4, rotation.ProviderRevision);
+        Assert.Equal(
+            ModelProviderDraftState.Available,
+            await db.ModelProviderDrafts.AsNoTracking()
+                .Where(head => head.ProviderId == providerId)
+                .Select(head => head.State)
+                .SingleAsync());
+        Assert.Equal(3, owner.Requests.Count);
+        Assert.All(owner.Requests, request => Assert.Equal((cardId, cardVersion), request));
+    }
+
+    [Fact]
+    public async Task CredentialPublicationWithoutSavedRateCardStaysDraft()
+    {
+        await using var db = CreateDbContext();
+        var providerId = "rate-card-missing-" + Guid.NewGuid().ToString("N");
+        const string actorId = "broker-agent";
+        await SeedProviderWithRateCardAsync(db, providerId, actorId, null, null);
+        var owner = new RuntimeRateCardTestClient(true);
+        var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
+
+        var receipt = await service.PublishCredentialAsync(
+            new ModelProviderCredentialPublicationRequest(
+                Guid.NewGuid(),
+                1,
+                ModelProviderBindingScope.Platform,
+                null,
+                providerId,
+                "0123456789abcdef0123456789abcdef"),
+            actorId,
+            CancellationToken.None);
+
+        Assert.Equal(2, receipt.ProviderRevision);
+        Assert.Equal(ModelProviderDraftState.Draft,
+            await db.ModelProviderDrafts.AsNoTracking()
+                .Where(head => head.ProviderId == providerId)
+                .Select(head => head.State)
+                .SingleAsync());
+        Assert.Empty(owner.Requests);
+    }
+
+    [Fact]
     public async Task ConcurrentSavesUseCasAndSameOperationRetriesReturnOneRevision()
     {
         await using var db = CreateDbContext();
@@ -485,6 +584,64 @@ public sealed partial class ProjectsConfigPostgresTests
             DraftRequest(Guid.NewGuid(), 0),
             CancellationToken.None);
         Assert.Equal(1, retry.Binding.ProviderRevision);
+    }
+
+    private static async Task SeedProviderWithRateCardAsync(
+        ProjectsConfigDbContext db,
+        string providerId,
+        string actorId,
+        string? rateCardId,
+        string? rateCardVersion)
+    {
+        var now = DateTimeOffset.UtcNow;
+        db.ModelProviderDrafts.Add(new ModelProviderDraftHeadRecord
+        {
+            ProviderId = providerId,
+            Scope = ModelProviderBindingScope.Platform,
+            DisplayName = "Customer model",
+            ProviderType = "azure",
+            BaseUrl = "https://provider.example",
+            Deployment = "deployment-1",
+            ReasoningEfforts = ["low"],
+            State = ModelProviderDraftState.Draft,
+            CurrentRevision = 1,
+            CreatedByActorId = actorId,
+            CreatedAt = now,
+            UpdatedByActorId = actorId,
+            UpdatedAt = now,
+        });
+        db.ModelProviderDraftRevisions.Add(new ModelProviderDraftRevisionRecord
+        {
+            ProviderId = providerId,
+            Scope = ModelProviderBindingScope.Platform,
+            ProviderRevision = 1,
+            OperationId = Guid.NewGuid(),
+            RequestFingerprint = new string('b', 64),
+            DisplayName = "Customer model",
+            ProviderType = "azure",
+            BaseUrl = "https://provider.example",
+            Deployment = "deployment-1",
+            ReasoningEfforts = ["low"],
+            ConfigurationHash = new string('a', 64),
+            RateCardId = rateCardId,
+            RateCardVersion = rateCardVersion,
+            CreatedByActorId = actorId,
+            CreatedAt = now,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private sealed class RuntimeRateCardTestClient(params bool[] results) : IRuntimeRateCardOwnerClient
+    {
+        private int _nextResult;
+
+        public List<(string Id, string Version)> Requests { get; } = [];
+
+        public Task<bool> VerifyAsync(string id, string version, CancellationToken cancellationToken)
+        {
+            Requests.Add((id, version));
+            return Task.FromResult(results[_nextResult++]);
+        }
     }
 
     private static SaveModelProviderDraftRequest DraftRequest(Guid operationId, long expectedRevision) =>

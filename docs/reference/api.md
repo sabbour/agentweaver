@@ -35,14 +35,17 @@ therefore does not provide complete browser or BFF parity. For the CLI
 commands, authorization, and current distribution status, see the
 [Agentweaver CLI guide](../guide/cli.md).
 
-## Model-provider Draft metadata
+## Model-provider Draft and Available metadata
 
-These routes expose Draft metadata through the Gateway. Projects & Config owns
-the records and checks current authority on every request. Platform operations
-require an unbound current PlatformAdmin. Project operations require the exact
-project binding, no run binding, and a current project Owner or PlatformAdmin.
-Every operation requires `api.read` and `projects.admin`. All eight operations
-are excluded from MCP.
+These routes expose provider metadata through the Gateway. New providers have
+state `Draft`. Projects sets state to `Available` after it verifies the saved
+credential and exact Events-owned rate card and provenance. `Available` does
+not select a provider or change deployment-owned model eligibility. Projects
+& Config owns the records and checks current authority on every request.
+Platform operations require an unbound current PlatformAdmin. Project
+operations require the exact project binding, no run binding, and a current
+project Owner or PlatformAdmin. Every operation requires `api.read` and
+`projects.admin`. All eight operations are excluded from MCP.
 
 | Gateway route | Native owner | Operation ID |
 | --- | --- | --- |
@@ -61,6 +64,10 @@ requires a positive revision. Save retries return the revision committed by
 the original operation. Delete, activation, and credential routes are not
 available through Gateway. Identity Broker publishes exact credential versions
 through the private Projects route `POST /internal/byok/credential-publications`.
+Public metadata requests do not accept rate-card references. The public
+response `state` is `Draft` or `Available`; the private Events read contract
+and credential-publication failure rules are in the
+[service contract](./contracts.md#customer-provided-model-provider-draft-contract).
 See the [contract details](./contracts.md#customer-provided-model-provider-draft-contract).
 
 ## Periodic issue sync

@@ -602,7 +602,7 @@ public sealed class RuntimeModelBindingsResolverTests
             3,
             "fedcba9876543210fedcba9876543210",
             "rate-card-v1",
-            1,
+            "1",
             configurationHash);
 
     private static RuntimeAcceptedModelSelection RuntimeProviderSelection(

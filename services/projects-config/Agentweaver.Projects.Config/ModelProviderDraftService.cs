@@ -7,10 +7,27 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
-public sealed class ModelProviderDraftService(
-    ProjectsConfigDbContext db,
-    TimeProvider timeProvider)
+public sealed class ModelProviderDraftService
 {
+    private readonly ProjectsConfigDbContext db;
+    private readonly TimeProvider timeProvider;
+    private readonly IRuntimeRateCardOwnerClient? runtimeRateCardOwnerClient;
+
+    public ModelProviderDraftService(ProjectsConfigDbContext db, TimeProvider timeProvider)
+        : this(db, timeProvider, null)
+    {
+    }
+
+    internal ModelProviderDraftService(
+        ProjectsConfigDbContext db,
+        TimeProvider timeProvider,
+        IRuntimeRateCardOwnerClient? runtimeRateCardOwnerClient)
+    {
+        this.db = db;
+        this.timeProvider = timeProvider;
+        this.runtimeRateCardOwnerClient = runtimeRateCardOwnerClient;
+    }
+
     private static readonly ImmutableHashSet<string> SupportedReasoningEfforts =
         ImmutableHashSet.Create(StringComparer.Ordinal, "none", "minimal", "low", "medium", "high", "xhigh");
 
@@ -312,7 +329,7 @@ public sealed class ModelProviderDraftService(
             .ConfigureAwait(false);
         if (current is null || current.Scope != request.Scope || current.ProjectId != request.ProjectId)
             throw ModelProviderDraftException.NotFound();
-        if (current.State != ModelProviderDraftState.Draft ||
+        if (current.State is not (ModelProviderDraftState.Draft or ModelProviderDraftState.Available) ||
             current.CurrentRevision != request.ExpectedProviderRevision)
         {
             var concurrentReplay = await ReadReplayAsync(
@@ -335,6 +352,13 @@ public sealed class ModelProviderDraftService(
                     revision.ProviderRevision == current.CurrentRevision,
                 cancellationToken)
             .ConfigureAwait(false);
+        var state = currentRevision.RateCardId is { } rateCardId &&
+            currentRevision.RateCardVersion is { } rateCardVersion &&
+            runtimeRateCardOwnerClient is not null &&
+            await runtimeRateCardOwnerClient.VerifyAsync(rateCardId, rateCardVersion, cancellationToken)
+                .ConfigureAwait(false)
+            ? ModelProviderDraftState.Available
+            : ModelProviderDraftState.Draft;
         var nextRevision = request.ExpectedProviderRevision + 1;
         var now = timeProvider.GetUtcNow();
         var revisionRecord = new ModelProviderDraftRevisionRecord
@@ -371,11 +395,12 @@ public sealed class ModelProviderDraftService(
                     head.ProviderId == request.ProviderId &&
                     head.Scope == request.Scope &&
                     head.ProjectId == request.ProjectId &&
-                    head.State == ModelProviderDraftState.Draft &&
+                    head.State == current.State &&
                     head.CurrentRevision == request.ExpectedProviderRevision)
                 .ExecuteUpdateAsync(
                     setters => setters
                         .SetProperty(head => head.CurrentRevision, nextRevision)
+                        .SetProperty(head => head.State, state)
                         .SetProperty(head => head.UpdatedByActorId, actorId)
                         .SetProperty(head => head.UpdatedAt, now),
                     cancellationToken)
@@ -411,7 +436,7 @@ public sealed class ModelProviderDraftService(
 
         DetachTrackedProvider(request.ProviderId);
         return ToCredentialPublicationReceipt(
-            ToDraft(ModelProviderDraftState.Draft, revisionRecord),
+            ToDraft(state, revisionRecord),
             request.OperationId);
     }
 

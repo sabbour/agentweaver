@@ -64,11 +64,12 @@ retry returns the same revision, including after a later edit.
 
 List requests accept `pageSize` (default `50`, range `1`–`100`) and
 `afterProviderId`. The response is `{ providers, nextAfterProviderId }`.
-Results contain only Drafts in the requested scope and use provider-ID order.
+Results include Draft and Available providers in the requested scope and use
+provider-ID order.
 The Gateway limits save bodies to 32 KiB, single-row responses to 32 KiB, and
 list responses to 4 MiB. Draft GET routes reject request bodies.
 
-Invalid requests return `400`; missing Drafts return `404`; stale revisions,
+Invalid requests return `400`; missing providers return `404`; stale revisions,
 operation conflicts, and unsafe stored URLs return `409`. An unsafe stored
 URL error contains only the provider `id` and `revision`, so the caller can
 repair the Draft with a new operation ID. Owner responses use
@@ -195,18 +196,23 @@ resolver limits.
 
 ### Customer-provided model-provider draft contract
 
-`ModelProviderBindingScope` is `Platform` or `Project`. Contract version 1 of
+`ModelProviderBindingScope` is `Platform` or `Project`. Contract version 2 of
 `ModelProviderBindingRevision` in `Agentweaver.Abstractions` carries the
 provider ID, scope and project ID, display name, provider type, HTTPS base URL,
 deployment, optional wire API and Azure API version, reasoning efforts,
 optional prompt capacity, provider revision, optional credential-version and
-rate-card references, and a configuration hash.
+rate-card references, and a configuration hash. `RateCardId` and
+`RateCardVersion` are nullable strings. A rate-card version is opaque; callers
+must not parse or normalize it.
 
-The Projects & Config draft service stores metadata in a mutable Draft head and
-an append-only revision ledger. Public metadata requests do not accept
-credentials, headers, vault references, or rate-card references. The private
-Broker contract can attach an exact credential version to an existing Draft.
-It stores no key, secret name, or vault URI. It does not activate or select a
+The Projects & Config service stores metadata in a mutable provider head and
+an append-only revision ledger. New providers start in `Draft`. Public
+metadata requests do not accept credentials, headers, vault references, or
+rate-card references. The private Broker contract attaches an exact credential
+version to a `Draft` or `Available` provider. It stores no key, secret name, or
+vault URI.
+The contract changes the provider to `Available` only after Projects verifies
+the saved rate-card reference with Events. `Available` does not select a
 provider or change accepted run selections.
 
 `POST /internal/byok/credential-publications` accepts a JSON request with
@@ -225,16 +231,36 @@ requires the private Projects audience, a signed short-lived
 binds the actor and every request field. It is not exposed through Gateway.
 The Broker caller must check current authority before it sends the request.
 
-Projects requires an existing provider Draft at `expectedProviderRevision`.
+Projects requires an existing provider at `expectedProviderRevision`.
 It appends a revision that copies the current metadata, configuration hash, and
-rate-card references, then sets `credentialVersion`. A metadata save keeps
-that version. The response is a no-store receipt with `operationId`, `scope`,
-`projectId`, `providerId`, `providerRevision`, `credentialVersion`, and
-`configurationHash`. An exact retry returns the original receipt after later
-edits. Changed-content reuse and stale revisions return `409`; a missing Draft
-returns `404`. The route leaves model eligibility unchanged.
+rate-card references, then sets `credentialVersion`. Before the transaction,
+Projects reads the stored rate-card ID and opaque version through Events'
+private `GET /internal/runtime-rate-cards/{id}/{version}` route. The route
+requires the exact configured Projects workload subject and returns the
+canonical card and provenance with a strong ETag: the quoted lowercase
+SHA-256 of the response bytes. Projects checks the ETag, canonical bytes,
+exact ID and version, and provenance. One revision-checked transaction
+appends the credential revision and sets `Available` when all checks pass.
+Missing or invalid data and Events timeouts set the provider to `Draft`; the
+credential revision still commits. Projects rechecks the card when it rotates
+a credential on an `Available` provider. Caller cancellation aborts the operation.
 
-Public Draft reads and writes still require `api.read` and `projects.admin`.
+The Events call has a three-second deadline. A Broker recovery attempt uses
+the same credential version, a new operation ID, and the current provider
+revision. Replaying a committed operation returns its receipt without another
+Events read or state change. A metadata save on a `Draft` provider keeps the
+credential version.
+The response is a no-store receipt with `operationId`, `scope`, `projectId`,
+`providerId`, `providerRevision`, `credentialVersion`, and
+`configurationHash`. changed-content reuse and stale revisions return `409`;
+a missing provider returns `404`. The route leaves model eligibility unchanged.
+
+The Events owner-read route is private and is not exposed through Gateway. It
+reads the immutable Events-owned card by its exact string ID and version. The
+route returns `404` for a missing key and does not write or publish pricing.
+
+Public provider reads and Draft metadata writes still require `api.read` and
+`projects.admin`.
 Platform calls require an unbound PlatformAdmin request. Project calls require
 an exact project binding with no run binding and a project Owner or
 PlatformAdmin. See

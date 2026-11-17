@@ -166,27 +166,39 @@ When you update a revision, supply the expected current revision. The service
 appends a new revision and advances the head. If another writer wins first,
 your update conflicts instead of overwriting its change.
 
-Customer-provided model-provider metadata has a separate Draft-only store.
-Public reads and writes require `api.read` and `projects.admin`. Platform
-requests must be unbound and made by a PlatformAdmin. Project requests must
-match the exact project binding, have no run binding, and be made by a project
-Owner or PlatformAdmin. Draft metadata and credential publication leave model
-eligibility and accepted run selections unchanged.
+Customer-provided model-provider metadata has a separate store with `Draft`
+and `Available` states. New providers start in `Draft`. Public reads and writes
+require `api.read` and `projects.admin`. Platform requests must be unbound and
+made by a PlatformAdmin. Project requests must match the exact project
+binding, have no run binding, and be made by a project Owner or PlatformAdmin.
+`Available` means the saved credential and exact Events-owned rate card and
+provenance passed verification. It does not change model eligibility or
+accepted run selections.
 
 The private Broker route
 `POST /internal/byok/credential-publications` appends an exact credential
-version to an existing provider Draft. It copies the current metadata,
-configuration hash, and rate-card references. The Broker caller must check
+version to a `Draft` or `Available` provider. It copies the current metadata,
+configuration hash, and rate-card references. The Broker caller checks
 current authority before publication. A short-lived token binds the actor and
 request; Projects checks the native TLS handshake and exact token-to-body
-match. An exact retry returns the saved receipt after later edits, and a
-metadata save preserves the credential version. This route does not activate or
-select a provider. Public Gateway routes still support only list, read, create,
-and update for platform and project Drafts. They return a public metadata
-projection, not the full binding record. `hasCredential` reports whether the
-current revision has a credential version, but does not expose it. Lists use a
-bounded, provider-ID-ordered query over current heads. Exact save retries
-return the immutable revision saved by the original operation. See the
+match. Projects reads the saved card ID and opaque version from the current
+revision through the Projects-only Events owner route. It checks the canonical
+card, exact ID and version, provenance, and strong SHA-256 ETag before it sets
+the state to `Available`.
+
+A missing card, invalid response, or three-second Events timeout sets the
+provider to `Draft` while credential publication commits. Projects rechecks
+the card when it rotates a credential on an `Available` provider. Caller
+cancellation aborts publication. A new Broker operation with a fresh operation ID and
+current provider revision retries verification after Events recovers. Replaying
+the original operation returns its receipt without another Events read or a
+state change. A metadata save on a `Draft` provider preserves the credential version. This route
+does not select a provider. Gateway routes expose list, read, create, and update
+for platform and project providers. They return a public metadata projection,
+not the full binding record. `hasCredential` reports whether the current
+revision has a credential version, but does not expose it. Lists use a bounded,
+provider-ID-ordered query over current heads. Exact save retries return the
+immutable revision saved by the original operation. See the
 [credential publication contract](../reference/contracts.md#customer-provided-model-provider-draft-contract).
 
 ### Accept a run selection

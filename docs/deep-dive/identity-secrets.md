@@ -83,10 +83,12 @@ binding restricts a token to that project and run; it is not a project role.
 ### Publish a BYOK credential version
 
 The Broker registers a private Projects client that publishes an exact
-credential version to an existing provider Draft. The request contains no key,
-secret name, or vault URI. The client binds a short-lived typed token to the
-actor and request, then uses the pinned Projects TLS channel. Projects appends
-an immutable provider revision and returns a replayable receipt.
+credential version to a provider in `Draft` or `Available`. The request
+contains no key, secret name, or vault URI. The client binds a short-lived
+typed token to the actor and request, then uses the pinned Projects TLS
+channel. Projects appends an immutable provider revision and returns a
+replayable receipt. Projects verifies the saved Events-owned rate card before
+it sets the provider to `Available`.
 
 The calling management operation must check current Projects authority before
 it invokes the client. This slice adds no management route that invokes it.

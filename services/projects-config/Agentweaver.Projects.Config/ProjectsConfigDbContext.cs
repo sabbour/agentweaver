@@ -241,7 +241,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 table.HasCheckConstraint(
                     "ck_model_providers_scope_project",
                     "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
-                table.HasCheckConstraint("ck_model_providers_state", "state = 'Draft'");
+                table.HasCheckConstraint("ck_model_providers_state", "state IN ('Draft', 'Available')");
                 table.HasCheckConstraint("ck_model_providers_revision", "current_revision > 0");
                 table.HasCheckConstraint(
                     "ck_model_providers_reasoning_efforts",
@@ -345,7 +345,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasMaxLength(256);
             entity.Property(revision => revision.RateCardId).HasColumnName("rate_card_id")
                 .HasMaxLength(128);
-            entity.Property(revision => revision.RateCardVersion).HasColumnName("rate_card_version");
+            entity.Property(revision => revision.RateCardVersion).HasColumnName("rate_card_version")
+                .HasMaxLength(64);
             entity.Property(revision => revision.CreatedByActorId).HasColumnName("created_by_actor_id")
                 .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
             entity.Property(revision => revision.CreatedAt).HasColumnName("created_at");

@@ -12,14 +12,16 @@ resources. This page describes source, not a release or deployment. The
 [Projects deep dive](../deep-dive/projects-config.md) explains revision races
 and the acceptance transaction.
 
-Projects & Config stores customer-provided model-provider metadata as Draft
-heads and immutable revisions. The public Gateway exposes list, read, create,
-and update routes for platform and project Drafts. Every operation requires
-`api.read` and `projects.admin`; platform requests must be unbound and made by a
-current PlatformAdmin. Project requests must match the exact project binding,
-have no run binding, and come from a current project Owner or PlatformAdmin.
-Drafts do not activate providers or change deployment-owned model eligibility
-or accepted run selections. See
+Projects & Config stores customer-provided model-provider metadata as immutable
+revisions. New providers start as `Draft`. Credential publication changes a
+provider to `Available` only after Projects verifies its saved credential and
+the exact Events-owned rate card and provenance. `Available` does not activate
+the provider or change deployment-owned model eligibility or accepted run
+selections. The public Gateway exposes list, read, create, and update routes
+for platform and project providers. Every operation requires `api.read` and
+`projects.admin`; platform requests must be unbound and made by a current
+PlatformAdmin. Project requests must match the exact project binding, have no
+run binding, and come from a current project Owner or PlatformAdmin. See
 [issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
 
 The save response contains the immutable revision committed by that operation.
@@ -51,39 +53,63 @@ sequenceDiagram
 
 ## BYOK credential publication
 
-The public Draft routes accept provider metadata, not credentials. The private
-Broker contract attaches one exact 32-character credential version to an
-existing provider Draft. The Broker caller must check current authority before
-it requests publication. The Projects route verifies the short-lived token,
-its purpose, the native TLS handshake, and every request field against signed
-claims.
+The public provider routes accept metadata, not credentials or rate-card
+references. The private Broker contract attaches one exact 32-character
+credential version to a provider in `Draft` or `Available`. The Broker caller
+checks current authority before publication. Projects verifies the short-lived
+token, its purpose, the native TLS handshake, and every request field against
+signed claims.
 
 `POST /internal/byok/credential-publications` appends an immutable provider
 revision. It copies the current metadata, configuration hash, and rate-card
-references, then sets `credentialVersion`. A concurrent update returns `409`.
-An exact retry returns the original receipt, including after a later metadata
-edit. Reusing the operation ID with changed content returns `409`. Metadata
-saves preserve the published credential version. The route does not activate
-or select the provider and is not exposed through the Gateway. Gateway Draft
-reads expose only `hasCredential`; they do not return the credential version.
+references, then sets `credentialVersion`. Projects reads the exact saved
+card ID and opaque version from that revision through the private Events owner
+route. The Projects workload token authorizes this read. Events returns the
+canonical card and provenance with a strong ETag: the quoted, lowercase
+SHA-256 of the exact response bytes. Projects checks the ETag, canonical
+content, exact ordinal ID and version, and provenance.
+
+Projects uses one revision-checked transaction to append the credential
+revision and update the provider head. A valid card sets the state to
+`Available`; a missing card, invalid provenance, hash mismatch, or Events
+timeout sets the state to `Draft`. The credential revision still commits when
+Events cannot answer. Projects rechecks the card when it rotates credentials
+for an `Available` provider. The owner call has a three-second deadline.
+Caller cancellation aborts publication. A Broker retry after an Events outage
+uses the same credential version, a new operation ID, and the current revision.
+Replaying the original operation returns its receipt without another Events
+read or a state change. A concurrent update returns `409`. Reusing an operation
+ID with changed content returns `409`. Metadata saves on Draft providers
+preserve the published credential version. These routes do not select a
+provider and are not exposed through the Gateway. Gateway reads expose only
+`hasCredential`; they do not return the credential version.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Broker as Identity Broker
     participant Projects as Projects & Config
+    participant Events
     participant DB as PostgreSQL
     Note over Broker,Projects: The management caller checks current authority before invoking this private contract.
     Broker->>Projects: POST exact credential version with short-lived purpose-bound token
     Projects->>Projects: Check native TLS and exact token-to-body binding
-    Projects->>DB: Compare expected revision and append immutable provider revision
+    Projects->>DB: Read current revision and saved rate-card key
+    Projects->>Events: GET exact card ID and opaque version with Projects service token
+    Events-->>Projects: Canonical card and provenance with strong SHA-256 ETag
+    alt Exact card, version, provenance, and hash match
+        Projects->>DB: CAS append credential revision and set Available
+    else Missing card, invalid data, or Events timeout
+        Projects->>DB: CAS append credential revision and set Draft
+    end
     DB-->>Projects: Commit provider revision and receipt
     Projects-->>Broker: Return no-store receipt
-    alt Broker retries the same operation
-        Broker->>Projects: Send the same operation and request
-        Projects->>DB: Find matching operation fingerprint
-        DB-->>Projects: Original provider revision
+    alt Broker replays the same operation
+        Broker->>DB: Find saved operation receipt; do not call Events
+        DB-->>Projects: Original receipt
         Projects-->>Broker: Return original receipt
+    else Broker retries after Events recovers
+        Broker->>Projects: New operation ID, current revision, same credential version
     end
 ```
 
@@ -284,7 +310,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/policies/platform` | Store a validated complete Platform Policy preparation at an expected revision. Requires `api.read`, `projects.admin`, and a current unbound PlatformAdmin. Off by default: returns `503` unless `NativeAcsPolicy:HeadWritesEnabled` is true. Exact retries return the saved preparation after current authority and head checks. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
-| `POST /internal/byok/credential-publications` | Private Broker-only write, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3 and a short-lived credential-publication token bound to the exact request. It appends one immutable Draft revision and returns a bounded `Cache-Control: no-store` receipt. |
+| `POST /internal/byok/credential-publications` | Private Broker-only write, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3 and a short-lived credential-publication token bound to the exact request. It appends a credential revision for a Draft or Available provider and sets `Available` only after the Events owner verifies the saved rate card; failures set `Draft`. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
 | `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
