@@ -145,7 +145,7 @@ if (runMigrations)
     return;
 }
 
-var platformPolicySourceEnabled = PlatformPolicySourceTls.Configure(builder);
+var platformPolicySourceEnabled = PlatformPolicySourceTls.IsEnabled(builder.Configuration);
 var runtimeConnectionString = builder.Configuration.GetConnectionString("ProjectsConfig")
     ?? throw new InvalidOperationException("Missing required configuration 'ConnectionStrings:ProjectsConfig'.");
 // The history route depends on the Knowledge owner even though the rest of Projects & Config does not.
@@ -262,10 +262,13 @@ if (brokerRunBindingAudience is not null)
             "The Broker run-binding audience must be a distinct, absolute HTTPS audience.");
     brokerRunBindingAudienceUri = parsedBrokerAudience;
 }
-BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null);
+BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null,
+    applyHttpsDefaults: !platformPolicySourceEnabled);
 var issueSyncIdentity = Agentweaver.Identity.IssueSyncServiceTransport.AddChannel(builder,
     IssueSyncAuthorityEndpoints.Channel, "ProjectsConfig:IssueSync:IdentityTls", "Projects", "IdentityBroker", true);
-HostedModelCatalogPublicationTls.Configure(builder);
+HostedModelCatalogPublicationTls.Configure(builder, "/var/run/service-backend-ca/ca.crt",
+    applyHttpsDefaults: !platformPolicySourceEnabled);
+PlatformPolicySourceTls.Configure(builder);
 
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();
@@ -329,7 +332,8 @@ await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 app.UseRouting();
 app.UseModelProviderDraftNoStore();
 if (platformPolicySourceEnabled)
-    app.UsePrivateListenerGuard();
+    app.UsePlatformPolicySourceGuard(
+        app.Services.GetRequiredService<PlatformPolicySourceTlsIdentity>().ListenerPort);
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseModelProviderDraftBodyLimit();

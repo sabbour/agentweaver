@@ -105,10 +105,12 @@ does not activate ACS or change the v4 Policy path. The
 [native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
 defines its full error and request contract.
 
-The Environment reads the current complete artifact through the separate,
-disabled-by-default `GET /internal/policy-source/platform` route on port
-`8445`. Pinned mTLS identifies the Environment peer. Projects rechecks that
-certificate on each request, reads the source in one bounded, read-only
+The Environment reads the current complete artifact through the
+disabled-by-default `GET /internal/policy-source/platform` route on the
+existing Projects HTTPS listener. The shared handshake requests an optional
+client certificate; pinned mTLS identifies the Environment peer. Projects
+rechecks that certificate at request start and before sending the serialized
+response, reads the source in one bounded, read-only
 PostgreSQL snapshot, and returns admission as pending with no checkpoint.
 The read is independent of OPA and leaves policy state unchanged. See the
 [private source contract](../reference/contracts.md#private-environment-policy-source-read)

@@ -11,95 +11,137 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 namespace Agentweaver.Projects.Config;
 
 internal static class PlatformPolicySourceTls
 {
     internal const string SectionName = "ProjectsConfig:PolicySource";
-    internal const string EndpointName = "EnvironmentPolicySource";
     internal const string EndpointUrlKey = "Kestrel:Endpoints:EnvironmentPolicySource:Url";
     internal const string RoutePath = "/internal/policy-source/platform";
     internal const string BackendCaFile = "/var/run/service-backend-ca/ca.crt";
     internal const string EnvironmentDnsName = "environment.agentweaver.svc.cluster.local";
 
     private const string PublicEndpointName = "ProjectsHttps";
-    private const string PublicEndpointUrl = "https://+:8443";
-    private const string PrivateEndpointUrl = "https://+:8445";
+    internal static bool IsEnabled(IConfiguration configuration)
+    {
+        var value = configuration[$"{SectionName}:Enabled"];
+        if (value is not null && !bool.TryParse(value, out _))
+            throw InvalidConfiguration();
+        return bool.TryParse(value, out var enabled) && enabled;
+    }
 
     internal static bool Configure(
         WebApplicationBuilder builder,
         string backendCaFile = BackendCaFile,
         TimeProvider? timeProvider = null)
     {
-        var enabledValue = builder.Configuration[$"{SectionName}:Enabled"];
-        if (enabledValue is not null && !bool.TryParse(enabledValue, out _))
+        if (builder.Configuration.GetSection("Kestrel:Endpoints:EnvironmentPolicySource").Exists())
             throw InvalidConfiguration();
-        var enabled = bool.TryParse(enabledValue, out var parsedEnabled) && parsedEnabled;
-        if (!enabled)
-        {
-            if (builder.Configuration[EndpointUrlKey] is not null)
-                throw InvalidConfiguration();
+        if (!IsEnabled(builder.Configuration))
             return false;
-        }
 
         var options = ReadOptions(builder.Configuration.GetSection(SectionName), (timeProvider ?? TimeProvider.System).GetUtcNow());
+        var otherPins = builder.Configuration
+            .GetSection("ProjectsConfig:IssueSync:IdentityTls:PeerCertificateSha256Pins")
+            .GetChildren().Select(pin => pin.Value)
+            .Append(builder.Configuration[$"{HostedModelCatalogPublicationTls.SectionName}:AgentHostCertificateSha256"])
+            .Where(pin => pin is not null).ToArray();
+        if (options.EnvironmentPins.Any(pin => otherPins.Contains(pin.Sha256, StringComparer.OrdinalIgnoreCase)) ||
+            otherPins.Length != otherPins.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+            throw InvalidConfiguration();
+
+        var (publicEndpointName, port) = ConfigureEndpointUrl(builder);
         var identity = new PlatformPolicySourceTlsIdentity(options, backendCaFile, timeProvider ?? TimeProvider.System);
+        identity.ListenerPort = port;
         builder.Services.AddSingleton(identity);
 
-        var publicEndpointName = ConfigureEndpointUrls(builder);
+        builder.WebHost.ConfigureKestrel(server =>
+        {
+            var broker = server.ApplicationServices.GetService<BrokerRunBindingTlsIdentity>();
+            var agentHost = server.ApplicationServices.GetService<HostedModelCatalogPublicationTls>();
+            server.ConfigureHttpsDefaults(https =>
+            {
+                broker?.Apply(https);
+                agentHost?.Apply(https);
+            });
+        });
         KestrelEndpointComposition.AddEndpoint(builder, (loader, server) =>
         {
-            loader.Endpoint(publicEndpointName, _ => { });
-            loader.Endpoint(EndpointName, endpoint =>
+            loader.Endpoint(publicEndpointName, endpoint =>
             {
-                var tls = server.ApplicationServices.GetRequiredService<PlatformPolicySourceTlsIdentity>();
-                endpoint.HttpsOptions.SslProtocols = PlatformPolicySourceTlsIdentity.AllowedProtocols;
-                endpoint.HttpsOptions.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
-                endpoint.HttpsOptions.CheckCertificateRevocation = true;
-                endpoint.HttpsOptions.ClientCertificateValidation = tls.AcceptClientCertificate;
+                var https = endpoint.HttpsOptions;
+                var broker = server.ApplicationServices.GetService<BrokerRunBindingTlsIdentity>();
+                var agentHost = server.ApplicationServices.GetService<HostedModelCatalogPublicationTls>();
+                var mode = https.ClientCertificateMode;
+                var previous = https.ClientCertificateValidation;
+                if (!endpoint.IsHttps ||
+                    endpoint.ListenOptions.Protocols.HasFlag(HttpProtocols.Http3) ||
+                    mode is not (ClientCertificateMode.NoCertificate or ClientCertificateMode.AllowCertificate) ||
+                    https.OnAuthenticate is not null ||
+                    https.ServerCertificateSelector is not null ||
+                    (broker is not null &&
+                        (https.ServerCertificate is null ||
+                         !https.ServerCertificate.RawData.AsSpan().SequenceEqual(broker.Certificate.RawData) ||
+                         https.SslProtocols != BrokerRunBindingTlsIdentity.AllowedProtocols)) ||
+                    (agentHost is not null &&
+                        (mode != ClientCertificateMode.AllowCertificate ||
+                         previous != agentHost.AcceptClientCertificate)) ||
+                    (agentHost is null && mode == ClientCertificateMode.AllowCertificate &&
+                        (previous is null || https.CheckCertificateRevocation)))
+                    throw InvalidConfiguration();
+
+                https.ClientCertificateMode = ClientCertificateMode.AllowCertificate;
+                // Pin classification must precede issuer retrieval; workload callbacks build their own chains.
+                https.OnAuthenticate = (_, authentication) =>
+                    authentication.CertificateChainPolicy = new X509ChainPolicy
+                    {
+                        RevocationMode = X509RevocationMode.NoCheck,
+                        DisableCertificateDownloads = true,
+                    };
+                https.ClientCertificateValidation = (certificate, chain, errors) =>
+                {
+                    if (certificate is null)
+                        return false;
+                    var pin = Convert.ToHexString(SHA256.HashData(certificate.RawData));
+                    if (options.EnvironmentPins.Any(item =>
+                            string.Equals(item.Sha256, pin, StringComparison.OrdinalIgnoreCase)))
+                        return identity.AcceptClientCertificate(certificate, chain, errors);
+                    if (agentHost is not null)
+                        return string.Equals(agentHost.CertificatePin, pin, StringComparison.OrdinalIgnoreCase) &&
+                            agentHost.AcceptClientCertificate(certificate, chain, errors);
+                    return mode == ClientCertificateMode.NoCertificate ||
+                        (previous?.Invoke(certificate, chain, errors) ?? errors == SslPolicyErrors.None);
+                };
             });
         });
         return true;
     }
 
-    private static string ConfigureEndpointUrls(WebApplicationBuilder builder)
+    private static (string Name, int Port) ConfigureEndpointUrl(WebApplicationBuilder builder)
     {
+        if (bool.TryParse(builder.Configuration["preferHostingUrls"], out var preferHosting) && preferHosting)
+            throw InvalidConfiguration();
         var endpoints = builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().ToArray();
-        if (endpoints.Any(endpoint =>
-                string.Equals(endpoint.Key, EndpointName, StringComparison.OrdinalIgnoreCase)))
-        {
-            if (!string.Equals(builder.Configuration[EndpointUrlKey], PrivateEndpointUrl, StringComparison.Ordinal))
-                throw InvalidConfiguration();
-        }
-        else
-        {
-            builder.Configuration[EndpointUrlKey] = PrivateEndpointUrl;
-        }
-
-        var privateEndpoints = endpoints
-            .Where(endpoint => ReadEndpointUris(endpoint["Url"]).Any(address => address.Port == 8445))
+        var candidates = endpoints.Where(endpoint =>
+                !string.Equals(endpoint.Key, "IssueSyncIdentity", StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        if (privateEndpoints.Any(endpoint =>
-                !string.Equals(endpoint.Key, EndpointName, StringComparison.OrdinalIgnoreCase)) ||
-            privateEndpoints.Length > 1)
+        if (candidates.Length > 1)
             throw InvalidConfiguration();
-
-        var publicEndpoints = endpoints
-            .Where(endpoint => ReadEndpointUris(endpoint["Url"]).Any(address => address.Port == 8443))
-            .ToArray();
-        if (publicEndpoints.Length > 1 ||
-            publicEndpoints.Any(endpoint =>
-                ReadEndpointUris(endpoint["Url"]).Any(address =>
-                    address.Port == 8443 && address.Scheme != Uri.UriSchemeHttps)))
+        var name = candidates.Length == 1 ? candidates[0].Key : PublicEndpointName;
+        var url = candidates.Length == 1 ? candidates[0]["Url"] : builder.Configuration["urls"];
+        var addresses = ReadEndpointUris(url).ToArray();
+        if (addresses.Length != 1 || addresses[0].Scheme != Uri.UriSchemeHttps ||
+            addresses[0].AbsolutePath != "/" || addresses[0].Query.Length != 0 ||
+            addresses[0].Fragment.Length != 0 || addresses[0].UserInfo.Length != 0 ||
+            endpoints.Any(endpoint => endpoint.Key != name &&
+                ReadEndpointUris(endpoint["Url"]).Any(address => address.Port == addresses[0].Port)) ||
+            builder.Configuration.GetSection($"Kestrel:Endpoints:{name}:Sni").Exists())
             throw InvalidConfiguration();
-        if (publicEndpoints.Length == 1)
-            return publicEndpoints[0].Key;
-
-        if (builder.Configuration[$"Kestrel:Endpoints:{PublicEndpointName}:Url"] is not null)
-            throw InvalidConfiguration();
-        builder.Configuration[$"Kestrel:Endpoints:{PublicEndpointName}:Url"] = PublicEndpointUrl;
-        return PublicEndpointName;
+        if (candidates.Length == 0)
+            builder.Configuration[$"Kestrel:Endpoints:{name}:Url"] = url;
+        return (name, addresses[0].Port);
     }
 
     private static IEnumerable<Uri> ReadEndpointUris(string? value)
@@ -184,6 +226,7 @@ internal sealed record PlatformPolicySourceTlsOptions(
 
 internal sealed class PlatformPolicySourceTlsIdentity
 {
+    internal int ListenerPort { get; set; }
     internal const SslProtocols AllowedProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
     private const string ClientAuthenticationOid = "1.3.6.1.5.5.7.3.2";
     private const int MaximumPeerIntermediates = 8;
@@ -238,9 +281,14 @@ internal sealed class PlatformPolicySourceTlsIdentity
             !IsPinnedEnvironmentLeaf(certificate, _timeProvider.GetUtcNow(), out var digest))
             return false;
 
+        var peer = X509CertificateLoader.LoadCertificate(certificate.RawData);
         return await Task.Run(
-                () => ValidatePeer(certificate, null, SslPolicyErrors.None, _timeProvider.GetUtcNow(),
-                    cacheIntermediates: false, digest, cancellationToken),
+                () =>
+                {
+                    using (peer)
+                        return ValidatePeer(peer, null, SslPolicyErrors.None, _timeProvider.GetUtcNow(),
+                            cacheIntermediates: false, digest, cancellationToken);
+                },
                 CancellationToken.None)
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
