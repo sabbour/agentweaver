@@ -228,6 +228,137 @@ not a pass.
 This route-specific case checks workflow generation. It does not replace full
 P1 API acceptance.
 
+## Run task model completion
+
+The `task-model-completion` case dispatches an already claimed task through the
+public Gateway. It checks the accepted model selection and hard budget,
+owner-derived task completion, the matching child receipt, priced usage, and
+disposable-run cleanup.
+
+The case sends a model request and cancels the named run after it confirms the
+run identity. Use an approved non-production Gateway and a disposable run.
+
+### Before you begin
+
+You need Node.js 24 and the self-contained native Agentweaver apphost for the
+source commit you want to test. Prepare a disposable run with:
+
+- An accepted root session and a claimed task.
+- A confirmed one-item WorkPlan for that task.
+- A BYOK model selection pinned to the expected model.
+- A run-level hard budget for `byok.tokens` in `USD`.
+- Run limits that match the case input.
+
+Sign in as the expected actor and tenant with two CLI identities:
+
+- A run-bound `projects.orchestrator` identity for the exact project and run.
+- An unbound `projects.admin` identity, with no project or run selector, to
+  cancel the disposable run.
+
+The case does not sign in or launch a browser. Use the supported CLI login
+flow before running it. Browser authorization needs explicit approval.
+
+### Prepare the case input
+
+Copy `scripts/acceptance/api/examples/task-model-completion.json` to a new
+local JSON file outside the repository. Replace the example values:
+
+- `sourceCommit`: the full 40-character source commit for the apphost.
+- `targetCommit`: the full source commit deployed to the Gateway target.
+- `apphostSha256`: the SHA-256 hash of the exact apphost file.
+- `approvedNonProduction` and `approvedDisposableRun`: keep both `true` after
+  you approve the target and disposable run. These values record your approval;
+  the script cannot determine the target's deployment status.
+- `expectedActorId`: the actor authorized for the project and run.
+- `expectedDecisionStateVersion`: the current decision-state version for the
+  confirmed plan.
+- `expectedSelection`: the exact project configuration revision, model
+  selection reference, model ID, maximum USD spend, and run limits.
+- `expectedTask`: the task ID and revision, claim ID, WorkPlan ID, workflow ID
+  and revision, and the task's WorkPlan association ID.
+- `target`: the Gateway origin, Broker issuer, client ID, API audience, tenant,
+  project, run, and root session IDs.
+
+Set `expectedSelection.maxRunUsd` to the approved spending cap, up to USD 5.
+The accepted selection must contain one run-scoped `byok.tokens` budget in
+`USD` with a positive hard limit that does not exceed `maxRunUsd`. The
+`reservePerDispatch` value must also be positive. The case input accepts only
+its documented fields. Do not add credentials, tokens, prompts, or task content.
+
+### Validate and run the case
+
+1. Set the native apphost path and create a new input and evidence path outside
+   the repository:
+
+   ```powershell
+   $env:AGENTWEAVER_CLI_PATH = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
+   $caseRoot = Join-Path $HOME 'agentweaver-acceptance'
+   New-Item -ItemType Directory -Force -Path $caseRoot | Out-Null
+   $caseInput = Join-Path $caseRoot 'task-model-completion.json'
+   Copy-Item .\scripts\acceptance\api\examples\task-model-completion.json $caseInput
+   $runName = '{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N'))
+   $evidence = Join-Path $caseRoot "task-model-completion-$runName"
+   ```
+
+2. Record the apphost source, target commit, and hash in the case input:
+
+   ```powershell
+   git rev-parse HEAD
+   (Get-FileHash $env:AGENTWEAVER_CLI_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
+   & $env:AGENTWEAVER_CLI_PATH --version
+   ```
+
+3. Validate the input without starting the apphost or contacting the Gateway:
+
+   ```powershell
+   node scripts\acceptance\api\task-model-completion.mjs --input $caseInput --output $evidence --dry-run
+   ```
+
+   A successful dry run reports `validated-not-run`. It checks the case input,
+   apphost path and hash, and evidence path. It does not execute the apphost,
+   contact the Gateway, or create evidence.
+
+4. Sign in with both identities for the same target. Use the project and run
+   selectors for `projects.orchestrator`. Do not use either selector for
+   `projects.admin`. The case checks both sign-ins, caller context, accepted
+   selection, and decision state before it dispatches the task.
+
+5. Run the case:
+
+   ```powershell
+   node scripts\acceptance\api\task-model-completion.mjs --input $caseInput --output $evidence
+   ```
+
+   The case calls `dispatchCoordinatorExecution` at
+   `POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch`.
+   The Gateway and native CLI use a ten-minute deadline for each dispatch
+   request. The case retries the same request while child startup is pending.
+   A terminal dispatch failure stops retries. After it verifies task
+   completion and run usage, it cancels the named run and waits for
+   `runtimeCleanup.state` to reach `complete` with no pending work. The case
+   also attempts cleanup after dispatch failure.
+
+   `commands.jsonl` records redacted arguments and command results. It stores
+   hashes instead of the run-selection and dispatch output, so it does not
+   record task output text. `result.json` records the selected model, task and
+   completion hashes, usage totals, and cleanup result.
+
+### Verify the result
+
+The evidence directory contains `commands.jsonl` and `result.json`. A
+`passed` result (exit code `0`) requires matching task-completion evidence and
+child receipt, fully priced BYOK usage within the accepted hard limit, and a
+cancelled run with complete runtime cleanup.
+
+A missing sign-in, missing operation, caller mismatch, selection mismatch, or
+non-dispatchable decision is `blocked` (exit code `2`). A dispatch error,
+timeout, evidence or usage mismatch, run that does not reach `cancelled`, or
+runtime cleanup that remains pending is `failed` (exit code `1`). A failed or
+blocked case is not a pass.
+
+This route-specific case checks task dispatch and completion. It does not
+replace full P1 API acceptance.
+
 ## Run the Workspace repository-read case
 
 The `workspace-repository-read` case reads one file from the Repo App

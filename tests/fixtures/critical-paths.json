@@ -39,13 +39,18 @@
         "readProjectWorkflowGenerationJob",
         "readProjectWorkflowGenerationResult"
       ]
+    },
+    {
+      "id": "cp4-task-model-completion",
+      "title": "Dispatch a claimed task and verify completion through the native CLI",
+      "caseScript": "scripts/acceptance/api/task-model-completion.mjs",
+      "watchRoutePrefixes": [
+        "/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch"
+      ],
+      "coveredOperations": [
+        "dispatchCoordinatorExecution"
+      ]
     }
   ],
-  "knownGaps": [
-    {
-      "stage": "task-model-completion",
-      "routePrefix": "/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch",
-      "reason": "The v1 Gateway has no route that dispatches a backlog task to a model and reports completion yet."
-    }
-  ]
+  "knownGaps": []
 }

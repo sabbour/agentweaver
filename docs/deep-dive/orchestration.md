@@ -548,33 +548,44 @@ request shapes.
 ```mermaid
 sequenceDiagram
     actor Caller
+    participant Gateway
     participant O as Orchestrator
     participant DB as Orchestrator PostgreSQL
     participant Env as Environment
     participant Host as Child AgentHost
     participant Events as Events and Sessions
-    Caller->>O: Generate workflow draft
+    Caller->>Gateway: Generate workflow draft
+    Gateway->>O: Forward generation request
     O->>DB: Save native request and typed draft
-    Caller->>O: Capture and claim task on run B
+    Caller->>Gateway: Capture and claim task on run B
+    Gateway->>O: Forward task claim
     O->>DB: Reuse accepted root; save claim and idempotency
-    O-->>Caller: Same claim and root on exact retry
-    Caller->>O: Propose and confirm outcome
-    Caller->>O: Select and confirm generated workflow
-    Caller->>O: Propose and confirm WorkPlan
-    Caller->>O: Dispatch accepted WorkPlan
+    O-->>Gateway: Return the claim and root
+    Gateway-->>Caller: Return the claim and root
+    Caller->>Gateway: Propose and confirm outcome
+    Gateway->>O: Forward outcome decision
+    Caller->>Gateway: Select and confirm generated workflow
+    Gateway->>O: Forward workflow decision
+    Caller->>Gateway: Propose and confirm WorkPlan
+    Gateway->>O: Forward plan decision
+    Caller->>Gateway: Dispatch accepted WorkPlan
+    Gateway->>O: Forward run-bound dispatch request
     O->>DB: Save child-start intent and checkpoint
     O->>Env: Provision child placement
     Env-->>O: Placement and readiness evidence
-    O-->>Caller: Pending while startup lease is held
-    Caller->>O: Retry the same dispatch request
+    O-->>Gateway: Return pending startup
+    Gateway-->>Caller: Return pending startup
+    Caller->>Gateway: Retry the same dispatch request
+    Gateway->>O: Forward the same request
     O->>Host: Send associated child task
     Host->>Events: Append native material and usage events
     Events-->>Host: Acknowledge native events and material
     Host-->>O: Return child-turn completion receipt and item-binding hash
     O->>DB: Store receipt with checkpoint result
-    O-->>Caller: Return bounded completionEvidence
+    O-->>Gateway: Return bounded completionEvidence
     O->>DB: Join claim, current item hash, checkpoint and output witness
-    O-->>Caller: Return taskCompletion only when every join passes
+    O-->>Gateway: Return taskCompletion when every join passes
+    Gateway-->>Caller: Return dispatch result and evidence
 ```
 
 ### Dispatch ready work

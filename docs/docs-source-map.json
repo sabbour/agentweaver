@@ -126,6 +126,12 @@
         ".github/workflows/v1-cli-package.yml",
         "deploy/k8s/runtime-configs/identity-broker-runtime-config.json"
       ],
+      "sourceExclusions": [
+        "tools/Agentweaver.Cli/Api/GatewayClient.cs",
+        "tools/Agentweaver.Cli/Program.cs",
+        "tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj",
+        "tests/Agentweaver.Cli.Tests/GatewayClientTests.cs"
+      ],
       "required": [
         "docs/specs/native-cli-api-acceptance.md",
         "docs/guide/cli.md",
@@ -145,6 +151,9 @@
         "scripts/acceptance/api/"
       ],
       "sourceExclusions": [
+        "scripts/acceptance/api/task-model-completion.mjs",
+        "scripts/acceptance/api/tests/task-model-completion.test.mjs",
+        "scripts/acceptance/api/examples/task-model-completion.json",
         "scripts/acceptance/api/numeric-",
         "scripts/acceptance/api/examples/numeric-",
         "scripts/acceptance/api/tests/numeric-"
@@ -189,6 +198,36 @@
         "docs/guide/testing.md",
         "docs/guide/api-acceptance-migration.md",
         "docs/guide/identity-scopes.md",
+        "docs/deep-dive/orchestration.md",
+        "docs/deep-dive/testing-strategy.md",
+        "docs/reference/web-ui-parity.md",
+        "docs/specs/native-cli-api-acceptance.md"
+      ]
+    },
+    {
+      "name": "Public task dispatch and completion",
+      "sourcePrefixes": [
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOwnerClient.cs",
+        "tools/Agentweaver.Cli/Api/GatewayClient.cs",
+        "tools/Agentweaver.Cli/Program.cs",
+        "tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj",
+        "tests/Agentweaver.Cli.Tests/GatewayClientTests.cs",
+        "scripts/acceptance/api/task-model-completion.mjs",
+        "scripts/acceptance/api/tests/task-model-completion.test.mjs",
+        "scripts/acceptance/api/examples/task-model-completion.json",
+        "tests/Agentweaver.Identity.Broker.Tests/GatewayTaskDispatchTests.cs",
+        "tests/fixtures/critical-paths.json"
+      ],
+      "required": [
+        "docs/reference/api.md",
+        "docs/guide/cli.md",
+        "docs/guide/testing.md",
+        "docs/guide/api-acceptance-migration.md",
+        "docs/guide/gateway.md",
+        "docs/guide/identity-scopes.md",
+        "docs/deep-dive/gateway.md",
         "docs/deep-dive/orchestration.md",
         "docs/deep-dive/testing-strategy.md",
         "docs/reference/web-ui-parity.md",
@@ -437,6 +476,11 @@
         "tests/Agentweaver.Projects.Config.Tests/NativeAcsPolicyHistoryRequestTests.cs",
         "tests/Agentweaver.Identity.Broker.Tests/GatewayWorkspaceReadRegressionTests.cs"
       ],
+      "sourceExclusions": [
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOwnerClient.cs"
+      ],
       "required": [
         "docs/specs/canonical-acs-policy-history-read-slice.md",
         "docs/architecture/overview.md",
@@ -596,6 +640,10 @@
         "tests/Agentweaver.Environment.Tests/EnvironmentWorkspaceVolumeApiTests.cs",
         "tests/Agentweaver.Identity.Broker.Tests/GatewayEnvironmentRecoveryTests.cs",
         "tests/Agentweaver.Providers.Storage.AzureFiles.Tests/AzureFilesCsiWorkspaceVolumeProviderTests.cs"
+      ],
+      "sourceExclusions": [
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs"
       ],
       "required": [
         "docs/architecture/environment-sandbox.md",

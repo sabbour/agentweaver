@@ -896,6 +896,15 @@ selection and execution fence are rechecked by the owner CAS. The immutable bind
 is committed with the winning decision, gate, grant, and outbox transaction. The
 caller cannot submit a resource pin or override the durable binding.
 
+The Gateway publishes task dispatch as
+`POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch`
+with operation ID `dispatchCoordinatorExecution`. It forwards the request to
+the Orchestrator coordination owner; the Gateway does not derive task state.
+The owner returns bounded child completion receipts and includes
+`taskCompletion` only when it joins the current claim, confirmed WorkPlan,
+checkpoint, receipt, and output witness. See the
+[HTTP API reference](./api.md#dispatch-completion-and-startup-readback).
+
 <a id="runtime-observation-v2"></a>
 
 ### Runtime observation v2

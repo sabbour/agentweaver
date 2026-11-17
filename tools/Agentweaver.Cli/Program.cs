@@ -8,7 +8,9 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         using var gatewayHandler = new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false };
-        using var gatewayClient = new HttpClient(gatewayHandler);
+        using var gatewayClient = new HttpClient(gatewayHandler) { Timeout = Timeout.InfiniteTimeSpan };
+        using var cliHandler = new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false };
+        using var cliClient = new HttpClient(cliHandler);
         // Keep Broker OAuth transport separate so cookies or redirects never cross the Gateway boundary.
         using var brokerHandler = new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false };
         using var brokerClient = new HttpClient(brokerHandler);
@@ -25,7 +27,7 @@ public static class Program
         return await CliApplication.RunAsync(
             args,
             new CliRuntimeOptions(
-                HttpClient: gatewayClient,
+                HttpClient: cliClient,
                 GatewayClientFactory: gatewayClients,
                 Authentication: authentication),
             cancellation.Token).ConfigureAwait(false);

@@ -1,0 +1,43 @@
+{
+  "caseId": "task-model-completion",
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "targetCommit": "0000000000000000000000000000000000000000",
+  "apphostSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "approvedNonProduction": true,
+  "approvedDisposableRun": true,
+  "expectedActorId": "ACTOR_ID",
+  "expectedDecisionStateVersion": 1,
+  "expectedSelection": {
+    "projectConfigurationRevision": 1,
+    "modelSelectionReference": "MODEL_SELECTION_REFERENCE",
+    "modelId": "BYOK_MODEL_ID",
+    "maxRunUsd": 5.0,
+    "runLimits": {
+      "maxModelTurns": 1,
+      "maxToolCalls": 0,
+      "maxChildren": 1,
+      "maxConcurrentChildren": 1,
+      "maxWallTimeSeconds": 300,
+      "maxPromptTokens": 8192
+    }
+  },
+  "expectedTask": {
+    "taskId": "TASK_ID",
+    "taskRevision": 1,
+    "claimId": "00000000-0000-0000-0000-000000000001",
+    "workPlanId": "WORK_PLAN_ID",
+    "workflowId": "WORKFLOW_ID",
+    "definitionRevision": "1",
+    "associationId": "TASK_ASSOCIATION_ID"
+  },
+  "target": {
+    "gatewayUrl": "https://gateway.example.invalid",
+    "brokerIssuer": "https://identity.example.invalid/issuer-path",
+    "clientId": "agentweaver-cli",
+    "apiAudience": "https://gateway.example.invalid",
+    "tenantId": "TENANT_ID",
+    "projectId": "00000000-0000-0000-0000-000000000001",
+    "runId": "RUN_ID",
+    "sessionId": "ROOT_SESSION_ID"
+  }
+}

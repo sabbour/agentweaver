@@ -284,6 +284,12 @@ GitHub App connection; the tree and file are pinned to an immutable commit.
 This is separate from the produced-run file browser on Run Changes. Local
 worktree edits and repository import remain unavailable.
 
+The Gateway also exposes Orchestrator task dispatch at
+`POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch`.
+It returns bounded child completion evidence and an optional owner-derived
+task-completion projection. The web app has no task-dispatch control; the
+native CLI API case exercises this route.
+
 | Gap | 0.x endpoint | Missing v1 method and path | Plan |
 | --- | --- | --- | --- |
 | Board task position | `POST /api/projects/{p}/backlog/reorder` | Available: `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/position` | Queue positions are stored and revision-checked. The Board supports earlier/later actions and drag and drop within or between Backlog and Ready. |

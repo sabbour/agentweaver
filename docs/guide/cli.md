@@ -553,6 +553,18 @@ input, sign-in, dry run, and evidence steps, follow
 [Run workflow generation](./api-acceptance-migration.md#run-workflow-generation).
 This route-specific case does not replace full P1 API acceptance.
 
+## Run task dispatch through the Gateway
+
+The `task-model-completion` case uses normal CLI `api invoke` commands to
+dispatch a claimed task through the public Gateway. It checks the accepted
+BYOK model and hard run budget, task-completion evidence, priced usage, and
+cleanup of the disposable run.
+
+The case sends a model request and cancels the named run. Use an approved
+non-production Gateway and a disposable run. Follow
+[Run task model completion](./api-acceptance-migration.md#run-task-model-completion)
+for the input, identities, dry run, and evidence steps.
+
 ## Run the read-only Gateway API case
 
 The checked-in case script checks Gateway discovery and the signed-in actor’s authorization context through normal CLI commands. It runs auth status, api operations, api describe, and rest; it does not mutate resources, send model requests, or launch a browser.

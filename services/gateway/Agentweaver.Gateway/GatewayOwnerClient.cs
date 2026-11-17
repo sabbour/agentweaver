@@ -35,6 +35,7 @@ public sealed partial class GatewayOwnerClient(
     GatewayOptions options)
 {
     private const long MaximumProxyResponseBytes = 8 * 1024 * 1024;
+    private static readonly TimeSpan DispatchRequestTimeout = TimeSpan.FromMinutes(10);
 
     private static async Task<bool> HasP1SetupBodyAsync(
         HttpRequest request, CancellationToken cancellationToken)
@@ -85,7 +86,9 @@ public sealed partial class GatewayOwnerClient(
                 IsModelProviderDraftRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
-            using var timeout = CreateOwnerTimeout(cancellationToken);
+            using var timeout = CreateOwnerTimeout(
+                cancellationToken,
+                route.OperationId == "dispatchCoordinatorExecution" ? DispatchRequestTimeout : null);
             // The setup routes take no body or query. The Transfer-Encoding check rejects an HTTP/1.1 chunked
             // body. An HTTP/2 or HTTP/3 body can have neither header, so when CanHaveBody is true,
             // HasP1SetupBodyAsync reads one byte to find the body. The request fails before any owner call.
@@ -2405,10 +2408,12 @@ public sealed partial class GatewayOwnerClient(
     private HttpClient OwnerHttpClient(GatewayOwner owner) =>
         clients.CreateClient(owner.ToString());
 
-    private CancellationTokenSource CreateOwnerTimeout(CancellationToken cancellationToken)
+    private CancellationTokenSource CreateOwnerTimeout(
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null)
     {
         var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(options.OwnerRequestTimeout);
+        timeout.CancelAfter(requestTimeout ?? options.OwnerRequestTimeout);
         return timeout;
     }
 
