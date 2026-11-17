@@ -789,7 +789,7 @@ public sealed partial class GatewayClient : IGatewayClient
     {
         var requestId = Guid.NewGuid();
         var started = Stopwatch.GetTimestamp();
-        var hidePolicyRequest = operationId == "validatePlatformNativeAcsPolicy";
+        var hidePolicyRequest = operationId is "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
         var evidence = new JsonObject
         {
             ["requestId"] = requestId.ToString("D"),
@@ -805,7 +805,8 @@ public sealed partial class GatewayClient : IGatewayClient
             ["operationId"] = operationId,
         };
         var hidePolicyEvidence = operationId is
-            "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or "validatePlatformNativeAcsPolicy";
+            "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
+            "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 

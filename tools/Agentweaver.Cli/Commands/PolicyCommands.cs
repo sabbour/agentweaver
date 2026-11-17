@@ -25,8 +25,8 @@ internal static class PolicyCommands
     internal static async Task<int> RunAsync(
         string[] args, CliRuntimeOptions runtime, HttpClient httpClient, TextWriter output, CancellationToken ct)
     {
-        if (args.Length == 0 || args[0] is not ("show" or "export" or "history" or "validate"))
-            throw new CliUsageException("Choose `show`, `export`, `history`, or `validate`.");
+        if (args.Length == 0 || args[0] is not ("show" or "export" or "history" or "validate" or "apply"))
+            throw new CliUsageException("Choose `show`, `export`, `history`, `validate`, or `apply`.");
         var command = args[0];
         var options = CliOptions.Parse(args[1..], new HashSet<string>(StringComparer.Ordinal));
         if (options.Many("project-id").Count > 0 || options.Many("run-id").Count > 0)
@@ -36,14 +36,21 @@ internal static class PolicyCommands
             "show" => new[] { "scope", "revision" },
             "export" => new[] { "scope", "revision", "output" },
             "history" => new[] { "scope", "page-size", "cursor" },
-            _ => new[] { "scope", "input" },
+            "validate" => new[] { "scope", "input" },
+            _ => new[] { "scope", "input", "expected-revision", "reason" },
         };
         options.RequireOnly(commandOptions.Concat(
             CliConfiguration.TargetOptionNames.Where(name => name is not ("project-id" or "run-id"))).ToArray());
         if (options.Single("scope") != "platform")
             throw new CliUsageException("Policy commands require --scope platform.");
         var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
-        var inputPath = command == "validate" ? InputFilePath(options.Single("input")) : null;
+        var inputPath = command is "validate" or "apply"
+            ? InputFilePath(options.Single("input"), command)
+            : null;
+        var expectedRevision = command == "apply"
+            ? ExpectedRevision(options.Single("expected-revision"))
+            : null;
+        var reason = command == "apply" ? ApplyReason(options.Single("reason")) : null;
 
         var revisionText = options.Single("revision");
         long? revision = null;
@@ -65,18 +72,23 @@ internal static class PolicyCommands
         var cursor = options.Single("cursor");
         if (cursor is not null && !ValidCursor(cursor))
             throw new CliUsageException("--cursor must be a non-empty history cursor.");
-        var inputArtifact = inputPath is null ? null : await ReadInputArtifactAsync(inputPath, ct).ConfigureAwait(false);
+        var inputArtifact = inputPath is null
+            ? null
+            : await ReadInputArtifactAsync(inputPath, ct, requirePlatform: command == "apply").ConfigureAwait(false);
+        var artifactHash = command == "apply" ? Hash(inputArtifact!) : null;
 
         var operationId = command switch
         {
             "history" => "listPlatformNativeAcsPolicyRevisions",
             "validate" => "validatePlatformNativeAcsPolicy",
+            "apply" => "writePlatformNativeAcsPolicy",
             _ => revision is null ? "readPlatformNativeAcsPolicy" : "readPlatformNativeAcsPolicyRevision",
         };
         var path = command switch
         {
             "history" => "/api/v1/policies/platform/revisions",
             "validate" => "/api/v1/policies/platform/validate",
+            "apply" => "/api/v1/policies/platform",
             _ => revision is null ? "/api/v1/policies/platform" : "/api/v1/policies/platform/revisions/{revision}",
         };
         var query = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -87,26 +99,49 @@ internal static class PolicyCommands
         var pathParameters = revisionText is null ? null :
             new Dictionary<string, string>(StringComparer.Ordinal) { ["revision"] = revisionText };
 
-        var identity = CliConfiguration.ReadIdentity(options: options, unbound: true);
+        var identity = CliConfiguration.ReadIdentity(
+            command == "apply" ? ["projects.admin"] : null,
+            options: options,
+            unbound: true);
         var gateway = (runtime.GatewayClientFactory ?? new GatewayClientFactory(httpClient, runtime.Authentication))
             .Create(identity);
         JsonObject result;
+        PolicyApplyJournalEntry? applyJournal = null;
         try
         {
             var operations = GatewayContract.Parse(await gateway.DiscoverAsync(ct).ConfigureAwait(false));
             if (!operations.TryGetValue(operationId, out var operation) || operation.Path != path ||
                 operation.Parameters.Any(p => p.Location == "header" &&
                     p.Name.Equals("X-Agentweaver-Project-Authorization", StringComparison.OrdinalIgnoreCase)) ||
-                (command == "validate"
-                    ? operation.Method != "POST" || !operation.HasRequestBody || !operation.BodyRequired ||
-                      operation.MaximumRequestBytes > MaximumResponseBytes ||
-                      operation.MaximumResponseBytes > MaximumResponseBytes
-                    : operation.Method != "GET" || operation.HasRequestBody ||
-                      operation.MaximumResponseBytes > MaximumResponseBytes))
+                !ValidOperation(command, operation))
                 throw new PolicyFailureException("The Gateway does not support this policy operation.");
-            var invocation = command == "validate"
-                ? new GatewayInvocation(Body: new JsonObject { ["artifact"] = inputArtifact!.DeepClone() })
-                : new GatewayInvocation(pathParameters, query);
+            GatewayInvocation invocation;
+            if (command == "validate")
+            {
+                invocation = new GatewayInvocation(Body: new JsonObject { ["artifact"] = inputArtifact!.DeepClone() });
+            }
+            else if (command == "apply")
+            {
+                applyJournal = await PolicyApplyJournal.PrepareAsync(
+                    identity,
+                    expectedRevision,
+                    artifactHash!,
+                    reason!,
+                    runtime.PolicyApplyStateDirectory,
+                    ct).ConfigureAwait(false);
+                invocation = new GatewayInvocation(Body: new JsonObject
+                {
+                    ["expectedRevision"] = expectedRevision,
+                    ["artifact"] = inputArtifact!.DeepClone(),
+                    ["idempotencyKey"] = applyJournal.IdempotencyKey,
+                    ["reason"] = reason,
+                    ["correlationId"] = applyJournal.CorrelationId,
+                });
+            }
+            else
+            {
+                invocation = new GatewayInvocation(pathParameters, query);
+            }
             var response = await gateway.InvokeAsync(operationId, invocation, ct)
                 .ConfigureAwait(false);
             if (command == "validate")
@@ -117,6 +152,12 @@ internal static class PolicyCommands
                     422 => ProjectValidationFailure(response.Body),
                     _ => throw new PolicyFailureException(ValidationErrorMessage(response.Status, response.Body)),
                 };
+            }
+            else if (command == "apply")
+            {
+                if (response.Status != 200)
+                    throw new PolicyFailureException(ApplyErrorMessage(response.Status, response.Body));
+                result = ProjectApply(response.Body, expectedRevision, artifactHash!);
             }
             else
             {
@@ -138,9 +179,15 @@ internal static class PolicyCommands
         {
             throw;
         }
+        catch (PolicyApplyJournalException exception)
+        {
+            throw new PolicyFailureException(exception.Message);
+        }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            throw new PolicyFailureException("The policy request failed.");
+            throw new PolicyFailureException(command == "apply"
+                ? "The policy apply failed. Its saved recovery record remains; rerun the same command to recover or complete the request."
+                : "The policy request failed.");
         }
 
         if (command == "export")
@@ -164,24 +211,63 @@ internal static class PolicyCommands
         }
 
         await output.WriteLineAsync(result.ToJsonString(OutputJson)).ConfigureAwait(false);
+        if (applyJournal is not null)
+            PolicyApplyJournal.Complete(applyJournal.Path);
         return command == "validate" && !result["isValid"]!.GetValue<bool>() ? 1 : 0;
     }
 
-    private static string InputFilePath(string? value)
+    private static bool ValidOperation(string command, GatewayOperation operation) =>
+        command switch
+        {
+            "validate" => operation.Method == "POST" && operation.HasRequestBody && operation.BodyRequired &&
+                          operation.MaximumRequestBytes <= MaximumResponseBytes &&
+                          operation.MaximumResponseBytes <= MaximumResponseBytes,
+            "apply" => operation.Method == "PUT" && operation.HasRequestBody && operation.BodyRequired &&
+                       operation.MaximumRequestBytes <= MaximumResponseBytes &&
+                       operation.MaximumResponseBytes <= MaximumResponseBytes,
+            _ => operation.Method == "GET" && !operation.HasRequestBody &&
+                 operation.MaximumResponseBytes <= MaximumResponseBytes,
+        };
+
+    private static string InputFilePath(string? value, string command)
     {
         if (string.IsNullOrWhiteSpace(value))
-            throw new CliUsageException("Policy validation requires --input <export-file>.");
+            throw new CliUsageException($"Policy {command} requires --input <export-file>.");
         try
         {
             return Path.GetFullPath(value);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            throw new CliUsageException("Policy validation requires a valid input file path.");
+            throw new CliUsageException($"Policy {command} requires a valid input file path.");
         }
     }
 
-    private static async Task<JsonObject> ReadInputArtifactAsync(string path, CancellationToken ct)
+    private static long? ExpectedRevision(string? value)
+    {
+        if (value is null)
+            throw new CliUsageException("Policy apply requires --expected-revision <revision|none>.");
+        if (value == "none")
+            return null;
+        if (value.Length == 0 || value[0] == '0' ||
+            value.Any(c => c is < '0' or > '9') ||
+            !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var revision) ||
+            revision <= 0)
+            throw new CliUsageException("--expected-revision must be `none` or a canonical positive decimal Int64.");
+        return revision;
+    }
+
+    private static string ApplyReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 1024)
+            throw new CliUsageException("--reason must be non-blank and at most 1,024 characters.");
+        return reason;
+    }
+
+    private static async Task<JsonObject> ReadInputArtifactAsync(
+        string path,
+        CancellationToken ct,
+        bool requirePlatform = false)
     {
         try
         {
@@ -208,6 +294,9 @@ internal static class PolicyCommands
                 if (hasCreatedAt == hasUpdatedAt ||
                     obj.Count != expectedFields.Length ||
                     obj.Any(pair => !expectedFields.Contains(pair.Key, StringComparer.Ordinal)))
+                    throw UnexpectedInput();
+                if (requirePlatform &&
+                    (String(obj, "scopeType") != "platform" || String(obj, "scopeId") != "default"))
                     throw UnexpectedInput();
 
                 var revision = PositiveNumber(obj, "revision");
@@ -346,6 +435,37 @@ internal static class PolicyCommands
             ["contentSha256"] = Hash(exported),
             [timeField] = Timestamp(exported, timeField),
             ["output"] = outputPath,
+        };
+    }
+
+    private static JsonObject ProjectApply(JsonNode? body, long? expectedRevision, string expectedHash)
+    {
+        if (body is not JsonObject obj)
+            throw UnexpectedResponse();
+        CheckScope(obj);
+        var policyId = PolicyId(obj);
+        var revision = PositiveNumber(obj, "revision");
+        var hash = Hash(obj);
+        var nextRevision = expectedRevision is null
+            ? 1
+            : expectedRevision == long.MaxValue
+                ? throw UnexpectedResponse()
+                : expectedRevision.Value + 1;
+        if (revision != nextRevision || hash != expectedHash ||
+            !Guid.TryParse(String(obj, "auditId"), out _) ||
+            !Guid.TryParse(String(obj, "outboxId"), out _) ||
+            obj["replayed"] is not JsonValue replayedValue ||
+            !replayedValue.TryGetValue<bool>(out var replayed))
+            throw UnexpectedResponse();
+
+        return new JsonObject
+        {
+            ["scopeType"] = "platform",
+            ["scopeId"] = "default",
+            ["policyId"] = policyId,
+            ["revision"] = revision,
+            ["contentSha256"] = hash,
+            ["replayed"] = replayed,
         };
     }
 
@@ -542,6 +662,21 @@ internal static class PolicyCommands
             (503, "native_acs_dependency_unavailable");
         return known ? $"The policy validation failed (HTTP {status}, {code})." :
             $"The policy validation failed (HTTP {status}).";
+    }
+
+    private static string ApplyErrorMessage(int status, JsonNode? body)
+    {
+        var code = (body as JsonObject)?["code"] is JsonValue value &&
+            value.TryGetValue<string>(out var text) ? text : null;
+        if (status == 403)
+            return "The policy apply was denied (HTTP 403). The saved recovery record remains; rerun the same command after authorization is restored.";
+        if (status == 409)
+            return "The Platform Policy write conflicted (HTTP 409). Read the current revision before choosing a new --expected-revision; the saved recovery record remains.";
+        if (status == 503 && code == "native_acs_policy_writes_unavailable")
+            return "Platform Policy writes are disabled on this deployment (native_acs_policy_writes_unavailable). The saved recovery record remains; rerun the same command when writes are enabled.";
+        if (status == 422)
+            return "The Platform Policy artifact was rejected (HTTP 422). Validate the artifact before applying it; the saved recovery record remains.";
+        return $"The policy apply failed (HTTP {status}). The saved recovery record remains; rerun the same command to recover or complete the request.";
     }
 
     private static PolicyFailureException UnexpectedResponse() => new("The Gateway returned an invalid policy response.");

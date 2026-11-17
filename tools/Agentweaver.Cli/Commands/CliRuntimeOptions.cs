@@ -8,4 +8,7 @@ public sealed record CliRuntimeOptions(
     ICliAuthentication? Authentication = null,
     TextWriter? Output = null,
     TextWriter? Error = null,
-    INativeRepoAppSelectionHandoff? RepositorySelection = null);
+    INativeRepoAppSelectionHandoff? RepositorySelection = null)
+{
+    internal string? PolicyApplyStateDirectory { get; init; }
+}
