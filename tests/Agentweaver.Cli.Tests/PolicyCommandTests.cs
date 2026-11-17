@@ -16,6 +16,7 @@ public sealed class PolicyCommandTests
 {
     private const string Time = "2026-11-16T00:00:00+00:00";
     private const string Canary = "POLICY_PRIVATE_CANARY";
+    private const string ArtifactCanary = "67,65,78,65,82,89";
     private static readonly string Hash = ArtifactHash(3);
     private static readonly string[] Target =
     [
@@ -139,6 +140,340 @@ public sealed class PolicyCommandTests
         {
             if (File.Exists(outputPath))
                 File.Delete(outputPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ValidateReadsExportAndProjectsOnlyServerDiagnostics(bool exact)
+    {
+        var inputPath = NewInputPath();
+        var exportFixture = new Fixture { Body = ShowBodyWithCanary(exact) };
+        var fixture = new Fixture
+        {
+            Body = """{"isValid":true,"diagnostics":[{"code":"validated","message":"Artifact accepted","private":"POLICY_PRIVATE_CANARY"}],"manifestBytes":[67,65,78,65,82,89]}""",
+        };
+        try
+        {
+            Assert.Equal(0, await exportFixture.Run(exact
+                ? ["export", "--scope", "platform", "--revision", "2", "--output", inputPath]
+                : ["export", "--scope", "platform", "--output", inputPath]));
+            Assert.Equal(0, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Equal("POST", fixture.PolicyMethod);
+            Assert.Equal("/api/v1/policies/platform/validate", fixture.PolicyPath);
+            using var request = JsonDocument.Parse(fixture.PolicyBody!);
+            Assert.Equal(["artifact"], request.RootElement.EnumerateObject().Select(property => property.Name));
+            Assert.Equal(
+                new byte[] { 67, 65, 78, 65, 82, 89 },
+                request.RootElement.GetProperty("artifact").GetProperty("manifestBytes")
+                    .EnumerateArray().Select(value => value.GetByte()).ToArray());
+            var result = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal(["diagnostics", "isValid"], result.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.True(result["isValid"]!.GetValue<bool>());
+            var diagnostic = result["diagnostics"]!.AsArray()[0]!.AsObject();
+            Assert.Equal(["code", "column", "line", "message", "relativePath"],
+                diagnostic.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Equal("validated", diagnostic["code"]!.GetValue<string>());
+            Assert.Equal("Artifact accepted", diagnostic["message"]!.GetValue<string>());
+            Assert.DoesNotContain("private", fixture.Output.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.DoesNotContain(ArtifactCanary, fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+            Assert.Null(fixture.Authentication.Identity!.ProjectId);
+            Assert.Null(fixture.Authentication.Identity.RunId);
+            Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
+            Assert.Equal(InteractionPolicy.Never, fixture.Authentication.Interaction);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ValidateReturnsBoundedDiagnosticsForTheDocumentedInvalidResponse()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            Status = HttpStatusCode.UnprocessableEntity,
+            Body = $$"""{"code":"native_acs_policy_invalid","detail":"{{Canary}}","diagnostics":[{"code":"manifest_shape","message":"The manifest has an invalid shape.","relativePath":"manifest.yaml","line":2,"column":3,"private":"{{Canary}}"}],"manifestBytes":[67,65,78,65,82,89]}""",
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            var result = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal(["diagnostics", "isValid"], result.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.False(result["isValid"]!.GetValue<bool>());
+            var diagnostic = result["diagnostics"]!.AsArray()[0]!.AsObject();
+            Assert.Equal("manifest_shape", diagnostic["code"]!.GetValue<string>());
+            Assert.Equal("The manifest has an invalid shape.", diagnostic["message"]!.GetValue<string>());
+            Assert.Equal("manifest.yaml", diagnostic["relativePath"]!.GetValue<string>());
+            Assert.Equal(2, diagnostic["line"]!.GetValue<int>());
+            Assert.Equal(3, diagnostic["column"]!.GetValue<int>());
+            Assert.DoesNotContain(Canary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.DoesNotContain(Canary, fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ValidateRejectsInvalidAndOversizedInputBeforeGatewayDiscovery()
+    {
+        var inputPath = NewInputPath();
+        var invalid = JsonNode.Parse(ExportInput(exact: false))!.AsObject();
+        invalid["artifact"]!["manifestBytes"]![0] = 66;
+        await File.WriteAllTextAsync(inputPath, invalid.ToJsonString());
+        var fixture = new Fixture();
+        try
+        {
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Empty(fixture.Output.ToString());
+            Assert.Contains("export file is invalid", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+
+            invalid = JsonNode.Parse(ExportInput(exact: false))!.AsObject();
+            invalid["artifact"]!["private"] = Canary;
+            await File.WriteAllTextAsync(inputPath, invalid.ToJsonString());
+            fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+
+            invalid = JsonNode.Parse(ExportInput(exact: false))!.AsObject();
+            invalid["artifact"]!["files"]![0]!["private"] = Canary;
+            await File.WriteAllTextAsync(inputPath, invalid.ToJsonString());
+            fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+
+            await using (var stream = new FileStream(inputPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                stream.SetLength(64L * 1024 * 1024 + 1);
+            fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Empty(fixture.Output.ToString());
+            Assert.Contains("64 MiB", fixture.Error.ToString(), StringComparison.Ordinal);
+
+            fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform"));
+            Assert.Equal(0, fixture.RequestCount);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ValidateRejectsAnAdvertisedRequestBoundAboveThePolicyApiLimit()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture { UnsafeValidationRequestBound = true };
+        try
+        {
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Null(fixture.PolicyPath);
+            Assert.Equal(1, fixture.RequestCount);
+            Assert.Empty(fixture.Output.ToString());
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ValidateRejectsAnOperationWithTheWrongPath()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture { WrongValidationPath = true };
+        try
+        {
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Null(fixture.PolicyPath);
+            Assert.Equal(1, fixture.RequestCount);
+            Assert.Empty(fixture.Output.ToString());
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(5242880)]
+    [InlineData(5242881)]
+    public async Task ValidateChecksTheSerializedRequestSize(int requestBytes)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInputWithRequestSize(requestBytes));
+        var fixture = new Fixture { Body = """{"isValid":true,"diagnostics":[]}""" };
+        try
+        {
+            var result = await fixture.Run("validate", "--scope", "platform", "--input", inputPath);
+            if (requestBytes == 5242880)
+            {
+                Assert.Equal(0, result);
+                Assert.Equal("POST", fixture.PolicyMethod);
+                Assert.Equal(requestBytes, Encoding.UTF8.GetByteCount(fixture.PolicyBody!));
+            }
+            else
+            {
+                Assert.Equal(1, result);
+                Assert.Null(fixture.PolicyPath);
+                Assert.Equal(1, fixture.RequestCount);
+                Assert.DoesNotContain(ArtifactCanary, fixture.Error.ToString(), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(200, "application/json")]
+    [InlineData(200, "text/plain")]
+    [InlineData(500, "text/plain")]
+    public async Task ValidateArtifactNeverAppearsInGatewayEvidence(int status, string mediaType)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            Status = (HttpStatusCode)status,
+            MediaType = mediaType,
+            Body = mediaType == "application/json"
+                ? """{"isValid":true,"diagnostics":[],"manifestBytes":[67,65,78,65,82,89]}"""
+                : $$"""{{Canary}} 67,65,78,65,82,89""",
+        };
+        try
+        {
+            await fixture.Run("validate", "--scope", "platform", "--input", inputPath);
+            var evidence = fixture.Client!.Calls.Last().ToJsonString();
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.DoesNotContain(Canary, evidence, StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, evidence, StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ValidateDispatchesAgainstThePublishedGatewayContract()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Body = """{"isValid":true,"diagnostics":[]}""",
+        };
+        try
+        {
+            Assert.Equal(0, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Equal("POST", fixture.PolicyMethod);
+            Assert.Equal("/api/v1/policies/platform/validate", fixture.PolicyPath);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(403, "native_acs_dependency_unavailable", false)]
+    [InlineData(429, "native_acs_validation_rate_limited", true)]
+    [InlineData(503, "native_acs_dependency_unavailable", true)]
+    public async Task ValidateReportsSafeServerFailures(int status, string code, bool includeCode)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            Status = (HttpStatusCode)status,
+            Body = $$"""{"code":"{{code}}","detail":"{{Canary}}","manifestBytes":[67,65,78,65,82,89]}""",
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+            Assert.Empty(fixture.Output.ToString());
+            Assert.Contains(status.ToString(), fixture.Error.ToString(), StringComparison.Ordinal);
+            if (includeCode)
+                Assert.Contains(code, fixture.Error.ToString(), StringComparison.Ordinal);
+            else
+                Assert.DoesNotContain(code, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.DoesNotContain(Canary, fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Client.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ValidateRejectsMalformedSuccessAndInvalidDiagnostics()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var responses = new[]
+        {
+            (HttpStatusCode.OK, """{"isValid":false,"diagnostics":[],"private":"POLICY_PRIVATE_CANARY"}"""),
+            (HttpStatusCode.UnprocessableEntity,
+                """{"code":"native_acs_policy_invalid","diagnostics":[{"code":"bad","message":"POLICY_PRIVATE_CANARY","line":"not-an-integer"}]}"""),
+        };
+        try
+        {
+            foreach (var (status, body) in responses)
+            {
+                var fixture = new Fixture { Status = status, Body = body };
+                Assert.Equal(1, await fixture.Run("validate", "--scope", "platform", "--input", inputPath));
+                Assert.Empty(fixture.Output.ToString());
+                Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+                Assert.DoesNotContain(ArtifactCanary, fixture.Client!.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
         }
     }
 
@@ -504,6 +839,50 @@ public sealed class PolicyCommandTests
         return $$"""{"scopeType":"platform","scopeId":"default","policyId":"canonical","revision":{{revision}},"contentSha256":"{{hash}}","{{(exact ? "createdAt" : "updatedAt")}}":"{{timestamp}}","artifact":{"manifestBytes":[{{string.Join(',', Enumerable.Repeat(65, bytes))}}],"files":[{"relativePath":"modules/network.rego","bytes":[80,79,76,73,67,89]},{"relativePath":"data/policy.json","bytes":[123,34,101,110,97,98,108,101,100,34,58,116,114,117,101,125]}],"contentSha256":"{{hash}}"},"private":"{{Canary}}"}""";
     }
 
+    private static string ExportInput(bool exact)
+    {
+        var export = JsonNode.Parse(ShowBody(exact))!.AsObject();
+        export.Remove("private");
+        export["artifact"]!["manifestBytes"] = new JsonArray(67, 65, 78, 65, 82, 89);
+        RehashExport(export);
+        return export.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) +
+            Environment.NewLine;
+    }
+
+    private static string ShowBodyWithCanary(bool exact)
+    {
+        var body = JsonNode.Parse(ShowBody(exact))!.AsObject();
+        body["artifact"]!["manifestBytes"] = new JsonArray(67, 65, 78, 65, 82, 89);
+        RehashExport(body);
+        return body.ToJsonString();
+    }
+
+    private static string ExportInputWithRequestSize(int requestBytes)
+    {
+        var export = JsonNode.Parse(ExportInput(exact: false))!.AsObject();
+        var artifact = export["artifact"]!.AsObject();
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var request = new JsonObject { ["artifact"] = artifact.DeepClone() };
+        var currentSize = Encoding.UTF8.GetByteCount(request.ToJsonString(options));
+        var currentPath = artifact["files"]![0]!["relativePath"]!.GetValue<string>();
+        artifact["files"]![0]!["relativePath"] = new string('x', currentPath.Length + requestBytes - currentSize);
+        RehashExport(export);
+        request = new JsonObject { ["artifact"] = artifact.DeepClone() };
+        Assert.Equal(requestBytes, Encoding.UTF8.GetByteCount(request.ToJsonString(options)));
+        return export.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) +
+            Environment.NewLine;
+    }
+
+    private static void RehashExport(JsonObject export)
+    {
+        var artifact = JsonSerializer.Deserialize<NativeAcsArtifact>(
+            export["artifact"]!.ToJsonString(),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        var hash = NativeAcsArtifactHash.Compute(artifact);
+        export["contentSha256"] = hash;
+        export["artifact"]!["contentSha256"] = hash;
+    }
+
     private static string ArtifactHash(int manifestBytes)
     {
         var artifact = new NativeAcsArtifact(
@@ -522,6 +901,9 @@ public sealed class PolicyCommandTests
     private static string NewOutputPath() =>
         Path.Combine(AppContext.BaseDirectory, $"policy-export-{Guid.NewGuid():N}.json");
 
+    private static string NewInputPath() =>
+        Path.Combine(AppContext.BaseDirectory, $"policy-input-{Guid.NewGuid():N}.json");
+
     private sealed class Fixture : HttpMessageHandler, IGatewayClientFactory
     {
         public readonly StringWriter Output = new();
@@ -532,11 +914,15 @@ public sealed class PolicyCommandTests
         public HttpStatusCode Status = HttpStatusCode.OK;
         public string MediaType = "application/json";
         public string? UnsafeOperation;
+        public bool UnsafeValidationRequestBound;
+        public bool WrongValidationPath;
         public bool WrongPath;
         public bool UseGatewayContract;
         public int RequestCount;
         public string? PolicyPath;
         public string? PolicyQuery;
+        public string? PolicyMethod;
+        public string? PolicyBody;
 
         public IGatewayClient Create(CliIdentity identity) =>
             Client = new GatewayClient(new HttpClient(this, disposeHandler: false), identity, Authentication);
@@ -545,19 +931,21 @@ public sealed class PolicyCommandTests
             ["policy", .. args, .. Target],
             new CliRuntimeOptions(GatewayClientFactory: this, Authentication: Authentication, Output: Output, Error: Error));
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             RequestCount++;
             var path = request.RequestUri!.AbsolutePath;
             if (path == "/openapi/v1.json")
-                return Response(HttpStatusCode.OK, OpenApi(), "application/json");
+                return await Response(HttpStatusCode.OK, OpenApi(), "application/json").ConfigureAwait(false);
             if (path == "/api/v1/authorization/context")
-                return Response(HttpStatusCode.OK,
+                return await Response(HttpStatusCode.OK,
                     """{"contractVersion":1,"issuer":"https://identity.example/","actorId":"actor-1","tenantId":"tenant-1","membershipRevision":1,"boundProjectId":null,"boundRunId":null,"effectiveAuthority":[]}""",
-                    "application/json");
+                    "application/json").ConfigureAwait(false);
             PolicyPath = path;
             PolicyQuery = request.RequestUri.Query;
-            return Response(Status, Body, MediaType);
+            PolicyMethod = request.Method.Method;
+            PolicyBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            return await Response(Status, Body, MediaType).ConfigureAwait(false);
         }
 
         private static Task<HttpResponseMessage> Response(HttpStatusCode status, string body, string mediaType) =>
@@ -578,6 +966,12 @@ public sealed class PolicyCommandTests
             var headPath = WrongPath ? "/api/v1/policies/other" : "/api/v1/policies/platform";
             var historyParameters = """{"name":"pageSize","in":"query","schema":{"type":"integer"}},{"name":"cursor","in":"query","schema":{"type":"string"}},""" + tenant;
             var revisionParameters = """{"name":"revision","in":"path","required":true,"schema":{"type":"string"}},""" + tenant;
+            var validationResponse = """{"200":{"content":{"application/json":{"schema":{"type":"object"}}}},"403":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"422":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"429":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"503":{"content":{"application/problem+json":{"schema":{"type":"object"}}}}}""";
+            var validationRequestBody = """{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}}""";
+            var validationPath = WrongValidationPath
+                ? "/api/v1/policies/platform/invalid"
+                : "/api/v1/policies/platform/validate";
+            var requestLimit = UnsafeValidationRequestBound ? 6000000 : 5242880;
             var document = JsonNode.Parse(
                 """{"openapi":"3.1.0","security":[{"Bearer":[]}],"components":{"securitySchemes":{"Bearer":{"type":"http","scheme":"bearer"}}}}""")!.AsObject();
             document["paths"] = new JsonObject
@@ -586,6 +980,11 @@ public sealed class PolicyCommandTests
                 [headPath] = new JsonObject { ["get"] = JsonNode.Parse(Operation("readPlatformNativeAcsPolicy", tenant)) },
                 ["/api/v1/policies/platform/revisions"] = new JsonObject { ["get"] = JsonNode.Parse(Operation("listPlatformNativeAcsPolicyRevisions", historyParameters)) },
                 ["/api/v1/policies/platform/revisions/{revision}"] = new JsonObject { ["get"] = JsonNode.Parse(Operation("readPlatformNativeAcsPolicyRevision", revisionParameters)) },
+                [validationPath] = new JsonObject
+                {
+                    ["post"] = JsonNode.Parse(
+                        $$"""{"operationId":"validatePlatformNativeAcsPolicy","x-agentweaver-max-request-body-bytes":{{requestLimit}},"x-agentweaver-max-response-bytes":5242880,"parameters":[{{tenant}}],"requestBody":{{validationRequestBody}},"responses":{{validationResponse}}}"""),
+                },
             };
             return document.ToJsonString();
         }

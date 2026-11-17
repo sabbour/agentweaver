@@ -10,6 +10,10 @@ namespace Agentweaver.Cli;
 internal static class PolicyCommands
 {
     private const int MaximumResponseBytes = 5 * 1024 * 1024;
+    private const int MaximumInputFileBytes = 64 * 1024 * 1024;
+    private const int MaximumDiagnosticCount = 32;
+    private const int MaximumDiagnosticCodeLength = 128;
+    private const int MaximumDiagnosticMessageLength = 2048;
     private const int MaximumTimestampLength = 33;
     private static readonly string[] TimestampFormats =
     [
@@ -21,8 +25,8 @@ internal static class PolicyCommands
     internal static async Task<int> RunAsync(
         string[] args, CliRuntimeOptions runtime, HttpClient httpClient, TextWriter output, CancellationToken ct)
     {
-        if (args.Length == 0 || args[0] is not ("show" or "export" or "history"))
-            throw new CliUsageException("Choose `show`, `export`, or `history`.");
+        if (args.Length == 0 || args[0] is not ("show" or "export" or "history" or "validate"))
+            throw new CliUsageException("Choose `show`, `export`, `history`, or `validate`.");
         var command = args[0];
         var options = CliOptions.Parse(args[1..], new HashSet<string>(StringComparer.Ordinal));
         if (options.Many("project-id").Count > 0 || options.Many("run-id").Count > 0)
@@ -31,13 +35,15 @@ internal static class PolicyCommands
         {
             "show" => new[] { "scope", "revision" },
             "export" => new[] { "scope", "revision", "output" },
-            _ => new[] { "scope", "page-size", "cursor" },
+            "history" => new[] { "scope", "page-size", "cursor" },
+            _ => new[] { "scope", "input" },
         };
         options.RequireOnly(commandOptions.Concat(
             CliConfiguration.TargetOptionNames.Where(name => name is not ("project-id" or "run-id"))).ToArray());
         if (options.Single("scope") != "platform")
             throw new CliUsageException("Policy commands require --scope platform.");
         var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
+        var inputPath = command == "validate" ? InputFilePath(options.Single("input")) : null;
 
         var revisionText = options.Single("revision");
         long? revision = null;
@@ -59,11 +65,20 @@ internal static class PolicyCommands
         var cursor = options.Single("cursor");
         if (cursor is not null && !ValidCursor(cursor))
             throw new CliUsageException("--cursor must be a non-empty history cursor.");
+        var inputArtifact = inputPath is null ? null : await ReadInputArtifactAsync(inputPath, ct).ConfigureAwait(false);
 
-        var operationId = command == "history" ? "listPlatformNativeAcsPolicyRevisions" :
-            revision is null ? "readPlatformNativeAcsPolicy" : "readPlatformNativeAcsPolicyRevision";
-        var path = command == "history" ? "/api/v1/policies/platform/revisions" :
-            revision is null ? "/api/v1/policies/platform" : "/api/v1/policies/platform/revisions/{revision}";
+        var operationId = command switch
+        {
+            "history" => "listPlatformNativeAcsPolicyRevisions",
+            "validate" => "validatePlatformNativeAcsPolicy",
+            _ => revision is null ? "readPlatformNativeAcsPolicy" : "readPlatformNativeAcsPolicyRevision",
+        };
+        var path = command switch
+        {
+            "history" => "/api/v1/policies/platform/revisions",
+            "validate" => "/api/v1/policies/platform/validate",
+            _ => revision is null ? "/api/v1/policies/platform" : "/api/v1/policies/platform/revisions/{revision}",
+        };
         var query = new Dictionary<string, string>(StringComparer.Ordinal);
         if (pageSizeText is not null)
             query["pageSize"] = pageSizeText;
@@ -79,22 +94,41 @@ internal static class PolicyCommands
         try
         {
             var operations = GatewayContract.Parse(await gateway.DiscoverAsync(ct).ConfigureAwait(false));
-            if (!operations.TryGetValue(operationId, out var operation) ||
-                operation.Method != "GET" || operation.Path != path || operation.HasRequestBody ||
-                operation.MaximumResponseBytes > MaximumResponseBytes ||
+            if (!operations.TryGetValue(operationId, out var operation) || operation.Path != path ||
                 operation.Parameters.Any(p => p.Location == "header" &&
-                    p.Name.Equals("X-Agentweaver-Project-Authorization", StringComparison.OrdinalIgnoreCase)))
+                    p.Name.Equals("X-Agentweaver-Project-Authorization", StringComparison.OrdinalIgnoreCase)) ||
+                (command == "validate"
+                    ? operation.Method != "POST" || !operation.HasRequestBody || !operation.BodyRequired ||
+                      operation.MaximumRequestBytes > MaximumResponseBytes ||
+                      operation.MaximumResponseBytes > MaximumResponseBytes
+                    : operation.Method != "GET" || operation.HasRequestBody ||
+                      operation.MaximumResponseBytes > MaximumResponseBytes))
                 throw new PolicyFailureException("The Gateway does not support this policy operation.");
-            var response = await gateway.InvokeAsync(operationId, new GatewayInvocation(pathParameters, query), ct)
+            var invocation = command == "validate"
+                ? new GatewayInvocation(Body: new JsonObject { ["artifact"] = inputArtifact!.DeepClone() })
+                : new GatewayInvocation(pathParameters, query);
+            var response = await gateway.InvokeAsync(operationId, invocation, ct)
                 .ConfigureAwait(false);
-            if (response.Status != 200)
-                throw new PolicyFailureException(ErrorMessage(response.Status, response.Body));
-            result = command switch
+            if (command == "validate")
             {
-                "history" => ProjectHistory(response.Body, pageSize),
-                "export" => ProjectExport(response.Body, revision),
-                _ => ProjectShow(response.Body, revision),
-            };
+                result = response.Status switch
+                {
+                    200 => ProjectValidationSuccess(response.Body),
+                    422 => ProjectValidationFailure(response.Body),
+                    _ => throw new PolicyFailureException(ValidationErrorMessage(response.Status, response.Body)),
+                };
+            }
+            else
+            {
+                if (response.Status != 200)
+                    throw new PolicyFailureException(ErrorMessage(response.Status, response.Body));
+                result = command switch
+                {
+                    "history" => ProjectHistory(response.Body, pageSize),
+                    "export" => ProjectExport(response.Body, revision),
+                    _ => ProjectShow(response.Body, revision),
+                };
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -130,7 +164,85 @@ internal static class PolicyCommands
         }
 
         await output.WriteLineAsync(result.ToJsonString(OutputJson)).ConfigureAwait(false);
-        return 0;
+        return command == "validate" && !result["isValid"]!.GetValue<bool>() ? 1 : 0;
+    }
+
+    private static string InputFilePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new CliUsageException("Policy validation requires --input <export-file>.");
+        try
+        {
+            return Path.GetFullPath(value);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new CliUsageException("Policy validation requires a valid input file path.");
+        }
+    }
+
+    private static async Task<JsonObject> ReadInputArtifactAsync(string path, CancellationToken ct)
+    {
+        try
+        {
+            await using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (stream.Length is <= 0 or > MaximumInputFileBytes)
+                throw new PolicyFailureException("The policy input file exceeds the 64 MiB limit or is empty.");
+            try
+            {
+                var length = checked((int)stream.Length);
+                var bytes = new byte[length];
+                await stream.ReadExactlyAsync(bytes, ct).ConfigureAwait(false);
+                if (stream.Length != length)
+                    throw UnexpectedInput();
+                if (JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions { MaxDepth = 32 }) is not JsonObject obj)
+                    throw UnexpectedInput();
+
+                var hasCreatedAt = obj.ContainsKey("createdAt");
+                var hasUpdatedAt = obj.ContainsKey("updatedAt");
+                var expectedFields = hasCreatedAt
+                    ? new[] { "artifact", "contentSha256", "createdAt", "policyId", "revision", "scopeId", "scopeType" }
+                    : new[] { "artifact", "contentSha256", "policyId", "revision", "scopeId", "scopeType", "updatedAt" };
+                if (hasCreatedAt == hasUpdatedAt ||
+                    obj.Count != expectedFields.Length ||
+                    obj.Any(pair => !expectedFields.Contains(pair.Key, StringComparer.Ordinal)))
+                    throw UnexpectedInput();
+
+                var revision = PositiveNumber(obj, "revision");
+                _ = Timestamp(obj, hasCreatedAt ? "createdAt" : "updatedAt");
+                if (obj["artifact"] is not JsonObject artifact ||
+                    artifact.Count != 3 ||
+                    artifact.Any(pair => pair.Key is not ("contentSha256" or "files" or "manifestBytes")) ||
+                    artifact["files"] is not JsonArray files ||
+                    files.Any(item => item is not JsonObject file ||
+                        file.Count != 2 || file.Any(pair => pair.Key is not ("relativePath" or "bytes"))))
+                    throw UnexpectedInput();
+                var exported = ProjectExport(obj, hasCreatedAt ? revision : null);
+                return (JsonObject)exported["artifact"]!.DeepClone();
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                throw UnexpectedInput();
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PolicyFailureException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            throw new PolicyFailureException("The policy export file is invalid or could not be read.");
+        }
     }
 
     private static string OutputFilePath(string? value)
@@ -236,6 +348,66 @@ internal static class PolicyCommands
             ["output"] = outputPath,
         };
     }
+
+    private static JsonObject ProjectValidationSuccess(JsonNode? body)
+    {
+        if (body is not JsonObject obj ||
+            obj["isValid"] is not JsonValue isValidValue ||
+            !isValidValue.TryGetValue<bool>(out var isValid) || !isValid ||
+            obj["diagnostics"] is not JsonArray diagnostics)
+            throw UnexpectedResponse();
+        return new JsonObject { ["isValid"] = true, ["diagnostics"] = ProjectDiagnostics(diagnostics) };
+    }
+
+    private static JsonObject ProjectValidationFailure(JsonNode? body)
+    {
+        if (body is not JsonObject obj ||
+            obj["code"] is not JsonValue codeValue ||
+            !codeValue.TryGetValue<string>(out var code) || code != "native_acs_policy_invalid" ||
+            obj["diagnostics"] is not JsonArray diagnostics)
+            throw UnexpectedResponse();
+        return new JsonObject { ["isValid"] = false, ["diagnostics"] = ProjectDiagnostics(diagnostics) };
+    }
+
+    private static JsonArray ProjectDiagnostics(JsonArray diagnostics)
+    {
+        if (diagnostics.Count > MaximumDiagnosticCount)
+            throw UnexpectedResponse();
+        var projected = new JsonArray();
+        foreach (var item in diagnostics)
+        {
+            if (item is not JsonObject diagnostic)
+                throw UnexpectedResponse();
+            var code = String(diagnostic, "code");
+            var message = String(diagnostic, "message");
+            if (code.Length is 0 or > MaximumDiagnosticCodeLength ||
+                message.Length is 0 or > MaximumDiagnosticMessageLength)
+                throw UnexpectedResponse();
+            projected.Add(new JsonObject
+            {
+                ["code"] = code,
+                ["message"] = message,
+                ["relativePath"] = OptionalString(diagnostic, "relativePath"),
+                ["line"] = OptionalInt32(diagnostic, "line"),
+                ["column"] = OptionalInt32(diagnostic, "column"),
+            });
+        }
+        return projected;
+    }
+
+    private static JsonNode? OptionalString(JsonObject obj, string name) =>
+        !obj.ContainsKey(name) || obj[name] is null
+            ? null
+            : obj[name] is JsonValue value && value.TryGetValue<string>(out var text)
+                ? JsonValue.Create(text)
+                : throw UnexpectedResponse();
+
+    private static JsonNode? OptionalInt32(JsonObject obj, string name) =>
+        !obj.ContainsKey(name) || obj[name] is null
+            ? null
+            : obj[name] is JsonValue value && value.TryGetValue<int>(out var number)
+                ? JsonValue.Create(number)
+                : throw UnexpectedResponse();
 
     private static async Task WriteNewFileAsync(string path, byte[] bytes, CancellationToken ct)
     {
@@ -358,6 +530,21 @@ internal static class PolicyCommands
             $"The policy request failed (HTTP {status}).";
     }
 
+    private static string ValidationErrorMessage(int status, JsonNode? body)
+    {
+        if (status == 403)
+            return "The policy validation was denied (HTTP 403).";
+        var code = (body as JsonObject)?["code"] is JsonValue value &&
+            value.TryGetValue<string>(out var text) ? text : null;
+        var known = (status, code) is
+            (400, "native_acs_policy_invalid") or
+            (429, "native_acs_validation_rate_limited") or
+            (503, "native_acs_dependency_unavailable");
+        return known ? $"The policy validation failed (HTTP {status}, {code})." :
+            $"The policy validation failed (HTTP {status}).";
+    }
+
     private static PolicyFailureException UnexpectedResponse() => new("The Gateway returned an invalid policy response.");
+    private static PolicyFailureException UnexpectedInput() => new("The policy export file is invalid or could not be read.");
     private sealed class PolicyFailureException(string message) : InvalidOperationException(message);
 }
