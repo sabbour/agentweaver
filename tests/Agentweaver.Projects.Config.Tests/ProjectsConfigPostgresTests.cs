@@ -443,6 +443,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         finally
         {
             await migrator.MigrateAsync(latestMigration);
+            await RestoreRuntimeGrantsAsync();
         }
     }
 
@@ -3558,6 +3559,12 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     private ProjectsConfigDbContext CreateDbContext()
     {
         return new ProjectsConfigDbContext(CreateDbContextOptions());
+    }
+
+    private async Task RestoreRuntimeGrantsAsync()
+    {
+        await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+        await ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, CancellationToken.None);
     }
 
     private DbContextOptions<ProjectsConfigDbContext> CreateDbContextOptions() =>

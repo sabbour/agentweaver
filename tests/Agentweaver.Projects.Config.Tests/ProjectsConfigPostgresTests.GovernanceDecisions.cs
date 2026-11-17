@@ -250,7 +250,9 @@ public sealed partial class ProjectsConfigPostgresTests
                    OR has_table_privilege(current_user, 'projects_config.project_governance_decision_outbox', 'TRUNCATE')
                    OR has_table_privilege(current_user, 'projects_config.project_governance_decision_stream_heads', 'DELETE')
                    OR has_table_privilege(current_user, 'projects_config.project_governance_decision_stream_heads', 'TRUNCATE'),
-                       has_column_privilege(current_user, 'projects_config.project_governance_decision_stream_heads', 'sequence', 'UPDATE')
+                       has_column_privilege(
+                           current_user,
+                           'projects_config.project_governance_decision_stream_heads', 'sequence', 'UPDATE')
                 """, connection);
             await using var reader = await privileges.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());

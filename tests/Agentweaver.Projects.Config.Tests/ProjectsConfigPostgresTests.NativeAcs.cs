@@ -299,6 +299,7 @@ public sealed partial class ProjectsConfigPostgresTests
                 await cleanup.ExecuteNonQueryAsync();
             }
             await migrator.MigrateAsync(latestMigration);
+            await RestoreRuntimeGrantsAsync();
         }
     }
 
