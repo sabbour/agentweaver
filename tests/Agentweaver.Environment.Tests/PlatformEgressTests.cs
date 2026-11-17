@@ -588,7 +588,8 @@ internal static class PlatformEgressFixtures
     public static CiliumPlatformEgressProvider Cilium(
         ICiliumPolicyResourceStore store,
         bool exactHost,
-        string[]? additionalRanges = null) =>
+        string[]? additionalRanges = null,
+        IPlatformEgressApplyReservationReader? reservationReader = null) =>
         new(
             store,
             new CiliumEgressProviderOptions(
@@ -598,7 +599,8 @@ internal static class PlatformEgressFixtures
                 "test-revision",
                 ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty),
             new CiliumPlatformEgressOptions("agentweaver", exactHost, [.. additionalRanges ?? []]),
-            TimeProvider.System);
+            TimeProvider.System,
+            reservationReader);
 }
 
 /// <summary>In-memory Kubernetes store for the one platform object. It round-trips JSON like the API server.</summary>
@@ -619,6 +621,8 @@ internal sealed class FakeCiliumPolicyStore : ICiliumPolicyResourceStore
     public int Reads { get; private set; }
     public int Writes { get; private set; }
 
+    public string GetTargetId(string @namespace, string name) => $"test:{@namespace}:{name}";
+
     public Task<CiliumNetworkPolicyDocument?> GetAsync(string @namespace, string name, CancellationToken cancellationToken)
     {
         Reads++;
@@ -634,9 +638,19 @@ internal sealed class FakeCiliumPolicyStore : ICiliumPolicyResourceStore
     public Task<CiliumNetworkPolicyDocument> ReplaceAsync(
         CiliumNetworkPolicyDocument policy,
         string expectedResourceVersion,
+        CancellationToken cancellationToken) =>
+        ReplaceAsync(policy, policy.Metadata.Uid ?? string.Empty, expectedResourceVersion, cancellationToken);
+
+    public Task<CiliumNetworkPolicyDocument> ReplaceAsync(
+        CiliumNetworkPolicyDocument policy,
+        string expectedUid,
+        string expectedResourceVersion,
         CancellationToken cancellationToken)
     {
-        if (ConflictOnNextReplace || Current?.Metadata.ResourceVersion != expectedResourceVersion)
+        if (ConflictOnNextReplace ||
+            Current?.Metadata.Uid != expectedUid ||
+            policy.Metadata.Uid != expectedUid ||
+            Current.Metadata.ResourceVersion != expectedResourceVersion)
         {
             ConflictOnNextReplace = false;
             throw new CiliumPolicyException("kubernetes_conflict", "conflict");
@@ -672,7 +686,8 @@ internal sealed class FakeCiliumPolicyStore : ICiliumPolicyResourceStore
                 "agentweaver",
                 ImmutableDictionary<string, string>.Empty.Add("agentweaver.io/service", "agenthost"),
                 ImmutableDictionary<string, string>.Empty,
-                "1"),
+                "1",
+                Uid: "platform-egress-object-uid"),
             new CiliumPolicySpec(
                 new CiliumEndpointSelector(
                     ImmutableDictionary<string, string>.Empty.Add("agentweaver.io/workload", "agenthost")),

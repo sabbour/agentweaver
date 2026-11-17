@@ -345,6 +345,101 @@ namespace Agentweaver.Environment.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentPlatformPolicyApplyReservationRow", b =>
+                {
+                    b.Property<Guid>("ReservationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("Generation")
+                        .HasColumnType("bigint")
+                        .HasColumnName("generation");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("IntentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("intent_hash");
+
+                    b.Property<string>("ObjectUid")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("object_uid");
+
+                    b.Property<string>("ProviderRequestJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("provider_request_json");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("ResourceVersion")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("resource_version");
+
+                    b.Property<long>("SourceEpoch")
+                        .HasColumnType("bigint")
+                        .HasColumnName("source_epoch");
+
+                    b.Property<string>("SourceHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("source_hash");
+
+                    b.Property<string>("SourceId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("source_id");
+
+                    b.Property<long>("SourceRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("source_revision");
+
+                    b.Property<string>("TargetId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("target_id");
+
+                    b.HasKey("ReservationId");
+
+                    b.HasIndex("TargetId", "IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_environment_platform_policy_apply_reservations_idempotency");
+
+                    b.HasIndex("TargetId", "SourceEpoch", "Generation", "CreatedAt")
+                        .HasDatabaseName("ix_environment_platform_policy_apply_reservations_latest");
+
+                    b.ToTable("platform_policy_apply_reservations", "environment", t =>
+                        {
+                            t.HasCheckConstraint("ck_environment_platform_policy_apply_reservations_hashes", "source_hash ~ '^[0-9a-f]{64}$' AND intent_hash ~ '^[0-9a-f]{64}$' AND request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_environment_platform_policy_apply_reservations_request", "jsonb_typeof(provider_request_json) = 'object'");
+
+                            t.HasCheckConstraint("ck_environment_platform_policy_apply_reservations_versions", "source_epoch > 0 AND generation > 0 AND source_revision > 0");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Environment.EnvironmentProviderLifecycleReportRow", b =>
                 {
                     b.Property<string>("TenantId")

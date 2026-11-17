@@ -121,6 +121,7 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             GRANT SELECT, INSERT ON environment.remote_mcp_connection_configurations TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.remote_mcp_catalog_snapshots TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.remote_mcp_connection_idempotency TO {RuntimeRole};
+            GRANT SELECT, INSERT ON environment.platform_policy_apply_reservations TO {RuntimeRole};
             """);
 
         try
@@ -130,6 +131,26 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
                 RuntimeRole,
                 RuntimePassword);
             await EnvironmentMigrator.VerifyRuntimeAuthorityAsync(runtimeDataSource);
+            var reservationPolicy = PlatformEgressPolicy.Create(
+                1,
+                PlatformEgressMode.PublicHttps,
+                [],
+                PlatformEgressFixtures.Hash("runtime-reservation"));
+            var reservationStore = new PlatformEgressApplyReservationStore(runtimeDataSource, TimeProvider.System);
+            var reservationRequest = new PlatformEgressApplyReservationRequest(
+                "runtime-" + Guid.NewGuid().ToString("N"),
+                "runtime-reservation",
+                1,
+                1,
+                "projects-config:platform:default:test",
+                "runtime-object-uid",
+                "1",
+                reservationPolicy);
+            var reservation = await reservationStore.ReserveAsync(reservationRequest, CancellationToken.None);
+            var reservationReplay = await reservationStore.ReserveAsync(reservationRequest, CancellationToken.None);
+            Assert.False(reservation.Replayed);
+            Assert.True(reservationReplay.Replayed);
+            Assert.Equal(reservation.ReservationId, reservationReplay.ReservationId);
 
             var forbiddenUpdate = await Assert.ThrowsAsync<PostgresException>(() =>
                 ExecuteSqlAsync(
@@ -142,6 +163,21 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             var forbiddenTruncate = await Assert.ThrowsAsync<PostgresException>(() =>
                 ExecuteSqlAsync(runtimeDataSource, "TRUNCATE environment.remote_mcp_connection_idempotency"));
             Assert.Equal("42501", forbiddenTruncate.SqlState);
+            var forbiddenReservationUpdate = await Assert.ThrowsAsync<PostgresException>(() =>
+                ExecuteSqlAsync(
+                    runtimeDataSource,
+                    "UPDATE environment.platform_policy_apply_reservations SET source_hash = 'changed'"));
+            Assert.Equal("42501", forbiddenReservationUpdate.SqlState);
+            var forbiddenReservationDelete = await Assert.ThrowsAsync<PostgresException>(() =>
+                ExecuteSqlAsync(
+                    runtimeDataSource,
+                    "DELETE FROM environment.platform_policy_apply_reservations"));
+            Assert.Equal("42501", forbiddenReservationDelete.SqlState);
+            var forbiddenReservationTruncate = await Assert.ThrowsAsync<PostgresException>(() =>
+                ExecuteSqlAsync(
+                    runtimeDataSource,
+                    "TRUNCATE environment.platform_policy_apply_reservations"));
+            Assert.Equal("42501", forbiddenReservationTruncate.SqlState);
 
             await ExecuteSqlAsync(
                 fixture.DataSource,

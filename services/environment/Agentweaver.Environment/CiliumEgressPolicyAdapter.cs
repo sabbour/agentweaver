@@ -288,6 +288,10 @@ public sealed record CiliumPolicyObservation(
 /// <summary>Provides create, read, replace, and delete operations for namespaced Cilium policy objects.</summary>
 public interface ICiliumPolicyResourceStore
 {
+    /// <summary>Returns a stable opaque binding for one Kubernetes API object.</summary>
+    string GetTargetId(string @namespace, string name) =>
+        throw new CiliumPolicyException("provider_target_identity_unavailable", "The Kubernetes target identity is unavailable.");
+
     /// <summary>Reads one policy by namespace and name, returning null when it is absent.</summary>
     Task<CiliumNetworkPolicyDocument?> GetAsync(
         string @namespace,
@@ -304,6 +308,20 @@ public interface ICiliumPolicyResourceStore
         CiliumNetworkPolicyDocument policy,
         string expectedResourceVersion,
         CancellationToken cancellationToken);
+
+    /// <summary>Replaces a policy only when its UID and resourceVersion match the observed object.</summary>
+    Task<CiliumNetworkPolicyDocument> ReplaceAsync(
+        CiliumNetworkPolicyDocument policy,
+        string expectedUid,
+        string expectedResourceVersion,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(expectedUid) || policy.Metadata.Uid != expectedUid)
+            throw new CiliumPolicyException(
+                "stale_object_uid",
+                "Cilium policy replacement must use the observed Kubernetes object UID.");
+        return ReplaceAsync(policy, expectedResourceVersion, cancellationToken);
+    }
 
     /// <summary>Deletes a policy only at the expected Kubernetes resource version.</summary>
     Task DeleteAsync(
@@ -395,16 +413,25 @@ public sealed class CiliumEgressPolicyAdapter(
                 "stale_generation",
                 "The applied policy generation no longer matches the expected predecessor.");
 
+        if (string.IsNullOrWhiteSpace(current.Metadata.Uid))
+            throw new CiliumPolicyException(
+                "invalid_object_uid",
+                "Kubernetes returned a policy without an object UID.");
         if (string.IsNullOrWhiteSpace(current.Metadata.ResourceVersion))
             throw new CiliumPolicyException(
                 "invalid_resource_version",
                 "Kubernetes returned a policy without a resource version.");
         var replacement = desired with
         {
-            Metadata = desired.Metadata with { ResourceVersion = current.Metadata.ResourceVersion }
+            Metadata = desired.Metadata with
+            {
+                Uid = current.Metadata.Uid,
+                ResourceVersion = current.Metadata.ResourceVersion
+            }
         };
         return await store.ReplaceAsync(
             replacement,
+            current.Metadata.Uid,
             current.Metadata.ResourceVersion,
             cancellationToken).ConfigureAwait(false);
     }
@@ -479,6 +506,10 @@ public sealed class CiliumEgressPolicyAdapter(
             throw new CiliumPolicyException(
                 "stale_generation",
                 "Revoke predecessor does not match the currently applied policy generation.");
+        if (string.IsNullOrWhiteSpace(current.Metadata.Uid))
+            throw new CiliumPolicyException(
+                "invalid_object_uid",
+                "Kubernetes returned a policy without an object UID.");
         if (string.IsNullOrWhiteSpace(current.Metadata.ResourceVersion))
             throw new CiliumPolicyException(
                 "invalid_resource_version",
@@ -486,10 +517,15 @@ public sealed class CiliumEgressPolicyAdapter(
 
         var replacement = expectedTombstone with
         {
-            Metadata = expectedTombstone.Metadata with { ResourceVersion = current.Metadata.ResourceVersion }
+            Metadata = expectedTombstone.Metadata with
+            {
+                Uid = current.Metadata.Uid,
+                ResourceVersion = current.Metadata.ResourceVersion
+            }
         };
         _ = await store.ReplaceAsync(
             replacement,
+            current.Metadata.Uid,
             current.Metadata.ResourceVersion,
             cancellationToken).ConfigureAwait(false);
         var afterReplace = await store.GetAsync(selector.Namespace, selector.PolicyName, cancellationToken)
@@ -788,6 +824,21 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    public string GetTargetId(string @namespace, string name)
+    {
+        _ = ItemPath(@namespace, name);
+        var baseAddress = httpClient.BaseAddress;
+        if (baseAddress is null || !baseAddress.IsAbsoluteUri || baseAddress.UserInfo.Length > 0 ||
+            baseAddress.Query.Length > 0 || baseAddress.Fragment.Length > 0)
+            throw new CiliumPolicyException(
+                "provider_target_identity_unavailable",
+                "The Kubernetes API origin is not a valid absolute URI.");
+        var origin = baseAddress.GetComponents(
+            UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped).TrimEnd('/');
+        var target = $"{origin}\n{@namespace}\n{name}";
+        return "k8s:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target))).ToLowerInvariant();
+    }
+
     /// <summary>Reads the namespaced policy and returns null when Kubernetes reports that it is absent.</summary>
     public Task<CiliumNetworkPolicyDocument?> GetAsync(
         string @namespace,
@@ -811,8 +862,21 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
     public async Task<CiliumNetworkPolicyDocument> ReplaceAsync(
         CiliumNetworkPolicyDocument policy,
         string expectedResourceVersion,
+        CancellationToken cancellationToken) =>
+        await ReplaceAsync(policy, policy.Metadata.Uid ?? string.Empty, expectedResourceVersion, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>Replaces a policy only when both Kubernetes object identity fields match the observed object.</summary>
+    public async Task<CiliumNetworkPolicyDocument> ReplaceAsync(
+        CiliumNetworkPolicyDocument policy,
+        string expectedUid,
+        string expectedResourceVersion,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(expectedUid) || policy.Metadata.Uid != expectedUid)
+            throw new CiliumPolicyException(
+                "stale_object_uid",
+                "Cilium policy replacement must use the observed Kubernetes object UID.");
         if (policy.Metadata.ResourceVersion != expectedResourceVersion)
             throw new CiliumPolicyException(
                 "stale_resource_version",

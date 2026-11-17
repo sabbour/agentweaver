@@ -832,8 +832,11 @@ consistency manifest.
 
 The `Agentweaver.Environment` source compiles typed purpose-grouped rules from the
 platform/project/run intersection, rechecks Projects & Config authorization on each operation, and uses
-Kubernetes resource-version and intent-generation fences before pinning the verified L3/L4 binding. Its
-readback proves the exact Cilium policy object only, not enforcement in the datapath.
+Kubernetes object-UID, resource-version, and intent-generation fences before pinning the verified L3/L4
+binding. Its readback proves the exact Cilium policy object only, not enforcement in the datapath.
+The shared platform-egress provider also has an append-only reservation that binds an exact request to
+its source epoch, generation, object UID, and `resourceVersion`. Its reserved apply path remains
+unregistered. See [Environment egress](../environment-egress.md#durable-apply-reservations).
 Environment propagates verified selectors into Sandbox templates and validates them on the actual Pod.
 BuildTest adds separate operation- and role-scoped deny-all policies for command and collector Pods.
 These source paths do not include deployed Kubernetes identity/RBAC or prove datapath enforcement. See

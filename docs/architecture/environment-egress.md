@@ -76,6 +76,7 @@ sequenceDiagram
     Note over Client,Compiler: Source client is off by default; enabling it sends no startup request
     Note over Caller,Compiler: Candidate compilation has no provider effect
     Note over Projects,Client: Preparations are not source authority and do not reach providers
+    Note over Caller,Projects: This source-read flow makes no reservation and issues no Kubernetes write
 ```
 
 The System-only candidate is input for the later admission barrier. This flow
@@ -403,7 +404,7 @@ The parts are:
   same.
 - The provider object stores the generation, the intent hash, and the source
   hash. The reconciler therefore keeps no local state. Two replicas are
-  fenced by the Kubernetes `resourceVersion` check.
+  fenced by the Kubernetes object UID and `resourceVersion`.
 - `CiliumPlatformEgressProvider` owns one object:
   `CiliumNetworkPolicy/agenthost-platform-egress` in the AgentHost namespace,
   with the selector `agentweaver.io/workload: agenthost`. The deploy creates
@@ -455,17 +456,57 @@ sequenceDiagram
         else Different or not applied
             R->>S: Read snapshot again
             R->>C: Apply generation + 1
-            C->>K: Replace with resourceVersion check
+            C->>K: Replace with UID and resourceVersion preconditions
             K-->>C: Stored object
             C-->>R: Accepted or Failed
         end
     end
     Note over C,K: Environment Role grants get, update, and patch on the named policy; deploy creates the seed only when missing
+    Note over R,K: This reconciler flow is not registered
 ```
 
-Environment has no reconciler registration. The client returns a pending
-observation and an unadmitted candidate. The deployment owns the DNS-only seed
-and AgentHost egress policies; those paths remain separate from this candidate.
+### Durable apply reservations
+
+`PlatformEgressApplyReservationStore` saves the exact provider request before a
+caller sends a Kubernetes write. Each append-only row binds the Kubernetes
+target, source epoch, policy generation, source ID and revision, policy hashes,
+full policy request, object UID, and observed `resourceVersion`. A target and
+idempotency key name one exact request. Multiple attempts can share a target,
+source epoch, and generation only when source identity, revision, hashes, and
+policy content match. Each attempt keeps its own object UID and
+`resourceVersion`.
+
+An exact retry returns the saved reservation. Reusing its idempotency key with
+different request content fails. A new policy generation must advance the
+target's generation. The source epoch cannot move backwards, and one source
+epoch and generation cannot identify different source or policy content. After
+a restart, retrieve the reservation by target ID and idempotency key before
+retrying.
+
+`CiliumPlatformEgressProvider.ApplyReservedAsync` loads the saved request and
+rejects it when a newer reservation exists. Before it replaces the object, it
+checks the target, UID, source epoch, generation, and `resourceVersion`. The
+Kubernetes `PUT` carries both UID and `resourceVersion`. If a newer write
+updates the object first, Kubernetes rejects an older delayed `PUT` because its
+resource version is stale. A reservation cannot cancel a Kubernetes request
+that is already in flight.
+
+If Kubernetes stores a request but its response is lost, retry the same
+reservation. The provider reads the object and accepts it only when the UID,
+source epoch, generation, hashes, and policy spec match. Do not refresh the
+saved `resourceVersion` on that retry. If an already-issued older request wins
+first and makes the saved version stale, read the current object and create a
+new attempt with a new idempotency key. The store accepts that attempt only
+when its source and policy content match the existing source epoch and
+generation.
+
+The source epoch is an ordering token supplied by the caller. It does not prove
+that the caller read the current source. The reservation store and reserved
+apply path are not registered or called by the service. They do not install a
+System-only barrier, commit a policy preparation, or admit a policy. The
+client still returns a pending observation and an unadmitted candidate. The
+deployment owns the DNS-only seed and AgentHost egress policies; those paths
+remain separate from the candidate.
 
 The client integration test reads the actual Projects route and PostgreSQL
 artifact through the production client, then checks candidate compilation.

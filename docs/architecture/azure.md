@@ -215,13 +215,13 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 38 Core migration versions (1 through 16, 18
-through 33, and 35-40), with version 17 excluded and reserved version 34
-skipped, 11 Events versions, and 11 Environment versions. The initializer
+Its source catalog includes 49 Core migration versions (1 through 16, 18
+through 33, and 35-51), with version 17 excluded and reserved version 34
+skipped, 11 Events versions, and 13 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`df16526c756df42a3c0ba8534fea10bf5d019c6b5ca6e8e083b91963aa7e66ea`.
-It contains 121 tables, 14 row-lock columns, and 37 exact function signatures.
+`b2c71037d2307ac5d6874dfc3c9e6c73b871bfda2093f6ba2401d6e67525c5bf`.
+It contains 136 tables, 14 row-lock columns, and 45 exact function signatures.
 Events migration 010 adds `session_object_inventory` with exactly
 `SELECT, INSERT, UPDATE` runtime access.
 Migration 011 protects the immutable `messaging_provider_bindings` row lock
@@ -260,6 +260,12 @@ binding and reservation identity and allows only one transition from `Pending`
 to a finalized result. The finalized provider reference is distinct from a
 reserved generation. This migration and the updated grant-plan hash are
 source-only; this change does not apply them or authorize a live grant.
+Environment schema version 13 adds
+`environment.platform_policy_apply_reservations` for durable platform-egress
+provider requests. Its planned runtime rights are `SELECT, INSERT`; an owner
+trigger rejects `UPDATE`, `DELETE`, and `TRUNCATE`. The reserved apply path is
+not registered or called. This source change updates the grant-plan hash but
+does not apply the migration or grants to a live database.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,

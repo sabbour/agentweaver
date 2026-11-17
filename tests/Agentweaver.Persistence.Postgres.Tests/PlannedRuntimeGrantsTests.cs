@@ -9,10 +9,10 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests of plan validation; no database is needed.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "dc4e65996bfa0e550053d1985c2e2ab64a3c7c67d2098aaa30ca5f54f6676258";
+    private const string ReviewedPlanSha256 = "b2c71037d2307ac5d6874dfc3c9e6c73b871bfda2093f6ba2401d6e67525c5bf";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
-    private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 12)];
+    private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 13)];
 
     [Fact]
     public void EmbeddedPlanIsTheReviewedPlan()
@@ -97,6 +97,13 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains(environment.Tables, table => table.Table == "remote_mcp_connection_configurations");
         var creationLinks = Assert.Single(environment.Tables, table => table.Table == "p1_creation_links");
         Assert.Equal(["SELECT", "INSERT", "UPDATE"], creationLinks.Privileges);
+        var reservations = Assert.Single(
+            environment.Tables, table => table.Table == "platform_policy_apply_reservations");
+        Assert.Equal(["SELECT", "INSERT"], reservations.Privileges);
+        var reservationGuard = Assert.Single(
+            environment.Functions,
+            function => function.Signature == "reject_platform_policy_apply_reservation_mutation()");
+        Assert.False(reservationGuard.Execute);
     }
 
     [Fact]

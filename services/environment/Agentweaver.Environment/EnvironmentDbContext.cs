@@ -16,6 +16,8 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
         Set<EnvironmentWorkspaceVolumeCleanupRow>();
     internal DbSet<EnvironmentProviderLifecycleReportRow> ProviderLifecycleReports =>
         Set<EnvironmentProviderLifecycleReportRow>();
+    internal DbSet<EnvironmentPlatformPolicyApplyReservationRow> PlatformPolicyApplyReservations =>
+        Set<EnvironmentPlatformPolicyApplyReservationRow>();
     internal DbSet<RemoteMcpConnectionRow> RemoteMcpConnections => Set<RemoteMcpConnectionRow>();
     internal DbSet<RemoteMcpConnectionConfigurationRow> RemoteMcpConnectionConfigurations =>
         Set<RemoteMcpConnectionConfigurationRow>();
@@ -24,7 +26,7 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
     internal DbSet<RemoteMcpConnectionIdempotencyRow> RemoteMcpConnectionIdempotency =>
         Set<RemoteMcpConnectionIdempotencyRow>();
 
-    /// <summary>Maps Environment, Remote MCP, and lifecycle report entities to their database contracts.</summary>
+    /// <summary>Maps Environment state and immutable operation records to their database contracts.</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);
@@ -328,6 +330,45 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<EnvironmentPlatformPolicyApplyReservationRow>(entity =>
+        {
+            entity.ToTable("platform_policy_apply_reservations", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_apply_reservations_versions",
+                    "source_epoch > 0 AND generation > 0 AND source_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_apply_reservations_hashes",
+                    "source_hash ~ '^[0-9a-f]{64}$' AND intent_hash ~ '^[0-9a-f]{64}$' " +
+                    "AND request_fingerprint ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_apply_reservations_request",
+                    "jsonb_typeof(provider_request_json) = 'object'");
+            });
+            entity.HasKey(row => row.ReservationId);
+            entity.Property(row => row.ReservationId).HasColumnName("reservation_id");
+            entity.Property(row => row.TargetId).HasColumnName("target_id").HasMaxLength(256);
+            entity.Property(row => row.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
+            entity.Property(row => row.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
+            entity.Property(row => row.SourceEpoch).HasColumnName("source_epoch");
+            entity.Property(row => row.Generation).HasColumnName("generation");
+            entity.Property(row => row.SourceId).HasColumnName("source_id").HasMaxLength(256);
+            entity.Property(row => row.SourceRevision).HasColumnName("source_revision");
+            entity.Property(row => row.SourceHash).HasColumnName("source_hash").HasMaxLength(64);
+            entity.Property(row => row.IntentHash).HasColumnName("intent_hash").HasMaxLength(64);
+            entity.Property(row => row.ObjectUid).HasColumnName("object_uid").HasMaxLength(128);
+            entity.Property(row => row.ResourceVersion).HasColumnName("resource_version").HasMaxLength(256);
+            entity.Property(row => row.ProviderRequestJson)
+                .HasColumnName("provider_request_json")
+                .HasColumnType("jsonb");
+            entity.Property(row => row.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(row => new { row.TargetId, row.IdempotencyKey })
+                .IsUnique()
+                .HasDatabaseName("ux_environment_platform_policy_apply_reservations_idempotency");
+            entity.HasIndex(row => new { row.TargetId, row.SourceEpoch, row.Generation, row.CreatedAt })
+                .HasDatabaseName("ix_environment_platform_policy_apply_reservations_latest");
+        });
+
         EnvironmentProviderLifecycleReportModel.Configure(modelBuilder);
     }
 }
@@ -396,6 +437,25 @@ internal sealed class EnvironmentOwnerEffectRow
     public string State { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+}
+
+/// <summary>Immutable request binding for one platform egress provider apply.</summary>
+internal sealed class EnvironmentPlatformPolicyApplyReservationRow
+{
+    public Guid ReservationId { get; set; }
+    public string TargetId { get; set; } = string.Empty;
+    public string IdempotencyKey { get; set; } = string.Empty;
+    public string RequestFingerprint { get; set; } = string.Empty;
+    public long SourceEpoch { get; set; }
+    public long Generation { get; set; }
+    public string SourceId { get; set; } = string.Empty;
+    public long SourceRevision { get; set; }
+    public string SourceHash { get; set; } = string.Empty;
+    public string IntentHash { get; set; } = string.Empty;
+    public string ObjectUid { get; set; } = string.Empty;
+    public string ResourceVersion { get; set; } = string.Empty;
+    public string ProviderRequestJson { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 /// <summary>Database row tracking a workspace-volume cleanup claim and its retry state.</summary>
