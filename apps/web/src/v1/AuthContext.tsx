@@ -40,8 +40,10 @@ import type {
 import { gatewayClient, GatewayError } from './api';
 import { clearRecentRuns } from './recentRuns';
 import type {
+  PlatformPolicyArtifactRequest,
   PlatformPolicyRevisionPage,
   PlatformPolicyRevisionReadResult,
+  PlatformPolicyValidationResult,
 } from './platformPolicyContracts';
 
 /** In-memory bearer session bound to the project/run that initiated authorization. */
@@ -113,6 +115,11 @@ interface AuthContextValue {
     revision: number,
     signal?: AbortSignal,
   ) => Promise<PlatformPolicyRevisionReadResult>;
+  validatePlatformPolicyArtifact: (
+    tenantSelector: string,
+    artifact: PlatformPolicyArtifactRequest,
+    signal?: AbortSignal,
+  ) => Promise<PlatformPolicyValidationResult>;
   refreshPlatformPolicySession: () => Promise<PlatformPolicyRefreshResult>;
 }
 
@@ -1254,6 +1261,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [isCurrentPlatformPolicyAccess, requirePlatformPolicyAccess]);
 
+  const validatePlatformPolicyArtifact = useCallback(async (
+    tenantSelector: string,
+    artifact: PlatformPolicyArtifactRequest,
+    signal?: AbortSignal,
+  ): Promise<PlatformPolicyValidationResult> => {
+    const access = requirePlatformPolicyAccess(tenantSelector);
+    try {
+      const result = await gatewayClient.validatePlatformPolicyArtifact(
+        access.unboundSession.accessToken,
+        tenantSelector,
+        artifact,
+        signal,
+      );
+      if (!isCurrentPlatformPolicyAccess(access, tenantSelector))
+        throw new GatewayError(401, { code: 'policy_access_expired' },
+          'Platform Policy access must be checked again.');
+      return result;
+    } catch (reason) {
+      if (reason instanceof GatewayError &&
+          reason.status === 403 &&
+          policyAccessRef.current === access)
+        policyAccessRef.current = null;
+      throw reason;
+    }
+  }, [isCurrentPlatformPolicyAccess, requirePlatformPolicyAccess]);
+
   useEffect(() => () => cancelPolicyAuthorization(), [cancelPolicyAuthorization]);
 
   useEffect(() => {
@@ -1295,6 +1328,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     establishPlatformPolicyAccess,
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
+    validatePlatformPolicyArtifact,
     refreshPlatformPolicySession,
     authorizationContext,
     authorizationContextLoading,
@@ -1316,6 +1350,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     error,
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
+    validatePlatformPolicyArtifact,
     resolveAuthorizationContext,
     refreshPlatformPolicySession,
     session,

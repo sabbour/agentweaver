@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildPlatformPolicyValidationArtifact,
+  createPlatformPolicyTextBuffer,
   parsePlatformPolicyRevisionPage,
   parsePlatformPolicyRevisionReadResult,
+  parsePlatformPolicyValidationResult,
+  serializePlatformPolicyTextBuffer,
+  updatePlatformPolicyTextBuffer,
 } from './platformPolicyContracts';
 
 const hash = 'a'.repeat(64);
@@ -40,6 +45,98 @@ function history(overrides: Record<string, unknown> = {}) {
 }
 
 describe('Platform Policy response contracts', () => {
+  it('preserves BOMs and mixed line endings while building the canonical validation hash', async () => {
+    const manifest = createPlatformPolicyTextBuffer('\uFEFFname: x\r\n');
+    const content = createPlatformPolicyTextBuffer('allow=true\r');
+    const editedContent = updatePlatformPolicyTextBuffer(content, 'allow=false\n');
+    expect(serializePlatformPolicyTextBuffer(manifest)).toBe('\uFEFFname: x\r\n');
+    expect(serializePlatformPolicyTextBuffer(editedContent)).toBe('allow=false\r');
+
+    const artifact = await buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'rules/a.rego', content },
+    ]);
+    expect(artifact.manifestBytes).toEqual(bytes('\uFEFFname: x\r\n'));
+    expect(artifact.files[0]?.bytes).toEqual(bytes('allow=true\r'));
+    expect(artifact.contentSha256)
+      .toBe('f9591534f88ca70e815637008d4841a94fe4c58b622582a9078ea32be3844357');
+  });
+
+  it('keeps unchanged mixed separators when a browser-normalized textarea value changes', () => {
+    const original = createPlatformPolicyTextBuffer('first\r\nsecond\rthird\n');
+    const edited = updatePlatformPolicyTextBuffer(original, 'first\nsecond changed\nthird\n');
+    expect(serializePlatformPolicyTextBuffer(edited)).toBe('first\r\nsecond changed\rthird\n');
+  });
+
+  it('preserves mixed separators across multiline edits and adjacent-line deletion', () => {
+    const original = createPlatformPolicyTextBuffer('a\r\nb\rc\n');
+    const multilineEdit = updatePlatformPolicyTextBuffer(
+      original,
+      'a\nB\nC\n',
+      { start: 2, end: 5, nextEnd: 5 },
+    );
+    expect(serializePlatformPolicyTextBuffer(multilineEdit)).toBe('a\r\nB\rC\n');
+
+    const adjacent = createPlatformPolicyTextBuffer('first\r\n\rthird\n');
+    const deletedFirstSeparator = updatePlatformPolicyTextBuffer(
+      adjacent,
+      'first\nthird\n',
+      { start: 5, end: 6, nextEnd: 5 },
+    );
+    expect(serializePlatformPolicyTextBuffer(deletedFirstSeparator)).toBe('first\rthird\n');
+  });
+
+  it('rejects duplicate or unsafe draft paths and artifacts over the request bounds', async () => {
+    const manifest = createPlatformPolicyTextBuffer('name: test');
+    const content = createPlatformPolicyTextBuffer('rule');
+    await expect(buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'rules/../unsafe.rego', content },
+    ])).rejects.toThrow('valid relative path');
+    await expect(buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'manifest.yaml', content },
+    ])).rejects.toThrow('valid relative path');
+    await expect(buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'rules/bad:name.rego', content },
+    ])).rejects.toThrow('valid relative path');
+    await expect(buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'rules/a.rego', content },
+      { relativePath: 'rules/a.rego', content },
+    ])).rejects.toThrow('must be unique');
+    await expect(buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'rules', content },
+      { relativePath: 'rules/example.rego', content },
+    ])).rejects.toThrow('conflict with directories');
+    await expect(buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'rules/a.rego', content: createPlatformPolicyTextBuffer('x'.repeat(262_145)) },
+    ])).rejects.toThrow('262,144 bytes or smaller');
+  });
+
+  it('accepts valid and invalid server results and rejects malformed diagnostics', () => {
+    const diagnostic = {
+      code: 'yaml.invalid',
+      message: 'The manifest is invalid.',
+      relativePath: null,
+      line: 2,
+      column: 1,
+    };
+    expect(parsePlatformPolicyValidationResult({
+      isValid: true,
+      diagnostics: [],
+    })).toEqual({ isValid: true, diagnostics: [] });
+    expect(parsePlatformPolicyValidationResult({
+      title: 'native_acs_policy_invalid',
+      code: 'native_acs_policy_invalid',
+      diagnostics: [diagnostic],
+    })).toEqual({ isValid: false, diagnostics: [diagnostic] });
+    expect(parsePlatformPolicyValidationResult({
+      code: 'native_acs_policy_invalid',
+      diagnostics: [{ ...diagnostic, message: 'x'.repeat(2_049) }],
+    })).toBeNull();
+    expect(parsePlatformPolicyValidationResult({
+      isValid: true,
+      diagnostics: Array.from({ length: 33 }, () => diagnostic),
+    })).toBeNull();
+  });
+
   it('accepts an authorized empty history and preserves the exact snapshot head', () => {
     expect(parsePlatformPolicyRevisionPage({
       scopeType: 'platform',
@@ -78,6 +175,13 @@ describe('Platform Policy response contracts', () => {
     const parsed = parsePlatformPolicyRevisionReadResult(detail());
     expect(parsed?.artifact.manifest).toBe('name: example\n');
     expect(parsed?.artifact.files[0]?.content).toBe('allow: false\n');
+    expect(parsePlatformPolicyRevisionReadResult(detail({
+      artifact: {
+        manifestBytes: bytes('\uFEFFname: example\n'),
+        files: [],
+        contentSha256: hash,
+      },
+    }))?.artifact.manifest).toBe('\uFEFFname: example\n');
     expect(parsePlatformPolicyRevisionReadResult(detail({
       artifact: {
         manifestBytes: [0xc3, 0x28],

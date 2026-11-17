@@ -8,6 +8,9 @@ const MAX_FILES = 64;
 const MAX_FILE_BYTES = 262_144;
 const MAX_ARTIFACT_BYTES = 1_048_576;
 const MAX_HISTORY_ITEMS = 100;
+const MAX_DIAGNOSTICS = 32;
+const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 2_048;
+const MAX_DIAGNOSTIC_PATH_LENGTH = 1_024;
 
 export interface PlatformPolicyRevisionSummary {
   revision: number;
@@ -28,6 +31,36 @@ export interface PlatformPolicyArtifactText {
   manifest: string;
   files: { relativePath: string; content: string }[];
   contentSha256: string;
+}
+
+export interface PlatformPolicyTextBuffer {
+  value: string;
+  lineEndings: string[];
+}
+
+export interface PlatformPolicyTextEdit {
+  start: number;
+  end: number;
+  nextEnd: number;
+}
+
+export interface PlatformPolicyArtifactRequest {
+  manifestBytes: number[];
+  files: { relativePath: string; bytes: number[] }[];
+  contentSha256: string;
+}
+
+export interface PlatformPolicyValidationDiagnostic {
+  code: string;
+  message: string;
+  relativePath: string | null;
+  line: number | null;
+  column: number | null;
+}
+
+export interface PlatformPolicyValidationResult {
+  isValid: boolean;
+  diagnostics: PlatformPolicyValidationDiagnostic[];
 }
 
 export interface PlatformPolicyRevisionReadResult {
@@ -77,12 +110,17 @@ function isRelativePath(value: unknown): value is string {
   return typeof value === 'string' &&
     value.length > 0 &&
     value.trim().length > 0 &&
-    value.length <= 1_024 &&
+    value.length <= 256 &&
     !value.startsWith('/') &&
     !value.includes('\\') &&
+    !value.includes(':') &&
     !hasControlCharacter(value) &&
-    !/^[A-Za-z]:/.test(value) &&
-    value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+    value !== 'manifest.yaml' &&
+    value.split('/').every((part) =>
+      part.length > 0 &&
+      part !== '.' &&
+      part !== '..' &&
+      /^[A-Za-z0-9._-]+$/.test(part));
 }
 
 function readByteArray(value: unknown, maximum: number, allowEmpty = false): Uint8Array | null {
@@ -100,10 +138,250 @@ function readByteArray(value: unknown, maximum: number, allowEmpty = false): Uin
 
 function decodeUtf8(bytes: Uint8Array): string | null {
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return null;
   }
+}
+
+function countLineEndings(value: string, end: number): number {
+  let count = 0;
+  for (let index = 0; index < end; index += 1)
+    if (value[index] === '\n') count += 1;
+  return count;
+}
+
+export function createPlatformPolicyTextBuffer(value: string): PlatformPolicyTextBuffer {
+  const lineEndings: string[] = [];
+  const normalized = value.replace(/\r\n|\r|\n/g, (ending) => {
+    lineEndings.push(ending);
+    return '\n';
+  });
+  return { value: normalized, lineEndings };
+}
+
+export function updatePlatformPolicyTextBuffer(
+  previous: PlatformPolicyTextBuffer,
+  value: string,
+  edit?: PlatformPolicyTextEdit,
+): PlatformPolicyTextBuffer {
+  const next = value.replace(/\r\n|\r/g, '\n');
+  if (edit &&
+      edit.start >= 0 &&
+      edit.start <= edit.end &&
+      edit.end <= previous.value.length &&
+      edit.nextEnd >= edit.start &&
+      edit.nextEnd <= next.length &&
+      previous.value.slice(0, edit.start) === next.slice(0, edit.start) &&
+      previous.value.slice(edit.end) === next.slice(edit.nextEnd)) {
+    const prefixLineCount = countLineEndings(previous.value, edit.start);
+    const oldSuffixLine = countLineEndings(previous.value, edit.end);
+    const oldEditLineCount = oldSuffixLine - prefixLineCount;
+    const newEditLineCount = countLineEndings(next, edit.nextEnd) - prefixLineCount;
+    const preserveEditedEndings = oldEditLineCount === newEditLineCount;
+    const insertedLineEnding = previous.lineEndings[prefixLineCount - 1] ??
+      previous.lineEndings[prefixLineCount] ?? '\n';
+    const lineEndings: string[] = [];
+    let prefixLine = 0;
+    let editedLine = 0;
+    let suffixLine = 0;
+    for (let index = 0; index < next.length; index += 1) {
+      if (next[index] !== '\n') continue;
+      if (index < edit.start) {
+        lineEndings.push(previous.lineEndings[prefixLine] ?? insertedLineEnding);
+        prefixLine += 1;
+      } else if (index >= edit.nextEnd) {
+        lineEndings.push(previous.lineEndings[oldSuffixLine + suffixLine] ?? insertedLineEnding);
+        suffixLine += 1;
+      } else {
+        lineEndings.push(preserveEditedEndings
+          ? previous.lineEndings[prefixLineCount + editedLine] ?? insertedLineEnding
+          : insertedLineEnding);
+        editedLine += 1;
+      }
+    }
+    return { value: next, lineEndings };
+  }
+
+  if (previous.lineEndings.length === countLineEndings(next, next.length))
+    return { value: next, lineEndings: [...previous.lineEndings] };
+
+  let prefix = 0;
+  while (prefix < previous.value.length &&
+      prefix < next.length &&
+      previous.value[prefix] === next[prefix])
+    prefix += 1;
+
+  let suffix = 0;
+  while (suffix < previous.value.length - prefix &&
+      suffix < next.length - prefix &&
+      previous.value[previous.value.length - suffix - 1] === next[next.length - suffix - 1])
+    suffix += 1;
+
+  const oldSuffixStart = previous.value.length - suffix;
+  const newSuffixStart = next.length - suffix;
+  const prefixLineCount = countLineEndings(previous.value, prefix);
+  const oldSuffixLine = countLineEndings(previous.value, oldSuffixStart);
+  const newSuffixLine = countLineEndings(next, newSuffixStart);
+  const insertedLineEnding = previous.lineEndings[prefixLineCount - 1] ??
+    previous.lineEndings[prefixLineCount] ?? '\n';
+  const lineEndings: string[] = [];
+  let lineIndex = 0;
+  for (let index = 0; index < next.length; index += 1) {
+    if (next[index] !== '\n') continue;
+    if (index < prefix) {
+      lineEndings.push(previous.lineEndings[lineIndex] ?? insertedLineEnding);
+    } else if (index >= newSuffixStart) {
+      lineEndings.push(previous.lineEndings[oldSuffixLine + lineIndex - newSuffixLine] ??
+        insertedLineEnding);
+    } else {
+      lineEndings.push(insertedLineEnding);
+    }
+    lineIndex += 1;
+  }
+  return { value: next, lineEndings };
+}
+
+export function serializePlatformPolicyTextBuffer(buffer: PlatformPolicyTextBuffer): string {
+  let output = '';
+  let lineIndex = 0;
+  for (const character of buffer.value) {
+    if (character === '\n') {
+      const ending = buffer.lineEndings[lineIndex];
+      if (!ending) throw new Error('Policy text line endings are invalid.');
+      output += ending;
+      lineIndex += 1;
+    } else {
+      output += character;
+    }
+  }
+  if (lineIndex !== buffer.lineEndings.length)
+    throw new Error('Policy text line endings are invalid.');
+  return output;
+}
+
+function encodeUtf8(value: string): Uint8Array {
+  const bytes = new TextEncoder().encode(value);
+  if (new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) !== value)
+    throw new Error('Policy text must contain valid Unicode.');
+  return bytes;
+}
+
+function appendLengthPrefixedField(
+  output: Uint8Array,
+  view: DataView,
+  offset: number,
+  field: Uint8Array,
+): number {
+  view.setUint32(offset, field.byteLength, false);
+  output.set(field, offset + 4);
+  return offset + 4 + field.byteLength;
+}
+
+export async function buildPlatformPolicyValidationArtifact(
+  manifest: PlatformPolicyTextBuffer,
+  files: { relativePath: string; content: PlatformPolicyTextBuffer }[],
+): Promise<PlatformPolicyArtifactRequest> {
+  if (files.length > MAX_FILES)
+    throw new Error('A Platform Policy can contain up to 64 files.');
+
+  const manifestBytes = encodeUtf8(serializePlatformPolicyTextBuffer(manifest));
+  if (manifestBytes.byteLength > MAX_MANIFEST_BYTES)
+    throw new Error('The Platform Policy manifest exceeds 65,536 bytes.');
+
+  let totalBytes = manifestBytes.byteLength;
+  const seenPaths = new Set<string>();
+  const encodedFiles = files.map((file) => {
+    if (!isRelativePath(file.relativePath))
+      throw new Error('Each Platform Policy file needs a valid relative path.');
+    if (seenPaths.has(file.relativePath))
+      throw new Error('Platform Policy file paths must be unique.');
+    seenPaths.add(file.relativePath);
+    const pathBytes = encodeUtf8(file.relativePath);
+    const bytes = encodeUtf8(serializePlatformPolicyTextBuffer(file.content));
+    if (bytes.byteLength > MAX_FILE_BYTES)
+      throw new Error('Each Platform Policy file must be 262,144 bytes or smaller.');
+    totalBytes += bytes.byteLength;
+    if (totalBytes > MAX_ARTIFACT_BYTES)
+      throw new Error('The Platform Policy artifact exceeds 1,048,576 bytes.');
+    return { relativePath: file.relativePath, pathBytes, bytes };
+  });
+
+  const sortedFiles = [...encodedFiles].sort((left, right) =>
+    left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0);
+  for (const path of seenPaths) {
+    const segments = path.split('/');
+    for (let index = 1; index < segments.length; index += 1) {
+      const parent = segments.slice(0, index).join('/');
+      if (seenPaths.has(parent))
+        throw new Error('Platform Policy file paths cannot conflict with directories.');
+    }
+  }
+  const fields = [manifestBytes, ...sortedFiles.flatMap((file) => [file.pathBytes, file.bytes])];
+  const prefix = encodeUtf8('agentweaver-native-acs-artifact-v1\0');
+  const inputLength = prefix.byteLength + fields.reduce((length, field) => length + 4 + field.byteLength, 0);
+  const input = new Uint8Array(inputLength);
+  const view = new DataView(input.buffer);
+  input.set(prefix);
+  let offset = prefix.byteLength;
+  for (const field of fields)
+    offset = appendLengthPrefixedField(input, view, offset, field);
+
+  if (!globalThis.crypto?.subtle)
+    throw new Error('Policy validation is unavailable in this browser.');
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', input));
+  const contentSha256 = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return {
+    manifestBytes: Array.from(manifestBytes),
+    files: encodedFiles.map(({ relativePath, bytes }) => ({
+      relativePath,
+      bytes: Array.from(bytes),
+    })),
+    contentSha256,
+  };
+}
+
+function parseDiagnostics(value: unknown): PlatformPolicyValidationDiagnostic[] | null {
+  if (!Array.isArray(value) || value.length > MAX_DIAGNOSTICS) return null;
+  const diagnostics: PlatformPolicyValidationDiagnostic[] = [];
+  for (const item of value) {
+    if (!isRecord(item) ||
+        !hasExactKeys(item, ['code', 'message', 'relativePath', 'line', 'column']) ||
+        !isText(item.code) ||
+        item.code.length > 128 ||
+        typeof item.message !== 'string' ||
+        item.message.length > MAX_DIAGNOSTIC_MESSAGE_LENGTH ||
+        !(item.relativePath === null ||
+          (typeof item.relativePath === 'string' &&
+            item.relativePath.length <= MAX_DIAGNOSTIC_PATH_LENGTH &&
+            !hasControlCharacter(item.relativePath))) ||
+        !(item.line === null ||
+          (Number.isSafeInteger(item.line) && (item.line as number) >= 0)) ||
+        !(item.column === null ||
+          (Number.isSafeInteger(item.column) && (item.column as number) >= 0)))
+      return null;
+    diagnostics.push({
+      code: item.code,
+      message: item.message,
+      relativePath: item.relativePath as string | null,
+      line: item.line as number | null,
+      column: item.column as number | null,
+    });
+  }
+  return diagnostics;
+}
+
+export function parsePlatformPolicyValidationResult(
+  value: unknown,
+): PlatformPolicyValidationResult | null {
+  if (!isRecord(value)) return null;
+  const diagnostics = parseDiagnostics(value.diagnostics);
+  if (!diagnostics) return null;
+  if (value.isValid === true)
+    return { isValid: true, diagnostics };
+  if (value.code === 'native_acs_policy_invalid')
+    return { isValid: false, diagnostics };
+  return null;
 }
 
 export function parsePlatformPolicyRevisionPage(value: unknown): PlatformPolicyRevisionPage | null {

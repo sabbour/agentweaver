@@ -4,8 +4,14 @@ import { useLocation } from 'react-router-dom';
 import { GatewayError } from './api';
 import { useAuth } from './AuthContext';
 import type { PlatformPolicyIdentity, PlatformPolicyRefreshResult } from './AuthContext';
-import { PLATFORM_POLICY_SCOPE_ID } from './platformPolicyContracts';
+import {
+  buildPlatformPolicyValidationArtifact,
+  createPlatformPolicyTextBuffer,
+  PLATFORM_POLICY_SCOPE_ID,
+} from './platformPolicyContracts';
 import type {
+  PlatformPolicyTextBuffer,
+  PlatformPolicyValidationResult,
   PlatformPolicyRevisionPage,
   PlatformPolicyRevisionReadResult,
   PlatformPolicyRevisionSummary,
@@ -17,6 +23,12 @@ interface PolicyRevisionSelection {
   policyId: string;
   snapshotRevision: number;
   revision: PlatformPolicyRevisionSummary;
+}
+
+interface PlatformPolicyDraftFile {
+  id: number;
+  relativePath: string;
+  content: PlatformPolicyTextBuffer;
 }
 
 type RetryRead =
@@ -45,8 +57,20 @@ export interface PlatformPoliciesControllerValue {
   detail: PlatformPolicyRevisionReadResult | null;
   detailLoading: boolean;
   detailError: string | null;
+  draftManifest: PlatformPolicyTextBuffer;
+  draftFiles: PlatformPolicyDraftFile[];
+  draftError: string | null;
+  validation: PlatformPolicyValidationResult | null;
+  validationLoading: boolean;
   retry: () => void;
   viewRevision: (revision: PlatformPolicyRevisionSummary) => void;
+  setDraftManifest: (buffer: PlatformPolicyTextBuffer) => void;
+  addDraftFile: () => void;
+  removeDraftFile: (id: number) => void;
+  setDraftFilePath: (id: number, value: string) => void;
+  setDraftFileContent: (id: number, content: PlatformPolicyTextBuffer) => void;
+  loadDraftFromSavedSource: () => void;
+  validateDraft: () => void;
   loadMore: () => void;
 }
 
@@ -95,7 +119,7 @@ function verifyRevision(
 
 function safeFailure(reason: unknown): { status: PolicyPageStatus; message: string } {
   if (reason instanceof GatewayError && reason.status === 403)
-    return { status: 'denied', message: 'You do not have permission to read Platform Policies.' };
+    return { status: 'denied', message: 'You do not have permission to access Platform Policies.' };
   return { status: 'unavailable', message: 'Platform Policies could not load. Try again.' };
 }
 
@@ -105,6 +129,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     establishPlatformPolicyAccess,
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
+    validatePlatformPolicyArtifact,
     refreshPlatformPolicySession,
   } = auth;
   const location = useLocation();
@@ -117,11 +142,20 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const [detail, setDetail] = useState<PlatformPolicyRevisionReadResult | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [draftManifest, setDraftManifestState] = useState(() => createPlatformPolicyTextBuffer(''));
+  const [draftFiles, setDraftFiles] = useState<PlatformPolicyDraftFile[]>([]);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [validation, setValidation] = useState<PlatformPolicyValidationResult | null>(null);
+  const [validationLoading, setValidationLoading] = useState(false);
   const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden');
   const requestGenerationRef = useRef(0);
+  const validationGenerationRef = useRef(0);
+  const validationControllerRef = useRef<AbortController | null>(null);
+  const draftFileIdRef = useRef(0);
   const identityEpochRef = useRef(0);
   const currentRequestRef = useRef<AbortController | null>(null);
   const policyIdentityRef = useRef<PlatformPolicyIdentity | null>(null);
+  const draftIdentityRef = useRef<PlatformPolicyIdentity | null>(null);
   const historyRef = useRef<PlatformPolicyRevisionPage | null>(null);
   const tenantRef = useRef(tenantId);
   const tenantWasSelectedRef = useRef(false);
@@ -167,10 +201,44 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     setStatus(value);
   }, []);
 
-  const clearPolicyState = useCallback((nextStatus: PolicyPageStatus) => {
+  const bindDraftToCurrentIdentity = useCallback(() => {
+    if (policyIdentityRef.current)
+      draftIdentityRef.current = policyIdentityRef.current;
+  }, []);
+
+  const clearDraftValidation = useCallback((
+    preserveError = false,
+    canceledMessage?: string,
+  ) => {
+    const wasValidating = validationControllerRef.current !== null;
+    validationGenerationRef.current += 1;
+    validationControllerRef.current?.abort();
+    validationControllerRef.current = null;
+    setValidationLoading(false);
+    setValidation(null);
+    if (wasValidating && canceledMessage)
+      setDraftError(canceledMessage);
+    else if (!preserveError)
+      setDraftError(null);
+  }, []);
+
+  const clearPolicyState = useCallback((
+    nextStatus: PolicyPageStatus,
+    preserveDraftError = false,
+    preserveDraft = false,
+  ) => {
+    const validationCanceled = validationControllerRef.current !== null;
     capturePolicyLinkFocus();
     identityEpochRef.current += 1;
     requestGenerationRef.current += 1;
+    clearDraftValidation(preserveDraftError);
+    if (!preserveDraft) {
+      setDraftManifestState(createPlatformPolicyTextBuffer(''));
+      setDraftFiles([]);
+      draftIdentityRef.current = null;
+    }
+    if (validationCanceled && !preserveDraftError && nextStatus === 'checking')
+      setDraftError('Platform Policy access changed. Validate the draft again when access is ready.');
     currentRequestRef.current?.abort();
     currentRequestRef.current = null;
     policyIdentityRef.current = null;
@@ -182,7 +250,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     setDetailLoading(false);
     setDetailError(null);
     setPageStatus(nextStatus);
-  }, [capturePolicyLinkFocus, setAuthorized, setHistory, setPageStatus]);
+  }, [capturePolicyLinkFocus, clearDraftValidation, setAuthorized, setHistory, setPageStatus]);
 
   const updateTenantId = useCallback((value: string, userSelected: boolean) => {
     const changed = tenantRef.current.trim() !== value.trim();
@@ -196,6 +264,63 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const setTenantId = useCallback((value: string) => {
     updateTenantId(value, true);
   }, [updateTenantId]);
+
+  const setDraftManifest = useCallback((buffer: PlatformPolicyTextBuffer) => {
+    bindDraftToCurrentIdentity();
+    clearDraftValidation();
+    setDraftManifestState(buffer);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+
+  const addDraftFile = useCallback(() => {
+    bindDraftToCurrentIdentity();
+    clearDraftValidation();
+    const id = ++draftFileIdRef.current;
+    setDraftFiles((current) => [
+      ...current,
+      {
+        id,
+        relativePath: `rules/policy-${id}.yaml`,
+        content: createPlatformPolicyTextBuffer(''),
+      },
+    ]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+
+  const removeDraftFile = useCallback((id: number) => {
+    bindDraftToCurrentIdentity();
+    clearDraftValidation();
+    setDraftFiles((current) => current.filter((file) => file.id !== id));
+  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+
+  const setDraftFilePath = useCallback((id: number, value: string) => {
+    bindDraftToCurrentIdentity();
+    clearDraftValidation();
+    setDraftFiles((current) => current.map((file) =>
+      file.id === id ? { ...file, relativePath: value } : file));
+  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+
+  const setDraftFileContent = useCallback((
+    id: number,
+    content: PlatformPolicyTextBuffer,
+  ) => {
+    bindDraftToCurrentIdentity();
+    clearDraftValidation();
+    setDraftFiles((current) => current.map((file) =>
+      file.id === id
+        ? { ...file, content }
+        : file));
+  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+
+  const loadDraftFromSavedSource = useCallback(() => {
+    if (!authorizedRef.current || !detail) return;
+    bindDraftToCurrentIdentity();
+    clearDraftValidation();
+    setDraftManifestState(createPlatformPolicyTextBuffer(detail.artifact.manifest));
+    setDraftFiles(detail.artifact.files.map((file) => ({
+      id: ++draftFileIdRef.current,
+      relativePath: file.relativePath,
+      content: createPlatformPolicyTextBuffer(file.content),
+    })));
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, detail]);
 
   const expectPolicyRefreshChange = useCallback((selectedTenant: string): ExpectedRefreshChange => {
     const current = latestAuthRef.current;
@@ -272,6 +397,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     currentRequestRef.current = controller;
     const identityEpoch = ++identityEpochRef.current;
     const requestGeneration = ++requestGenerationRef.current;
+    clearDraftValidation(true, 'Platform Policy access changed. Validate the draft again when access is ready.');
     policyIdentityRef.current = null;
     setAuthorized(false);
     setHistory(null);
@@ -341,7 +467,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
           reason.status === 401 &&
           reason.code === 'platform_policy_request_failed' &&
           retryCount === 0) {
-        clearPolicyState('checking');
+        clearPolicyState('checking', false, true);
         const recoveryIdentityEpoch = identityEpochRef.current;
         const recoveryRequestGeneration = requestGenerationRef.current;
         const recoveryTenant = tenantRef.current.trim();
@@ -366,7 +492,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         return;
       }
       const failure = safeFailure(reason);
-      clearPolicyState(failure.status);
+      clearPolicyState(failure.status, false, failure.status !== 'denied');
       if (retryRead?.kind === 'revision' && failure.status !== 'denied')
         setDetailError('The selected Platform Policy revision is unavailable. Try again.');
     } finally {
@@ -382,6 +508,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     refreshPlatformPolicySession,
     clearPolicyState,
     isCurrentRequest,
+    clearDraftValidation,
     expectPolicyRefreshChange,
     isCurrentRecovery,
     setAuthorized,
@@ -393,6 +520,97 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   useEffect(() => {
     runCheckRef.current = runCheck;
   }, [runCheck]);
+
+  const validateDraft = useCallback(() => {
+    const identity = policyIdentityRef.current;
+    if (!authorizedRef.current ||
+        statusRef.current !== 'ready' ||
+        !identity ||
+        tenantRef.current.trim() !== identity.tenantId)
+      return;
+
+    clearDraftValidation();
+    const generation = ++validationGenerationRef.current;
+    const identityEpoch = identityEpochRef.current;
+    const controller = new AbortController();
+    validationControllerRef.current = controller;
+    setValidationLoading(true);
+
+    const isCurrentValidation = () => {
+      return (
+        validationGenerationRef.current === generation &&
+        identityEpochRef.current === identityEpoch &&
+        validationControllerRef.current === controller &&
+        !controller.signal.aborted &&
+        authorizedRef.current &&
+        statusRef.current === 'ready' &&
+        policyIdentityRef.current === identity &&
+        tenantRef.current.trim() === identity.tenantId
+      );
+    };
+
+    void (async () => {
+      try {
+        const artifact = await buildPlatformPolicyValidationArtifact(
+          draftManifest,
+          draftFiles.map(({ relativePath, content }) => ({ relativePath, content })),
+        );
+        if (!isCurrentValidation()) return;
+        const result = await validatePlatformPolicyArtifact(
+          identity.tenantId,
+          artifact,
+          controller.signal,
+        );
+        if (!isCurrentValidation()) return;
+        setValidation(result);
+      } catch (reason) {
+        if (!isCurrentValidation()) return;
+        if (reason instanceof GatewayError && reason.status === 403) {
+          clearPolicyState('denied');
+        } else if (reason instanceof GatewayError &&
+            reason.status === 401 &&
+            reason.code === 'platform_policy_request_failed') {
+          clearPolicyState('checking', true, true);
+          setDraftError('Platform Policy access expired. Check access, then validate again.');
+          const recoveryIdentityEpoch = identityEpochRef.current;
+          const recoveryRequestGeneration = requestGenerationRef.current;
+          const recoveryTenant = tenantRef.current.trim();
+          const expectedRefresh = expectPolicyRefreshChange(identity.tenantId);
+          const refreshResult = await refreshPlatformPolicySession();
+          if (!isCurrentRecovery(
+            recoveryIdentityEpoch,
+            recoveryRequestGeneration,
+            recoveryTenant,
+            expectedRefresh,
+            refreshResult,
+          )) return;
+          if (refreshResult.refreshed)
+            await runCheckRef.current?.(identity.tenantId, identity, 1);
+          else
+            setPageStatus('unavailable');
+        } else {
+          setDraftError(reason instanceof Error
+            ? reason.message
+            : 'Platform Policy validation could not complete. Try again.');
+        }
+      } finally {
+        if (validationControllerRef.current === controller) {
+          validationControllerRef.current = null;
+          setValidationLoading(false);
+        }
+      }
+    })();
+  }, [
+    clearDraftValidation,
+    clearPolicyState,
+    draftFiles,
+    draftManifest,
+    expectPolicyRefreshChange,
+    isCurrentRecovery,
+    refreshPlatformPolicySession,
+    setPageStatus,
+    validatePlatformPolicyArtifact,
+  ]);
 
   const retry = useCallback(() => {
     void runCheck(tenantRef.current);
@@ -440,7 +658,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         } else if (reason instanceof GatewayError &&
             reason.status === 401 &&
             reason.code === 'platform_policy_request_failed') {
-          clearPolicyState('checking');
+          clearPolicyState('checking', false, true);
           const recoveryIdentityEpoch = identityEpochRef.current;
           const recoveryRequestGeneration = requestGenerationRef.current;
           const expectedRefresh = expectPolicyRefreshChange(identity.tenantId);
@@ -522,7 +740,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         if (reason instanceof GatewayError &&
             reason.status === 401 &&
             reason.code === 'platform_policy_request_failed') {
-          clearPolicyState('checking');
+          clearPolicyState('checking', false, true);
           const recoveryIdentityEpoch = identityEpochRef.current;
           const recoveryRequestGeneration = requestGenerationRef.current;
           const expectedRefresh = expectPolicyRefreshChange(identity.tenantId);
@@ -547,7 +765,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
           setHistoryError('Additional Platform Policy revisions could not load. Try again.');
           return;
         }
-        clearPolicyState('unavailable');
+        clearPolicyState('unavailable', false, true);
       } finally {
         if (currentRequestRef.current === controller) {
           currentRequestRef.current = null;
@@ -623,9 +841,16 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     }
     expectedRefreshChangeRef.current = null;
     const selectedTenant = tenantRef.current.trim() || auth.authorizationContext?.tenantId || '';
-    clearPolicyState(auth.session ? 'checking' : 'idle');
+    const previousPolicyIdentity = draftIdentityRef.current;
+    const preserveDraft = !!auth.session &&
+      !!previousPolicyIdentity &&
+      previousPolicyIdentity.tenantId === selectedTenant &&
+      (!auth.authorizationContext ||
+        (previousPolicyIdentity.issuer === auth.authorizationContext.issuer &&
+         previousPolicyIdentity.actorId === auth.authorizationContext.actorId));
+    clearPolicyState(auth.session ? 'checking' : 'idle', false, preserveDraft);
     if (auth.session && selectedTenant)
-      void runCheck(selectedTenant);
+      void runCheck(selectedTenant, preserveDraft ? previousPolicyIdentity : null);
   }, [
     auth.authSessionGeneration,
     auth.authorizationContext,
@@ -695,22 +920,46 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     detail,
     detailLoading,
     detailError,
+    draftManifest,
+    draftFiles,
+    draftError,
+    validation,
+    validationLoading,
     retry,
     viewRevision,
+    setDraftManifest,
+    addDraftFile,
+    removeDraftFile,
+    setDraftFilePath,
+    setDraftFileContent,
+    loadDraftFromSavedSource,
+    validateDraft,
     loadMore,
   }), [
+    addDraftFile,
     authorized,
     detail,
     detailError,
     detailLoading,
+    draftError,
+    draftFiles,
+    draftManifest,
     history,
     historyError,
     historyLoading,
     loadMore,
     retry,
+    removeDraftFile,
+    setDraftFileContent,
+    setDraftFilePath,
+    setDraftManifest,
     setTenantId,
     status,
     tenantId,
+    loadDraftFromSavedSource,
+    validateDraft,
+    validation,
+    validationLoading,
     viewRevision,
   ]);
 
