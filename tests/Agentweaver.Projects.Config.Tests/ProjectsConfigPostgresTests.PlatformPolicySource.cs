@@ -9,6 +9,7 @@ using System.Text.Json;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -669,6 +670,7 @@ public sealed partial class ProjectsConfigPostgresTests
             options.UseNpgsql(fixture.DataSource,
                 npgsql => npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema)));
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<IDataProtectionProvider>(CreateTestDataProtectionProvider());
         builder.Services.AddScoped<NativeAcsPolicyStore>();
         var app = builder.Build();
         app.UsePlatformPolicySourceGuard(port);
@@ -746,6 +748,7 @@ public sealed partial class ProjectsConfigPostgresTests
                         if (commandInterceptor is not null)
                             options.AddInterceptors(commandInterceptor);
                     });
+                    services.AddSingleton<IDataProtectionProvider>(CreateTestDataProtectionProvider());
                     services.AddScoped<NativeAcsPolicyStore>();
                 });
                 web.Configure(app =>

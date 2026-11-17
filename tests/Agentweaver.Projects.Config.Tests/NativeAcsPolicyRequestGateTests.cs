@@ -46,8 +46,27 @@ public sealed class NativeAcsPolicyRequestGateTests
         using var app = builder.Build();
         app.MapNativeAcsPolicyEndpoints();
 
-        var endpoints = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).ToList();
+        var routes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(endpoint => (
+                Name: endpoint.Metadata.GetMetadata<IEndpointNameMetadata>()!.EndpointName!,
+                Method: endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Single()))
+            .OrderBy(route => route.Name, StringComparer.Ordinal)
+            .ToArray();
+        var expected = new[]
+        {
+            (Name: "ListPlatformNativeAcsPolicyRevisions", Method: "GET"),
+            (Name: "ListProjectNativeAcsPolicies", Method: "GET"),
+            (Name: "ListProjectNativeAcsPolicyRevisions", Method: "GET"),
+            (Name: "ReadPlatformNativeAcsPolicy", Method: "GET"),
+            (Name: "ReadPlatformNativeAcsPolicyRevision", Method: "GET"),
+            (Name: "ReadProjectNativeAcsPolicy", Method: "GET"),
+            (Name: "ReadProjectNativeAcsPolicyRevision", Method: "GET"),
+            (Name: "ValidatePlatformNativeAcsPolicy", Method: "POST"),
+            (Name: "WritePlatformNativeAcsPolicy", Method: "PUT"),
+        };
 
-        Assert.Equal(5, endpoints.Count);
+        Assert.Equal(expected, routes);
     }
 }

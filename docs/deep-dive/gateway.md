@@ -82,6 +82,15 @@ read routes. Projects & Config owns authorization, validation, and policy
 state. See the
 [Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
 
+The four Project Policy source and history reads are also fixed catalog routes.
+They forward the optional tenant selector, expose `Cache-Control`, accept
+responses up to 5 MiB, and are excluded from MCP. The list and history routes
+allow only `pageSize` and `cursor`; current and exact-revision reads allow no
+query values. The Gateway does not forward `Idempotency-Key` or `If-Match` for
+these reads. Projects & Config resolves current membership and roles in the
+bounded list-page query and checks authority before and after other Project
+Policy reads.
+
 Gateway preserves the owner's response status and body. In particular,
 `202 Accepted` means an owner accepted an operation; it does not prove that a
 resource, model turn, or workflow finished. Gateway has no domain database and

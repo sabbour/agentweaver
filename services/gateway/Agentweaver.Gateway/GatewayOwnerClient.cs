@@ -2185,12 +2185,30 @@ public sealed partial class GatewayOwnerClient(
         tenantSelector = null;
         var isPlatformPolicyRevisionRead = route.OperationId is
             "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision";
+        var isProjectPolicyRead = route.OperationId is
+            "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
+            "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
         if (isPlatformPolicyRevisionRead &&
             context.Request.Query.Keys.Any(key => !route.QueryParameters.Contains(key, StringComparer.Ordinal)))
         {
             var code = route.OperationId == "listPlatformNativeAcsPolicyRevisions"
                 ? "native_acs_policy_history_request_invalid"
                 : "native_acs_policy_revision_request_invalid";
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody(code, StatusCodes.Status400BadRequest));
+        }
+        if (isProjectPolicyRead &&
+            context.Request.Query.Keys.Any(key => !route.QueryParameters.Contains(key, StringComparer.Ordinal)))
+        {
+            var code = route.OperationId switch
+            {
+                "listProjectNativeAcsPolicies" => "native_acs_policy_scope_list_request_invalid",
+                "readProjectNativeAcsPolicy" => "native_acs_policy_query_not_supported",
+                "listProjectNativeAcsPolicyRevisions" => "native_acs_policy_history_request_invalid",
+                _ => "native_acs_policy_revision_request_invalid",
+            };
             throw new GatewayOwnerFailureException(
                 StatusCodes.Status400BadRequest,
                 "application/problem+json",
@@ -2203,7 +2221,7 @@ public sealed partial class GatewayOwnerClient(
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         if (route.ForwardTenantSelector)
             tenantSelector = CopyTenantSelector(context, request);
-        if (!isPlatformPolicyRevisionRead)
+        if (!isPlatformPolicyRevisionRead && !isProjectPolicyRead)
         {
             CopySingleRequestHeader(context, request, "Idempotency-Key");
             CopySingleRequestHeader(context, request, "If-Match");

@@ -15,6 +15,7 @@
     "docs/authoring/templates/adr.md",
     "docs/specs/native-cli-api-acceptance.md",
     "docs/specs/canonical-acs-policy-history-read-slice.md",
+    "docs/specs/canonical-acs-project-policy-read-slice.md",
     "docs/specs/native-acs-composable-domains.md",
     "docs/specs/session-material-persistence-and-recovery.md",
     "docs/architecture/decisions/0003-events-owned-session-material.md",
@@ -481,7 +482,7 @@
       ]
     },
     {
-      "name": "Canonical Platform Policy history reads",
+      "name": "Canonical Project and Platform Policy reads",
       "sourcePrefixes": [
         "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyRecords.cs",
         "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyStore.cs",
@@ -500,6 +501,7 @@
       ],
       "required": [
         "docs/specs/canonical-acs-policy-history-read-slice.md",
+        "docs/specs/canonical-acs-project-policy-read-slice.md",
         "docs/architecture/overview.md",
         "docs/architecture/projects-config.md",
         "docs/deep-dive/projects-config.md",

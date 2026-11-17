@@ -25,7 +25,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectAuthorization.cs` | Current membership, roles, scopes, and effective permissions |
 | `ProjectConfiguration.cs` | Typed settings, validation, limits, and egress narrowing |
 | `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
-| `NativeAcsPolicyEndpoints.cs`, `PlatformPolicySourceEndpoints.cs`, `PlatformPolicySourceTls.cs`, and `NativeAcsPolicyStore.cs` | Public Platform ACS Policy API, private Environment source read, and immutable policy source |
+| `NativeAcsPolicyEndpoints.cs`, `PlatformPolicySourceEndpoints.cs`, `PlatformPolicySourceTls.cs`, and `NativeAcsPolicyStore.cs` | Public Platform and Project ACS Policy reads, private Environment source read, and immutable policy source |
 | `ModelProviderDraftService.cs`, `ModelProviderDraftRecords.cs`, and `ModelProviderCredentialPublicationEndpoints.cs` | Customer-provided provider Drafts, immutable revisions, and private credential publication |
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
@@ -62,11 +62,12 @@ do not bootstrap membership.
 
 ### Store one canonical ACS Policy source
 
-Projects & Config exposes Platform Policy history, exact-revision, current
-read, validation, and preparation routes. It uses one head per scope and keeps
-the Policy ID of an existing head. Only an empty scope gets the server-owned
-`canonical` Policy ID. Each artifact contains all policy domains; the API does
-not accept a scope or domain selector from the caller.
+Projects & Config exposes Platform and Project Policy source, history, and
+exact-revision reads. Platform also has validation and preparation routes. The
+store uses one head per scope and keeps the Policy ID of an existing head. Only
+an empty Platform scope gets the server-owned `canonical` Policy ID. Each
+artifact contains all policy domains; these reads do not accept a scope or
+domain selector from the caller.
 
 The read route returns the current artifact only after the store checks its
 content hash. The validation route does not write state. Head writes are off by default. A
@@ -110,6 +111,21 @@ and after retrieval. Writes also require `projects.admin` and the
 does not activate ACS or change the v4 Policy path. The
 [native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
 defines its full error and request contract.
+
+Project Policy reads require `api.read`, an active membership, and current
+TenantAdmin authority in the selected tenant or an Owner, Contributor, or
+Viewer grant on the project. A project-specific request accepts an unbound
+token or a token bound to that exact project; run-bound and purpose-bound
+tokens are rejected. A project list request requires an unbound token and
+returns metadata only for visible projects with stored heads. PlatformAdmin
+alone does not grant Project Policy access. Each list page uses one bounded
+query to resolve current membership and roles while reading current heads.
+Its protected cursor is bound to the caller's current read grants; a grant
+change invalidates the cursor, and the caller must restart the list. The
+cursor does not pin a cross-page snapshot or expose Project IDs as clear text.
+The list does not include Platform Policy or an
+inherited view. Project history for an authorized scope with no head returns an
+empty page; current and exact-revision reads return 404.
 
 The Environment reads the current complete artifact through the
 disabled-by-default `GET /internal/policy-source/platform` route on the

@@ -674,16 +674,24 @@ revision, actor, and timestamp. They never include access tokens or secrets.
 | GET | `/api/policies/platform/` | `api.read`, active membership, unbound PlatformAdmin | Read the hash-verified current canonical ACS Policy artifact. Does not require `projects.admin`. | `/api/v1/policies/platform` |
 | GET | `/api/policies/platform/revisions?pageSize={n}&cursor={token}` | `api.read`, active membership, unbound PlatformAdmin | Read bounded, newest-first metadata. `pageSize` defaults to 20 and ranges from 1 to 100. Each page rechecks authority. | `/api/v1/policies/platform/revisions` |
 | GET | `/api/policies/platform/revisions/{revision}` | `api.read`, active membership, unbound PlatformAdmin | Read the exact revision's complete artifact and original creation time after a hash check. `revision` must be a canonical positive decimal Int64. | `/api/v1/policies/platform/revisions/{revision}` |
+| GET | `/api/policies/projects?pageSize={n}&cursor={token}` | `api.read`, active membership, unbound; current TenantAdmin or project Owner, Contributor, or Viewer | List metadata for visible projects with stored Policy heads. `pageSize` defaults to 20 and ranges from 1 to 100. | `/api/v1/policies/projects` |
+| GET | `/api/policies/projects/{projectId}` | `api.read`, active membership, current TenantAdmin or project Owner, Contributor, or Viewer; unbound or bound to this project | Read the current hash-verified Project Policy artifact. Returns `404` when no head exists. | `/api/v1/policies/projects/{projectId}` |
+| GET | `/api/policies/projects/{projectId}/revisions?pageSize={n}&cursor={token}` | Same Project Policy read authority | Read newest-first revision metadata. An authorized project with no head returns an empty page. | `/api/v1/policies/projects/{projectId}/revisions` |
+| GET | `/api/policies/projects/{projectId}/revisions/{revision}` | Same Project Policy read authority | Read the exact revision's complete artifact after a hash check. `revision` must be a canonical positive decimal Int64. | `/api/v1/policies/projects/{projectId}/revisions/{revision}` |
 | POST | `/api/policies/platform/validate` | `api.read`, active membership, unbound PlatformAdmin | Validate a complete artifact without changing policy state. | `/api/v1/policies/platform/validate` |
 | PUT | `/api/policies/platform/` | `api.read`, `projects.admin`, active membership, unbound PlatformAdmin with `WritePlatformRuntimeDefaults` | Store an immutable pending preparation at its expected revision. Off by default: new writes return `503` unless `NativeAcsPolicy:HeadWritesEnabled` is true. Exact retries check current authority and head state. | `/api/v1/policies/platform` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
 
-The Policy API uses the one existing head for the Platform scope and keeps its
-Policy ID. Only an empty scope gets the server-owned `canonical` Policy ID.
-Each artifact contains every policy domain. History returns revision, stored
-hash, and creation time without loading artifact files. Exact-revision reads
-return all retained bytes only after a hash check. The API does not activate
-ACS or change the v4 Policy path. See the
+The Policy API uses the existing head for each scope and keeps its Policy ID.
+Project listing returns only existing heads visible to the caller; it does not
+include Platform Policy or an inherited view. Its protected cursor is bound to
+the caller's current read grants. A grant change invalidates the cursor, and
+the caller must restart the list. The cursor does not pin a cross-page
+snapshot or expose Project IDs as clear text. Each artifact contains every
+policy domain. History returns revision, stored hash, and creation time without
+loading artifact files. Exact-revision reads return all retained bytes only
+after a hash check. The API does not activate ACS or change the v4 Policy
+path. See the
 [native ACS contract](./contracts.md#native-acs-artifact-and-evaluation-contract)
 for request limits, validation outcomes, and write behavior.
 

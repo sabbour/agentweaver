@@ -319,16 +319,31 @@ policies independently, with hard-deny precedence.
 | `GET /api/v1/policies/platform` | Read the current artifact and revision. Requires `api.read`, an active membership, an unbound request, and a current PlatformAdmin grant. Does not require `projects.admin`. Returns `404` when no head exists. |
 | `GET /api/v1/policies/platform/revisions?pageSize={n}&cursor={token}` | Return bounded revision metadata in descending order. `pageSize` defaults to 20 and ranges from 1 to 100. The versioned cursor binds the Platform lineage, snapshot revision, page size, and last returned revision. An empty scope returns an empty page with null lineage fields. Each page rechecks current authority. |
 | `GET /api/v1/policies/platform/revisions/{revision}` | Return the exact retained revision, full artifact bytes, verified hash, and original `createdAt`. The path value must be a canonical positive decimal Int64. No head or a future revision returns `404 native_acs_policy_not_found`; a missing committed revision or corrupt source returns `500 native_acs_policy_corrupt`. |
+| `GET /api/v1/policies/projects?pageSize={n}&cursor={token}` | List metadata for stored Project Policy heads visible to the caller. Requires `api.read`, active membership, an unbound request, and current TenantAdmin or project Owner, Contributor, or Viewer authority. `pageSize` defaults to 20 and ranges from 1 to 100. The opaque protected cursor binds the tenant, caller, current read grants, page size, and last returned Project ID. A membership or grant change makes the server return `400 native_acs_policy_scope_list_request_invalid`; the caller restarts the list. Each page uses one bounded query to check current access and read current heads; pages do not form a snapshot. |
+| `GET /api/v1/policies/projects/{projectId}` | Read the current Project Policy artifact. Requires `api.read`, active membership, and current TenantAdmin or project Owner, Contributor, or Viewer authority. The caller must use an unbound token or a token bound to this project. A missing head returns `404 native_acs_policy_not_found`. |
+| `GET /api/v1/policies/projects/{projectId}/revisions?pageSize={n}&cursor={token}` | Return newest-first Project Policy metadata. The versioned cursor binds the Project scope, Policy ID, snapshot revision, page size, and last returned revision. An authorized project with no head returns an empty page with null lineage fields. Each page rechecks access. |
+| `GET /api/v1/policies/projects/{projectId}/revisions/{revision}` | Return the exact retained Project revision, full artifact bytes, verified hash, and original `createdAt`. The path value must be a canonical positive decimal Int64. No head or a future revision returns `404 native_acs_policy_not_found`; a missing committed revision or corrupt source returns `500 native_acs_policy_corrupt`. |
 | `POST /api/v1/policies/platform/validate` | Validate a complete artifact without changing policy state. Uses the same read authorization. A malformed request returns `400`. A proven invalid artifact returns `422` `native_acs_policy_invalid` with diagnostics. An unavailable, crashed, timed-out, or unconfigured native or OPA dependency returns `503` `native_acs_dependency_unavailable` with a typed dependency value. This includes the native validator codes `opa_timeout`, `opa_invalid_executable`, `opa_execution_error`, `rego_staging_error`, and `validation_internal_error`. Other native validator diagnostics return `422`. |
 | `PUT /api/v1/policies/platform` | Validate and store an immutable pending preparation against `expectedRevision`. Requires `api.read`, `projects.admin`, an active membership, an unbound request, and a current PlatformAdmin grant with `WritePlatformRuntimeDefaults`. New writes are off by default and return `503` `native_acs_policy_writes_unavailable` until `NativeAcsPolicy:HeadWritesEnabled` is `true`. A preparation retry returns the saved receipt after current authority and head checks. A stale head or conflicting idempotency key returns `409`. |
 
 Current and exact-revision reads return the exact manifest and file bytes only
 after the store verifies the artifact hash. History returns metadata only; its
-stored hashes do not verify each artifact. Both new reads require `api.read`,
-active membership, an unbound request, and current PlatformAdmin authority,
-without `projects.admin`. The owner checks authority before and after each
-retrieval. History query keys are limited to `pageSize` and `cursor`; an exact
-revision accepts no query values.
+stored hashes do not verify each artifact. Platform reads require an unbound
+request and current PlatformAdmin authority. Project list requests also require
+an unbound request. A Project-specific read accepts an unbound request or a
+token bound to that exact Project. Run-bound and purpose-bound tokens are
+rejected. PlatformAdmin alone grants no Project Policy access. Project reads
+require current TenantAdmin authority for the selected tenant or a project
+Owner, Contributor, or Viewer grant. The owner checks authority in the single
+bounded list-page query and before and after other Project Policy reads.
+History query keys are limited to `pageSize` and
+`cursor`; an exact revision accepts no query values.
+
+Project listing includes only projects with stored Policy heads visible to the
+caller. It does not expose Platform Policy or an inherited Policy view. The
+list cursor is not an access grant or a cross-page snapshot. If membership or
+read grants change, the server rejects the cursor and the caller restarts the
+list. The cursor does not expose Project IDs as clear text.
 
 A successful new PUT stores the expected head ID, revision and hash, the full
 proposed artifact and hash, the actor-scoped idempotency data, and creation

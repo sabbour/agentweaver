@@ -179,6 +179,157 @@ public sealed class GatewayWorkspaceReadRegressionTests
     }
 
     [Fact]
+    public void ProjectPolicyRoutesAreBoundedAndExcludedFromMcp()
+    {
+        var routes = new[]
+        {
+            ("GET", "/api/v1/policies/projects", "listProjectNativeAcsPolicies"),
+            ("GET", "/api/v1/policies/projects/{projectId}", "readProjectNativeAcsPolicy"),
+            ("GET", "/api/v1/policies/projects/{projectId}/revisions", "listProjectNativeAcsPolicyRevisions"),
+            ("GET", "/api/v1/policies/projects/{projectId}/revisions/{revision}",
+                "readProjectNativeAcsPolicyRevision"),
+        };
+
+        foreach (var (method, path, operationId) in routes)
+        {
+            var route = Assert.Single(GatewayRouteCatalog.Routes, item => item.OperationId == operationId);
+            Assert.Equal(method, route.Method);
+            Assert.Equal(path, route.PublicPath);
+            Assert.Equal(GatewayOwner.Projects, route.Owner);
+            Assert.True(route.ForwardTenantSelector);
+            Assert.True(route.ExcludeFromMcp);
+            Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
+            Assert.Equal(5 * 1024 * 1024, route.MaximumResponseBytes);
+            Assert.False(route.HasJsonBody);
+            Assert.Null(route.MaximumRequestBodyBytes);
+        }
+        Assert.Equal(
+            new[] { "pageSize", "cursor" },
+            Assert.Single(GatewayRouteCatalog.Routes, item =>
+                item.OperationId == "listProjectNativeAcsPolicies").QueryParameters);
+        Assert.Equal(
+            new[] { "pageSize", "cursor" },
+            Assert.Single(GatewayRouteCatalog.Routes, item =>
+                item.OperationId == "listProjectNativeAcsPolicyRevisions").QueryParameters);
+        Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "readProjectNativeAcsPolicy").QueryParameters);
+        Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "readProjectNativeAcsPolicyRevision").QueryParameters);
+    }
+
+    [Fact]
+    public async Task ProjectPolicyRoutesForwardTenantAndRejectUnknownQueryValues()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var bearer = CreateBearer(signingKey);
+        var forwarded = new List<string>();
+        Task<HttpResponseMessage> RespondAsync(
+            GatewayOwner owner,
+            HttpRequestMessage request,
+            CancellationToken _)
+        {
+            Assert.Equal(GatewayOwner.Projects, owner);
+            request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenantValues);
+            forwarded.Add($"{request.RequestUri!.PathAndQuery}|{tenantValues?.SingleOrDefault()}");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            });
+        }
+
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new CallbackHttpMessageHandler((request, cancellationToken) =>
+                RespondAsync(GatewayOwner.Projects, request, cancellationToken)),
+            RespondAsync);
+
+        var requests = new[]
+        {
+            ("/api/v1/policies/projects?pageSize=7&cursor=next",
+                "/api/policies/projects/?pageSize=7&cursor=next"),
+            ("/api/v1/policies/projects/project-one", "/api/policies/projects/project-one"),
+            ("/api/v1/policies/projects/project-one/revisions?pageSize=4",
+                "/api/policies/projects/project-one/revisions?pageSize=4"),
+            ("/api/v1/policies/projects/project-one/revisions/3",
+                "/api/policies/projects/project-one/revisions/3"),
+        };
+        for (var index = 0; index < requests.Length; index++)
+        {
+            using var request = CreateRequest(bearer, requests[index].Item1);
+            request.Headers.Remove("X-Agentweaver-Tenant");
+            request.Headers.Add("X-Agentweaver-Tenant", "tenant-" + index);
+            request.Headers.Add("Idempotency-Key", "not-forwarded");
+            request.Headers.Add("If-Match", "\"not-forwarded\"");
+            using var response = await gateway.Client.SendAsync(request);
+            Assert.True(
+                response.StatusCode == HttpStatusCode.OK,
+                $"{requests[index].Item1}: {await response.Content.ReadAsStringAsync()}");
+            Assert.True(response.Headers.CacheControl?.NoStore);
+        }
+
+        foreach (var (path, code) in new[]
+        {
+            ("/api/v1/policies/projects?unknown=value", "native_acs_policy_scope_list_request_invalid"),
+            ("/api/v1/policies/projects/project-one?cursor=x", "native_acs_policy_query_not_supported"),
+            ("/api/v1/policies/projects/project-one/revisions?unknown=value",
+                "native_acs_policy_history_request_invalid"),
+            ("/api/v1/policies/projects/project-one/revisions/3?pageSize=4",
+                "native_acs_policy_revision_request_invalid"),
+        })
+        {
+            using var request = CreateRequest(bearer, path);
+            using var response = await gateway.Client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(code, body.RootElement.GetProperty("code").GetString());
+        }
+
+        Assert.Equal(requests.Select((request, index) => request.Item2 + "|tenant-" + index), forwarded);
+    }
+
+    [Fact]
+    public async Task ProjectPolicyReadsPublishTypedOpenApiContracts()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa),
+            () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call an owner."));
+
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+        var list = paths.GetProperty("/api/v1/policies/projects").GetProperty("get");
+        Assert.Equal("listProjectNativeAcsPolicies", list.GetProperty("operationId").GetString());
+        Assert.Equal(
+            "#/components/schemas/NativeAcsPolicyScopePage",
+            list.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var listParameters = list.GetProperty("parameters").EnumerateArray().ToArray();
+        Assert.Contains(listParameters, parameter =>
+            parameter.GetProperty("name").GetString() == "pageSize" &&
+            parameter.GetProperty("schema").GetProperty("default").GetInt32() == 20);
+        Assert.Contains(listParameters, parameter => parameter.GetProperty("name").GetString() == "cursor");
+
+        var current = paths.GetProperty("/api/v1/policies/projects/{projectId}").GetProperty("get");
+        Assert.Equal("readProjectNativeAcsPolicy", current.GetProperty("operationId").GetString());
+        Assert.Equal(
+            "#/components/schemas/NativeAcsPolicyReadResult",
+            current.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var history = paths.GetProperty("/api/v1/policies/projects/{projectId}/revisions").GetProperty("get");
+        Assert.Equal("listProjectNativeAcsPolicyRevisions", history.GetProperty("operationId").GetString());
+        var exact = paths.GetProperty("/api/v1/policies/projects/{projectId}/revisions/{revision}")
+            .GetProperty("get");
+        Assert.Equal("readProjectNativeAcsPolicyRevision", exact.GetProperty("operationId").GetString());
+        Assert.Contains(
+            exact.GetProperty("responses").GetProperty("200").GetProperty("headers").EnumerateObject(),
+            header => header.Name == "Cache-Control");
+    }
+
+    [Fact]
     public async Task WorkspaceRoutesPublishTypedOwnerBoundReadContracts()
     {
         using var rsa = RSA.Create(2048);

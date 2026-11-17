@@ -94,6 +94,10 @@ internal static partial class GatewayOpenApi
             ["readPlatformNativeAcsPolicy"] = C(null, "NativeAcsPolicyReadResult", "200"),
             ["listPlatformNativeAcsPolicyRevisions"] = C(null, "NativeAcsPolicyRevisionPage", "200"),
             ["readPlatformNativeAcsPolicyRevision"] = C(null, "NativeAcsPolicyRevisionReadResult", "200"),
+            ["listProjectNativeAcsPolicies"] = C(null, "NativeAcsPolicyScopePage", "200"),
+            ["readProjectNativeAcsPolicy"] = C(null, "NativeAcsPolicyReadResult", "200"),
+            ["listProjectNativeAcsPolicyRevisions"] = C(null, "NativeAcsPolicyRevisionPage", "200"),
+            ["readProjectNativeAcsPolicyRevision"] = C(null, "NativeAcsPolicyRevisionReadResult", "200"),
             ["validatePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
             ["writePlatformNativeAcsPolicy"] = C(
@@ -441,6 +445,8 @@ internal static partial class GatewayOpenApi
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
                         "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
                         "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
+                        "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
+                        "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                         "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         IsModelProviderDraftRoute(route.OperationId)) && status == "200")
@@ -468,6 +474,10 @@ internal static partial class GatewayOpenApi
                                             "writePlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
                                             "readPlatformNativeAcsPolicyRevision" =>
                                                 "Platform Policy responses are not cacheable.",
+                                            "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
+                                            "listProjectNativeAcsPolicyRevisions" or
+                                            "readProjectNativeAcsPolicyRevision" =>
+                                                "Project Policy responses are not cacheable.",
                                             _ when IsModelProviderDraftRoute(route.OperationId) =>
                                                 "Provider Draft responses are not cacheable.",
                                             _ => "Runtime evidence responses are not cacheable.",
@@ -739,16 +749,26 @@ else if (route.OperationId is
         }
         else if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
             "readPlatformNativeAcsPolicyRevision" or "validatePlatformNativeAcsPolicy" or
-            "writePlatformNativeAcsPolicy")
+            "writePlatformNativeAcsPolicy" or "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
+            "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision")
         {
             responses["400"] = ProblemResponse("The request includes an undeclared query value or invalid policy selector.");
-            responses["403"] = ProblemResponse("The caller lacks current Platform administrator authority.");
-            if (route.OperationId is "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision")
-                responses["404"] = ProblemResponse("No Platform Policy revision exists.");
-            if (route.OperationId is "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision")
+            var isProjectPolicyRead = route.OperationId is
+                "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
+                "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
+            responses["403"] = ProblemResponse(isProjectPolicyRead
+                ? "The caller lacks current Project Policy read authority."
+                : "The caller lacks current Platform administrator authority.");
+            if (route.OperationId is "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
+                "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision")
+                responses["404"] = ProblemResponse("No current or requested Policy revision exists.");
+            if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
+                "readPlatformNativeAcsPolicyRevision" or "listProjectNativeAcsPolicies" or
+                "readProjectNativeAcsPolicy" or "listProjectNativeAcsPolicyRevisions" or
+                "readProjectNativeAcsPolicyRevision")
             {
-                responses["500"] = ProblemResponse("The retained Platform Policy source failed its integrity check.");
-                responses["503"] = ProblemResponse("The Platform Policy source is unavailable.");
+                responses["500"] = ProblemResponse("The stored Policy source failed its integrity check.");
+                responses["503"] = ProblemResponse("The Policy source is unavailable.");
             }
             if (route.HasJsonBody)
             {
@@ -936,6 +956,39 @@ else if (route.OperationId is
                 "lineage. pageSize defaults to 20 and ranges from 1 to 100. The opaque cursor binds the page size, " +
                 "Policy ID, and starting revision. Each page rechecks current authority. The response is no-store; " +
                 "history hashes do not verify artifact bytes.";
+        }
+        else if (route.OperationId == "listProjectNativeAcsPolicies")
+        {
+            description +=
+                " Requires api.read, active membership in the selected tenant, an unbound request, and current " +
+                "TenantAdmin or project Owner, Contributor, or Viewer authority. Returns metadata for Project " +
+                "Policy heads visible to the caller, ordered by Project ID. pageSize defaults to 20 and ranges " +
+                "from 1 to 100. The opaque cursor selects the next Project ID; each page rechecks access and reads " +
+                "current heads, so pages do not form a snapshot. The response is no-store.";
+        }
+        else if (route.OperationId == "readProjectNativeAcsPolicy")
+        {
+            description +=
+                " Requires api.read, active membership, and current TenantAdmin or project Owner, Contributor, " +
+                "or Viewer authority. The caller must use an unbound token or a token bound to this Project. " +
+                "Returns the complete current artifact only after checking its content hash. The response is no-store.";
+        }
+        else if (route.OperationId == "listProjectNativeAcsPolicyRevisions")
+        {
+            description +=
+                " Requires api.read, active membership, and current TenantAdmin or project Owner, Contributor, " +
+                "or Viewer authority. The caller must use an unbound token or a token bound to this Project. " +
+                "Returns newest-first metadata for the stable Project Policy lineage. pageSize defaults to 20 " +
+                "and ranges from 1 to 100. The opaque cursor binds the Project, Policy ID, page size, and starting " +
+                "revision. Each page rechecks current authority. The response is no-store.";
+        }
+        else if (route.OperationId == "readProjectNativeAcsPolicyRevision")
+        {
+            description +=
+                " Requires api.read, active membership, and current TenantAdmin or project Owner, Contributor, " +
+                "or Viewer authority. The caller must use an unbound token or a token bound to this Project. " +
+                "revision is a canonical positive decimal Int64. The owner returns the complete retained artifact " +
+                "only after checking its content hash. The response is no-store.";
         }
         else if (route.OperationId == "readPlatformNativeAcsPolicyRevision")
         {
@@ -1287,7 +1340,8 @@ else if (route.OperationId is
         if (operationId == "listProjectCastingProposals" && name == "limit")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 50 };
 
-        if (operationId == "listPlatformNativeAcsPolicyRevisions")
+        if (operationId is "listPlatformNativeAcsPolicyRevisions" or "listProjectNativeAcsPolicies" or
+            "listProjectNativeAcsPolicyRevisions")
         {
             return name switch
             {
@@ -2136,6 +2190,13 @@ else if (route.OperationId is
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
             ("revision", Int()), ("contentSha256", Str()), ("artifact", Ref("NativeAcsArtifact")),
             ("createdAt", Date())),
+        ["NativeAcsPolicyScopeSummary"] = StrictObj(
+            ["scopeType", "scopeId", "policyId", "revision", "contentSha256", "updatedAt"],
+            ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
+            ("revision", Int()), ("contentSha256", Str()), ("updatedAt", Date())),
+        ["NativeAcsPolicyScopePage"] = StrictObj(
+            ["items", "nextCursor"],
+            ("items", Arr(Ref("NativeAcsPolicyScopeSummary"))), ("nextCursor", NullableStr())),
         ["NativeAcsPolicyWriteReceipt"] = Obj(
             ["scopeType", "scopeId", "policyId", "revision", "contentSha256", "auditId", "outboxId", "replayed"],
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),

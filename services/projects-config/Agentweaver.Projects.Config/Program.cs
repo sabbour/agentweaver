@@ -7,6 +7,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.ObjectStore.AzureBlob;
 using Azure.Core;
 using Azure.Storage.Blobs;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -174,6 +175,8 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
 builder.Services.AddSingleton(ModelBindingCapabilities.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectsConfigService>();
 builder.Services.AddScoped<ModelProviderDraftService>();
+builder.Services.AddDataProtection()
+    .SetApplicationName("Agentweaver.Projects.Config");
 builder.Services.AddScoped<NativeAcsPolicyStore>();
 builder.Services.AddMemoryCache();
 // Missing OPA must not stop unrelated service functions. Policy validation then reports that OPA is unavailable.
