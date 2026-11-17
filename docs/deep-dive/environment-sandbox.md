@@ -119,6 +119,9 @@ private Projects route only after an explicit call and compiles a pending
 response into an unadmitted candidate. Startup sends no source request, and
 Environment registers no admitted source or reconciler worker. See
 [Environment egress](../architecture/environment-egress.md#platform-egress-provider-and-reconciler).
+The composed ACS profile has a separate candidate compiler that reads the
+platform-network domain and retains the hash of the full artifact. Existing
+compiler entrypoints still require the finite network profile.
 
 ### Manage workspace data
 

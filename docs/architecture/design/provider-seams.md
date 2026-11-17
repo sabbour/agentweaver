@@ -871,6 +871,9 @@ unadmitted candidate; it does not register `IPlatformEgressPolicySource`, a
 provider, or a reconciler. Admitted policy still comes only from
 `IPlatformEgressPolicySource`. See
 [Environment egress](../environment-egress.md#platform-egress-provider-and-reconciler).
+The fixed composed ACS profile keeps action and network data separate; its
+egress candidate compiler reads only the network domain and preserves the full
+artifact hash.
 
 ## Cost
 

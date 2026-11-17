@@ -897,6 +897,9 @@ The Environment source client reads the private Projects route
 `GET /internal/policy-source/platform`. The route returns a pending artifact
 with a null admission checkpoint. The client compiles an unadmitted candidate.
 A pending response carries no authority to change provider policy.
+The composed ACS profile adds no Environment setting. Its separate candidate
+compiler reads the platform-network domain and retains the complete artifact
+hash.
 
 | Configuration path | Contract |
 | --- | --- |

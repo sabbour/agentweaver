@@ -66,11 +66,20 @@ The existing provider capability check still requires exact-host support for
 `Allowlist`, and private-range exclusions remain a separate provider safety
 gate.
 
-The network profile accepts only its fixed manifest and module and one
-`policy/data.json` file. The file names a trusted, versioned System catalog.
-The validator rejects changed catalog entries, duplicate destinations,
-unknown fields, and other modules or data files. DNS and private-address
-checks remain separate from compilation; the compiler does not resolve DNS.
+The `finite-network-v1` profile accepts only its fixed manifest and module and
+one `policy/data.json` file. The file names a trusted, versioned System
+catalog. The validator rejects changed catalog entries, duplicate
+destinations, unknown fields, and other modules or data files.
+
+The `composable-domains-v1` profile adds the fixed `actions` and
+`platform_network` domains. It keeps action data in
+`policy/actions-data.json` and network data in `policy/data.json`. Its explicit
+Environment candidate compiler reads only the network domain to build an
+egress candidate; the candidate hash still covers the full artifact. The
+existing compiler entrypoints keep accepting only `finite-network-v1`.
+Neither profile changes the deployed policy path or enables a policy write.
+DNS and private-address checks remain separate from compilation; the compiler
+does not resolve DNS.
 
 The same Environment owner manages workspace-volume lifecycle routes and
 registers the Azure Files CSI Storage provider. This article covers only
