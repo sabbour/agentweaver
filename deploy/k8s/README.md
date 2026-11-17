@@ -191,11 +191,48 @@ query string from the BaseUrl. The results are:
 - No HTTP response (a DNS, connection, or TLS failure, or a 30-second
   timeout): the command fails and names the host.
 
+### AgentHost egress audit
+
+Set `--agenthost-egress-audit` to `allowed` or `denied` on
+`npm run deploy:kustomize` to collect AgentHost flow logs. The default is
+`off`. Use the same mode on `scripts/azure/deploy.mjs` to enable forwarding to
+the install Log Analytics workspace.
+
+The collector is the cluster-scoped
+`ContainerNetworkLog/agentweaver-agenthost-egress`. It selects TCP, UDP, and
+DNS flows from pods in namespace `agentweaver` with
+`agentweaver.io/workload=agenthost`. `allowed` records dropped and forwarded
+flows; `denied` records dropped flows. The collector adds source labels,
+destination addresses, and DNS names to the aggregation fields.
+
+When audit is on, the smoke pod gets a synthetic
+`agentweaver.dev/sandbox-owner` label and attempts a connection to
+`192.0.2.1:443`. The smoke check fails if that denied connection opens. With
+audit off, the extra label and connection probe are absent.
+
+When the ACNS API exists, the deployment identity needs `get` on
+`containernetworklogs.acn.azure.com` to inspect the collector. An enabled mode
+needs `create` when the collector is absent, or `patch` when it is
+Agentweaver-owned. Turning audit off needs `delete` when an Agentweaver-owned
+collector exists. Each write checks the collector's ownership and version so a
+concurrent owner change stops the deployment. An unowned collector with the
+same name stops an enabled deployment. Audit off leaves unowned collectors
+unchanged.
+ACNS flow logs require Cilium and AKS Kubernetes 1.36 or later for the
+`ContainerNetworkLog` API.
+
+With audit enabled, Kustomize stops before any Kubernetes write unless
+DaemonSet `ama-logs` is fully ready and has a ready, DaemonSet-owned pod on
+every sandbox node. With audit off, the existing canary-region and
+sandbox-node warnings remain.
+
 The caller needs these extra permissions:
 
 | Scope | Permissions |
 | --- | --- |
 | Cluster | `list nodes`; `create storageclasses` only when the class is missing. |
+| Cluster, when the `ContainerNetworkLog` API exists | `get` on `containernetworklogs.acn.azure.com` in every mode; `create` when enabled and absent; `patch` when enabled and Agentweaver-owned; `delete` when removing an owned collector. |
+| Namespace `kube-system` | `get daemonsets.apps/ama-logs`; `list pods` when audit is enabled or Kustomize checks an unready DaemonSet. |
 | Namespace `agentweaver` | `create`, `get`, `list`, and `delete` on `pods` and `persistentvolumeclaims`; `get pods/log`. |
 
 ## Verify workloads

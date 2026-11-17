@@ -58,7 +58,20 @@ test('limited P1 identity setup grants Events access only to session-material', 
     'Microsoft.ManagedIdentity/userAssignedIdentities',
     'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials',
     'Microsoft.Resources/deployments',
+    'Microsoft.Authorization/roleAssignments',
   ].includes(resource.type)));
+  assert.equal(template.variables.environmentIndex,
+    "[indexOf(variables('serviceNames'), 'environment')]");
+  assert.equal(template.variables.logAnalyticsReaderRoleId, '73c42c96-874c-492b-b04d-ab87d138a893');
+  const environmentRole = template.resources.find(resource =>
+    resource.type === 'Microsoft.Authorization/roleAssignments');
+  assert.ok(environmentRole);
+  assert.equal(environmentRole.scope,
+    "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('namePrefix')))]");
+  assert.equal(environmentRole.properties.principalType, 'ServicePrincipal');
+  assert.equal(environmentRole.properties.roleDefinitionId,
+    "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('logAnalyticsReaderRoleId'))]");
+  assert.match(environmentRole.properties.principalId, /environmentIndex/);
   const eventsRoleDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-events-session-material-blob-role', parameters('namePrefix'))]");
   assert.ok(eventsRoleDeployment);
@@ -309,8 +322,12 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.deepEqual(cluster.properties.networkProfile.advancedNetworking, {
     enabled: true,
     security: { enabled: true },
-    observability: { enabled: false },
+    observability: { enabled: "[parameters('enableContainerNetworkLogs')]" },
   });
+  assert.equal(aks.parameters.enableContainerNetworkLogs.defaultValue, false);
+  assert.equal(template.parameters.enableContainerNetworkLogs.defaultValue, false);
+  assert.equal(aksDeployment.properties.parameters.enableContainerNetworkLogs.value,
+    "[parameters('enableContainerNetworkLogs')]");
   assert.deepEqual(cluster.properties.aadProfile, {
     managed: true, enableAzureRBAC: true, tenantID: "[parameters('tenantId')]",
   });

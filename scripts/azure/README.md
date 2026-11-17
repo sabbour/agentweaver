@@ -687,25 +687,44 @@ DaemonSet `ama-logs` in `kube-system` is not ready. A cluster in a canary
 region with a workspace in a production region cannot use the add-on: the
 installer skips it with a warning and `action` set to `unsupported-region`,
 and `deploy:kustomize` accepts the missing agent only when every node is in a
-canary region. An unready `ama-logs` pod is accepted, with a warning, only on
-Kata sandbox nodes. For the steps, failures, permissions, cost, the canary
+canary region. An unready `ama-logs` pod is accepted, with a warning, on Kata
+sandbox nodes when audit is off. When audit is enabled, a missing agent or an
+unready sandbox pod stops the deployment before any Kubernetes write. For the
+steps, failures, permissions, cost, the canary
 limit, and the sandbox node limit, see
 [Azure Monitor add-on](../../infra/bicep/README.md#azure-monitor-add-on).
 
 ## ACNS security source setting
 
 AKS opts into Advanced Container Networking Services (ACNS) with security
-enabled and observability disabled, the security-only configuration needed for
-fully qualified domain name (FQDN) egress filtering. Runtime Kubernetes must
-be version 1.29 or later.
+enabled. Observability defaults to disabled; the AgentHost egress audit mode
+enables it when requested. Security-only ACNS supports fully qualified domain
+name (FQDN) egress filtering. Runtime Kubernetes must be version 1.29 or later.
 The template leaves `kubernetesVersion` empty so AKS selects its currently
 supported default rather than pinning an older version.
 
 ACNS has per-node/hour charges with a cluster-wide effect; security-only is not
-documented as free. This source setting does not apply to a cluster or prove
-FQDN enforcement. Applying it requires separate explicit approval of the exact
-target and cost, a current regional quote, and a guarded, reviewed update. No
-Azure operation is part of source validation.
+documented as free. Flow-log collection requires Cilium and AKS Kubernetes
+1.36 or later for the `ContainerNetworkLog` API. The source setting does not
+apply to a cluster or prove FQDN enforcement. Applying it requires separate explicit
+approval of the exact target and cost, a current regional quote, and a guarded,
+reviewed update. No Azure operation is part of source validation.
+
+`--agenthost-egress-audit` accepts `off`, `allowed`, or `denied`; the default is
+`off`. The installer checks the add-on workspace and region pair before
+infrastructure writes. It enables ACNS flow-log forwarding only for the
+`<prefix>-law` workspace. The Environment identity receives `Log Analytics
+Reader` at that workspace scope. The Kustomize deploy command owns the
+`ContainerNetworkLog` collector and the denied-flow smoke probe; see
+[AgentHost egress audit](../../deploy/k8s/README.md#agenthost-egress-audit).
+Pass the same option to `plan.mjs`. Infrastructure-only plans include the
+Bicep parameter. AKS-only plans show the selected mode and the later `az aks
+update` command in `postDeploymentChanges`.
+`azure:deploy-from-commit` accepts the same option and passes it to the
+Kustomize helper from the selected commit. Its default is `off`; enabled modes
+require audit support in that source commit.
+The `source.labels` aggregation field is cluster-wide and increases log
+cardinality and cost. Log Analytics also charges for ingested flow-log volume.
 
 ## Application Routing source setting
 
@@ -1168,10 +1187,11 @@ The existing P0 target preflight does not inspect resource inventory or guarante
 full-foundation deployment preserves existing resources. Select the template
 that matches the intended change and review its what-if output.
 For either P0 template, `plan.mjs` accepts the same selection and target
-arguments for a guarded live read-only what-if. `deploy.mjs --execute` performs
-the guarded what-if before Incremental create. The source guard requires a
-clean HEAD equal to the fetched admitted `origin/v1` tip; deployment does not
-accept a caller-selected `--expected-sha`.
+arguments for a guarded live read-only what-if. It also accepts
+`--agenthost-egress-audit`, so its Bicep parameter matches deployment.
+`deploy.mjs --execute` performs the guarded what-if before Incremental create.
+The source guard requires a clean HEAD equal to the fetched admitted
+`origin/v1` tip; deployment does not accept a caller-selected `--expected-sha`.
 For the AKS-only template, the top-level what-if does not show resources inside
 the nested workload-identity federation and Kata node pool deployments. The
 preflight lists the three federated identity credentials and the `kata` node

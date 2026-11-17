@@ -11,6 +11,9 @@ and cluster, Entra-only PostgreSQL, and Key Vault, Blob Storage, and Azure
 Monitor resources. PostgreSQL, Key Vault, and Blob use private networking;
 Azure Monitor uses a private query path and an explicit ingestion path.
 Blob creates private `platform-artifacts` and `session-material` containers.
+ACNS observability defaults to off. The AgentHost egress-audit option can
+forward selected flows to the `ContainerNetworkLogs` table. The Environment
+identity has `Log Analytics Reader` on the install workspace.
 
 For a new separate nonproduction foundation, the installer selects an empty
 resource group and a distinct AKS managed group. It retains the same Monitor
@@ -44,9 +47,9 @@ from the runtime map because the host validates them before `--migrate`.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate database migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. Source image builds add the verified Linux-x64 ACS library and pinned OPA binary to Orchestrator, AgentHost, and Projects & Config, then probe each image before publication. No live deployment or complete foundation acceptance is claimed." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. ACNS observability defaults to off; enabled AgentHost audit forwards selected flow logs to the workspace. The Environment identity has Log Analytics Reader only on that workspace. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate database migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. Source image builds add the verified Linux-x64 ACS library and pinned OPA binary to Orchestrator, AgentHost, and Projects & Config, then probe each image before publication. No live deployment or complete foundation acceptance is claimed." />
   </a>
-  <figcaption>Structural resource and evidence dependencies. The source image build also checks ACS and OPA assets in each Orchestrator, AgentHost, and Projects & Config image. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or complete foundation acceptance.</figcaption>
+  <figcaption>Structural resource and evidence dependencies, including opt-in ACNS flow-log configuration and the Environment identity's workspace-scoped Reader role. The source image build also checks ACS and OPA assets in each Orchestrator, AgentHost, and Projects & Config image. Bicep and Kustomize definitions describe source configuration, not live readiness or complete foundation acceptance.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.drawio'">Open editable draw.io source</a></p>
 
@@ -330,9 +333,14 @@ all 14 exact tables and their migration-role ownership.
 Tests use disposable restricted PostgreSQL principals for this source definition.
 It creates no new Azure identity or live role grant and does not run the operator bootstrap.
 
-AKS exposes a public API endpoint protected by managed Entra authentication and Azure RBAC; local accounts are disabled. The cluster keeps Azure Linux nodes, Cilium networking, OIDC/workload identity, and ACNS security with observability disabled. The source leaves `kubernetesVersion` empty. Runtime acceptance requires Kubernetes 1.29 or later.
+AKS exposes a public API endpoint protected by managed Entra authentication and Azure RBAC; local accounts are disabled. The cluster keeps Azure Linux nodes, Cilium networking, OIDC/workload identity, and ACNS security. ACNS observability defaults to off; the egress-audit option enables flow-log forwarding to the install workspace. The source leaves `kubernetesVersion` empty. Runtime acceptance requires Kubernetes 1.29 or later; `ContainerNetworkLog` collection requires Cilium and AKS Kubernetes 1.36 or later.
 
 The base NetworkPolicy denies traffic by default. The Foundation Probe overlay grants its own egress. The base does not provide telemetry exporter egress.
+
+The `ContainerNetworkLog` source selects AgentHost pods. Its `source.labels`
+aggregation field has a cluster-wide cardinality and cost effect. The
+Environment identity receives `Log Analytics Reader` at the workspace scope;
+the source does not grant it access to other workspaces.
 
 The base Cilium policies allow internal owner calls by exact service DNS name on
 the service HTTPS port. The shared Broker-issuer policy also allows its selected

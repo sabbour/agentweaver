@@ -172,6 +172,10 @@ store; remove them with `docker logout <acr-login-server>` when finished.
 npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> --execute
 ```
 
+Pass `--agenthost-egress-audit <mode>` to select `off`, `allowed`, or `denied`.
+The default is `off`. Enabled modes require audit support in the selected
+source commit.
+
 For ACR, use:
 
 ```powershell

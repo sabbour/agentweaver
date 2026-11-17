@@ -142,6 +142,11 @@ export function fakeAzure(overrides = {}, calls = []) {
       } });
     }
     if (args[0] === 'aks' && args[1] === 'enable-addons') return overrides.enableAddons ?? ok({});
+    if (args[0] === 'aks' && args[1] === 'update') return overrides.containerNetworkLogsUpdate ?? ok({});
+    if (args[0] === 'aks' && args[1] === 'show' &&
+        args.includes('[networkProfile.advancedNetworking.enabled,networkProfile.advancedNetworking.observability.enabled]')) {
+      return overrides.containerNetworkLogsState ?? { status: 0, stdout: '[true,true]', stderr: '' };
+    }
     if (args[0] === 'aks' && args[1] === 'show' && args.at(args.indexOf('--query') + 1) === 'location') {
       return overrides.clusterLocation ?? { status: 0, stdout: 'eastus2\n', stderr: '' };
     }

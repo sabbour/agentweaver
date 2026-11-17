@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildDeployArgs, cliConfig, cliOptions, deploy, ensureAzureMonitorAddon, setupIdentityBrokerProviders,
+  buildDeployArgs, cliConfig, cliOptions, deploy, ensureAzureMonitorAddon, ensureContainerNetworkLogs,
+  preflightContainerNetworkLogs,
+  setupIdentityBrokerProviders,
 } from '../deploy.mjs';
 import {
   fixture, source, fakeAzure, ids, tags, deploymentOutputs,
@@ -17,17 +19,67 @@ test('deployment uses supported source parameters, explicit subscription and inc
   assert.ok(!args.some(arg => arg.startsWith('operatorObjectId=') ||
     arg.startsWith('operatorRoleAssignmentName=')));
   assert.ok(args.includes('nodePoolCount=2'));
+  assert.ok(args.includes('enableContainerNetworkLogs=false'));
+  const auditArgs = buildDeployArgs({ ...source, resourceGroup: fixture.resourceGroup, sourceSha: source.sha,
+    deploymentName: 'candidate', subscription: ids.subscriptionId, agentHostEgressAudit: 'allowed' });
+  assert.ok(auditArgs.includes('enableContainerNetworkLogs=true'));
   assert.ok(args.includes('Incremental'));
   assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
   const aksOnlyArgs = buildDeployArgs({ ...source, scope: 'aks-only', resourceGroup: fixture.resourceGroup,
-    sourceSha: source.sha, deploymentName: 'candidate', subscription: ids.subscriptionId });
+    sourceSha: source.sha, deploymentName: 'candidate', subscription: ids.subscriptionId,
+    agentHostEgressAudit: 'allowed' });
   assert.ok(!aksOnlyArgs.some(arg => arg.startsWith('nodePoolCount=')));
+  assert.ok(!aksOnlyArgs.some(arg => arg.startsWith('enableContainerNetworkLogs=')));
 });
 
 test('offline dry-run never reads account or mutates', async () => {
   const result = await deploy(fixture, { sourceResolver: () => source, execAz: () => { throw new Error('cloud call'); } });
   assert.equal(result.executed, false);
   assert.equal(result.scope, 'infrastructure-only');
+});
+
+test('Azure deployment enables ACNS forwarding only for an enabled egress-audit mode', async () => {
+  const calls = [];
+  const result = await deploy({ ...fixture, execute: true, agentHostEgressAudit: 'allowed' }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({}, calls),
+  });
+  assert.equal(result.agentHostEgressAudit, 'allowed');
+  assert.deepEqual(result.receipt.containerNetworkLogs, {
+    workspaceResourceId: deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId,
+    action: 'enabled',
+  });
+  const create = calls.find(args => args[0] === 'deployment' && args[1] === 'group' && args[2] === 'create');
+  const whatIf = calls.find(args => args[0] === 'deployment' && args[1] === 'group' && args[2] === 'what-if');
+  assert.ok(create.includes('enableContainerNetworkLogs=true'));
+  assert.ok(whatIf.includes('enableContainerNetworkLogs=true'));
+  assert.ok(calls.some(args => args[0] === 'aks' && args[1] === 'update' &&
+    args.includes('--enable-container-network-logs')));
+});
+
+test('AgentHost egress audit rejects unsupported regions and workspaces before infrastructure writes', async () => {
+  const cases = [
+    [{ clusterLocation: { status: 0, stdout: 'eastus2euap\n', stderr: '' } },
+      /unsupported for cluster region eastus2euap and workspace region eastus2/],
+    [{ monitoringAddon: { status: 0, stdout: JSON.stringify({ enabled: true, config: {
+      logAnalyticsWorkspaceResourceID: `${deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId}-other`,
+      useAADAuth: 'true',
+    } }), stderr: '' } }, /another workspace/],
+  ];
+  for (const [overrides, message] of cases) {
+    const calls = [];
+    await assert.rejects(deploy({ ...fixture, execute: true, agentHostEgressAudit: 'allowed' }, {
+      sourceResolver: () => source,
+      execAz: fakeAzure(overrides, calls),
+    }), message);
+    assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'what-if'));
+    assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create'));
+    assert.ok(!calls.some(args => args[0] === 'aks' && args[1] === 'update'));
+  }
+  assert.throws(() => preflightContainerNetworkLogs({
+    resourceGroup: 'agentweaver', subscriptionId: ids.subscriptionId, newFoundation: true,
+    location: 'eastus2euap', monitorLocation: 'eastus2',
+  }, () => assert.fail('new-foundation region preflight must not call Azure')), /unsupported for cluster region/);
 });
 
 test('P0-only options reject a registered separate target before any Azure call', async () => {
@@ -71,6 +123,15 @@ test('identity PostgreSQL bootstrap is a separate default-off deployment option'
   assert.equal(cliOptions['bootstrap-identity-postgres'].default, false);
   assert.equal(cliConfig({}).bootstrapIdentityPostgres, false);
   assert.equal(cliConfig({ 'bootstrap-identity-postgres': true }).bootstrapIdentityPostgres, true);
+});
+
+test('AgentHost egress audit is default-off and accepts only the three collection modes', () => {
+  assert.equal(cliOptions['agenthost-egress-audit'].default, 'off');
+  assert.equal(cliConfig({}).agentHostEgressAudit, 'off');
+  assert.equal(cliConfig({ 'agenthost-egress-audit': 'denied' }).agentHostEgressAudit, 'denied');
+  assert.throws(() => buildDeployArgs({ ...source, resourceGroup: fixture.resourceGroup, sourceSha: source.sha,
+    deploymentName: 'candidate', subscription: ids.subscriptionId, agentHostEgressAudit: 'all' }),
+  /must be off, allowed, or denied/);
 });
 
 test('provider setup uses explicit input, mode, output, and revision options', async () => {
@@ -589,6 +650,7 @@ test('deployment checks the approved account and resource group before what-if a
   assert.deepEqual(calls.map(args => args.slice(0, 3)), [
     ['account', 'show', '-o'], ['group', 'show', '--name'],
     ['deployment', 'group', 'what-if'], ['deployment', 'group', 'create'], ['aks', 'show', '--resource-group'],
+    ['aks', 'update', '--resource-group'],
   ]);
   assert.deepEqual(result.receipt.azureMonitorAddon, { action: 'adopted',
     workspaceResourceId: deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId });
@@ -841,6 +903,39 @@ test('Azure Monitor add-on step stops on another workspace, shared-key auth, or 
   return assert.rejects(deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
     execAz: fakeAzure({ monitoringAddon: disabled, enableAddons: { status: 1, stdout: '', stderr: `denied ${token}` } }) }),
   error => /succeeded, but Azure Monitor add-on setup failed: .*\[redacted\]/.test(error.message) && !error.message.includes(token));
+});
+
+test('container network logs require the exact supported workspace and verify ACNS observability', () => {
+  const workspace = deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId;
+  const target = { resourceGroup: 'agentweaver', subscriptionId: ids.subscriptionId };
+  const calls = [];
+  const result = ensureContainerNetworkLogs(target, 'allowed', {
+    workspaceResourceId: workspace, action: 'adopted',
+  }, fakeAzure({}, calls));
+  assert.deepEqual(result, { workspaceResourceId: workspace, action: 'enabled' });
+  const update = calls.find(args => args[0] === 'aks' && args[1] === 'update');
+  assert.deepEqual(update, ['aks', 'update', '--resource-group', 'agentweaver', '--name', 'agentweaver-aks',
+    '--enable-acns', '--enable-container-network-logs', '-o', 'none']);
+  assert.ok(calls.some(args => args.includes('[networkProfile.advancedNetworking.enabled,' +
+    'networkProfile.advancedNetworking.observability.enabled]')));
+  assert.throws(() => ensureContainerNetworkLogs(target, 'allowed', {
+    workspaceResourceId: `${workspace}-other`, action: 'adopted',
+  }, fakeAzure({}, [])), /requires the install Log Analytics workspace/);
+  const unsupportedCalls = [];
+  assert.throws(() => ensureContainerNetworkLogs(target, 'denied', {
+    workspaceResourceId: workspace, action: 'unsupported-region',
+  }, fakeAzure({}, unsupportedCalls)), /unavailable for this cluster and workspace region pair/);
+  assert.ok(!unsupportedCalls.some(args => args[1] === 'update'));
+});
+
+test('container network logs disable by default without changing the Azure Monitor add-on', () => {
+  const calls = [];
+  assert.deepEqual(ensureContainerNetworkLogs({ resourceGroup: 'agentweaver' }, 'off', undefined,
+    fakeAzure({}, calls)), { workspaceResourceId: undefined, action: 'disabled' });
+  assert.deepEqual(calls, [[
+    'aks', 'update', '--resource-group', 'agentweaver', '--name', 'agentweaver-aks',
+    '--disable-container-network-logs', '-o', 'none',
+  ]]);
 });
 
 test('runtime identity setup deploys the template for the selected target and records the five identities', async () => {

@@ -42,7 +42,11 @@ const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function buildDeployArgs({
   resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash,
   scope = 'infrastructure-only', nodePoolCount, newFoundation = false, nodeResourceGroup,
+  agentHostEgressAudit = 'off',
 }) {
+  if (!['off', 'allowed', 'denied'].includes(agentHostEgressAudit)) {
+    throw new Error('AgentHost egress audit must be off, allowed, or denied.');
+  }
   if (!newFoundation) assertDedicatedTarget(resourceGroup);
   else if (!/^[a-z][a-z0-9]{5,11}$/.test(resourceGroup ?? '') || resourceGroup === 'agentweaver' ||
       scope !== 'infrastructure-only' || nodeResourceGroup !== `${resourceGroup}-aks-nodes`) {
@@ -57,7 +61,9 @@ export function buildDeployArgs({
   }
   const args = ['deployment', 'group', 'create', '--resource-group', resourceGroup, '--template-file', template,
     '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceTree=${sourceTree}`, `sourceHash=${sourceHash}`];
-  if (scope === 'infrastructure-only') args.push(`nodePoolCount=${nodePoolCount ?? 2}`);
+  if (scope === 'infrastructure-only') {
+    args.push(`nodePoolCount=${nodePoolCount ?? 2}`, `enableContainerNetworkLogs=${agentHostEgressAudit !== 'off'}`);
+  }
   if (newFoundation) args.push(`nodeResourceGroup=${nodeResourceGroup}`);
   args.push('--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json');
   return args;
@@ -95,6 +101,60 @@ export function deployRuntimeIdentities({ resourceGroup, sourceSha, tags, groupL
 
 /** Canary (EUAP) regions; their clusters can only associate data collection rules in a canary region. */
 const isCanaryRegion = location => /euap$/i.test(location);
+
+function azureLocation(execAz, args, name) {
+  const result = execAz(args, { check: false });
+  const value = result.status === 0 ? result.stdout.trim() : '';
+  if (!/^[a-z0-9]+$/i.test(value)) throw new Error(`Could not read the ${name} location: ${result.stderr}`);
+  return value.toLowerCase();
+}
+
+function assertContainerNetworkLogRegionPair(clusterLocation, workspaceLocation) {
+  if (isCanaryRegion(clusterLocation) && !isCanaryRegion(workspaceLocation)) {
+    throw new Error(`Container network log forwarding is unsupported for cluster region ${clusterLocation} ` +
+      `and workspace region ${workspaceLocation}.`);
+  }
+}
+
+/** Checks audit workspace, add-on, and region support before infrastructure writes. */
+export function preflightContainerNetworkLogs({ resourceGroup, subscriptionId, newFoundation, location,
+  monitorLocation }, execAz) {
+  const workspaceResourceId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/` +
+    `providers/Microsoft.OperationalInsights/workspaces/${resourceGroup}-law`;
+  let clusterLocation;
+  let workspaceLocation;
+  if (newFoundation) {
+    clusterLocation = String(location ?? '').toLowerCase();
+    workspaceLocation = String(monitorLocation ?? '').toLowerCase();
+    if (!/^[a-z0-9]+$/i.test(clusterLocation) || !/^[a-z0-9]+$/i.test(workspaceLocation)) {
+      throw new Error('The reviewed foundation parameters do not identify valid AKS and workspace regions.');
+    }
+  } else {
+    const cluster = ['--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`];
+    const addon = execAz(['aks', 'show', ...cluster, '--query', 'addonProfiles.omsagent', '-o', 'json'],
+      { check: false });
+    if (addon.status !== 0) throw new Error(`Could not read the AKS add-on profile: ${addon.stderr}`);
+    let profile;
+    try { profile = JSON.parse(addon.stdout.trim() || 'null'); } catch {
+      throw new Error('AKS returned invalid Azure Monitor add-on configuration.');
+    }
+    if (profile?.enabled === true) {
+      if (profile.config?.logAnalyticsWorkspaceResourceID?.toLowerCase() !== workspaceResourceId.toLowerCase()) {
+        throw new Error(`The add-on sends to another workspace (${profile.config?.logAnalyticsWorkspaceResourceID}); ` +
+          `expected ${workspaceResourceId}. Disable the add-on, then run the deployment again.`);
+      }
+      if (String(profile.config?.useAADAuth).toLowerCase() !== 'true') {
+        throw new Error('The add-on uses shared-key authentication. Disable the add-on, then run the deployment again.');
+      }
+    }
+    clusterLocation = azureLocation(execAz, ['aks', 'show', ...cluster, '--query', 'location', '-o', 'tsv'],
+      'AKS cluster');
+    workspaceLocation = azureLocation(execAz, ['resource', 'show', '--ids', workspaceResourceId,
+      '--query', 'location', '-o', 'tsv'], 'Log Analytics workspace');
+  }
+  assertContainerNetworkLogRegionPair(clusterLocation, workspaceLocation);
+  return { workspaceResourceId, clusterLocation, workspaceLocation };
+}
 
 /**
  * Enables the AKS Azure Monitor add-on with the install workspace, or adopts it when it is already enabled.
@@ -143,6 +203,56 @@ export function ensureAzureMonitorAddon({ resourceGroup, subscriptionId }, execA
   if (enable.status !== 0) throw new Error(`az aks enable-addons failed: ${enable.stderr}`);
   if (state(read()) !== 'enabled') throw new Error('The AKS add-on profile does not show the add-on as enabled.');
   return { workspaceResourceId, action: 'enabled' };
+}
+
+/** Builds the AKS update arguments for the selected ACNS forwarding mode. */
+export function buildContainerNetworkLogsUpdateArgs(resourceGroup, auditMode) {
+  if (!['off', 'allowed', 'denied'].includes(auditMode)) {
+    throw new Error('AgentHost egress audit must be off, allowed, or denied.');
+  }
+  const cluster = ['--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`];
+  return auditMode === 'off'
+    ? ['aks', 'update', ...cluster, '--disable-container-network-logs', '-o', 'none']
+    : ['aks', 'update', ...cluster, '--enable-acns', '--enable-container-network-logs', '-o', 'none'];
+}
+
+/** Configures stored ACNS flow-log forwarding after the Monitor add-on has the exact workspace. */
+export function ensureContainerNetworkLogs({ resourceGroup, subscriptionId }, auditMode, monitorAddon, execAz) {
+  const args = buildContainerNetworkLogsUpdateArgs(resourceGroup, auditMode);
+  const cluster = ['--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`];
+  if (auditMode !== 'off') {
+    if (monitorAddon?.action === 'unsupported-region') {
+      throw new Error('Container network log forwarding is unavailable for this cluster and workspace region pair.');
+    }
+    const expectedWorkspaceResourceId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/` +
+      `providers/Microsoft.OperationalInsights/workspaces/${resourceGroup}-law`;
+    if (monitorAddon?.workspaceResourceId?.toLowerCase() !== expectedWorkspaceResourceId.toLowerCase()) {
+      throw new Error('Container network log forwarding requires the install Log Analytics workspace.');
+    }
+    const clusterLocation = azureLocation(execAz,
+      ['aks', 'show', ...cluster, '--query', 'location', '-o', 'tsv'], 'AKS cluster');
+    const workspaceLocation = azureLocation(execAz,
+      ['resource', 'show', '--ids', monitorAddon.workspaceResourceId, '--query', 'location', '-o', 'tsv'],
+      'Log Analytics workspace');
+    assertContainerNetworkLogRegionPair(clusterLocation, workspaceLocation);
+  }
+
+  const update = execAz(args, { check: false });
+  if (update.status !== 0) {
+    throw new Error(`az aks update for container network logs failed: ${update.stderr}`);
+  }
+  if (auditMode !== 'off') {
+    const state = execAz(['aks', 'show', ...cluster, '--query',
+      '[networkProfile.advancedNetworking.enabled,networkProfile.advancedNetworking.observability.enabled]',
+      '-o', 'json'], { check: false });
+    if (state.status !== 0) throw new Error(`Could not verify ACNS observability: ${state.stderr}`);
+    let enabled;
+    try { enabled = JSON.parse(state.stdout); } catch { throw new Error('AKS returned invalid ACNS observability state.'); }
+    if (!Array.isArray(enabled) || enabled[0] !== true || enabled[1] !== true) {
+      throw new Error('AKS does not report ACNS and observability as enabled.');
+    }
+  }
+  return { workspaceResourceId: monitorAddon?.workspaceResourceId, action: auditMode === 'off' ? 'disabled' : 'enabled' };
 }
 
 /**
@@ -212,6 +322,10 @@ export async function deploy(config, {
       config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback) {
     throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
   }
+  const auditMode = config.agentHostEgressAudit ?? 'off';
+  if (!['off', 'allowed', 'denied'].includes(auditMode)) {
+    throw new Error('AgentHost egress audit must be off, allowed, or denied.');
+  }
   const source = sourceResolver(config);
   if (config.newFoundation) assertNewFoundation(config, source);
   if (config.bootstrapIdentityBrokerRuntime) {
@@ -232,6 +346,9 @@ export async function deploy(config, {
   if (config.bootstrapIdentityBrokerConfigOnly && source.scope !== 'aks-only') {
     throw new Error('Broker ConfigMap-only mode requires the reviewed AKS-only template and parameters.');
   }
+  if (auditMode !== 'off' && (config.identityRoutingOnly || config.bootstrapIdentityBrokerConfigOnly)) {
+    throw new Error('AgentHost egress audit cannot be set up by an identity-only stage.');
+  }
   if (config.bootstrapRuntimeIdentities && source.scope !== 'aks-only') {
     throw new Error('Runtime identity setup requires the reviewed AKS-only template and parameters.');
   }
@@ -240,10 +357,12 @@ export async function deploy(config, {
   const noDeployment = config.identityRoutingOnly || config.bootstrapIdentityBrokerConfigOnly;
   let args = noDeployment ? undefined : buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName,
-    newFoundation: config.newFoundation, nodeResourceGroup: `${config.resourceGroup}-aks-nodes` });
+    newFoundation: config.newFoundation, nodeResourceGroup: `${config.resourceGroup}-aks-nodes`,
+    agentHostEgressAudit: auditMode });
   const summary = { ...source, resourceGroup: config.resourceGroup,
     ...(config.identityRoutingOnly ? { identityRoutingOnly: true }
       : config.bootstrapIdentityBrokerConfigOnly ? {} : { deploymentName, args }), executed: false,
+    agentHostEgressAudit: auditMode,
     bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
     bootstrapRuntimeIdentities: Boolean(config.bootstrapRuntimeIdentities),
     bootstrapIdentityRouting: routingRequested,
@@ -336,17 +455,22 @@ export async function deploy(config, {
     config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
     ? readIdentityPostgresBootstrapValues({ ...config, ...source }, boundAz)
     : undefined;
+  if (auditMode !== 'off') preflightContainerNetworkLogs({ ...config, ...source }, boundAz);
   // Infrastructure-only deployments submit the autoscaler minimum; AKS-only deploys leave pool count unchanged.
   const nodePoolCount = source.scope === 'infrastructure-only' ? source.nodePoolMinCount : undefined;
   args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount,
-    newFoundation: config.newFoundation, nodeResourceGroup: `${config.resourceGroup}-aks-nodes` });
+    newFoundation: config.newFoundation, nodeResourceGroup: `${config.resourceGroup}-aks-nodes`,
+    agentHostEgressAudit: auditMode });
   summary.args = args;
   // A guarded what-if precedes create. Failure never admits a mutation.
   const whatIfArgs = ['deployment', 'group', 'what-if', '--resource-group', config.resourceGroup,
     '--template-file', source.template, '--parameters', `@${source.parametersFile}`, `sourceSha=${source.sha}`,
     `sourceTree=${source.sourceTree}`, `sourceHash=${source.sourceHash}`];
   if (nodePoolCount !== undefined) whatIfArgs.push(`nodePoolCount=${nodePoolCount}`);
+  if (source.scope === 'infrastructure-only') {
+    whatIfArgs.push(`enableContainerNetworkLogs=${auditMode !== 'off'}`);
+  }
   if (config.newFoundation) whatIfArgs.push(`nodeResourceGroup=${preflight.nodeResourceGroup}`);
   whatIfArgs.push('--no-pretty-print');
   if (config.newFoundation) whatIfArgs.push('--name', deploymentName, '--mode', 'Incremental', '-o', 'json');
@@ -421,6 +545,12 @@ export async function deploy(config, {
     azureMonitorAddon = ensureAzureMonitorAddon(config, boundAz);
   } catch (error) {
     throw new Error(`Infrastructure deployment succeeded, but Azure Monitor add-on setup failed: ${redact(error.message)}`);
+  }
+  let containerNetworkLogs;
+  try {
+    containerNetworkLogs = ensureContainerNetworkLogs(config, auditMode, azureMonitorAddon, boundAz);
+  } catch (error) {
+    throw new Error(`Infrastructure deployment succeeded, but ACNS flow-log setup failed: ${redact(error.message)}`);
   }
   let runtimeIdentities;
   if (config.bootstrapRuntimeIdentities) {
@@ -569,6 +699,7 @@ export async function deploy(config, {
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
     sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
     resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id, azureMonitorAddon,
+    containerNetworkLogs,
     ...(runtimeIdentities ? { runtimeIdentities } : {}),
     ...(identityPostgresBootstrap ? { identityPostgresBootstrap } : {}),
     ...(identityRouting ? { identityRouting } : {}),
@@ -585,6 +716,7 @@ export async function deploy(config, {
 export function cliConfig(values) {
   return { resourceGroup: values['resource-group'], template: values.template, parametersFile: values.parameters,
     newFoundation: values['new-foundation'] ?? false,
+    agentHostEgressAudit: values['agenthost-egress-audit'] ?? 'off',
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
@@ -664,6 +796,7 @@ export async function setupIdentityBrokerProviders(config, dependencies = {}) {
 export const cliOptions = {
   'resource-group': { type: 'string' }, template: { type: 'string', default: 'infra/bicep/main.bicep' },
   'new-foundation': { type: 'boolean', default: false },
+  'agenthost-egress-audit': { type: 'string', default: 'off' },
   parameters: { type: 'string' }, subscription: { type: 'string' }, 'allowed-subscription': { type: 'string' },
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },

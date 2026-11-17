@@ -160,6 +160,33 @@ group: `Microsoft.ContainerService/managedClusters/read` and `write`,
 `Microsoft.OperationalInsights/workspaces/read` and `sharedKeys/action`. The installer
 grants no roles.
 
+### ACNS flow-log forwarding
+
+The AgentHost egress audit mode defaults to `off`. Set
+`--agenthost-egress-audit allowed` or `--agenthost-egress-audit denied` on
+`scripts/azure/deploy.mjs` to enable ACNS flow-log forwarding to `<prefix>-law`.
+The installer checks the Monitor add-on workspace and supported region pair
+before the what-if. `allowed` collects dropped and forwarded flows; `denied`
+collects dropped flows. The `off` mode disables flow-log forwarding and leaves
+the Azure Monitor add-on enabled.
+
+For `main.bicep`, the installer sets `enableContainerNetworkLogs` to match the
+audit mode. The AKS-only `aks-redeploy.bicep` does not update the AKS resource;
+the installer configures forwarding through a separate AKS update. The
+Kustomize deploy command creates the `ContainerNetworkLog` collector and runs
+the denied-flow smoke probe. The collector API requires Cilium and AKS
+Kubernetes 1.36 or later. See
+[AgentHost egress audit](../../deploy/k8s/README.md#agenthost-egress-audit).
+
+The Environment identity receives `Log Analytics Reader` at the
+`<prefix>-law` workspace scope. This role does not grant access to other
+workspaces.
+
+ACNS observability has a cluster-wide cost effect. The `source.labels`
+aggregation field increases log cardinality and cost. Log Analytics also
+charges for ingested flow-log volume. Review the current regional prices before
+enabling audit collection.
+
 `npm run deploy:kustomize` checks that DaemonSet `ama-logs` in `kube-system`
 is ready on every scheduled node before it writes to the cluster. The
 deployment identity needs `get` on `daemonsets.apps/ama-logs` in

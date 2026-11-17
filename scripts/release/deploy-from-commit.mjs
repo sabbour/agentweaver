@@ -14,7 +14,8 @@ const DIGEST = /^sha256:[a-f0-9]{64}$/;
 export const DEPLOY_FROM_COMMIT_USAGE =
   'Usage: npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> ' +
   '[--registry <registry>] [--resource-group <name>] [--model-bindings <file.json>] ' +
-  '[--remove-model-binding <reference>]... --execute';
+  '[--remove-model-binding <reference>]... [--agenthost-egress-audit <mode>] --execute\n' +
+  'Audit mode: off, allowed, or denied. Default: off.';
 
 function fail(message) {
   throw new Error(`Commit deployment: ${message}`);
@@ -29,6 +30,8 @@ export function parseDeployFromCommitArgs(argv) {
   let execute = false;
   let modelBindings;
   let resourceGroup;
+  let agentHostEgressAudit;
+  let hasAgentHostEgressAudit = false;
   const removeModelBindings = [];
   for (let index = 1; index < argv.length; index += 1) {
     if (argv[index] === '--execute') {
@@ -57,6 +60,15 @@ export function parseDeployFromCommitArgs(argv) {
           removeModelBindings.includes(reference)) fail(DEPLOY_FROM_COMMIT_USAGE);
       removeModelBindings.push(reference);
       index += 1;
+    } else if (argv[index] === '--agenthost-egress-audit') {
+      if (hasAgentHostEgressAudit) fail('AgentHost egress audit can be specified only once.');
+      const mode = argv[index + 1];
+      if (!['off', 'allowed', 'denied'].includes(mode)) {
+        fail('AgentHost egress audit must be off, allowed, or denied.');
+      }
+      agentHostEgressAudit = mode;
+      hasAgentHostEgressAudit = true;
+      index += 1;
     } else fail(DEPLOY_FROM_COMMIT_USAGE);
   }
   if (!execute) fail(DEPLOY_FROM_COMMIT_USAGE);
@@ -65,6 +77,7 @@ export function parseDeployFromCommitArgs(argv) {
     ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
     ...(modelBindings === undefined ? {} : { modelBindings }),
     ...(removeModelBindings.length ? { removeModelBindings } : {}),
+    ...(agentHostEgressAudit === undefined ? {} : { agentHostEgressAudit }),
     ...(resourceGroup === undefined || resourceGroup === 'agentweaver' ? {} : { resourceGroup }),
   };
 }
@@ -79,12 +92,16 @@ function command(exec, name, args, cwd, action) {
 
 export async function deployFromCommit({
   sourceSha, registry = DEFAULT_REGISTRY, modelBindings, removeModelBindings, resourceGroup,
+  agentHostEgressAudit = 'off',
 }, overrides = {}) {
   if (!SHA.test(sourceSha ?? '')) fail('source SHA must be a lowercase full 40-character commit SHA.');
   try {
     parseRegistryTarget(registry);
   } catch {
     fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
+  }
+  if (!['off', 'allowed', 'denied'].includes(agentHostEgressAudit)) {
+    fail('AgentHost egress audit must be off, allowed, or denied.');
   }
 
   const root = path.resolve(overrides.root ?? process.cwd());
@@ -161,9 +178,13 @@ export async function deployFromCommit({
     if (resourceGroup !== undefined && deployModule?.DEPLOY_KUSTOMIZE_TARGET_OPTION !== true) {
       fail(`source ${sourceSha} predates install target selection; select a newer source commit.`);
     }
+    if (agentHostEgressAudit !== 'off' && deployModule?.DEPLOY_KUSTOMIZE_AUDIT_OPTION !== true) {
+      fail(`source ${sourceSha} predates AgentHost egress audit support; select a newer source commit.`);
+    }
     const deployKustomize = overrides.deployKustomize ?? deployModule.deployKustomize;
     result = await deployKustomize(
-      { imageManifest, registry, ...modelOptions, ...(resourceGroup === undefined ? {} : { resourceGroup }) },
+      { imageManifest, registry, ...modelOptions, agentHostEgressAudit,
+        ...(resourceGroup === undefined ? {} : { resourceGroup }) },
       { root: worktreePath, registryOptions: overrides.registryOptions });
   } catch (error) {
     failure = error;

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import { guardAzureTarget } from './lib/guardrails.mjs';
-import { buildDeployArgs, cliConfig, cliOptions } from './deploy.mjs';
+import { buildContainerNetworkLogsUpdateArgs, buildDeployArgs, cliConfig, cliOptions } from './deploy.mjs';
 
 // Keep these declarations aligned with the AKS redeploy federation module's default services.
 const aksOnlyFederatedCredentials = resourceGroup =>
@@ -47,7 +47,7 @@ export function buildWhatIfArgs(options) {
  * Adds nested AKS federation declarations to a successful what-if result.
  * This reports Bicep create-or-update operations without querying existing FIC state.
  */
-function addNestedDeploymentChanges(result, source, resourceGroup) {
+function addNestedDeploymentChanges(result, source, resourceGroup, auditMode) {
   if (source.scope !== 'aks-only' || result.status !== 0) return result;
 
   let whatIf;
@@ -70,6 +70,11 @@ function addNestedDeploymentChanges(result, source, resourceGroup) {
         federatedIdentityCredentials: aksOnlyFederatedCredentials(resourceGroup),
         agentPools: aksOnlyAgentPools(source.kataVmSize),
       },
+      postDeploymentChanges: [{
+        operation: 'ACNS ContainerNetworkLogs forwarding update',
+        agentHostEgressAudit: auditMode,
+        command: ['az', ...buildContainerNetworkLogsUpdateArgs(resourceGroup, auditMode)],
+      }],
     }, null, 2),
   };
 }
@@ -88,9 +93,11 @@ export function plan(config, { execAz = runAz, sourceResolver = resolveSource } 
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
     throw new Error('Source parameter ownership differs from the actual target.');
   }
+  const auditMode = config.agentHostEgressAudit ?? 'off';
   const result = execAz(buildWhatIfArgs({ resourceGroup: config.resourceGroup, ...source,
-    sourceSha: source.sha, subscription: config.subscriptionId }), { check: false });
-  return addNestedDeploymentChanges(result, source, config.resourceGroup);
+    sourceSha: source.sha, subscription: config.subscriptionId,
+    agentHostEgressAudit: auditMode }), { check: false });
+  return addNestedDeploymentChanges(result, source, config.resourceGroup, auditMode);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
