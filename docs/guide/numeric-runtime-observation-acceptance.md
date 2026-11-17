@@ -136,7 +136,7 @@ changes:
 
 | Case | Example input | Case-specific input |
 | --- | --- | --- |
-| `numeric-model-turn-no-send` | `scripts/acceptance/api/examples/numeric-model-turn-no-send.json` | `expectedMaxModelTurns`: the accepted `maxModelTurns` value, from `1` to `10000`. |
+| `numeric-model-turn-no-send` | `scripts/acceptance/api/examples/numeric-model-turn-no-send.json` | `expectedMaxModelTurns`: the accepted `maxModelTurns` value, from `1` to `1000`. |
 | `numeric-hard-credit-no-send` | `scripts/acceptance/api/examples/numeric-hard-credit-no-send.json` | `expectedSoftWarning`: `true` if the run must show a soft-credit warning; otherwise `false`. |
 
 Set `target.sessionId` to the root session of the run. The input does not
@@ -201,6 +201,10 @@ A `passed` result for `numeric-hard-credit-no-send` means:
   observed credit floor does not decrease in sequence order.
 - If `expectedSoftWarning` is `true`, at least one `creditGuardChanged` fact
   shows `softWarningEmitted`.
+- The separate `numericMatrix.credit-warning-floor` row passes only when
+  current guard facts show a warning transition from below the accepted soft
+  credit limit to at or above it, followed by a higher floor, ledger-event
+  count, and owner revision. The facts must use `nanoAiu` and `copilotRun`.
 - The exact `api invoke` and `rest` lookups return the same `nativeNoSend`
   fact.
 
@@ -210,6 +214,79 @@ For all three cases, each result that is not a pass is `blocked`, and the
 script exits with code `2`. Read the `reason` field to see the failed check.
 An unavailable or unknown section is never treated as proof that nothing was
 sent.
+
+## Read numeric boundary coverage
+
+Each result includes `numericMatrix`. The rows in
+`scripts/acceptance/api/numeric-cases.json` compare reservations and denials
+with the accepted limit. Equality and overshoot are separate predicates.
+`numericMatrix.complete` is `true` only when every required row passes. A
+legacy case can still pass while the matrix remains blocked or incomplete;
+the matrix does not change the existing case status or exit code.
+
+The matrix marks exact reservation replay in the tool case as blocked because
+its exact lookup returns the rejection, not the reservation. It also keeps
+zero-credit receipts, prompt capacity, full native enforcement, and child
+native no-send proof blocked while the public observation route lacks those
+facts. The admitted-completion case replays the same generation request with
+the same idempotency key. It checks that the Gateway returns the same
+completion and that the reservation identity and total stay the same before
+and after the replay.
+
+## Check an admitted root completion
+
+The admitted-completion case calls `formulateCastingProposal` through the
+native CLI, then replays the same request with the same idempotency key. The
+Gateway returns the original completion for that replay. The first request
+starts a model turn, creates a pending casting proposal, and can incur model
+charges. The case rejects the proposal after it checks the completion
+evidence.
+
+Use an existing, approved non-production run. Get separate approval for the
+model call, its expected spend, and proposal cleanup. Set
+`approvedNonProduction`, `approvedModelAndSpend`, and
+`approvedProposalCleanup` to `true` in
+`scripts/acceptance/api/examples/numeric-admitted-completion.json`. Set
+`expectedConfigurationRevision` to the current project revision and
+`expectedMaxModelTurns` to the accepted run limit. Set the target session to
+the run's root session.
+
+Use the same native apphost and target fields as the read-only cases. Keep the
+input and evidence outside the repository. The script reads the approved
+configuration revision and casting-role catalog to build the prompt that the
+Gateway accepts. It also checks that the cleanup identity is an unbound
+project writer. Validate the input first:
+
+```powershell
+node scripts\acceptance\api\numeric-admitted-completion.mjs --input $caseInput --output $evidence --dry-run
+```
+
+The dry run checks the input, apphost hash, and new evidence path. It starts no
+process, uses no network, and writes no evidence. Run the case after the
+target, model-spend, and cleanup approvals are in place:
+
+```powershell
+node scripts\acceptance\api\numeric-admitted-completion.mjs --input $caseInput --output $evidence
+```
+
+The script saves the operation key in `operation-key.json` before it sends the
+generation request. After the first reservation read, it replays the exact
+request with the same key and checks the completion and reservation again. If
+`result.json` reports `mutationOutcome: "uncertain"`, keep the evidence and
+operation key. Do not start another request with a new key. Check the proposal
+through the normal owner flow. If cleanup reports `blocked`, reject the
+proposal through that flow.
+
+A `passed` result means the response includes native completion events,
+registration and selection bindings, cursor hashes, usage IDs, and typed
+material acknowledgments. The script joins that receipt to one current
+root-session reservation and checks the accepted model-turn total through
+`api invoke` and `rest`. The exact reads before and after the same-key replay
+return the same reservation and total. The script rejects the generated
+proposal, then reads it back to confirm the rejected state.
+`numericMatrix` stays `blocked` while any required boundary or unavailable
+proof row lacks evidence. This case does not drive a denial or complete N1
+coverage.
 
 ## Next step
 

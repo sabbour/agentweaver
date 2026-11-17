@@ -15,6 +15,12 @@ import {
   validateInput,
   validateObservation,
 } from '../numeric-runtime-observation.mjs';
+import {
+  buildNumericMatrix,
+  compareBoundary,
+  validateNumericMatrix,
+  warningFloorTransition,
+} from '../numeric-case-matrix.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const scriptPath = path.resolve(directory, '..', 'numeric-runtime-observation.mjs');
@@ -28,10 +34,13 @@ const hardCreditInput = JSON.parse(await readFile(
 ));
 const selectionHash = 'a'.repeat(64);
 const otherSelectionHash = 'b'.repeat(64);
+const runtimeInstanceId = '00000000-0000-4000-8000-000000000221';
+const registrationRevision = 7;
 const authorityMutations = {
   'stale fence': { executionFence: 2, reason: /stale or different execution fence/ },
   'other selection': { acceptedSelectionHash: otherSelectionHash, reason: /another accepted selection/ },
   'other session': { sessionId: 'other-child-session', reason: /another session/ },
+  'other registration': { registrationRevision: registrationRevision + 1, reason: /another runtime registration/ },
 };
 
 function mutateAuthority(fact, mutation) {
@@ -46,6 +55,8 @@ function rootFact(sessionId, factId, fields) {
     factId: `00000000-0000-4000-8000-0000000001${factId}`,
     sequence: Number(factId),
     sessionId,
+    runtimeInstanceId,
+    registrationRevision,
     executionFence: 3,
     acceptedSelectionHash: selectionHash,
     ownerDecision: { state: 'available' },
@@ -60,11 +71,14 @@ function rootBody(caseInput, acceptedLimits, totals, items) {
     binding: {
       projectId: caseInput.target.projectId,
       runId: caseInput.target.runId,
+      rootSessionId: caseInput.target.sessionId,
       sessionId: caseInput.target.sessionId,
       isRoot: true,
       acceptedSelectionHash: selectionHash,
       currentExecutionFence: 3,
       sessionExecutionFence: 3,
+      runtimeInstanceId,
+      registrationRevision,
     },
     acceptedLimits,
     totals,
@@ -82,10 +96,25 @@ function modelTurnObservation() {
   const sessionId = modelTurnInput.target.sessionId;
   const attemptId = '00000000-0000-4000-8000-000000000299';
   const reservations = ['01', '02'].map(id => rootFact(sessionId, id, {
-    kind: 'modelTurnReserved', limitKind: 'modelTurns', attemptId: `00000000-0000-4000-8000-0000000002${id}`,
+    kind: 'modelTurnReserved',
+    limitKind: 'modelTurns',
+    configuredValue: 2,
+    observedValue: Number(id),
+    reservedCount: Number(id),
+    unit: 'count',
+    scope: 'copilotRun',
+    attemptId: `00000000-0000-4000-8000-0000000002${id}`,
   }));
   const denied = {
-    kind: 'denied', limitKind: 'modelTurns', stage: 'rootAuthorization', reasonCode: 'limit_reached', attemptId,
+    kind: 'denied',
+    limitKind: 'modelTurns',
+    configuredValue: 2,
+    observedValue: 2,
+    unit: 'count',
+    scope: 'copilotRun',
+    stage: 'rootAuthorization',
+    reasonCode: 'limit_reached',
+    attemptId,
   };
   const denial = rootFact(sessionId, '03', denied);
   const noSend = rootFact(sessionId, '04', {
@@ -93,6 +122,7 @@ function modelTurnObservation() {
     kind: 'nativeNoSend',
     nativeNoSend: { state: 'available', rangeComplete: true, eventCount: 0 },
   });
+
   const ignored = [
     rootFact('other-child-session', '05', { kind: 'modelTurnReserved', limitKind: 'modelTurns' }),
     rootFact(sessionId, '06', { ...denied, executionFence: 2 }),
@@ -105,7 +135,13 @@ function modelTurnObservation() {
   );
   const exact = {
     binding: structuredClone(body.binding),
-    history: { exactAttempt: true, items: [structuredClone(denial), structuredClone(noSend)] },
+    history: {
+      exactAttempt: true,
+      complete: true,
+      items: [structuredClone(denial), structuredClone(noSend)],
+      nextCursor: null,
+      exactUnavailableReason: null,
+    },
   };
   return { body, exact, restExact: structuredClone(exact) };
 }
@@ -114,7 +150,15 @@ function hardCreditObservation() {
   const sessionId = hardCreditInput.target.sessionId;
   const dispatchId = '00000000-0000-4000-8000-000000000301';
   const guard = (id, observedValue, flags) => rootFact(sessionId, id, {
-    kind: 'creditGuardChanged', observedValue, softWarningEmitted: false, hardCapExhausted: false, ...flags,
+    kind: 'creditGuardChanged',
+    observedValue,
+    unit: 'nanoAiu',
+    scope: 'copilotRun',
+    softWarningEmitted: false,
+    hardCapExhausted: false,
+    accountedThroughLedgerEventCount: Number(id),
+    ownerRevision: Number(id),
+    ...flags,
   });
   const denied = {
     kind: 'denied',
@@ -122,6 +166,7 @@ function hardCreditObservation() {
     stage: 'nativeTurnBegin',
     reasonCode: 'hard_credit_limit_reached',
     unit: 'nanoAiu',
+    scope: 'copilotRun',
     attemptId: dispatchId,
     dispatchId,
     configuredValue: 5_000_000_000,
@@ -135,19 +180,31 @@ function hardCreditObservation() {
   });
   const body = rootBody(
     hardCreditInput,
-    { copilotHardCreditLimit: 5_000_000_000 },
+    {
+      copilotSoftCreditLimit: 4_000_000_000,
+      copilotHardCreditLimit: 5_000_000_000,
+      creditUnit: 'nanoAiu',
+      creditScope: 'copilotRun',
+    },
     {},
     [
-      guard('10', 4_000_000_000, { softWarningEmitted: true }),
-      guard('11', 5_200_000_000, { hardCapExhausted: true }),
+      guard('10', 3_900_000_000, { softWarningEmitted: false }),
+      guard('11', 4_000_000_000, { softWarningEmitted: true }),
       rootFact(sessionId, '12', { ...denied, configuredValue: 4_000_000_000, executionFence: 2 }),
       denial,
       noSend,
+      guard('16', 5_200_000_000, { hardCapExhausted: true }),
     ],
   );
   const exact = {
     binding: structuredClone(body.binding),
-    history: { exactAttempt: true, items: [structuredClone(denial), structuredClone(noSend)] },
+    history: {
+      exactAttempt: true,
+      complete: true,
+      items: [structuredClone(denial), structuredClone(noSend)],
+      nextCursor: null,
+      exactUnavailableReason: null,
+    },
   };
   return { body, exact, restExact: structuredClone(exact) };
 }
@@ -160,6 +217,13 @@ function observation() {
     sessionId: input.target.sessionId,
     executionFence: 2,
     acceptedSelectionHash: selectionHash,
+    configuredValue: 1,
+    observedValue: 1,
+    reservedCount: 1,
+    runtimeInstanceId,
+    registrationRevision,
+    unit: 'count',
+    scope: 'copilotRun',
     attemptId: '00000000-0000-4000-8000-000000000011',
   };
   const rejection = {
@@ -168,6 +232,12 @@ function observation() {
     limitKind: 'toolCalls',
     stage: 'toolPermission',
     reasonCode: 'runtime_tool_call_limit_exhausted',
+    configuredValue: 1,
+    observedValue: 1,
+    runtimeInstanceId,
+    registrationRevision,
+    unit: 'count',
+    scope: 'copilotRun',
     sessionId: input.target.sessionId,
     executionFence: 2,
     acceptedSelectionHash: selectionHash,
@@ -183,11 +253,14 @@ function observation() {
     binding: {
       projectId: input.target.projectId,
       runId: input.target.runId,
+      rootSessionId: 'root-session',
       sessionId: input.target.sessionId,
       isRoot: false,
       currentExecutionFence: 2,
       sessionExecutionFence: 2,
       acceptedSelectionHash: selectionHash,
+      runtimeInstanceId,
+      registrationRevision,
     },
     acceptedLimits: { maxToolCalls: 1 },
     totals: { toolSlotsReserved: { state: 'available', value: 1 } },
@@ -201,7 +274,13 @@ function observation() {
   };
   const exact = {
     binding: structuredClone(body.binding),
-    history: { exactAttempt: true, items: [rejection] },
+    history: {
+      exactAttempt: true,
+      complete: true,
+      items: [rejection],
+      nextCursor: null,
+      exactUnavailableReason: null,
+    },
   };
   return { body, exact, restExact: structuredClone(exact) };
 }
@@ -387,7 +466,16 @@ test('tool exact selection skips old facts and selects a later current pair', ()
     dispatchId: '00000000-0000-4000-8000-000000000022',
   };
   body.history.items = [oldReservation, oldRejection, currentReservation, currentRejection];
-  const exact = { binding: structuredClone(body.binding), history: { exactAttempt: true, items: [currentRejection] } };
+  const exact = {
+    binding: structuredClone(body.binding),
+    history: {
+      exactAttempt: true,
+      complete: true,
+      items: [currentRejection],
+      nextCursor: null,
+      exactUnavailableReason: null,
+    },
+  };
   const summary = validateObservation(validateInput(input), [body], exact, structuredClone(exact));
   assert.equal(exactLookupFact(validateInput(input), [body]).attemptId, currentRejection.attemptId);
   assert.equal(summary.attemptId, currentRejection.attemptId);
@@ -507,6 +595,8 @@ test('numeric no-send cases accept only their own input fields', () => {
   const { expectedMaxModelTurns, ...withoutTurns } = modelTurnInput;
   assert.throws(() => validateInput({ ...withoutTurns, expectedMaxToolCalls: expectedMaxModelTurns }), /schema/);
   assert.throws(() => validateInput({ ...modelTurnInput, expectedMaxModelTurns: 0 }), /schema/);
+  assert.equal(validateInput({ ...modelTurnInput, expectedMaxModelTurns: 10_000 }).expectedMaxModelTurns, 10_000);
+  assert.throws(() => validateInput({ ...modelTurnInput, expectedMaxModelTurns: 10_001 }), /schema/);
   assert.throws(() => validateInput({ ...hardCreditInput, expectedSoftWarning: 'true' }), /schema/);
   assert.throws(() => validateInput({ ...hardCreditInput, copilotHardCreditLimit: 1 }), /schema/);
   assert.throws(() => validateInput({ ...input, caseId: 'numeric-model-turn-no-send' }), /schema/);
@@ -657,7 +747,23 @@ test('hard-credit case passes on current-authority denial, no-send, and guard fa
   assert.equal(summary.dispatchId, '00000000-0000-4000-8000-000000000301');
   assert.equal(summary.factId, body.history.items[4].factId);
   assert.equal(summary.softWarningObserved, true);
+  assert.equal(summary.numericMatrix.rows.find(row => row.id === 'credit-below').status, 'passed');
+  assert.equal(summary.numericMatrix.rows.find(row => row.id === 'credit-overshoot').status, 'passed');
+  assert.equal(summary.numericMatrix.rows.find(row => row.id === 'credit-equality').status, 'blocked');
+  assert.equal(summary.numericMatrix.rows.find(row => row.id === 'credit-warning-floor').status, 'passed');
   assert.equal(exactLookupFact(caseInput, [body]), body.history.items[4]);
+
+  const equality = hardCreditObservation();
+  equality.body.history.items[3].observedValue = equality.body.history.items[3].configuredValue;
+  equality.body.history.items[4].observedValue = equality.body.history.items[4].configuredValue;
+  equality.exact.history.items[0].observedValue = equality.exact.history.items[0].configuredValue;
+  equality.exact.history.items[1].observedValue = equality.exact.history.items[1].configuredValue;
+  equality.restExact = structuredClone(equality.exact);
+  const equalitySummary = validateObservation(
+    caseInput, [equality.body], equality.exact, equality.restExact,
+  );
+  assert.equal(equalitySummary.numericMatrix.rows.find(row => row.id === 'credit-equality').status, 'passed');
+  assert.equal(equalitySummary.numericMatrix.rows.find(row => row.id === 'credit-overshoot').status, 'blocked');
 
   const unset = structuredClone(body);
   unset.acceptedLimits.copilotHardCreditLimit = null;
@@ -684,8 +790,8 @@ test('hard-credit case ignores denial, no-send, and guard facts outside the curr
   for (const [index, label] of [
     [3, /hard-credit denial/],
     [4, /hard-credit native no-send/],
-    [1, /hard cap is exhausted/],
-    [0, /expected soft warning/],
+    [5, /hard cap is exhausted/],
+    [1, /expected soft warning/],
   ]) {
     for (const [name, mutation] of Object.entries(authorityMutations)) {
       const { body, exact, restExact } = hardCreditObservation();
@@ -720,7 +826,7 @@ test('hard-credit case rejects old configuration, floor decrease, and incomplete
   ), /complete range and zero events/);
 
   const noSoftWarning = hardCreditObservation();
-  noSoftWarning.body.history.items[0].softWarningEmitted = false;
+  noSoftWarning.body.history.items[1].softWarningEmitted = false;
   assert.throws(() => validateObservation(
     caseInput, [noSoftWarning.body], noSoftWarning.exact, noSoftWarning.restExact,
   ), /expected soft warning/);
@@ -728,4 +834,101 @@ test('hard-credit case rejects old configuration, floor decrease, and incomplete
   assert.equal(validateObservation(
     notExpected, [noSoftWarning.body], noSoftWarning.exact, noSoftWarning.restExact,
   ).softWarningObserved, false);
+});
+
+test('hard-credit matrix classifies decimal equality and overshoot from the current denial', () => {
+  const caseInput = validateInput(hardCreditInput);
+  for (const [observed, expected] of [
+    [5_000_000_000, 'credit-equality'],
+    [5_000_000_000.25, 'credit-overshoot'],
+  ]) {
+    const { body, exact, restExact } = hardCreditObservation();
+    body.history.items[3].observedValue = observed;
+    body.history.items[4].observedValue = observed;
+    exact.history.items[0].observedValue = observed;
+    exact.history.items[1].observedValue = observed;
+    restExact.history.items[0].observedValue = observed;
+    restExact.history.items[1].observedValue = observed;
+    const summary = validateObservation(caseInput, [body], exact, restExact);
+    assert.equal(summary.numericMatrix.rows.find(row => row.id === 'credit-equality').status,
+      expected === 'credit-equality' ? 'passed' : 'blocked');
+    assert.equal(summary.numericMatrix.rows.find(row => row.id === 'credit-overshoot').status,
+      expected === 'credit-overshoot' ? 'passed' : 'blocked');
+  }
+});
+
+test('numeric matrix reports distinct boundaries without changing legacy case status', () => {
+  const tool = observation();
+  const summary = validateObservation(
+    validateInput(input), [tool.body], tool.exact, tool.restExact,
+  );
+  assert.equal(summary.attemptId, tool.body.history.items[1].attemptId);
+  assert.equal(summary.numericMatrix.rows.find(row => row.id === 'tool-at-cap').status, 'passed');
+  assert.equal(summary.numericMatrix.rows.find(row => row.id === 'tool-next-denial').status, 'passed');
+  assert.equal(summary.numericMatrix.rows.find(row => row.id === 'tool-below-cap').status, 'blocked');
+  assert.equal(summary.numericMatrix.complete, false);
+
+  const model = modelTurnObservation();
+  const modelSummary = validateObservation(
+    validateInput(modelTurnInput), [model.body], model.exact, model.restExact,
+  );
+  assert.equal(modelSummary.numericMatrix.rows.find(row => row.id === 'model-turn-below-cap').status, 'passed');
+  assert.equal(modelSummary.numericMatrix.rows.find(row => row.id === 'model-turn-at-cap').status, 'passed');
+  assert.equal(modelSummary.numericMatrix.rows.find(row => row.id === 'model-turn-next-denial').status, 'passed');
+});
+
+test('numeric matrix rejects missing and duplicate rows', () => {
+  const matrix = buildNumericMatrix();
+  assert.throws(() => validateNumericMatrix(matrix.rows.slice(1)), /missing required rows/);
+  assert.throws(() => validateNumericMatrix([
+    ...matrix.rows.slice(1),
+    { ...matrix.rows[1] },
+  ]), /unknown or duplicate row/);
+  const attemptedPromotion = buildNumericMatrix(
+    Object.fromEntries(matrix.rows.map(row => [row.id, 'passed'])),
+  );
+  assert.equal(attemptedPromotion.complete, false);
+  assert.equal(attemptedPromotion.rows.find(row => row.id === 'full-native-proof').status, 'blocked');
+  assert.equal(attemptedPromotion.rows.find(row => row.id === 'credit-zero').status, 'blocked');
+  const promotedFixedRow = matrix.rows.map(row => row.id === 'full-native-proof'
+    ? { ...row, status: 'passed' }
+    : row);
+  assert.throws(() => validateNumericMatrix(promotedFixedRow), /cannot claim passed/);
+  assert.throws(() => validateNumericMatrix(
+    matrix.rows.map((row, index) => index === 0 ? { ...row, status: 'partial' } : row),
+  ), /invalid status/);
+});
+
+test('numeric boundary comparisons keep equality separate from overshoot', () => {
+  assert.equal(compareBoundary(5, 5), 'equal');
+  assert.equal(compareBoundary(6, 5), 'overshoot');
+  assert.equal(compareBoundary(4, 5), 'below');
+  assert.equal(compareBoundary(5.25, 5.25), 'equal');
+  assert.equal(compareBoundary(5.5, 5.25), 'overshoot');
+  assert.equal(compareBoundary(5, 5.25), 'below');
+  assert.equal(compareBoundary(null, 5), null);
+  assert.equal(compareBoundary(Number.MAX_SAFE_INTEGER + 1, 5), null);
+});
+
+test('credit warning-floor proof requires ordered warning transition and later floor advance', () => {
+  const { body } = hardCreditObservation();
+  const guards = body.history.items.filter(fact => fact.kind === 'creditGuardChanged');
+  assert.equal(warningFloorTransition(guards, 4_000_000_000), true);
+  assert.equal(warningFloorTransition([
+    { sequence: 1, softWarningEmitted: false, observedValue: 4.25, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 1, ownerRevision: 1 },
+    { sequence: 2, softWarningEmitted: true, observedValue: 4.5, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 2, ownerRevision: 2 },
+    { sequence: 3, softWarningEmitted: true, observedValue: 4.75, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 3, ownerRevision: 3 },
+  ], 4.5), true);
+  const wrongUnit = structuredClone(guards);
+  wrongUnit[1].scope = 'project';
+  assert.equal(warningFloorTransition(wrongUnit, 4_000_000_000), false);
+  assert.equal(warningFloorTransition([
+    { sequence: 1, softWarningEmitted: false, observedValue: 4, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 1, ownerRevision: 1 },
+    { sequence: 2, softWarningEmitted: true, observedValue: 5, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 2, ownerRevision: 2 },
+  ], 5), false);
+  assert.equal(warningFloorTransition([
+    { sequence: 1, softWarningEmitted: false, observedValue: 4, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 1, ownerRevision: 1 },
+    { sequence: 2, softWarningEmitted: true, observedValue: 5, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 2, ownerRevision: 2 },
+    { sequence: 3, softWarningEmitted: true, observedValue: 6, unit: 'nanoAiu', scope: 'copilotRun', accountedThroughLedgerEventCount: 2, ownerRevision: 3 },
+  ], 5), false);
 });

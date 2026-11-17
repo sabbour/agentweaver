@@ -1001,11 +1001,14 @@ The API tests cover the checked-in case scripts and launcher contracts with loca
 The [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
 checks the public CLI and `rest` reads against an existing child session. Its
 root model-turn and hard-credit cases check an existing root session. Their
-dry runs are local only; they do not exercise a live target. The local test
-covers each case with fixtures:
+dry runs are local only; they do not exercise a live target. The admitted
+completion case sends one model request and rejects the generated proposal.
+It needs separate non-production, model-spend, and cleanup approval. Its dry
+run starts no process. The controlled tests use fixtures and do not call a
+Gateway or model:
 
 ```powershell
-node --test scripts\acceptance\api\tests\numeric-runtime-observation.test.mjs
+node --test scripts\acceptance\api\tests\numeric-runtime-observation.test.mjs scripts\acceptance\api\tests\numeric-admitted-completion.test.mjs
 ```
 
 Run the focused contract, owner paging, query validation, and Gateway schema
