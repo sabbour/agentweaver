@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using System.Text.Encodings.Web;
 
 namespace Agentweaver.Environment.Tests;
@@ -37,8 +38,20 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         {
             var request = new RuntimeRunStartPlacementRequest(2, fixture.Owner, null, operation);
             var first = await fixture.Manager.ProvisionAsync(request, actor, CancellationToken.None);
+            var sandboxOwner = fixture.Sandbox.LastRequest!.Fence.Owner;
+            await using (var removeMapping = database.DataSource.CreateCommand(
+                """
+                DELETE FROM environment.sandbox_owner_mappings
+                WHERE owner_fingerprint = @fingerprint
+                """))
+            {
+                removeMapping.Parameters.AddWithValue(
+                    "fingerprint", AgentSandboxProvider.GetOwnerFingerprint(sandboxOwner));
+                Assert.Equal(1, await removeMapping.ExecuteNonQueryAsync());
+            }
             var retry = await fixture.Manager.ProvisionAsync(request, actor, CancellationToken.None);
             Assert.Equal(first, retry);
+            await AssertOwnerMappingAsync(database.DataSource, sandboxOwner, CancellationToken.None);
             Assert.Equal(1, fixture.Sandbox.ProvisionCalls);
             Assert.Equal(1, fixture.Storage.ProvisionCalls);
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
@@ -876,6 +889,9 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         var storage = new RecordingStorageProvider(storageSelectionOptions);
         var workspaceVolumes = new WorkspaceVolumeService(store, storage);
         var sandbox = new RecordingSandboxProvider(sandboxOptions);
+        var auditStore = new EnvironmentEgressAuditStore(database.DataSource);
+        sandbox.BeforeProvisionAsync = (owner, cancellationToken) =>
+            AssertOwnerMappingAsync(database.DataSource, owner, cancellationToken);
         var kubernetesHttp = new HttpClient(new NoKubernetesRequestsHandler())
         {
             BaseAddress = new Uri("https://kubernetes.test/")
@@ -885,7 +901,8 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         var sandboxLeases = new EnvironmentSandboxLeaseStore(database.DataSource, timeProvider);
         var sandboxes = new EnvironmentSandboxManager(
             projects, store, sandboxLeases,
-            sandbox, sandboxOptions, kubernetes, networkOptions, egress, timeProvider: timeProvider);
+            sandbox, sandboxOptions, kubernetes, networkOptions, egress, timeProvider: timeProvider,
+            egressAuditStore: auditStore);
         var profiles = new EnvironmentRuntimeBootstrapProfileRegistry(
             [], "runtime-profile", new("https://orchestrator.test/"));
         var configuredStorageOptions = storageSelectionOptions with { MaximumCapacityGiB = maximumCapacityGiB };
@@ -930,6 +947,26 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
             receipt.EnvironmentId,
             disposition,
             receiptLinks);
+
+    private static async Task AssertOwnerMappingAsync(
+        NpgsqlDataSource dataSource,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            """
+            SELECT tenant_id, project_id, run_id, environment_id
+            FROM environment.sandbox_owner_mappings
+            WHERE owner_fingerprint = @fingerprint
+            """);
+        command.Parameters.AddWithValue("fingerprint", AgentSandboxProvider.GetOwnerFingerprint(owner));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        Assert.True(await reader.ReadAsync(cancellationToken));
+        Assert.Equal(owner.TenantId, reader.GetString(0));
+        Assert.Equal(owner.ProjectId, reader.GetString(1));
+        Assert.Equal(owner.RunId, reader.GetString(2));
+        Assert.Equal(owner.EnvironmentId, reader.GetString(3));
+    }
 
     private static ProjectAuthorizationContextResponse Authorization(
         RuntimeOwnerContext owner,
@@ -1148,13 +1185,16 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         public int ReleasePartialCalls { get; private set; }
         public bool LoseNextProvisionResponse { get; set; }
         public Action? AfterProvision { get; set; }
+        public Func<EnvironmentOwnerIdentity, CancellationToken, Task>? BeforeProvisionAsync { get; set; }
         public ProviderResourceRef? LastReleasedResource { get; private set; }
         public SandboxProvisionRequest? LastRequest { get; private set; }
 
-        public Task<SandboxProvisionedResource> ProvisionAsync(
+        public async Task<SandboxProvisionedResource> ProvisionAsync(
             SandboxProvisionRequest request,
             CancellationToken cancellationToken = default)
         {
+            if (BeforeProvisionAsync is not null)
+                await BeforeProvisionAsync(request.Fence.Owner, cancellationToken);
             ProvisionCalls++;
             LastRequest = request;
             _resource = new(
@@ -1180,7 +1220,7 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
             }
 
             AfterProvision?.Invoke();
-            return Task.FromResult(_resource);
+            return _resource;
         }
 
         public Task<SandboxObservation> DescribeAsync(

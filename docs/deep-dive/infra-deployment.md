@@ -104,6 +104,13 @@ project pull request list returns `503 pull_request_records_unavailable` until
 the Job applies the plan. See the
 [Azure tooling notes](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).
 
+Environment schema version 14 adds the Sandbox owner mapping and attributed
+and unattributed egress-flow tables. The reviewed runtime-grant plan permits
+only `SELECT, INSERT` on those tables. The runtime cannot update, delete, or
+truncate audit rows. The migration and grant-plan change are source changes;
+the maintenance Job applies them during a later deployment. This slice does
+not collect flow logs or expire audit records.
+
 ### Understand the Azure foundation
 
 `main.bicep` is an Azure infrastructure-as-code template. It targets a

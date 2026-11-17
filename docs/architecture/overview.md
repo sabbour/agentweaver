@@ -24,7 +24,7 @@ permission.
 | Identity Broker | Sign-in, tokens, purpose-bound grants, credential redemption, and private provider-credential publication | Assign project roles |
 | Projects & Config | Current project authority, immutable accepted run selections, provider Draft and Available revisions gated by Events rate-card verification, Platform and Project native ACS artifact storage and scoped reads, and private Environment mTLS source for pending Platform artifacts | Admit or apply policies, or change the v4 Policy path |
 | Orchestrator and Core | Decisions, gates, session tree, execution fences and MAF checkpoints | Treat model text as approval |
-| Environment | Resource lifecycle, network intent, unadmitted Platform egress candidates, workspace volumes and Sandbox placement | Admit or apply Platform policy, or own workflow completion |
+| Environment | Resource lifecycle, network intent, unadmitted Platform egress candidates, append-only Sandbox egress audit, workspace volumes and Sandbox placement | Admit or apply Platform policy, or own workflow completion |
 | AgentHost and AgentRuntime | Guard native SDK turns and tools against current owner bindings | Schedule itself or choose a new model/credential |
 | Events & Sessions | Ordered history, material references, addressed delivery and accounting | Replace execution state or replay effects |
 | Knowledge | Authorized records and bounded context through the selected Memory provider | Replace the run journal |

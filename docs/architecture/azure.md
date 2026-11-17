@@ -217,11 +217,11 @@ ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 49 Core migration versions (1 through 16, 18
 through 33, and 35-51), with version 17 excluded and reserved version 34
-skipped, 11 Events versions, and 13 Environment versions. The initializer
+skipped, 11 Events versions, and 14 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`5bc5d3157fdc75187820546193254d8a5a17275a4a8b65207c4b2ae3e5ba3fa8`.
-It contains 140 tables, 14 row-lock columns, and 51 exact function signatures.
+`926a6d610382f32422b2f22fc43160580a575534934db6e9d1051711cb059c6c`.
+It contains 143 tables, 14 row-lock columns, and 51 exact function signatures.
 The Projects & Config plan grants `SELECT, INSERT` and column-scoped
 `UPDATE (sequence, fence_generation, head_hash, updated_at)` on
 `project_governance_decision_stream_heads`. The initializer reads back its
@@ -270,6 +270,13 @@ provider requests. Its planned runtime rights are `SELECT, INSERT`; an owner
 trigger rejects `UPDATE`, `DELETE`, and `TRUNCATE`. The reserved apply path is
 not registered or called. This source change updates the grant-plan hash but
 does not apply the migration or grants to a live database.
+Environment schema version 14 adds `environment.sandbox_owner_mappings`,
+`environment.sandbox_egress_flows_attributed`, and
+`environment.sandbox_egress_flows_unattributed`. The runtime role has
+`SELECT, INSERT` on these tables and cannot update, delete, or truncate their
+rows. This slice does not collect source flow logs or define automatic expiry.
+The migration and grant-plan hash change are source-only; they do not apply
+the migration or grants to a live database.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,

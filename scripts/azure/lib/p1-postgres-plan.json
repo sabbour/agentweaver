@@ -691,6 +691,27 @@
               "sqlState": "55000"
             }
           ]
+        },
+        {
+          "table": "sandbox_owner_mappings",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ]
+        },
+        {
+          "table": "sandbox_egress_flows_attributed",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ]
+        },
+        {
+          "table": "sandbox_egress_flows_unattributed",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ]
         }
       ],
       "functions": [
@@ -1812,7 +1833,8 @@
     10,
     11,
     12,
-    13
+    13,
+    14
   ],
   "eventsVersions": [
     1,

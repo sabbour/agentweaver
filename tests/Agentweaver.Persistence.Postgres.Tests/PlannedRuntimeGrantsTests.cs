@@ -10,10 +10,10 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests of plan validation; no database is needed.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "5bc5d3157fdc75187820546193254d8a5a17275a4a8b65207c4b2ae3e5ba3fa8";
+    private const string ReviewedPlanSha256 = "926a6d610382f32422b2f22fc43160580a575534934db6e9d1051711cb059c6c";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
-    private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 13)];
+    private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 14)];
 
     [Fact]
     public void EmbeddedPlanIsTheReviewedPlan()
@@ -101,6 +101,16 @@ public sealed class PlannedRuntimeGrantsTests
         var reservations = Assert.Single(
             environment.Tables, table => table.Table == "platform_policy_apply_reservations");
         Assert.Equal(["SELECT", "INSERT"], reservations.Privileges);
+        foreach (var tableName in new[]
+        {
+            "sandbox_owner_mappings",
+            "sandbox_egress_flows_attributed",
+            "sandbox_egress_flows_unattributed"
+        })
+        {
+            var auditTable = Assert.Single(environment.Tables, table => table.Table == tableName);
+            Assert.Equal(["SELECT", "INSERT"], auditTable.Privileges);
+        }
         var reservationGuard = Assert.Single(
             environment.Functions,
             function => function.Signature == "reject_platform_policy_apply_reservation_mutation()");

@@ -224,6 +224,7 @@ CLI/API compatibility policy.
 | A live acceptance prerequisite or cleanup result is missing | Preserve failed/blocked status; do not aggregate into pass | Harness/CLI result tests; complete model-dependent live acceptance is separate |
 | A new platform egress provider is added | It must pass the shared conformance kit in `PlatformEgressTests.cs` | Controlled tests with a fake store; not datapath proof |
 | A reserved egress request is retried or delayed | PostgreSQL recovers the exact reservation after restart; fake Kubernetes tests cover lost-response replay and reject a delayed PUT with a stale `resourceVersion`; the provider rejects a recreated object with a stale UID | PostgreSQL and fake API tests; not live Kubernetes or datapath proof |
+| A Sandbox owner is provisioned or a flow write fails | PostgreSQL retains the owner mapping before provider creation and stores known and unknown owners in separate append-only tables; a failed write remains retryable from the same source cursor | PostgreSQL persistence, migration, and runtime-grant tests; no live flow-log collection or automatic expiry |
 
 The principal risk is overclaiming evidence. Source owners must identify the
 exact revision, executable, environment, executed suite and limitations.

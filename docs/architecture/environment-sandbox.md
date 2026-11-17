@@ -8,9 +8,13 @@ workspace data or the Environment itself.
 Environment reserves a durable lease before calling the provider and checks
 the exact workspace attachment and network policy before reporting dispatch
 readiness. Generation fences reject stale attempts instead of letting them
-change newer owner state. This page explains those source contracts, not
-a live Kubernetes or AgentHost test. The [runtime deep dive](../deep-dive/environment-sandbox.md)
-connects the lifecycle, placement and recovery views.
+change newer owner state. Before Sandbox provisioning, Environment also saves
+the owner fingerprint mapping used to attribute egress audit records. The
+[egress architecture](./environment-egress.md#sandbox-egress-audit-persistence)
+describes those records and their append-only runtime grants. This page explains
+source contracts, not a live Kubernetes or AgentHost test. The
+[runtime deep dive](../deep-dive/environment-sandbox.md) connects the lifecycle,
+placement and recovery views.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">

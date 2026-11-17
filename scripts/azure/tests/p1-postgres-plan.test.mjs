@@ -228,6 +228,12 @@ test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
       item.signature === guard.function && !item.execute));
 
   const environment = plan.services.find(service => service.schema === 'environment');
+  for (const table of [
+    'sandbox_owner_mappings',
+    'sandbox_egress_flows_attributed',
+    'sandbox_egress_flows_unattributed',
+  ])
+    assert.deepEqual(environment.tables.find(item => item.table === table).privileges, ['SELECT', 'INSERT']);
   const reservations = environment.tables.find(table => table.table === 'platform_policy_apply_reservations');
   assert.deepEqual(reservations.privileges, ['SELECT', 'INSERT']);
   assert.equal(reservations.mutationDenialRequired, true);
@@ -468,7 +474,7 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
 
   assert.deepEqual(catalog, migrationIds);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
-  assert.match(source, /private const int CurrentSchemaVersion = 13;/);
+  assert.match(source, /private const int CurrentSchemaVersion = 14;/);
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 
@@ -484,7 +490,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 140);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 143);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);

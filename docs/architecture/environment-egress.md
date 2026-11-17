@@ -9,6 +9,31 @@ This page explains the egress mechanism, not a live network test. Cilium
 provides the Kubernetes policy API. Pod placement and runtime registration
 are separate from compiling egress.
 
+## Sandbox egress audit persistence
+
+Environment stores Sandbox owner mappings and flow records in PostgreSQL. Before
+it calls the Sandbox provider, Environment commits a mapping from the Sandbox
+owner fingerprint to the tenant, project, run, and Environment IDs. The
+fingerprint is the first 40 lowercase hexadecimal characters of the
+SHA-256 hash of those four IDs, separated by NUL characters. It matches the
+fingerprint in the AgentSandbox label.
+
+Environment stores each flow with a stable ID. A flow whose `WorkloadRef`
+matches a saved owner fingerprint goes to
+`environment.sandbox_egress_flows_attributed`. A flow with an unknown or
+missing reference goes to `environment.sandbox_egress_flows_unattributed`.
+Repeated observations are idempotent. Environment normalizes timestamps to
+UTC before it creates the flow ID.
+
+Environment commits a flow before it returns success. A reader must advance
+its source cursor only after that commit succeeds. A failed write returns an
+error, so the same flow can be retried. The runtime role has `SELECT, INSERT`
+on the three audit tables. It cannot update, delete, or truncate their rows.
+
+This slice does not collect flows from Cilium or Log Analytics. It defines no
+retention period or automatic expiry. The application does not delete these
+records.
+
 ## Platform egress snapshot compiler
 
 The Platform Policy write gate is disabled by default. When
@@ -513,6 +538,25 @@ artifact through the production client, then checks candidate compilation.
 Reconciler tests use a fake policy source and a fake Kubernetes store. They
 include a conformance kit that every `IPlatformEgressProvider` must pass.
 Datapath enforcement requires separate live-network evidence.
+
+## Sandbox egress audit persistence
+
+Environment stores each Sandbox owner fingerprint with its tenant, project,
+run, and Environment IDs. The fingerprint uses the same first 40 lowercase
+SHA-256 characters as the AgentSandbox provider label. Environment commits
+this mapping before it calls the Sandbox provider. A conflicting mapping stops
+provisioning.
+
+Environment stores a flow as attributed when its `WorkloadRef` matches a saved
+fingerprint. It stores unknown references as unattributed records. It commits
+each flow before the store returns, so a reader advances its source cursor only
+after a successful write. A write error propagates and leaves the source cursor
+available for retry.
+
+This slice adds persistence only; it does not collect Cilium or Log Analytics
+flow logs. It defines no retention period or automatic expiry. The runtime
+database role has `SELECT` and `INSERT` access to these tables and no
+`UPDATE`, `DELETE`, or `TRUNCATE` access.
 
 ## Trade-offs and limits
 

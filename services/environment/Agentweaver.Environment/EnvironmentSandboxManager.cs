@@ -7,6 +7,7 @@ using Agentweaver.Identity;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Agentweaver.Providers.Storage.AzureFiles;
+using Npgsql;
 
 namespace Agentweaver.Environment;
 
@@ -140,7 +141,8 @@ public sealed class EnvironmentSandboxManager(
     EnvironmentEgressManager egressManager,
     EnvironmentRuntimeSuspendReleaseAuthority? suspendReleaseAuthority = null,
     TimeProvider? timeProvider = null,
-    IEnvironmentP1InvocationBindingReader? p1BindingReader = null)
+    IEnvironmentP1InvocationBindingReader? p1BindingReader = null,
+    IEnvironmentEgressAuditStore? egressAuditStore = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -397,12 +399,17 @@ public sealed class EnvironmentSandboxManager(
             if (requireCurrent is not null)
                 await requireCurrent(cancellationToken).ConfigureAwait(false);
             if (lease.State == SandboxLeaseState.Active && lease.IsCurrent)
+            {
+                await (egressAuditStore ?? throw new InvalidOperationException(
+                    "The Environment egress audit store is not configured."))
+                    .RegisterOwnerAsync(context.Fence.Owner, cancellationToken).ConfigureAwait(false);
                 return await ObserveAsync(
                     caller,
                     context,
                     lease,
                     request.NetworkPolicyGeneration,
                     cancellationToken).ConfigureAwait(false);
+            }
             return ToResult(lease);
         }
 
@@ -495,6 +502,9 @@ public sealed class EnvironmentSandboxManager(
             await CheckP1BindingAsync(cancellationToken).ConfigureAwait(false);
             await VerifyWorkspaceClusterIdentityAsync(latestWorkspace, cancellationToken).ConfigureAwait(false);
             await CheckP1BindingAsync(cancellationToken).ConfigureAwait(false);
+            await (egressAuditStore ?? throw new InvalidOperationException(
+                "The Environment egress audit store is not configured."))
+                .RegisterOwnerAsync(context.Fence.Owner, cancellationToken).ConfigureAwait(false);
             providerAttemptStarted = true;
             var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
                 SandboxProviderAttemptRequest.ForProvision(lease),
@@ -574,7 +584,8 @@ public sealed class EnvironmentSandboxManager(
                 ProjectsConfigApiException or
                 EnvironmentLifecycleException or
                 CiliumPolicyException or
-                HttpRequestException))
+                HttpRequestException or
+                NpgsqlException))
         {
             if (workspaceAttachmentAttempted)
                 await EnsureWorkspaceAttachmentReleasedAsync(
@@ -1734,6 +1745,9 @@ public sealed class EnvironmentSandboxManager(
         lease = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
 
         SandboxProvisionedResource provisioned;
+        await (egressAuditStore ?? throw new InvalidOperationException(
+            "The Environment egress audit store is not configured."))
+            .RegisterOwnerAsync(context.Fence.Owner, cancellationToken).ConfigureAwait(false);
         var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
             SandboxProviderAttemptRequest.ForProvision(lease),
             cancellationToken).ConfigureAwait(false);

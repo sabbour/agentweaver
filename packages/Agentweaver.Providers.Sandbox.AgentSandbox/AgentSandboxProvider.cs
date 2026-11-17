@@ -2327,7 +2327,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
     }
 
     /// <summary>Hashes the complete owner identity before storing it as a Kubernetes label.</summary>
-    private static string GetOwnerFingerprint(EnvironmentOwnerIdentity owner) =>
+    public static string GetOwnerFingerprint(EnvironmentOwnerIdentity owner) =>
         Hash($"{owner.TenantId}\0{owner.ProjectId}\0{owner.RunId}\0{owner.EnvironmentId}")[..40];
 
     /// <summary>Hashes workspace owner, volume, resource generation, and environment into a stable attachment identity.</summary>

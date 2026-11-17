@@ -122,6 +122,9 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             GRANT SELECT, INSERT ON environment.remote_mcp_catalog_snapshots TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.remote_mcp_connection_idempotency TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.platform_policy_apply_reservations TO {RuntimeRole};
+            GRANT SELECT, INSERT ON environment.sandbox_owner_mappings TO {RuntimeRole};
+            GRANT SELECT, INSERT ON environment.sandbox_egress_flows_attributed TO {RuntimeRole};
+            GRANT SELECT, INSERT ON environment.sandbox_egress_flows_unattributed TO {RuntimeRole};
             """);
 
         try
@@ -151,6 +154,57 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             Assert.False(reservation.Replayed);
             Assert.True(reservationReplay.Replayed);
             Assert.Equal(reservation.ReservationId, reservationReplay.ReservationId);
+
+            var auditStore = new EnvironmentEgressAuditStore(runtimeDataSource);
+            var owner = new EnvironmentOwnerIdentity(
+                "tenant-" + Guid.NewGuid().ToString("N"),
+                "project-" + Guid.NewGuid().ToString("N"),
+                "run-" + Guid.NewGuid().ToString("N"),
+                "environment-" + Guid.NewGuid().ToString("N"));
+            var fingerprint = await auditStore.RegisterOwnerAsync(owner, CancellationToken.None);
+            var flowTime = DateTimeOffset.UtcNow;
+            var retryFlow = new EgressFlowObservation(
+                "retry.example", null, 443, EgressFlowVerdict.Allowed,
+                flowTime, flowTime, 1, fingerprint);
+            await ExecuteSqlAsync(
+                fixture.DataSource,
+                $"REVOKE INSERT ON environment.sandbox_egress_flows_attributed FROM {RuntimeRole}");
+            var cursor = "cursor-before-write";
+            var failedAuditWrite = await Assert.ThrowsAsync<PostgresException>(async () =>
+            {
+                await auditStore.AppendFlowAsync(retryFlow, CancellationToken.None);
+                cursor = "cursor-after-write";
+            });
+            Assert.Equal("42501", failedAuditWrite.SqlState);
+            Assert.Equal("cursor-before-write", cursor);
+            await ExecuteSqlAsync(
+                fixture.DataSource,
+                $"GRANT INSERT ON environment.sandbox_egress_flows_attributed TO {RuntimeRole}");
+            var retry = await auditStore.AppendFlowAsync(retryFlow, CancellationToken.None);
+            Assert.True(retry.Attributed);
+            var unknown = await auditStore.AppendFlowAsync(
+                retryFlow with { Host = "unknown.example", WorkloadRef = "unregistered-workload" },
+                CancellationToken.None);
+            Assert.False(unknown.Attributed);
+
+            var auditMutations = new[]
+            {
+                "UPDATE environment.sandbox_owner_mappings SET environment_id = 'changed'",
+                "DELETE FROM environment.sandbox_owner_mappings",
+                "TRUNCATE environment.sandbox_owner_mappings",
+                "UPDATE environment.sandbox_egress_flows_attributed SET flow_count = flow_count",
+                "DELETE FROM environment.sandbox_egress_flows_attributed",
+                "TRUNCATE environment.sandbox_egress_flows_attributed",
+                "UPDATE environment.sandbox_egress_flows_unattributed SET flow_count = flow_count",
+                "DELETE FROM environment.sandbox_egress_flows_unattributed",
+                "TRUNCATE environment.sandbox_egress_flows_unattributed"
+            };
+            foreach (var statement in auditMutations)
+            {
+                var denied = await Assert.ThrowsAsync<PostgresException>(() =>
+                    ExecuteSqlAsync(runtimeDataSource, statement));
+                Assert.Equal("42501", denied.SqlState);
+            }
 
             var forbiddenUpdate = await Assert.ThrowsAsync<PostgresException>(() =>
                 ExecuteSqlAsync(

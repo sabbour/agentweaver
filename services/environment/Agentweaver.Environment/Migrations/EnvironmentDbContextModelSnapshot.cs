@@ -23,6 +23,78 @@ namespace Agentweaver.Environment.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentAttributedEgressFlowRow", b =>
+                {
+                    b.Property<string>("FlowId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("flow_id");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("address");
+
+                    b.Property<DateTimeOffset>("FirstSeen")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen");
+
+                    b.Property<long>("FlowCount")
+                        .HasColumnType("bigint")
+                        .HasColumnName("flow_count");
+
+                    b.Property<string>("Host")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("host");
+
+                    b.Property<DateTimeOffset>("LastSeen")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen");
+
+                    b.Property<string>("OwnerFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("owner_fingerprint");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("integer")
+                        .HasColumnName("port");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<string>("Verdict")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("verdict");
+
+                    b.Property<string>("WorkloadRef")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("workload_ref");
+
+                    b.HasKey("FlowId");
+
+                    b.HasIndex("OwnerFingerprint", "FirstSeen");
+
+                    b.ToTable("sandbox_egress_flows_attributed", "environment", t =>
+                        {
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_attributed_count", "flow_count > 0");
+
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_attributed_port", "port BETWEEN 1 AND 65535");
+
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_attributed_times", "last_seen >= first_seen");
+
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_attributed_verdict", "verdict IN ('Allowed', 'Denied')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Environment.EnvironmentLifecycleOperationRow", b =>
                 {
                     b.Property<Guid>("OperationId")
@@ -617,6 +689,120 @@ namespace Agentweaver.Environment.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentSandboxOwnerMappingRow", b =>
+                {
+                    b.Property<string>("OwnerFingerprint")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("owner_fingerprint");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<string>("EnvironmentId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("environment_id");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("OwnerFingerprint");
+
+                    b.HasIndex("TenantId", "ProjectId", "RunId", "EnvironmentId")
+                        .IsUnique();
+
+                    b.ToTable("sandbox_owner_mappings", "environment", t =>
+                        {
+                            t.HasCheckConstraint("ck_environment_sandbox_owner_mappings_fingerprint", "owner_fingerprint ~ '^[0-9a-f]{40}$'");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentUnattributedEgressFlowRow", b =>
+                {
+                    b.Property<string>("FlowId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("flow_id");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("address");
+
+                    b.Property<DateTimeOffset>("FirstSeen")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen");
+
+                    b.Property<long>("FlowCount")
+                        .HasColumnType("bigint")
+                        .HasColumnName("flow_count");
+
+                    b.Property<string>("Host")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("host");
+
+                    b.Property<DateTimeOffset>("LastSeen")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("integer")
+                        .HasColumnName("port");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<string>("Verdict")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("verdict");
+
+                    b.Property<string>("WorkloadRef")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("workload_ref");
+
+                    b.HasKey("FlowId");
+
+                    b.HasIndex("FirstSeen");
+
+                    b.ToTable("sandbox_egress_flows_unattributed", "environment", t =>
+                        {
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_unattributed_count", "flow_count > 0");
+
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_unattributed_port", "port BETWEEN 1 AND 65535");
+
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_unattributed_times", "last_seen >= first_seen");
+
+                            t.HasCheckConstraint("ck_environment_sandbox_egress_unattributed_verdict", "verdict IN ('Allowed', 'Denied')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Environment.EnvironmentWorkspaceVolumeCleanupRow", b =>
                 {
                     b.Property<Guid>("WorkId")
@@ -1100,6 +1286,15 @@ namespace Agentweaver.Environment.Migrations
 
                             t.HasCheckConstraint("ck_environment_remote_mcp_connections_state", "state IN ('Draft', 'Enabled', 'Disabled', 'Removed')");
                         });
+                });
+
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentAttributedEgressFlowRow", b =>
+                {
+                    b.HasOne("Agentweaver.Environment.EnvironmentSandboxOwnerMappingRow", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerFingerprint")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Agentweaver.Environment.EnvironmentLifecycleOperationRow", b =>
