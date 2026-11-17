@@ -2,7 +2,7 @@
   "apiVersion": "v1",
   "kind": "ConfigMap",
   "metadata": {
-    "name": "identity-broker-runtime-config-v3",
+    "name": "identity-broker-runtime-config-v4",
     "namespace": "agentweaver",
     "annotations": {}
   },
@@ -53,6 +53,7 @@
     "IdentityBroker__RuntimeBootstrap__SourceLifetime": "00:02:00",
     "IdentityBroker__WebOrigin": "https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io",
     "IdentityBroker__SecretRedemption__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+    "IdentityBroker__SecretRedemption__ByokVaultHost": "agentweaver-kv-v1.vault.azure.net",
     "IdentityBroker__SecretRedemption__VaultHost": "agentweaver-kv-v1.vault.azure.net",
     "IdentityBroker__SecretRedemption__VaultUri": "https://agentweaver-kv-v1.vault.azure.net/",
     "IdentityBroker__SecretRedemption__WorkloadIdentityClientId": "4ee7e4e8-f5c8-445a-9fa4-5cf13afdb067",

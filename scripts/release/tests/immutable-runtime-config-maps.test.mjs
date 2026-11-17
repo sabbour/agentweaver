@@ -157,7 +157,7 @@ test('kubectl reports a failed guarded delete when the live ConfigMap changed', 
 
 test('run-binding replacement scope allows only its two runtime ConfigMaps', () => {
   const replaceableNames = new Set([
-    'identity-broker-runtime-config-v3',
+    'identity-broker-runtime-config-v4',
     'projects-config-runtime-config',
   ]);
   const desired = [

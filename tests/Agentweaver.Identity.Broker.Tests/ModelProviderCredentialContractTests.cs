@@ -74,6 +74,22 @@ public sealed class ModelProviderCredentialContractTests
         Assert.Equal("credential_vault_unavailable", exception.Code);
     }
 
+    [Fact]
+    public void EgressHostMatchesTheConfiguredVaultAndDefaultsToTheExistingVault()
+    {
+        var existingOnly = ModelProviderCredentialVaults.Create(ExistingVault, null);
+        Assert.Equal("agentweaver-kv.vault.azure.net", existingOnly.ResolveEgressHost(null));
+        Assert.Throws<ModelProviderCredentialException>(() =>
+            existingOnly.ResolveEgressHost("other.vault.azure.net"));
+
+        var withByok = ModelProviderCredentialVaults.Create(ExistingVault, ByokVault);
+        Assert.Equal("agentweaver-byok.vault.azure.net",
+            withByok.ResolveEgressHost("agentweaver-byok.vault.azure.net"));
+        Assert.Throws<ModelProviderCredentialException>(() => withByok.ResolveEgressHost(null));
+        Assert.Throws<ModelProviderCredentialException>(() =>
+            withByok.ResolveEgressHost("other.vault.azure.net"));
+    }
+
     private static void AssertInvalidIdentity(ModelProviderCredentialScope scope, string? projectId) =>
         Assert.Throws<ModelProviderCredentialException>(() =>
             ModelProviderCredentialStore.ValidateIdentity(new(Guid.NewGuid(), scope, projectId, "provider")));

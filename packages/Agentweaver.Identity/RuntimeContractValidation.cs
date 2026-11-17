@@ -62,6 +62,19 @@ public static class RuntimeContractValidation
             if (binding.ModelSelectionReference is null)
                 throw new RuntimeAuthorizationException("runtime_binding_invalid");
         }
+        if (binding.ModelCredentialIdentity is { } credentialIdentity)
+        {
+            ValidateModelCredentialIdentity(credentialIdentity);
+            if (binding.ModelSourceMode != ModelSourceMode.Byok ||
+                binding.ModelCredentialReference is null ||
+                binding.ModelSelectionReference != credentialIdentity.ProviderId ||
+                binding.ModelBindingPin?.ProviderId != credentialIdentity.ProviderId ||
+                credentialIdentity.Scope == ModelProviderBindingScope.Project &&
+                    credentialIdentity.ProjectId != binding.ProjectId)
+                throw new RuntimeAuthorizationException("runtime_model_credential_identity_invalid");
+        }
+        else if (binding.ModelBindingPin?.ProviderId is not null)
+            throw new RuntimeAuthorizationException("runtime_model_credential_identity_invalid");
         if (binding.ModelConnectionId is { } connectionId &&
             (connectionId == Guid.Empty || binding.ModelSourceMode != Agentweaver.Abstractions.ModelSourceMode.HostedCopilot ||
                 binding.ModelCredentialReference is not null ||
@@ -158,6 +171,22 @@ public static class RuntimeContractValidation
             value.Any(character => !char.IsAsciiLetterOrDigit(character) &&
                 character is not ('.' or '_' or '-' or ':')))
             throw new RuntimeAuthorizationException("runtime_identifier_invalid");
+    }
+
+    /// <summary>Requires a complete slot, scope, project, and provider identity.</summary>
+    public static void ValidateModelCredentialIdentity(ModelCredentialIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        if (identity.CredentialSlotId == Guid.Empty ||
+            !Enum.IsDefined(identity.Scope) ||
+            identity.Scope == ModelProviderBindingScope.Platform && identity.ProjectId is not null ||
+            identity.Scope == ModelProviderBindingScope.Project &&
+                (string.IsNullOrEmpty(identity.ProjectId) || identity.ProjectId.Length > 32) ||
+            string.IsNullOrEmpty(identity.ProviderId) || identity.ProviderId.Length > 128)
+            throw new RuntimeAuthorizationException("runtime_model_credential_identity_invalid");
+        ValidateIdentifier(identity.ProviderId);
+        if (identity.Scope == ModelProviderBindingScope.Project)
+            ValidateIdentifier(identity.ProjectId!);
     }
 
     /// <summary>

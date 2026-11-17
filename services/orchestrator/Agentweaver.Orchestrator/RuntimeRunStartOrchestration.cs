@@ -1877,6 +1877,7 @@ internal sealed partial class RuntimeRunStartContinuation(
         {
             WorkflowStepId = binding.WorkflowStepId,
             ModelCredentialReference = binding.ModelCredentialReference,
+            ModelCredentialIdentity = binding.ModelCredentialIdentity,
             ModelSourceMode = binding.ModelSourceMode,
             ModelBindingPin = binding.ModelBindingPin,
             ModelConnectionId = binding.ModelConnectionId,
@@ -1978,6 +1979,7 @@ internal sealed partial class RuntimeRunStartContinuation(
             binding.WorkflowStepId != owner.WorkflowStepId ||
             binding.ModelSelectionReference != owner.ModelSelectionReference ||
             binding.ModelCredentialReference != owner.ModelCredentialReference ||
+            binding.ModelCredentialIdentity != owner.ModelCredentialIdentity ||
             binding.ModelSourceMode != owner.ModelSourceMode ||
             binding.ModelBindingPin != owner.ModelBindingPin ||
             binding.ModelConnectionId != owner.ModelConnectionId ||

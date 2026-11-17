@@ -59,6 +59,7 @@ spec:
               - matchName: orchestrator.agentweaver.svc.cluster.local
               - matchName: environment.agentweaver.svc.cluster.local
               - matchName: CHANGEME-KEYVAULT-HOST
+              - matchName: CHANGEME-BYOK-KEYVAULT-HOST
               - matchName: CHANGEME-POSTGRES-HOST
               - matchName: CHANGEME-UPSTREAM-OIDC-AUTHORITY
               - matchName: CHANGEME-UPSTREAM-OIDC-METADATA-HOST
@@ -96,4 +97,10 @@ spec:
       toPorts:
         - ports:
             - port: "5432"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: CHANGEME-BYOK-KEYVAULT-HOST
+      toPorts:
+        - ports:
+            - port: "443"
               protocol: TCP

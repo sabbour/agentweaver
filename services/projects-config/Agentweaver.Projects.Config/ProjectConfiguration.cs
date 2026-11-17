@@ -19,6 +19,9 @@ public sealed record ModelSelectionSettings(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelCredentialIdentity? CredentialIdentity { get; init; }
 }
 
 /// <summary>Optional model-reference and reasoning-effort changes at one configuration layer.</summary>
@@ -27,7 +30,14 @@ public sealed record ModelSelectionOverride(
     string? Reference = null,
     string? ReasoningEffort = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    RuntimeModelBindingPin? ModelBindingPin = null);
+    RuntimeModelBindingPin? ModelBindingPin = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SecretRef? CredentialReference { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelCredentialIdentity? CredentialIdentity { get; init; }
+}
 
 /// <summary>Platform or project model override for one task category.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -266,6 +276,7 @@ public static class ProjectConfigurationValidator
         {
             ValidateIdentifier(model.Reference, "modelSelection.reference");
             ValidateModelSourceMode(model);
+            ValidateResolvedCredentialSlotBinding(model, "modelSelection");
             ValidateReasoningEffort(model.ReasoningEffort, "modelSelection.reasoningEffort");
         }
         if (configuration.ModelSelection?.CredentialReference is { } secret &&
@@ -531,11 +542,18 @@ public static class ProjectConfigurationValidator
     private static void ValidateModelSelectionOverride(ModelSelectionOverride selection, string path)
     {
         if (selection is null ||
-            selection.Reference is null && selection.ReasoningEffort is null && selection.ModelBindingPin is null)
+            selection.Reference is null && selection.ReasoningEffort is null && selection.ModelBindingPin is null &&
+            selection.CredentialReference is null && selection.CredentialIdentity is null)
             throw Invalid($"'{path}' must change a model reference or reasoning effort.");
         if (selection.Reference is { } reference)
             ValidateIdentifier(reference, path + ".reference");
         ValidateReasoningEffort(selection.ReasoningEffort, path + ".reasoningEffort");
+        if (selection.CredentialReference is { } credentialReference &&
+            (string.IsNullOrWhiteSpace(credentialReference.Id) ||
+             string.IsNullOrWhiteSpace(credentialReference.Version)))
+            throw Invalid($"'{path}.credentialReference' must contain an exact secret ID and version.");
+        if (selection.CredentialIdentity is { } credentialIdentity)
+            ValidateCredentialIdentityShape(credentialIdentity, path + ".credentialIdentity");
         if (selection.ModelBindingPin is { } pin)
         {
             if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode) ||
@@ -550,9 +568,15 @@ public static class ProjectConfigurationValidator
             ValidateIdentifier(pin.ModelId, path + ".modelBindingPin.modelId");
             ValidateIdentifier(pin.ConfigurationRevision, path + ".modelBindingPin.configurationRevision");
             ValidateReasoningEffort(pin.ReasoningEffort, path + ".modelBindingPin.reasoningEffort");
+            if (pin.ProviderId is { } providerId)
+                ValidateIdentifier(providerId, path + ".modelBindingPin.providerId");
             if (selection.Reference != pin.ModelSelectionReference ||
                 selection.ReasoningEffort is not null && selection.ReasoningEffort != pin.ReasoningEffort)
                 throw Invalid($"'{path}.modelBindingPin' must match the selected model reference.");
+            if (pin.ProviderId is not null &&
+                selection.CredentialIdentity is { } selectedIdentity &&
+                pin.ProviderId != selectedIdentity.ProviderId)
+                throw Invalid($"'{path}.modelBindingPin' must match the credential identity.");
         }
     }
 
@@ -570,6 +594,7 @@ public static class ProjectConfigurationValidator
              model.SourceMode == ModelSourceMode.Byok &&
                 pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
              model.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
+             pin.ProviderId is not null && pin.SourceMode != ModelSourceMode.Byok ||
              string.IsNullOrWhiteSpace(pin.ModelId) || string.IsNullOrWhiteSpace(pin.ConfigurationRevision) ||
              pin.ConfigurationHash is not { Length: 64 } ||
              model.ReasoningEffort is not null && model.ReasoningEffort != pin.ReasoningEffort ||
@@ -580,6 +605,8 @@ public static class ProjectConfigurationValidator
             ValidateIdentifier(validatedPin.ModelId, "modelSelection.modelBindingPin.modelId");
             ValidateIdentifier(validatedPin.ConfigurationRevision, "modelSelection.modelBindingPin.configurationRevision");
             ValidateReasoningEffort(validatedPin.ReasoningEffort, "modelSelection.modelBindingPin.reasoningEffort");
+            if (validatedPin.ProviderId is { } providerId)
+                ValidateIdentifier(providerId, "modelSelection.modelBindingPin.providerId");
         }
         if (model.SourceMode is { } mode && !Enum.IsDefined(mode))
             throw Invalid("Model source mode must be hostedCopilot or byok.");
@@ -589,6 +616,40 @@ public static class ProjectConfigurationValidator
                 (model.ConnectionId is null || model.CredentialReference is not null) ||
             model.SourceMode == ModelSourceMode.Byok && model.CredentialReference is null)
             throw Invalid("Hosted Copilot requires one connection ID; BYOK requires one exact credential reference.");
+    }
+
+    internal static void ValidateResolvedCredentialSlotBinding(ModelSelectionSettings model, string path)
+    {
+        if (model.CredentialIdentity is { } identity)
+        {
+            ValidateCredentialIdentityShape(identity, path + ".credentialIdentity");
+            if (model.SourceMode != ModelSourceMode.Byok ||
+                model.CredentialReference is null ||
+                model.ConnectionId is not null ||
+                model.Reference != identity.ProviderId ||
+                model.ModelBindingPin?.ProviderId != identity.ProviderId)
+                throw Invalid($"'{path}' must bind the exact BYOK reference, provider pin, and credential identity.");
+        }
+        else if (model.ModelBindingPin?.ProviderId is not null)
+            throw Invalid($"'{path}.credentialIdentity' is required for a slot-backed provider pin.");
+    }
+
+    private static void ValidateCredentialIdentityShape(ModelCredentialIdentity identity, string path)
+    {
+        if (identity.CredentialSlotId == Guid.Empty ||
+            !Enum.IsDefined(identity.Scope) ||
+            identity.Scope == ModelProviderBindingScope.Platform && identity.ProjectId is not null ||
+            identity.Scope == ModelProviderBindingScope.Project &&
+                (string.IsNullOrWhiteSpace(identity.ProjectId) || identity.ProjectId.Length > 32))
+            throw Invalid($"'{path}' must contain a complete credential-slot scope.");
+        ValidateIdentifier(identity.ProviderId, path + ".providerId");
+        if (identity.ProviderId.Length > 128 ||
+            identity.ProjectId is { } projectId &&
+            projectId.Any(character => !char.IsAsciiLetterOrDigit(character) &&
+                character is not ('.' or '_' or '-' or ':')))
+            throw Invalid($"'{path}' contains an invalid provider or project ID.");
+        if (identity.ProjectId is { } validProjectId)
+            ValidateIdentifier(validProjectId, path + ".projectId");
     }
 
     private static bool IsExactIdentityConnectionId(string? connectionId) =>
@@ -609,6 +670,7 @@ public static class ProjectConfigurationValidator
         {
             ValidateIdentifier(model.Reference, "modelSelection.reference");
             ValidateModelSourceMode(model);
+            ValidateResolvedCredentialSlotBinding(model, "modelSelection");
             ValidateReasoningEffort(model.ReasoningEffort, "modelSelection.reasoningEffort");
         }
         if (defaults.ModelSelection?.CredentialReference is { } secret &&

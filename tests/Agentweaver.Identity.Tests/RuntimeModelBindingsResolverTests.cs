@@ -138,6 +138,27 @@ public sealed class RuntimeModelBindingsResolverTests
         Assert.Equal("fedcba9876543210fedcba9876543210", selection.CredentialReference.Version);
     }
 
+    [Fact]
+    public void ResolvesSlotBackedProviderRevisionOnlyWithItsExactCredentialIdentity()
+    {
+        var binding = RuntimeProviderBinding(new string('a', 64)) with
+        {
+            CredentialIdentity = new ModelCredentialIdentity(
+                Guid.NewGuid(), ModelProviderBindingScope.Project, "project-1", "runtime-provider")
+        };
+        var selection = RuntimeProviderSelection(binding);
+
+        Assert.Equal(binding.Deployment,
+            Resolver().ResolveAcceptedRuntimeBinding(selection, binding).ModelId);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            Resolver().ResolveAcceptedRuntimeBinding(selection with { CredentialIdentity = null }, binding));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            Resolver().ResolveAcceptedRuntimeBinding(selection with
+            {
+                CredentialIdentity = binding.CredentialIdentity! with { CredentialSlotId = Guid.NewGuid() }
+            }, binding));
+    }
+
     [Theory]
     [InlineData("hash")]
     [InlineData("revision")]
@@ -200,6 +221,10 @@ public sealed class RuntimeModelBindingsResolverTests
                     deploymentResolver.ResolveAcceptedRuntimeBinding(selection, binding)).Code);
         Assert.Equal("runtime-deployment", deploymentResolver.Resolve(
                 reference, ModelSourceMode.Byok, selection.ModelBindingPin).ModelId);
+        Assert.Equal("runtime_model_binding_pin_mismatch",
+            Assert.Throws<RuntimeAuthorizationException>(() => deploymentResolver.Resolve(
+                reference, ModelSourceMode.Byok,
+                selection.ModelBindingPin! with { ProviderId = "other-provider" })).Code);
     }
 
     [Fact]
@@ -238,6 +263,42 @@ public sealed class RuntimeModelBindingsResolverTests
         });
 
         Assert.Equal(pin, RuntimeAcceptedModelSelection.Read(selection).ModelBindingPin);
+    }
+
+    [Fact]
+    public void AcceptedSelectionDecoderPreservesSlotIdentityAndRequiresItsProviderMarker()
+    {
+        var binding = RuntimeProviderBinding(new string('a', 64)) with
+        {
+            CredentialIdentity = new ModelCredentialIdentity(
+                Guid.NewGuid(), ModelProviderBindingScope.Project, "project-1", "runtime-provider")
+        };
+        var identity = binding.CredentialIdentity!;
+        var pin = RuntimeModelBindingsResolver.Pin(binding, "low");
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var model = new
+        {
+            reference = binding.ProviderId,
+            sourceMode = ModelSourceMode.Byok,
+            credentialReference = new SecretRef("runtime-key", binding.CredentialVersion!),
+            credentialIdentity = identity,
+            reasoningEffort = "low",
+            modelBindingPin = pin
+        };
+        var snapshot = JsonSerializer.SerializeToElement(new { modelSelection = model }, options);
+
+        var accepted = RuntimeAcceptedModelSelection.Read(snapshot);
+
+        Assert.Equal(identity, accepted.CredentialIdentity);
+        Assert.Equal(pin, accepted.ModelBindingPin);
+
+        var changed = JsonSerializer.SerializeToNode(new { modelSelection = model }, options)!.AsObject();
+        changed["modelSelection"]!["modelBindingPin"]!["providerId"] = "foreign-provider";
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeAcceptedModelSelection.Read(JsonSerializer.SerializeToElement(changed)));
     }
 
     [Fact]
@@ -550,17 +611,8 @@ public sealed class RuntimeModelBindingsResolverTests
             new SecretRef("runtime-key", binding.CredentialVersion!), null, null)
         {
             ReasoningEffort = "low",
-            ModelBindingPin = new RuntimeModelBindingPin(
-                1,
-                binding.ProviderId,
-                binding.Deployment,
-                ModelSourceMode.Byok,
-                binding.ProviderRevision.ToString(),
-                binding.ConfigurationHash,
-                "low")
-            {
-                ProviderType = binding.ProviderType
-            }
+            CredentialIdentity = binding.CredentialIdentity,
+            ModelBindingPin = RuntimeModelBindingsResolver.Pin(binding, "low")
         };
 
     private static RuntimeByokProvider ByokProvider(KeyValuePair<string, string>[] headers) =>

@@ -18,4 +18,8 @@ public sealed record RuntimeModelBindingPin(
     /// <summary>Optional provider type for selections whose source is a named provider.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ProviderType { get; init; }
+
+    /// <summary>Provider ID marks a selection that uses a credential slot.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProviderId { get; init; }
 }

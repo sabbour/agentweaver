@@ -156,7 +156,7 @@ procedure and its limits, see
 [Replace an immutable runtime ConfigMap](../guide/deploy-to-azure.md#replace-an-immutable-runtime-configmap).
 
 Before `deploy:kustomize` runs a migration or writes to Kubernetes, it requires
-the live `identity-broker-runtime-config-v3` ConfigMap to match the complete
+the live `identity-broker-runtime-config-v4` ConfigMap to match the complete
 rendered Broker map, including `data`, `binaryData`, and `immutable`. The
 Broker Deployment must reference that map. A missing, malformed, or different
 map stops deployment. When the check passes, the helper omits the unchanged
@@ -299,6 +299,7 @@ change. See the [CLI guide](../guide/cli.md) for local setup.
 | `IdentityBroker__SecretRedemption__VaultHost` | Required exact public Key Vault host used by the Kubernetes egress policy. Set it to the lowercase host from the vault URI derived from `keyVaultName` in the reviewed Bicep parameter file. |
 | `IdentityBroker__SecretRedemption__VaultUri` | Required URI of the Key Vault secrets backend. Set it from the same reviewed `keyVaultName`; obtain the deployed value with `az keyvault show --resource-group <resource-group> --name <key-vault-name-from-reviewed-parameters> --query properties.vaultUri --output tsv`. The host must match `IdentityBroker__SecretRedemption__VaultHost`. |
 | `IdentityBroker__SecretRedemption__ByokVaultUri` | Optional HTTPS root for model-provider BYOK references. It must name a supported Key Vault and differ from `VaultUri`. Omission preserves current startup behavior; BYOK references fail closed until this vault is configured. A recorded reference stops resolving if its exact root changes; it is not redirected. |
+| `IdentityBroker__SecretRedemption__ByokVaultHost` | Required with `ByokVaultUri`. Set it to the lowercase host from that URI; the Broker checks the host and the exact recorded vault root before redemption. When `ByokVaultUri` is absent, this setting defaults to `VaultHost`. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTenantId` | Required Entra tenant GUID for the Broker's Key Vault identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityClientId` | Required client ID of the Broker's user-assigned managed identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath` | Required absolute path to the projected Broker workload-identity token file. |

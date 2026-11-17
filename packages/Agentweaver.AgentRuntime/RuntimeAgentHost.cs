@@ -1429,6 +1429,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             owner.ModelBindingPin != binding.ModelBindingPin ||
             owner.ReasoningEffort != binding.ReasoningEffort ||
             owner.ModelCredentialReference != binding.ModelCredentialReference ||
+            owner.ModelCredentialIdentity != binding.ModelCredentialIdentity ||
             owner.ModelConnectionId != binding.ModelConnectionId ||
             owner.ModelConnectionScope != binding.ModelConnectionScope ||
             owner.MaxModelTurns != binding.MaxModelTurns ||

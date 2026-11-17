@@ -864,7 +864,7 @@ issuer, Portal host, and callback. If the source or a live map differs, the
 stage stops without replacing it.
 
 The stage checks create permission before its only write. It creates only the
-immutable `identity-broker-runtime-config-v3` ConfigMap, then reads it back.
+immutable `identity-broker-runtime-config-v4` ConfigMap, then reads it back.
 An exact existing map is a no-op. If a create result is uncertain, check the
 map again before you retry; the stage never patches, deletes, or replaces it.
 It does not create routes, Services, policies, ServiceAccounts, Deployments,

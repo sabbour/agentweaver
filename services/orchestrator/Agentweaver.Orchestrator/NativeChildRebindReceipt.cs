@@ -368,6 +368,7 @@ internal sealed record NativeChildRebindOriginFingerprint(
             replacementSource.MeterSource == originSource.MeterSource &&
             newBinding.ModelSelectionReference == oldBinding.ModelSelectionReference &&
             newBinding.ModelCredentialReference == oldBinding.ModelCredentialReference &&
+            newBinding.ModelCredentialIdentity == oldBinding.ModelCredentialIdentity &&
             newBinding.ModelSourceMode == oldBinding.ModelSourceMode &&
             newBinding.ReasoningEffort == oldBinding.ReasoningEffort &&
             newBinding.ModelBindingPin == oldBinding.ModelBindingPin &&

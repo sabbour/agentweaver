@@ -127,3 +127,5 @@ public sealed class ModelProviderCredentialException(string code)
     public static ModelProviderCredentialException Conflict() => new("credential_slot_conflict");
     public static ModelProviderCredentialException VaultUnavailable() => new("credential_vault_unavailable");
 }
+
+internal sealed record ModelProviderCredentialRedemptionBackends(ISecretRedemption? Byok);

@@ -55,6 +55,16 @@ internal sealed class ModelProviderCredentialVaults
         if (!StringComparer.Ordinal.Equals(configuredUri, vaultUri))
             throw ModelProviderCredentialException.VaultUnavailable();
     }
+
+    internal string ResolveEgressHost(string? configuredHost)
+    {
+        var expectedHost = (Byok ?? Existing).VaultUri.Host;
+        if (Byok is not null && string.IsNullOrWhiteSpace(configuredHost) ||
+            configuredHost is not null &&
+                !StringComparer.OrdinalIgnoreCase.Equals(configuredHost, expectedHost))
+            throw ModelProviderCredentialException.InvalidRequest();
+        return configuredHost ?? expectedHost;
+    }
 }
 
 internal sealed class ModelProviderCredentialStore(
@@ -227,6 +237,23 @@ internal sealed class ModelProviderCredentialStore(
 
         vaults.RequireConfigured(revision.VaultSource, revision.VaultUri);
         return new(ModelProviderCredentialPinnedStatus.Found, ToReference(revision));
+    }
+
+    internal Task<ModelProviderCredentialPinnedRead> ReadPinnedAsync(
+        ModelCredentialIdentity identity,
+        SecretRef reference,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        var scope = identity.Scope switch
+        {
+            ModelProviderBindingScope.Platform => ModelProviderCredentialScope.Platform,
+            ModelProviderBindingScope.Project => ModelProviderCredentialScope.Project,
+            _ => throw ModelProviderCredentialException.InvalidRequest(),
+        };
+        return ReadPinnedAsync(new ModelProviderCredentialIdentity(
+            identity.CredentialSlotId, scope, identity.ProjectId, identity.ProviderId),
+            reference, cancellationToken);
     }
 
     internal async Task<ModelProviderCredentialReference> DisableAsync(

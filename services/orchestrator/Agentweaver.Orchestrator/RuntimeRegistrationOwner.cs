@@ -638,6 +638,7 @@ internal sealed class RuntimeRegistrationOwner(
             WorkflowStepId = owner.WorkflowStepId,
             ModelSelectionReference = owner.ModelSelectionReference,
             ModelCredentialReference = owner.ModelCredentialReference,
+            ModelCredentialIdentity = owner.ModelCredentialIdentity,
             ModelSourceMode = owner.ModelSourceMode,
             ReasoningEffort = owner.ReasoningEffort,
             ModelBindingPin = owner.ModelBindingPin,
@@ -783,6 +784,7 @@ internal sealed class RuntimeRegistrationOwner(
             previous.WorkflowStepId != owner.WorkflowStepId ||
             previous.ModelSelectionReference != owner.ModelSelectionReference ||
             previous.ModelCredentialReference != owner.ModelCredentialReference ||
+            previous.ModelCredentialIdentity != owner.ModelCredentialIdentity ||
             previous.ModelSourceMode != owner.ModelSourceMode ||
             previous.ModelConnectionId != owner.ModelConnectionId ||
             previous.ModelConnectionScope != owner.ModelConnectionScope ||
@@ -801,6 +803,7 @@ internal sealed class RuntimeRegistrationOwner(
             current.WorkflowStepId != previous.WorkflowStepId ||
             current.ModelSelectionReference != previous.ModelSelectionReference ||
             current.ModelCredentialReference != previous.ModelCredentialReference ||
+            current.ModelCredentialIdentity != previous.ModelCredentialIdentity ||
             current.ModelSourceMode != previous.ModelSourceMode ||
             current.ModelConnectionId != previous.ModelConnectionId ||
             current.ModelConnectionScope != previous.ModelConnectionScope ||

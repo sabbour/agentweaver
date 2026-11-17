@@ -118,6 +118,47 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
+    public void SlotBackedCredentialIdentityMustMatchThePinnedProviderAndRuntimeProject()
+    {
+        var registration = CreateRegistration();
+        var identity = new ModelCredentialIdentity(
+            Guid.NewGuid(), ModelProviderBindingScope.Project, "project", "provider");
+        var pin = new RuntimeModelBindingPin(
+            1, "provider", "deployment", ModelSourceMode.Byok, "revision",
+            new string('a', 64))
+        {
+            ProviderType = "openai",
+            ProviderId = "provider"
+        };
+        var bound = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ModelSelectionReference = "provider",
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelCredentialReference = new SecretRef("byok-project-provider", new string('b', 32)),
+                ModelCredentialIdentity = identity,
+                ModelBindingPin = pin
+            }
+        };
+
+        RuntimeContractValidation.Validate(bound);
+        Assert.NotEqual(
+            RuntimeContractValidation.RegistrationHash(registration),
+            RuntimeContractValidation.RegistrationHash(bound));
+        foreach (var invalid in new[]
+        {
+            bound with { Binding = bound.Binding with { ModelCredentialIdentity = null } },
+            bound with { Binding = bound.Binding with { ModelBindingPin = pin with { ProviderId = null } } },
+            bound with { Binding = bound.Binding with
+                { ModelCredentialIdentity = identity with { ProjectId = "other-project" } } },
+            bound with { Binding = bound.Binding with
+                { ModelCredentialIdentity = identity with { ProviderId = "other-provider" } } }
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeContractValidation.Validate(invalid));
+    }
+
+    [Fact]
     public void NumericRunPoliciesAreBoundValidatedAndDispatchLimitsRequireWorkflowBinding()
     {
         var registration = CreateRegistration();

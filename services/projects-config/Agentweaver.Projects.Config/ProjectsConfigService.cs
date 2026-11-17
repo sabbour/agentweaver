@@ -765,7 +765,8 @@ public sealed partial class ProjectsConfigService
         if (interactive)
             request = request with { Context = CreateInteractiveRunContext(projectConfiguration, defaults) };
 
-        var modelSelections = ResolveModelSelections(projectConfiguration, defaults, request.Context);
+        var modelSelections = ResolveModelSelections(
+            projectConfiguration, defaults, request.Context, project.ProjectId);
         var providers = ResolveProviders(request.Context);
         var egress = ProjectConfigurationValidator.ResolveEgress(
             defaults.EgressBaseline,
@@ -1241,7 +1242,8 @@ public sealed partial class ProjectsConfigService
     internal static ResolvedModelSelections ResolveModelSelections(
         ProjectConfiguration project,
         PlatformRuntimeDefaults platform,
-        RunSelectionContext context)
+        RunSelectionContext context,
+        string projectId)
     {
         var targets = new HashSet<(string? RoleId, string? AgentId)> { (null, null) };
         var castingByAgent = project.Casting.ToDictionary(item => item.AgentId, StringComparer.Ordinal);
@@ -1280,6 +1282,14 @@ public sealed partial class ProjectsConfigService
 
             var effort = selection.ReasoningEffort ?? "high";
             var normalized = selection with { ReasoningEffort = effort };
+            ProjectConfigurationValidator.ValidateResolvedCredentialSlotBinding(normalized, "modelSelection");
+            if (normalized.CredentialIdentity is
+                { Scope: ModelProviderBindingScope.Project } identity &&
+                identity.ProjectId != projectId)
+                throw new ProjectConfigException(
+                    "model_credential_identity_invalid",
+                    "The model credential slot belongs to a different project.",
+                    StatusCodes.Status422UnprocessableEntity);
             var key = (normalized.Reference, effort);
             if (effectiveByIdentity.TryGetValue(key, out var existing))
                 effectiveByIdentity[key] = MergeEffectiveSelection(existing, normalized, connectionScope);
@@ -1359,7 +1369,7 @@ public sealed partial class ProjectsConfigService
             StatusCodes.Status422UnprocessableEntity);
     }
 
-    /// <summary>Applies a partial model override and clears any stale pin when its model or effort changes.</summary>
+    /// <summary>Applies a partial model override and clears stale pins and credential links when the binding changes.</summary>
     private static ModelSelectionSettings? ApplyModelOverride(
         ModelSelectionSettings? current,
         ModelSelectionOverride? modelOverride)
@@ -1375,16 +1385,29 @@ public sealed partial class ProjectsConfigService
         var effort = modelOverride.ReasoningEffort ??
                      modelOverride.ModelBindingPin?.ReasoningEffort ??
                      current?.ReasoningEffort ?? "high";
+        var sourceMode = modelOverride.ModelBindingPin?.SourceMode ?? current?.SourceMode;
+        var sourceChanged = current?.SourceMode != sourceMode;
         var changed = current is null || current.Reference != reference ||
-                      (current.ReasoningEffort ?? "high") != effort;
+                      (current.ReasoningEffort ?? "high") != effort || sourceChanged;
+        var slotBacked = modelOverride.CredentialIdentity is not null ||
+                         modelOverride.ModelBindingPin?.ProviderId is not null;
+        var credentialBindingChanged = current is null || current.Reference != reference || sourceChanged ||
+                                       modelOverride.CredentialIdentity is not null &&
+                                       current.CredentialIdentity != modelOverride.CredentialIdentity ||
+                                       slotBacked && current.CredentialIdentity is null ||
+                                       modelOverride.ModelBindingPin?.ProviderId is { } providerId &&
+                                       current.CredentialIdentity?.ProviderId != providerId;
         return new ModelSelectionSettings(
             reference,
-            current?.CredentialReference,
-            modelOverride.ModelBindingPin?.SourceMode ?? current?.SourceMode,
-            current?.ConnectionId)
+            modelOverride.CredentialReference ??
+                (credentialBindingChanged ? null : current?.CredentialReference),
+            sourceMode,
+            sourceMode == ModelSourceMode.HostedCopilot ? current?.ConnectionId : null)
         {
             ReasoningEffort = effort,
-            ModelBindingPin = modelOverride.ModelBindingPin ?? (changed ? null : current?.ModelBindingPin)
+            ModelBindingPin = modelOverride.ModelBindingPin ?? (changed ? null : current?.ModelBindingPin),
+            CredentialIdentity = modelOverride.CredentialIdentity ??
+                                 (credentialBindingChanged ? null : current?.CredentialIdentity)
         };
     }
 
@@ -1411,6 +1434,7 @@ public sealed partial class ProjectsConfigService
                 current.SourceMode != incoming.SourceMode ||
             current.ConnectionId is not null && incoming.ConnectionId is not null &&
                 current.ConnectionId != incoming.ConnectionId ||
+            current.CredentialIdentity != incoming.CredentialIdentity ||
             current.ModelBindingPin is { } currentPin &&
                 incoming.ModelBindingPin is { } incomingPin && currentPin != incomingPin)
             throw new ProjectConfigException(
@@ -1425,6 +1449,7 @@ public sealed partial class ProjectsConfigService
                 CredentialReference = current.CredentialReference ?? incoming.CredentialReference,
                 SourceMode = current.SourceMode ?? incoming.SourceMode,
                 ConnectionId = current.ConnectionId ?? incoming.ConnectionId,
+                CredentialIdentity = current.CredentialIdentity,
                 ModelBindingPin = current.ModelBindingPin ?? incoming.ModelBindingPin
             }
         };

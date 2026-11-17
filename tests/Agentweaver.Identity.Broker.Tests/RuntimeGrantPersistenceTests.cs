@@ -272,6 +272,105 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
     }
 
     [Fact]
+    public async Task SlotBackedModelGrantRedeemsThePinnedByokVersionAfterDisableAndRejectsAnotherSlot()
+    {
+        const string existingVault = "https://agentweaver-kv.vault.azure.net/";
+        const string byokVault = "https://agentweaver-byok.vault.azure.net/";
+        const string providerId = "accepted-model-reference";
+        const string projectId = "project";
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var options = CreateOptions(dataSource);
+        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+
+        var identity = new ModelCredentialIdentity(
+            Guid.NewGuid(), ModelProviderBindingScope.Project, projectId, providerId);
+        var reference = new SecretRef(
+            "byok-project-" + providerId, new string('a', 32));
+        var vaults = ModelProviderCredentialVaults.Create(existingVault, byokVault);
+        await using var db = new IdentityBrokerDbContext(options);
+        var store = new ModelProviderCredentialStore(db, vaults, TimeProvider.System);
+        await store.RecordReferenceAsync(new(
+            Guid.NewGuid(), 0, identity.CredentialSlotId, ModelProviderCredentialScope.Project,
+            projectId, providerId, ModelProviderCredentialVaultSource.Byok, reference, "broker:actor"));
+        await store.DisableAsync(new(
+            Guid.NewGuid(), 1, identity.CredentialSlotId, ModelProviderCredentialScope.Project,
+            projectId, providerId, "broker:actor"));
+
+        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                [providerId] = new("controlled-model", ModelSourceMode.Byok,
+                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
+                {
+                    SupportedReasoningEfforts = ["high"]
+                }
+            });
+        var pin = resolver.Pin(providerId, ModelSourceMode.Byok) with { ProviderId = providerId };
+        var owner = new StorageOwner();
+        var registration = owner.Registration with
+        {
+            Binding = owner.Registration.Binding with
+            {
+                ModelSelectionReference = providerId,
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = pin,
+                ModelCredentialReference = reference,
+                ModelCredentialIdentity = identity
+            }
+        };
+        owner.Registration = registration;
+        var byokBackend = new TrackingSecretRedemption(
+            TimeProvider.System.GetUtcNow().AddMinutes(3), reference);
+        var existingBackend = new TrackingSecretRedemption(TimeProvider.System.GetUtcNow().AddMinutes(3));
+        var backends = new ModelProviderCredentialRedemptionBackends(byokBackend);
+        var authority = new RuntimeGrantAuthority(
+            db, owner, new StorageDelivery(), CreatePolicy(), CreateActor(), TimeProvider.System,
+            connections: null, modelCredentials: store, credentialBackends: backends);
+
+        Assert.Equal(ModelProviderCredentialCurrentStatus.Disabled,
+            (await store.ReadCurrentAsync(new(
+                identity.CredentialSlotId, ModelProviderCredentialScope.Project, projectId, providerId))).Status);
+        var receipt = await authority.IssueModelCredentialGrantAsync(
+            registration.RuntimeInstanceId, Guid.NewGuid());
+        var redeemed = await authority.RedeemModelCredentialAsync(
+            receipt, existingBackend, CancellationToken.None);
+        Assert.Equal(0, existingBackend.Calls);
+        Assert.Equal(1, byokBackend.Calls);
+        Assert.Equal(reference, byokBackend.LastIssuedReference);
+        redeemed.Credential.Invalidate();
+
+        var mismatchedVaults = ModelProviderCredentialVaults.Create(
+            existingVault, "https://replacement-byok.vault.azure.net/");
+        var mismatchedVaultAuthority = new RuntimeGrantAuthority(
+            db, owner, new StorageDelivery(), CreatePolicy(), CreateActor(), TimeProvider.System,
+            connections: null,
+            modelCredentials: new ModelProviderCredentialStore(db, mismatchedVaults, TimeProvider.System),
+            credentialBackends: backends);
+        var vaultMismatch = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            mismatchedVaultAuthority.IssueModelCredentialGrantAsync(
+                registration.RuntimeInstanceId, Guid.NewGuid()));
+        Assert.Equal("runtime_model_credential_vault_unavailable", vaultMismatch.Code);
+        Assert.Equal(1, byokBackend.Calls);
+
+        var foreignRegistration = registration with
+        {
+            RuntimeInstanceId = Guid.NewGuid(),
+            Binding = registration.Binding with
+            {
+                ModelCredentialIdentity = identity with { CredentialSlotId = Guid.NewGuid() }
+            }
+        };
+        var foreignAuthority = new RuntimeGrantAuthority(
+            db, new MultipleStorageOwner(foreignRegistration), new StorageDelivery(), CreatePolicy(),
+            CreateActor(), TimeProvider.System, connections: null, modelCredentials: store, credentialBackends: backends);
+        var denied = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            foreignAuthority.IssueModelCredentialGrantAsync(foreignRegistration.RuntimeInstanceId, Guid.NewGuid()));
+        Assert.Equal("runtime_model_credential_unavailable", denied.Code);
+        Assert.Equal(1, byokBackend.Calls);
+    }
+
+    [Fact]
     public async Task ForeignProofsDoNotMutateGrantsAndCurrentOwnerLossDurablyRevokesTheBoundNonce()
     {
         var connectionString = await postgres.CreateDatabaseAsync();
@@ -676,21 +775,26 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
 
     }
 
-    private sealed class TrackingSecretRedemption(DateTimeOffset expiresAt) : ISecretRedemption
+    private sealed class TrackingSecretRedemption(
+        DateTimeOffset expiresAt,
+        SecretRef? expectedReference = null) : ISecretRedemption
     {
         public int Calls { get; private set; }
         public SecretCredential? LastIssued { get; private set; }
+        public SecretRef? LastIssuedReference { get; private set; }
         public Func<Task>? BeforeReturn { get; set; }
 
         public async Task<SecretCredential> RedeemAsync(
             SecretRedemptionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Assert.Equal("model-api", request.Secret.Id);
-            Assert.Equal("model-v1", request.Secret.Version);
+            var expected = expectedReference ?? new SecretRef("model-api", "model-v1");
+            Assert.Equal(expected.Id, request.Secret.Id);
+            Assert.Equal(expected.Version, request.Secret.Version);
             Assert.Equal(RuntimeSecretPurposes.ModelSession, request.Purpose);
             Assert.Equal("run", request.RunId);
             Calls++;
+            LastIssuedReference = request.Secret;
             LastIssued = new SecretCredential("controlled-model-secret", expiresAt);
             if (BeforeReturn is { } beforeReturn)
                 await beforeReturn();

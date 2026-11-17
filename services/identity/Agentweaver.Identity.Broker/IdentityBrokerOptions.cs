@@ -165,6 +165,9 @@ public sealed class SecretRedemptionOptions
     /// <summary>Optional distinct Key Vault root used by model-provider credential references.</summary>
     public string? ByokVaultUri { get; set; }
 
+    /// <summary>Exact DNS host allowed for BYOK Key Vault traffic; defaults to the existing vault host.</summary>
+    public string? ByokVaultHost { get; set; }
+
     /// <summary>Tenant ID for the workload identity used to access Key Vault.</summary>
     [Required]
     public required string WorkloadIdentityTenantId { get; set; }

@@ -289,7 +289,7 @@ diagnose the cause and state. Verify schema compatibility before choosing an
 older image.
 
 Before any migration or Kubernetes write, the helper requires the live
-`identity-broker-runtime-config-v3` ConfigMap to match the rendered Broker map,
+`identity-broker-runtime-config-v4` ConfigMap to match the rendered Broker map,
 including its identity, `immutable` flag, `data`, and `binaryData`. It also
 checks that the Broker Deployment references this map. A missing, malformed,
 or different map stops the command before writes. The helper reports changed

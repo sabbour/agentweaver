@@ -2,21 +2,21 @@
   "version": 2,
   "source": {
     "file": "v1-identity-provider-setup.json",
-    "sha256": "5f505588574d864ad56057531706941aa224220c15e1eddd3c9d9129dc39a4f8"
+    "sha256": "b64e8808fd93ba21ea6a80e79d80b8538d7a371bfbd43771df4cf85602688ece"
   },
   "drawio": {
     "file": "v1-identity-provider-setup.drawio",
-    "sha256": "10ed6c325c6229689905f71fb5428bd7efb07a0f9b3a56f343581d9a24cfa019"
+    "sha256": "6125c7d1193bbc73a22c6f103c61901c89dbab3089e0b61da6341f3a05b6ae0e"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
     "format": "png",
     "border": 16,
     "scale": 2,
-    "rendererVersion": "32.6.1"
+    "rendererVersion": "32.6.10"
   },
   "png": {
     "file": "v1-identity-provider-setup.png",
-    "sha256": "4a07f522e95a1c909b8c61f4f0936a3ef661db9bbda54b0dc3bf76a679827768"
+    "sha256": "95518b2f66042cc16bbad632be45ab048af22669d28d493776913d6afe3e6396"
   }
 }

@@ -13,7 +13,7 @@ import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
 import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 
 const NAMESPACE = 'agentweaver';
-const CONFIG = 'identity-broker-runtime-config-v3';
+const CONFIG = 'identity-broker-runtime-config-v4';
 const GUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const OPTIONS = { check: false, timeout: 35_000 };
 const SENTINEL = 'ghcr.io/sabbour/agentweaver.identity.broker:receipt-pinned';
@@ -463,6 +463,7 @@ export function bootstrapIdentityBrokerRuntime(config, {
         .replaceAll('CHANGEME-identity-broker-client-id', identity.clientId)
         .replaceAll('CHANGEME-tenant-id', config.tenantId)
         .replaceAll('CHANGEME-KEYVAULT-HOST', `${keyVaultName.toLowerCase()}.vault.azure.net`)
+        .replaceAll('CHANGEME-BYOK-KEYVAULT-HOST', `${keyVaultName.toLowerCase()}.vault.azure.net`)
         .replaceAll('CHANGEME-POSTGRES-HOST', `${config.resourceGroup}-pg.postgres.database.azure.com`)
         .replaceAll('CHANGEME-UPSTREAM-OIDC-AUTHORITY', 'login.microsoftonline.com')
         .replaceAll('CHANGEME-UPSTREAM-OIDC-METADATA-HOST', 'login.microsoftonline.com')

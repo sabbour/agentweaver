@@ -145,10 +145,16 @@ not guarantee that every internal provider request stays below a hard
 admission threshold.
 
 Projects & Config also stores customer-provided model-provider metadata in
-Draft-only revisions. These records do not change the deployment-owned model
-eligibility snapshot or enter an accepted run selection. This source slice adds
-no HTTP route, activation, credentials, or rate-card data. See
-[issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
+Draft-only revisions. These drafts stay separate from the deployment-owned
+model eligibility snapshot and accepted run selection. A separate Identity
+credential ledger stores exact Key Vault references. A slot-backed BYOK
+selection carries the slot identity and exact `SecretRef`; Identity matches
+both against enabled history and uses the recorded vault. An enabled historical
+version remains usable after slot disable. The ledger stores no credential
+value or rate-card data. See
+[Identity and secrets](./identity-secrets.md#understand-runtime-and-connection-credentials)
+for the redemption path and [issue #2635](https://github.com/sabbour/agentweaver/issues/2635)
+for the Draft-only metadata source.
 
 ### Diagnose resolution failures
 

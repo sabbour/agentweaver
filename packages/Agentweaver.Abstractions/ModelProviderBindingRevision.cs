@@ -28,4 +28,6 @@ public sealed record ModelProviderBindingRevision(
     string ConfigurationHash)
 {
     public const int CurrentContractVersion = 1;
+
+    public ModelCredentialIdentity? CredentialIdentity { get; init; }
 }

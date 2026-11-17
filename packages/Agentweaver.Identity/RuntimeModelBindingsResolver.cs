@@ -119,7 +119,10 @@ public sealed class RuntimeModelBindingsResolver
         if (acceptedPin is not null)
         {
             ValidatePin(acceptedPin);
-            if (acceptedPin != CreatePin(reference, model, acceptedPin.ReasoningEffort))
+            if (acceptedPin.ProviderId is { } providerId && providerId != reference)
+                throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
+            if (acceptedPin != CreatePin(reference, model, acceptedPin.ReasoningEffort) with
+                { ProviderId = acceptedPin.ProviderId })
                 throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
         }
         return model;
@@ -138,7 +141,15 @@ public sealed class RuntimeModelBindingsResolver
             selection.CredentialReference is not { } credential ||
             selection.ConnectionId is not null || selection.ConnectionScope is not null ||
             selection.Reference != providerBinding.ProviderId ||
-            credential.Version != providerBinding.CredentialVersion)
+            credential.Version != providerBinding.CredentialVersion ||
+            (pin.ProviderId is null) != (selection.CredentialIdentity is null) ||
+            (pin.ProviderId is null) != (providerBinding.CredentialIdentity is null) ||
+            selection.CredentialIdentity is { } credentialIdentity &&
+                (credentialIdentity.ProviderId != pin.ProviderId ||
+                 providerBinding.CredentialIdentity != credentialIdentity ||
+                 credentialIdentity.ProviderId != providerBinding.ProviderId ||
+                 credentialIdentity.Scope != providerBinding.Scope ||
+                 credentialIdentity.ProjectId != providerBinding.ProjectId))
             throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
 
         ValidatePin(pin);
@@ -150,6 +161,7 @@ public sealed class RuntimeModelBindingsResolver
             pin.ConfigurationRevision != providerBinding.ProviderRevision.ToString(CultureInfo.InvariantCulture) ||
             pin.ConfigurationHash != providerBinding.ConfigurationHash ||
             pin.ReasoningEffort != selection.ReasoningEffort ||
+            pin.ProviderId != providerBinding.CredentialIdentity?.ProviderId ||
             !providerBinding.ReasoningEfforts.Contains(selection.ReasoningEffort, StringComparer.Ordinal))
             throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
 
@@ -182,6 +194,27 @@ public sealed class RuntimeModelBindingsResolver
         return CreatePin(reference, Resolve(reference, sourceMode), reasoningEffort);
     }
 
+    /// <summary>Builds a pin for an exact provider revision and its optional credential slot.</summary>
+    public static RuntimeModelBindingPin Pin(
+        ModelProviderBindingRevision binding, string reasoningEffort = "high")
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ValidateReasoningEffort(reasoningEffort);
+        ValidateRuntimeProviderBinding(binding);
+        return new RuntimeModelBindingPin(
+            ModelProviderBindingRevision.CurrentContractVersion,
+            binding.ProviderId,
+            binding.Deployment,
+            ModelSourceMode.Byok,
+            binding.ProviderRevision.ToString(CultureInfo.InvariantCulture),
+            binding.ConfigurationHash,
+            reasoningEffort)
+        {
+            ProviderType = binding.ProviderType,
+            ProviderId = binding.CredentialIdentity?.ProviderId
+        };
+    }
+
     private RuntimeModelBindingPin CreatePin(
         string reference, RuntimeModelBinding model, string reasoningEffort = "high") =>
         new(1, reference, model.ModelId, model.SourceMode, ConfigurationRevision, ConfigurationHash, reasoningEffort)
@@ -195,12 +228,19 @@ public sealed class RuntimeModelBindingsResolver
         if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode) ||
             pin.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
             pin.SourceMode == ModelSourceMode.Byok && pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
+            pin.ProviderId is not null && pin.SourceMode != ModelSourceMode.Byok ||
             !ModelReasoningEfforts.IsSupported(pin.ReasoningEffort))
             throw new RuntimeAuthorizationException("runtime_model_binding_pin_invalid");
         RuntimeContractValidation.ValidateIdentifier(pin.ModelSelectionReference);
         RuntimeContractValidation.ValidateIdentifier(pin.ModelId);
         RuntimeContractValidation.ValidateIdentifier(pin.ConfigurationRevision);
         RuntimeContractValidation.ValidateHash(pin.ConfigurationHash);
+        if (pin.ProviderId is { } providerId)
+        {
+            RuntimeContractValidation.ValidateIdentifier(providerId);
+            if (providerId.Length > 128)
+                throw new RuntimeAuthorizationException("runtime_model_binding_pin_invalid");
+        }
     }
 
     private static void ValidateRuntimeProviderBinding(ModelProviderBindingRevision binding)
@@ -218,6 +258,14 @@ public sealed class RuntimeModelBindingsResolver
 
         RuntimeContractValidation.ValidateIdentifier(binding.ProviderId);
         RuntimeContractValidation.ValidateIdentifier(binding.Deployment);
+        if (binding.CredentialIdentity is { } credentialIdentity)
+        {
+            RuntimeContractValidation.ValidateModelCredentialIdentity(credentialIdentity);
+            if (credentialIdentity.ProviderId != binding.ProviderId ||
+                credentialIdentity.Scope != binding.Scope ||
+                credentialIdentity.ProjectId != binding.ProjectId)
+                throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
+        }
         if (binding.ProjectId is { } projectId)
             RuntimeContractValidation.ValidateIdentifier(projectId);
         RuntimeContractValidation.ValidateHash(binding.ConfigurationHash);
