@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Agentweaver.Persistence.Postgres;
 using Xunit;
@@ -9,7 +10,7 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests of plan validation; no database is needed.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "b2c71037d2307ac5d6874dfc3c9e6c73b871bfda2093f6ba2401d6e67525c5bf";
+    private const string ReviewedPlanSha256 = "5cf2c73ef75b4ea113f280219d9fcb6fd0ebd87a5a6fd1dd34af2b4af71de292";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 13)];
@@ -190,7 +191,10 @@ public sealed class PlannedRuntimeGrantsTests
     private static string CanonicalSha256(byte[] bytes)
     {
         using var document = JsonDocument.Parse(bytes);
-        var canonical = JsonSerializer.SerializeToUtf8Bytes(document.RootElement);
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(document.RootElement, new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
         return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
     }
 }

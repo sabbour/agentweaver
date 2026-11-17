@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Npgsql;
@@ -82,7 +83,10 @@ public static class PlannedRuntimeGrants
     {
         using var document = JsonDocument.Parse(planBytes);
         // Match the initializer's compact JSON hash so formatting the reviewed file does not change its identity.
-        var canonicalPlan = JsonSerializer.SerializeToUtf8Bytes(document.RootElement);
+        var canonicalPlan = JsonSerializer.SerializeToUtf8Bytes(document.RootElement, new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
         var actual = Convert.ToHexString(SHA256.HashData(canonicalPlan)).ToLowerInvariant();
         if (!System.Text.RegularExpressions.Regex.IsMatch(expectedPlanSha256 ?? "", "^[0-9a-f]{64}$") ||
             actual != expectedPlanSha256)
