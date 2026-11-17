@@ -50,7 +50,7 @@ claiming production credentials or service availability.
 | Owner transactions | Concurrent claims, stale revisions, lost authority and restart replay against PostgreSQL | Deployed service behavior |
 | Source Control | Real isolated Git workspaces; controlled GitHub HTTP, expected heads and raw-byte HMAC | Live GitHub permission or merge approval |
 | Broker/grants | Concurrent refresh redemption, exact-purpose checks and revocation after waits | Live upstream SSO or Key Vault access |
-| AgentHost | Pinned native SDK against controlled loopback endpoint; inspect bearer/model/path and emitted evidence | Hosted Copilot or paid BYOK acceptance |
+| AgentHost | Pinned native SDK against a controlled loopback endpoint; callback tests reject workspace escapes in structured paths, patch edits, and working directories | Hosted Copilot or paid BYOK acceptance; OS-level filesystem confinement |
 | Browser | Built application with controlled services or injected page contract, depending on suite | Production sign-in or a different browser journey |
 | Deployment tooling | Manifest inputs, local renders and controlled transports | Actual target permissions, rollout or native resource behavior |
 

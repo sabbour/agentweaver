@@ -646,6 +646,12 @@ accepted selection, active session and work association, execution fence, and
 Environment placement before returning current runtime context. An earlier
 registration record alone does not authorize a turn.
 
+AgentRuntime also checks workspace containment in its native tool callbacks,
+independent of owner permission. It checks SDK-provided paths, patch edits, and
+working directories before and after owner waits. See the
+[AgentRuntime deep dive](./agent-runtime.md#enforce-tools-and-budgets) for the
+callback checks and Sandbox boundary.
+
 ### Recover from uncertain execution
 
 - A stale decision version or execution fence conflicts instead of applying

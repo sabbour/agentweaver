@@ -135,6 +135,13 @@ Native tools map to named actions such as `tool.read`, `tool.write`, and
 call ID, action, and input hash. The runtime rejects unknown tools, unmatched
 permissions, and Sandbox-bypass requests. An approved permission applies once.
 
+The pre-tool and permission callbacks check SDK-provided paths and working
+directories against the configured workspace, regardless of owner policy.
+They reject parent-directory traversal, symbolic links and other reparse points,
+patch edits outside the workspace, and shell paths outside the workspace. The
+runtime repeats each check after an owner authorization wait. The Sandbox still
+enforces filesystem and command isolation.
+
 Owner admission enforces accepted model-turn and tool-call limits. Hosted
 Copilot with a zero hard credit limit denies the turn before native Send and
 records guard/no-send evidence through the owner path. A positive hard limit
