@@ -1028,6 +1028,12 @@ public sealed partial class ProjectsConfigService
         var hasProjectVisibility =
             await HasCurrentRoleAsync(
                 caller,
+                ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin,
+                cancellationToken).ConfigureAwait(false) ||
+            await HasCurrentRoleAsync(
+                caller,
                 ProjectAuthorityResourceType.Tenant,
                 caller.TenantId,
                 ProjectAuthorityRole.TenantAdmin,
