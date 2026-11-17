@@ -157,6 +157,7 @@ public sealed partial class ProjectsConfigPostgresTests
         finally
         {
             await migrator.MigrateAsync(latestMigration);
+            await RestoreRuntimeGrantsAsync();
         }
     }
 
@@ -204,6 +205,7 @@ public sealed partial class ProjectsConfigPostgresTests
             if (legacy is not null)
                 await RepairMigration039LegacyRowsAsync(legacy, scenario);
             await migrator.MigrateAsync(latestMigration);
+            await RestoreRuntimeGrantsAsync();
         }
     }
 

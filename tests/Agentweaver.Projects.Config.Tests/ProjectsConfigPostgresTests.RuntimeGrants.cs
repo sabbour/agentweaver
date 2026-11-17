@@ -81,6 +81,16 @@ public sealed partial class ProjectsConfigPostgresTests
                NOT has_column_privilege(
                  'agentweaver-id-projects-config',
                  'projects_config.native_acs_policy_heads', 'policy_id', 'UPDATE')),
+              ('governance decision head column UPDATE',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_stream_heads', 'UPDATE')
+               AND has_column_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_stream_heads', 'sequence', 'UPDATE')
+               AND has_column_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_stream_heads', 'head_hash', 'UPDATE')),
               ('native ACS revision UPDATE and DELETE denied',
                NOT has_table_privilege(
                  'agentweaver-id-projects-config', 'projects_config.native_acs_policy_revisions', 'UPDATE')
