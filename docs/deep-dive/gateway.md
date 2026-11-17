@@ -92,6 +92,14 @@ forwards its saved status and receipt; callers must read the same operation
 until it is terminal instead of treating an accepted or pending response as
 completion.
 
+Task dispatch is also an Orchestrator-owned operation. The Gateway exposes
+`dispatchCoordinatorExecution` at
+`POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch`,
+limits the request body to 256 KiB, and forwards the run-bound request. The
+owner returns bounded child completion evidence and an optional
+`taskCompletion` projection. The normal-CLI case uses `api invoke` to exercise
+this route; see the [task completion guide](../guide/api-acceptance-migration.md#run-task-model-completion).
+
 ### Follow a catalog request
 
 Before calling a product route, obtain a valid Broker bearer and use a catalog

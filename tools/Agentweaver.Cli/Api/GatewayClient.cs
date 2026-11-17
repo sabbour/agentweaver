@@ -21,6 +21,7 @@ public sealed partial class GatewayClient : IGatewayClient
     internal const int DefaultRequestBytes = 1024 * 1024;
     private const int DefaultResponseBytes = 8 * 1024 * 1024;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DispatchRequestTimeout = TimeSpan.FromMinutes(10);
     private static readonly HashSet<string> TokenCountNames =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -859,7 +860,9 @@ public sealed partial class GatewayClient : IGatewayClient
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(_requestTimeout);
+            timeout.CancelAfter(operationId == "dispatchCoordinatorExecution"
+                ? DispatchRequestTimeout
+                : _requestTimeout);
             using var response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,

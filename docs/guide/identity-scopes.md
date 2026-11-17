@@ -50,9 +50,11 @@ the normal CLI login command before running a case; browser authorization
 needs explicit approval. The workflow-generation case also uses normal CLI
 commands. It needs a run-bound `projects.orchestrator` identity and a separate
 unbound `projects.admin` identity for the same actor and tenant. It creates a
-durable generation job and cancels the named disposable run. See the
-[API case guide](./api-acceptance-migration.md) for the target, identity, and
-evidence requirements.
+durable generation job and cancels the named disposable run. The
+task-model-completion case uses the same identities to dispatch a claimed task,
+read its completion and usage, and cancel the named disposable run. Both cases
+send a model request. See the [API case guide](./api-acceptance-migration.md)
+for the target, identity, and evidence requirements.
 
 ## `openid`
 

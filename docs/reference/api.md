@@ -1214,7 +1214,7 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/actions/select_workflow` | Select workflow. | Yes |
 | POST | `/sessions/{sessionId}/actions/propose_work_plan` | Propose work plan. | Yes |
 | POST | `/sessions/{sessionId}/actions/revise_work_plan` | Revise work plan. | Yes |
-| POST | `/sessions/{sessionId}/actions/dispatch` | Dispatch an accepted MAF checkpoint through configured owner integrations. | No |
+| POST | `/sessions/{sessionId}/actions/dispatch` | Dispatch an accepted MAF checkpoint through configured owner integrations. | Yes |
 | POST | `/sessions/{sessionId}/actions/request_assembly` | Request assembly. | Yes |
 | GET | `/sessions/{sessionId}/decisions` | Read current decision state. | Yes |
 | GET | `/sessions/{sessionId}/tree` | Read session tree. | Yes |
@@ -1455,6 +1455,14 @@ completed-but-unjoined results before it releases the hold.
 
 #### Dispatch completion and startup readback
 
+The Gateway exposes `dispatchCoordinatorExecution` at
+`POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch`.
+It forwards to the matching Orchestrator route below. The request requires
+`expectedStateVersion` and `workPlanId`; it can also include the bounded
+BuildTest, pull-request, and merge workspace inputs. The Gateway limits this
+request body to 256 KiB and returns an `application/problem+json` `413` when
+the request exceeds that limit.
+
 `POST /sessions/{sessionId}/actions/dispatch` returns the current checkpoint
 projection. If `childRuntimeStartup` reports `pending`, retry the same dispatch
 request with the same decision version and WorkPlan ID. Dispatch does not wait
@@ -1487,6 +1495,10 @@ When a ready runtime summary is read, the owner rechecks readiness and projects
 the current registration, selection, model source, image digest and platform,
 and Pod UID. This readback does not require P1 setup provenance. P1 invocation
 IDs remain optional and do not replace runtime evidence.
+
+The `readRunStatus` response includes optional `runtimeCleanup` with `state`,
+`total`, `pending`, and `complete` counts. After cancellation, wait for `state`
+to be `complete` and `pending` to be zero before recording cleanup as complete.
 
 For `IndependentReview`, `platformGateOperations` carries `approvalRequestId`,
 `evidenceHash`, and `reviewDecision` (null while pending). Its effect recovery

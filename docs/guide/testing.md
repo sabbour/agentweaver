@@ -1043,6 +1043,29 @@ for the input and retained evidence.
 This route-specific case checks workflow generation. It does not replace full
 P1 API acceptance.
 
+## Test task dispatch and completion through the Gateway
+
+The `task-model-completion` case dispatches a claimed task through the public
+Gateway with native CLI `api invoke` commands. It checks the accepted BYOK
+model and hard run budget, matching task and child completion evidence,
+priced usage, and disposable-run cleanup.
+
+Run its controlled case tests from the repository root:
+
+```powershell
+node --test scripts\acceptance\api\tests\task-model-completion.test.mjs
+```
+
+These tests use controlled CLI responses. They do not contact a live Gateway
+or run a model. Run the live case with the exact native apphost, an approved
+non-production target, and an approved disposable run. The case sends a model
+request and cancels the run after it confirms the run identity. Follow
+[Run task model completion](./api-acceptance-migration.md#run-task-model-completion)
+for the input and retained evidence.
+
+This route-specific case checks task dispatch and completion. It does not
+replace full P1 API acceptance.
+
 ## Record release acceptance results
 
 For version-level coverage and sign-off, use the single

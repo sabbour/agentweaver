@@ -573,6 +573,35 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
+    public async Task DispatchInvocationUsesTheExtendedRequestDeadline()
+    {
+        var handler = new TestGatewayHandler
+        {
+            ReplacementOperationId = "dispatchCoordinatorExecution",
+            DelayedPath = "/api/v1/projects/project-1/casting/proposals",
+            ResponseDelay = TimeSpan.FromMilliseconds(100),
+        };
+        using var http = new HttpClient(handler);
+        var client = new GatewayClient(
+            http,
+            RunIdentity,
+            new TestAuthentication(),
+            TimeSpan.FromMilliseconds(20));
+        await client.DiscoverAsync(CancellationToken.None);
+
+        var response = await client.InvokeAsync(
+            "dispatchCoordinatorExecution",
+            new GatewayInvocation(
+                new Dictionary<string, string> { ["projectId"] = "project-1" },
+                new Dictionary<string, string> { ["runId"] = "run-1", ["count"] = "2" },
+                JsonNode.Parse("""{"projectId":"project-1","runId":"run-1"}"""),
+                new Dictionary<string, string> { ["Idempotency-Key"] = "dispatch-deadline-test" }),
+            CancellationToken.None);
+
+        Assert.Equal(201, response.Status);
+    }
+
+    [Fact]
     public async Task RequestAndResponseEvidenceRedactsSecretsButInvocationReturnsTransientBody()
     {
         var handler = new TestGatewayHandler();
@@ -822,6 +851,9 @@ public sealed class GatewayClientTests
         public bool IncludeSelectionHeader { get; init; }
         public bool OmitOwnerPath { get; init; }
         public string? OwnerPermission { get; init; }
+        public string? ReplacementOperationId { get; init; }
+        public string? DelayedPath { get; init; }
+        public TimeSpan ResponseDelay { get; init; }
         public HttpContent? EventStreamContent { get; init; }
         public HttpContent? ResponseContent { get; init; }
         public string ResponseBody { get; set; } = """{"result":"created"}""";
@@ -859,6 +891,11 @@ public sealed class GatewayClientTests
                     "\"operationId\":\"streamEvents\"",
                     $"\"operationId\":\"{(DuplicateOperationId ? "formulateCastingProposal" : "streamEvents")}\"",
                     StringComparison.Ordinal);
+                if (ReplacementOperationId is not null)
+                    openApi = openApi.Replace(
+                        "\"operationId\":\"formulateCastingProposal\"",
+                        $"\"operationId\":\"{ReplacementOperationId}\"",
+                        StringComparison.Ordinal);
                 if (LowercaseBearerScheme)
                     openApi = openApi.Replace("\"Bearer\"", "\"bearer\"", StringComparison.Ordinal);
                 if (OmitOwnerPath)
@@ -917,6 +954,9 @@ public sealed class GatewayClientTests
                 content.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
             }
+
+            if (request.RequestUri.AbsolutePath == DelayedPath && ResponseDelay > TimeSpan.Zero)
+                await Task.Delay(ResponseDelay, cancellationToken);
 
             if (ResponseContent is not null)
                 return new HttpResponseMessage(HttpStatusCode.Created) { Content = ResponseContent };

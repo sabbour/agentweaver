@@ -155,6 +155,8 @@ internal static partial class GatewayOpenApi
             ["readDecisions"] = C(null, "CoordinatorDecisionStateView", "200"),
             ["readSessionTree"] = C(null, "SessionTreeSnapshot", "200"),
             ["readSessionStatus"] = C(null, "SessionStatusSnapshot", "200", "503"),
+            ["dispatchCoordinatorExecution"] = C(
+                "MafExecutionDispatchRequest", "MafExecutionDispatchResponse", "200"),
             ["readRuntimeObservationV1"] = C(null, "RuntimeObservationV1", "200", "409", "503"),
             ["readRuntimeObservationV2"] = C(null, "RuntimeObservationV2", "200", "400", "409", "503"),
             ["reportTurnFailure"] = C("ReportRunFailureRequest", "RunExecutionTransitionResult", "200"),
@@ -475,6 +477,8 @@ internal static partial class GatewayOpenApi
                             }
                             : null);
         }
+        if (route.OperationId == "dispatchCoordinatorExecution")
+            responses["413"] = ProblemResponse("The dispatch request exceeds the 256 KiB body limit.");
         if (route.OperationId == "generateProjectWorkflow")
         {
             responses["202"] = JsonResponse(
@@ -2090,7 +2094,8 @@ else if (route.OperationId is
             ("maxPromptTokens", NullableInt()),
             ("maxRevisionAttempts", Nullable(new { type = "integer", minimum = 0 })),
             ("copilotSoftCreditLimit", Nullable(new { type = "number", minimum = 0 })),
-            ("copilotHardCreditLimit", Nullable(new { type = "number", minimum = 0 }))),
+            ("copilotHardCreditLimit", Nullable(new { type = "number", minimum = 0 })),
+            ("spendBudgets", Nullable(Arr(Ref("SpendBudget"))))),
         ["VersionedPlatformRuntimeDefaults"] = Obj(["revision", "defaults", "updatedByActorId", "createdAt"],
             ("revision", Int()), ("defaults", NullableRef("PlatformRuntimeDefaults")),
             ("updatedByActorId", NullableStr()), ("createdAt", NullableDate())),
@@ -2196,7 +2201,16 @@ else if (route.OperationId is
             ("maxConcurrentChildren", Int()), ("maxWallTimeSeconds", Int()), ("maxPromptTokens", Int()),
             ("maxRevisionAttempts", Nullable(new { type = "integer", minimum = 0 })),
             ("copilotSoftCreditLimit", Nullable(new { type = "number", minimum = 0 })),
-            ("copilotHardCreditLimit", Nullable(new { type = "number", minimum = 0 }))),
+            ("copilotHardCreditLimit", Nullable(new { type = "number", minimum = 0 })),
+            ("spendBudgets", Nullable(Arr(Ref("SpendBudget"))))),
+        ["SpendBudget"] = Obj(
+            ["budgetId", "revision", "scope", "meterSource", "unit", "softLimit", "hardLimit", "reservePerDispatch"],
+            ("budgetId", Str()), ("revision", Int()), ("scope", Enum("project", "run", "agent")),
+            ("meterSource", Str()), ("unit", Str()), ("softLimit", Nullable(Number())),
+            ("hardLimit", Nullable(Number())), ("reservePerDispatch", Number()),
+            ("agentId", NullableStr()), ("period", NullableRef("UsageSpendPeriod"))),
+        ["UsageSpendPeriod"] = Obj(["periodId", "startsAt", "endsAt"],
+            ("periodId", Str()), ("startsAt", Date()), ("endsAt", Date())),
         ["NetworkEgressRule"] = Obj(["purpose", "destinationKind", "destination", "port", "protocol"],
             ("purpose", Enum("dnsResolver", "controlPlane", "modelEndpoint", "sourceControl", "packageRegistry", "remoteMcp", "publicHttps")),
             ("destinationKind", Enum("fqdn", "cidr", "kubernetesService")), ("destination", Str()),
@@ -2390,6 +2404,69 @@ else if (route.OperationId is
         ["SelectCoordinatorWorkflowRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),
             ("workflowId", NullableStr()), ("proposedDefinition", NullableRef("WorkflowDefinition"))),
+        ["MafExecutionDispatchRequest"] = StrictObj(["expectedStateVersion", "workPlanId"],
+            ("expectedStateVersion", Int()), ("workPlanId", Str()),
+            ("buildTestEnvironmentId", NullableStr()),
+            ("buildTestWorkspaces", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = Ref("SourceControlBuildTestWorkspaceLocator"),
+            }),
+            ("openPullRequestWorkspaces", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = Ref("SourceControlPullRequestWorkspaceLocator"),
+            }),
+            ("mergeInputs", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = Ref("SourceControlMergeStepInput"),
+            })),
+        ["SourceControlBuildTestWorkspaceLocator"] = StrictObj(
+            ["workspaceId", "workspaceIncarnationId", "baseSha", "branchName"],
+            ("workspaceId", Str()), ("workspaceIncarnationId", Uuid()),
+            ("baseSha", Str()), ("branchName", Str())),
+        ["SourceControlPullRequestWorkspaceLocator"] = StrictObj(
+            ["workspaceId", "workspaceIncarnationId", "baseSha", "branchName", "headSha", "baseBranch"],
+            ("workspaceId", Str()), ("workspaceIncarnationId", Uuid()), ("baseSha", Str()),
+            ("branchName", Str()), ("headSha", Str()), ("baseBranch", Str())),
+        ["SourceControlMergeStepInput"] = StrictObj(
+            ["method"], ("method", Enum("merge", "squash", "rebase")),
+            ("pullRequestNumber", NullableInt()), ("expectedHeadSha", NullableStr())),
+        ["MafExecutionDispatchResponse"] = StrictObj(
+            ["workPlanId", "decisionStateVersion", "checkpointRevision", "dispatchedAssociationIds",
+                "unavailableExecutorStepIds", "failedDependencyIds", "isComplete", "completedResults",
+                "wallTimeLimitReached", "childRuntimeStartup", "completionEvidence", "taskCompletion"],
+            ("workPlanId", Str()), ("decisionStateVersion", Int()), ("checkpointRevision", Int()),
+            ("dispatchedAssociationIds", Arr(Str())), ("unavailableExecutorStepIds", Arr(Str())),
+            ("failedDependencyIds", Arr(Str())), ("isComplete", Bool()),
+            ("completedResults", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = Str(),
+            }),
+            ("wallTimeLimitReached", Bool()),
+            ("childRuntimeStartup", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = Ref("RuntimeStartupSummary"),
+            }),
+            ("completionEvidence", BoundedArray(Ref("RuntimeChildTurnCompletionReceipt"), 0, 512)),
+            ("taskCompletion", NullableRef("MafExecutionTaskCompletionEvidence"))),
+        ["MafExecutionTaskCompletionEvidence"] = StrictObj(
+            ["state", "taskId", "taskRevision", "claimTaskRevision", "claimId", "taskContentSha256",
+                "runId", "rootSessionId", "acceptedSelectionHash", "executionFence", "workPlanId",
+                "workflowId", "definitionRevision", "associationId", "childSessionId",
+                "childOutputSha256", "childReceiptSha256", "checkpointId", "checkpointRevision",
+                "decisionStateVersion", "outputSetSha256", "outputWitnessProofSha256"],
+            ("state", Enum("completed")), ("taskId", Str()), ("taskRevision", Int()),
+            ("claimTaskRevision", Int()), ("claimId", Uuid()), ("taskContentSha256", Str()),
+            ("runId", Str()), ("rootSessionId", Str()), ("acceptedSelectionHash", Str()),
+            ("executionFence", Int()), ("workPlanId", Str()), ("workflowId", Str()),
+            ("definitionRevision", Str()), ("associationId", Str()), ("childSessionId", Str()),
+            ("childOutputSha256", Str()), ("childReceiptSha256", Str()), ("checkpointId", Str()),
+            ("checkpointRevision", Int()), ("decisionStateVersion", Int()),
+            ("outputSetSha256", Str()), ("outputWitnessProofSha256", Str())),
         ["GenerateProjectWorkflowRequest"] = StrictObj(
             ["runId", "sessionId", "expectedDecisionStateVersion", "prompt"],
             ("runId", Str()), ("sessionId", Str()), ("expectedDecisionStateVersion", Int()), ("prompt", Str())),
@@ -2517,7 +2594,11 @@ else if (route.OperationId is
             ("projectId", Str()), ("runId", Str()), ("rootSessionId", Str()), ("executionFence", Int()),
             ("logicalTurnOrdinal", Int()), ("executionState", Str()), ("stateVersion", Int()),
             ("causeCode", NullableStr()), ("reference", NullableStr()),
-            ("checkpointRecovery", NullableRef("CheckpointRecoveryStatus"))),
+            ("checkpointRecovery", NullableRef("CheckpointRecoveryStatus")),
+            ("runtimeCleanup", NullableRef("RuntimeCleanupSummary"))),
+        ["RuntimeCleanupSummary"] = StrictObj(
+            ["state", "total", "pending", "complete"],
+            ("state", Enum("complete", "pending")), ("total", Int()), ("pending", Int()), ("complete", Int())),
         ["RunExecutionTransitionResult"] = Obj(["operationId", "session", "previousState", "state", "previousExecutionFence", "executionFence", "logicalTurnOrdinal", "previousSessionStateVersion", "sessionStateVersion", "previousRunStateVersion", "runStateVersion", "fencedSessions", "isDuplicate"],
             ("operationId", Uuid()), ("session", Ref("SessionIdentity")), ("previousState", Str()), ("state", Str()),
             ("previousExecutionFence", Int()), ("executionFence", Int()), ("logicalTurnOrdinal", Int()),
@@ -2804,6 +2885,29 @@ else if (route.OperationId is
             ("modelSelectionReference", NullableStr()), ("modelSourceMode", NullableStr()),
             ("reasoningEffort", NullableStr()), ("maxPromptTokens", NullableInt()),
             ("imageDigest", NullableStr()), ("imagePlatform", NullableStr()), ("podUid", NullableStr())),
+        ["RuntimeChildTurnCompletionReceipt"] = StrictObj(
+            ["contractVersion", "requestId", "requestSha256", "promptSha256", "outputSha256",
+                "workPlanId", "associationId", "childSessionId", "sdkSessionId", "runtimeInstanceId",
+                "registrationRevision", "registrationSha256", "acceptedSelectionHash", "executionFence",
+                "sourceSha256", "image", "modelSelectionReference", "modelId", "modelSourceMode",
+                "reasoningEffort", "nativeMessageId", "nativeTurnStartEventId", "nativeTurnEndEventId",
+                "nativeCompletionReceiptEventId", "nativeCompletedAt", "nativeCursorSha256",
+                "nativePayloadSha256", "nativeOwnerRevision", "accountingOwnerRevision", "usageEventIds",
+                "userMaterial", "assistantMaterial"],
+            ("contractVersion", Int()), ("requestId", Uuid()), ("requestSha256", Str()),
+            ("promptSha256", Str()), ("outputSha256", Str()), ("workPlanId", Str()),
+            ("associationId", Str()), ("childSessionId", Str()), ("sdkSessionId", Str()),
+            ("runtimeInstanceId", Uuid()), ("registrationRevision", Int()), ("registrationSha256", Str()),
+            ("acceptedSelectionHash", Str()), ("executionFence", Int()), ("sourceSha256", Str()),
+            ("image", Ref("SandboxImageIdentity")), ("modelSelectionReference", Str()),
+            ("modelId", Str()), ("modelSourceMode", Str()), ("reasoningEffort", NullableStr()),
+            ("nativeMessageId", Uuid()), ("nativeTurnStartEventId", Uuid()),
+            ("nativeTurnEndEventId", Uuid()), ("nativeCompletionReceiptEventId", Uuid()),
+            ("nativeCompletedAt", Date()), ("nativeCursorSha256", Str()), ("nativePayloadSha256", Str()),
+            ("nativeOwnerRevision", Int()), ("accountingOwnerRevision", Int()),
+            ("usageEventIds", Arr(Uuid())), ("userMaterial", Ref("RuntimeMaterialAcknowledgmentEvidence")),
+            ("assistantMaterial", Ref("RuntimeMaterialAcknowledgmentEvidence")),
+            ("workItemBindingSha256", Str())),
         ["RuntimeReplacementRequest"] = StrictObj(
             ["contractVersion", "operationId", "expectedRuntimeInstanceId",
                 "expectedRegistrationRevision", "expectedExecutionFence", "expectedAcceptedSelectionHash"],

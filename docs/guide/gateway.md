@@ -62,6 +62,12 @@ operation ID and request after an uncertain result. Read the saved operation
 until it reaches a terminal state; `pending` and `cleanup_pending` do not mean
 that replacement is complete.
 
+To dispatch a confirmed task WorkPlan, use the public
+`dispatchCoordinatorExecution` operation. The Gateway forwards the run-bound
+request to Orchestrator, which owns dispatch and task-completion evidence. See
+[dispatch completion and startup readback](../reference/api.md#dispatch-completion-and-startup-readback)
+for the request and response contract.
+
 Project-wide Knowledge search uses
 `GET /api/v1/projects/{projectId}/knowledge/records`. Use a Broker token that
 is not bound to a run. The Knowledge owner checks current effective
@@ -99,6 +105,9 @@ Set the following configuration before you start the host:
 | `Gateway:Owners:AgentHost` | Optional HTTPS service root for AgentHost. Without it, live hosted reasoning catalog requests return 503 `owner_not_configured`. |
 | `Gateway:WebOrigin` | The Web application's exact HTTPS origin, for example `https://portal.<managed-domain>`. |
 | `Gateway:OwnerRequestTimeoutSeconds` | Finite timeout from 1 through 120 seconds. The default is 15 seconds. |
+
+`dispatchCoordinatorExecution` uses a separate ten-minute deadline because
+Orchestrator waits for child execution before it returns.
 
 Service addresses must be HTTPS roots. The Gateway rejects insecure or
 non-root owner addresses and does not follow redirects.

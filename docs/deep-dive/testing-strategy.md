@@ -89,14 +89,17 @@ The read-only Gateway case checks `auth status`, `api operations`,
 resources, send model requests, or open a browser. The workflow-generation
 case uses `api invoke` to submit a draft, check its job and result, and cancel
 an approved disposable run. It uses separate run-bound and unbound identities
-for the same actor and tenant. The `harness:p1 -- --surface api` launchers
+for the same actor and tenant. The task-model-completion case uses
+`api invoke` to dispatch a claimed task, verify its completion and priced BYOK
+usage, and cancel an approved disposable run. It also uses separate
+run-bound and unbound identities. The `harness:p1 -- --surface api` launchers
 delegate to checked-in scripts; they do not provide a second API client or a
 `test` command.
 
 Use the [API case guide](../guide/api-acceptance-migration.md) for the exact
 apphost, input, and evidence contract. A dry run validates local input only.
-The workflow-generation case checks one model-backed Gateway flow; it does not
-replace a full P1 API journey.
+The workflow-generation and task-model-completion cases check separate
+model-backed Gateway flows; neither replaces a full P1 API journey.
 
 #### Child startup and cleanup sequence
 

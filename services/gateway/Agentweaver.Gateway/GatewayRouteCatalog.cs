@@ -629,6 +629,11 @@ public static class GatewayRouteCatalog
             "proposeWorkPlan", "Propose a work plan", body: true);
         Coordination("POST", "/sessions/{sessionId}/actions/revise_work_plan",
             "reviseWorkPlan", "Revise a work plan", body: true);
+        Add("POST", GatewayOwner.Orchestrator,
+            coordination + "/sessions/{sessionId}/actions/dispatch",
+            "/api" + coordination + "/sessions/{sessionId}/actions/dispatch",
+            "dispatchCoordinatorExecution", "Dispatch a confirmed work plan and read task completion evidence",
+            body: true, maximumRequestBodyBytes: 256 * 1024, forwardTenantSelector: true);
         Coordination("POST", "/sessions/{sessionId}/actions/request_assembly",
             "requestAssembly", "Request assembly", body: true);
         Coordination("GET", "/sessions/{sessionId}/decisions",
