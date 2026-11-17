@@ -25,14 +25,18 @@ internal static class PolicyCommands
     internal static async Task<int> RunAsync(
         string[] args, CliRuntimeOptions runtime, HttpClient httpClient, TextWriter output, CancellationToken ct)
     {
-        if (args.Length == 0 || args[0] is not ("show" or "export" or "history" or "validate" or "apply"))
-            throw new CliUsageException("Choose `show`, `export`, `history`, `validate`, or `apply`.");
+        if (args.Length == 0 || args[0] is not ("list" or "show" or "export" or "history" or "validate" or "apply"))
+            throw new CliUsageException("Choose `list`, `show`, `export`, `history`, `validate`, or `apply`.");
         var command = args[0];
         var options = CliOptions.Parse(args[1..], new HashSet<string>(StringComparer.Ordinal));
-        if (options.Many("project-id").Count > 0 || options.Many("run-id").Count > 0)
-            throw new CliUsageException("Policy commands use an unbound identity. Do not set --project-id or --run-id.");
+        if (options.Many("run-id").Count > 0)
+            throw new CliUsageException("Policy commands use an unbound identity. Do not set --run-id.");
+        var scope = options.Single("scope");
+        var projectScope = scope == "project";
+        var projectList = projectScope && command == "list";
         var commandOptions = command switch
         {
+            "list" => new[] { "scope", "page-size", "cursor" },
             "show" => new[] { "scope", "revision" },
             "export" => new[] { "scope", "revision", "output" },
             "history" => new[] { "scope", "page-size", "cursor" },
@@ -40,9 +44,17 @@ internal static class PolicyCommands
             _ => new[] { "scope", "input", "expected-revision", "reason" },
         };
         options.RequireOnly(commandOptions.Concat(
-            CliConfiguration.TargetOptionNames.Where(name => name is not ("project-id" or "run-id"))).ToArray());
-        if (options.Single("scope") != "platform")
-            throw new CliUsageException("Policy commands require --scope platform.");
+            CliConfiguration.TargetOptionNames.Where(name =>
+                name != "run-id" && (name != "project-id" || projectScope && !projectList))).ToArray());
+        if (scope is not ("platform" or "project") ||
+            scope == "platform" && command == "list" ||
+            projectScope && command is not ("list" or "show" or "history" or "export"))
+            throw new CliUsageException("Use `--scope platform` for Platform commands or `--scope project` for Project reads.");
+        if (!projectScope && options.Many("project-id").Count > 0)
+            throw new CliUsageException("Platform Policy commands use an unbound identity. Do not set --project-id.");
+        var projectId = projectScope && command is ("show" or "history" or "export")
+            ? ProjectIdArgument(options.Single("project-id"))
+            : null;
         var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
         var inputPath = command is "validate" or "apply"
             ? InputFilePath(options.Single("input"), command)
@@ -70,21 +82,37 @@ internal static class PolicyCommands
              pageSize is < 1 or > 100))
             throw new CliUsageException("--page-size must be an integer from 1 to 100.");
         var cursor = options.Single("cursor");
-        if (cursor is not null && !ValidCursor(cursor))
-            throw new CliUsageException("--cursor must be a non-empty history cursor.");
+        if (cursor is not null && !ValidCursor(cursor, projectList ? 4096 : 2048))
+            throw new CliUsageException("--cursor must be a non-empty cursor within the API limit.");
         var inputArtifact = inputPath is null
             ? null
             : await ReadInputArtifactAsync(inputPath, ct, requirePlatform: command == "apply").ConfigureAwait(false);
         var artifactHash = command == "apply" ? Hash(inputArtifact!) : null;
 
-        var operationId = command switch
+        var operationId = projectScope
+            ? command switch
+            {
+                "list" => "listProjectNativeAcsPolicies",
+                "history" => "listProjectNativeAcsPolicyRevisions",
+                _ => revision is null ? "readProjectNativeAcsPolicy" : "readProjectNativeAcsPolicyRevision",
+            }
+            : command switch
         {
             "history" => "listPlatformNativeAcsPolicyRevisions",
             "validate" => "validatePlatformNativeAcsPolicy",
             "apply" => "writePlatformNativeAcsPolicy",
             _ => revision is null ? "readPlatformNativeAcsPolicy" : "readPlatformNativeAcsPolicyRevision",
         };
-        var path = command switch
+        var path = projectScope
+            ? command switch
+            {
+                "list" => "/api/v1/policies/projects",
+                "history" => "/api/v1/policies/projects/{projectId}/revisions",
+                _ => revision is null
+                    ? "/api/v1/policies/projects/{projectId}"
+                    : "/api/v1/policies/projects/{projectId}/revisions/{revision}",
+            }
+            : command switch
         {
             "history" => "/api/v1/policies/platform/revisions",
             "validate" => "/api/v1/policies/platform/validate",
@@ -96,8 +124,13 @@ internal static class PolicyCommands
             query["pageSize"] = pageSizeText;
         if (cursor is not null)
             query["cursor"] = cursor;
-        var pathParameters = revisionText is null ? null :
-            new Dictionary<string, string>(StringComparer.Ordinal) { ["revision"] = revisionText };
+        var pathParameters = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (projectId is not null)
+            pathParameters["projectId"] = projectId;
+        if (revisionText is not null)
+            pathParameters["revision"] = revisionText;
+        var expectedScopeType = projectScope ? "project" : "platform";
+        var expectedScopeId = projectId ?? "default";
 
         var identity = CliConfiguration.ReadIdentity(
             command == "apply" ? ["projects.admin"] : null,
@@ -140,7 +173,7 @@ internal static class PolicyCommands
             }
             else
             {
-                invocation = new GatewayInvocation(pathParameters, query);
+                invocation = new GatewayInvocation(pathParameters.Count == 0 ? null : pathParameters, query);
             }
             var response = await gateway.InvokeAsync(operationId, invocation, ct)
                 .ConfigureAwait(false);
@@ -165,9 +198,10 @@ internal static class PolicyCommands
                     throw new PolicyFailureException(ErrorMessage(response.Status, response.Body));
                 result = command switch
                 {
-                    "history" => ProjectHistory(response.Body, pageSize),
-                    "export" => ProjectExport(response.Body, revision),
-                    _ => ProjectShow(response.Body, revision),
+                    "list" => ProjectList(response.Body, pageSize),
+                    "history" => ProjectHistory(response.Body, pageSize, expectedScopeType, expectedScopeId),
+                    "export" => ProjectExport(response.Body, revision, expectedScopeType, expectedScopeId),
+                    _ => ProjectShow(response.Body, revision, expectedScopeType, expectedScopeId),
                 };
             }
         }
@@ -344,11 +378,12 @@ internal static class PolicyCommands
         return path;
     }
 
-    private static JsonObject ProjectShow(JsonNode? body, long? requestedRevision)
+    private static JsonObject ProjectShow(
+        JsonNode? body, long? requestedRevision, string expectedScopeType = "platform", string expectedScopeId = "default")
     {
         if (body is not JsonObject obj)
             throw UnexpectedResponse();
-        var policyId = PolicyId(obj);
+        var policyId = PolicyId(obj, expectedScopeType, expectedScopeId);
         var revision = PositiveNumber(obj, "revision");
         var hash = Hash(obj);
         var timeField = requestedRevision is null ? "updatedAt" : "createdAt";
@@ -360,16 +395,17 @@ internal static class PolicyCommands
             throw UnexpectedResponse();
         return new JsonObject
         {
-            ["scopeType"] = "platform", ["scopeId"] = "default", ["policyId"] = policyId,
+            ["scopeType"] = expectedScopeType, ["scopeId"] = expectedScopeId, ["policyId"] = policyId,
             ["revision"] = revision, ["contentSha256"] = hash, [timeField] = time,
         };
     }
 
-    private static JsonObject ProjectExport(JsonNode? body, long? requestedRevision)
+    private static JsonObject ProjectExport(
+        JsonNode? body, long? requestedRevision, string expectedScopeType = "platform", string expectedScopeId = "default")
     {
         if (body is not JsonObject obj)
             throw UnexpectedResponse();
-        var policyId = PolicyId(obj);
+        var policyId = PolicyId(obj, expectedScopeType, expectedScopeId);
         var revision = PositiveNumber(obj, "revision");
         var hash = Hash(obj);
         var timeField = requestedRevision is null ? "updatedAt" : "createdAt";
@@ -413,8 +449,8 @@ internal static class PolicyCommands
         obj.Remove("artifact");
         return new JsonObject
         {
-            ["scopeType"] = "platform",
-            ["scopeId"] = "default",
+            ["scopeType"] = expectedScopeType,
+            ["scopeId"] = expectedScopeId,
             ["policyId"] = policyId,
             ["revision"] = revision,
             ["contentSha256"] = hash,
@@ -426,11 +462,13 @@ internal static class PolicyCommands
     private static JsonObject ExportSummary(JsonObject exported, string outputPath)
     {
         var timeField = exported.ContainsKey("updatedAt") ? "updatedAt" : "createdAt";
+        var scopeType = String(exported, "scopeType");
+        var scopeId = String(exported, "scopeId");
         return new JsonObject
         {
-            ["scopeType"] = "platform",
-            ["scopeId"] = "default",
-            ["policyId"] = PolicyId(exported),
+            ["scopeType"] = scopeType,
+            ["scopeId"] = scopeId,
+            ["policyId"] = PolicyId(exported, scopeType, scopeId),
             ["revision"] = PositiveNumber(exported, "revision"),
             ["contentSha256"] = Hash(exported),
             [timeField] = Timestamp(exported, timeField),
@@ -548,14 +586,49 @@ internal static class PolicyCommands
         }
     }
 
-    private static JsonObject ProjectHistory(JsonNode? body, int pageSize)
+    private static JsonObject ProjectList(JsonNode? body, int pageSize)
+    {
+        if (body is not JsonObject obj || obj.Count != 2 ||
+            obj["items"] is not JsonArray items || items.Count > pageSize ||
+            !obj.ContainsKey("nextCursor"))
+            throw UnexpectedResponse();
+        var next = obj["nextCursor"] is null ? null : String(obj, "nextCursor");
+        if (next is not null && !ValidCursor(next, 4096))
+            throw UnexpectedResponse();
+
+        var projected = new JsonArray();
+        string? previous = null;
+        foreach (var item in items)
+        {
+            if (item is not JsonObject row || row.Count != 6 ||
+                String(row, "scopeType") != "project")
+                throw UnexpectedResponse();
+            var scopeId = ProjectScopeId(row);
+            if (previous is not null && string.CompareOrdinal(scopeId, previous) <= 0)
+                throw UnexpectedResponse();
+            previous = scopeId;
+            projected.Add(new JsonObject
+            {
+                ["scopeType"] = "project",
+                ["scopeId"] = scopeId,
+                ["policyId"] = PolicyId(row, "project", scopeId),
+                ["revision"] = PositiveNumber(row, "revision"),
+                ["contentSha256"] = Hash(row),
+                ["updatedAt"] = Timestamp(row, "updatedAt"),
+            });
+        }
+        return new JsonObject { ["scopeType"] = "project", ["items"] = projected, ["nextCursor"] = next };
+    }
+
+    private static JsonObject ProjectHistory(
+        JsonNode? body, int pageSize, string expectedScopeType = "platform", string expectedScopeId = "default")
     {
         if (body is not JsonObject obj || !obj.ContainsKey("policyId") ||
             !obj.ContainsKey("snapshotRevision") || !obj.ContainsKey("nextCursor") ||
             obj["items"] is not JsonArray items || items.Count > pageSize)
             throw UnexpectedResponse();
-        CheckScope(obj);
-        var policyId = obj["policyId"] is null ? null : PolicyId(obj);
+        CheckScope(obj, expectedScopeType, expectedScopeId);
+        var policyId = obj["policyId"] is null ? null : PolicyId(obj, expectedScopeType, expectedScopeId);
         var snapshot = obj["snapshotRevision"] is null ? (long?)null : PositiveNumber(obj, "snapshotRevision");
         var next = obj["nextCursor"] is null ? null : String(obj, "nextCursor");
         if (next is not null && !ValidCursor(next) ||
@@ -579,20 +652,21 @@ internal static class PolicyCommands
         }
         return new JsonObject
         {
-            ["scopeType"] = "platform", ["scopeId"] = "default", ["policyId"] = policyId,
+            ["scopeType"] = expectedScopeType, ["scopeId"] = expectedScopeId, ["policyId"] = policyId,
             ["snapshotRevision"] = snapshot, ["items"] = projected, ["nextCursor"] = next,
         };
     }
 
-    private static void CheckScope(JsonObject obj)
+    private static void CheckScope(JsonObject obj, string expectedScopeType = "platform", string expectedScopeId = "default")
     {
-        if (String(obj, "scopeType") != "platform" || String(obj, "scopeId") != "default")
+        if (String(obj, "scopeType") != expectedScopeType || String(obj, "scopeId") != expectedScopeId)
             throw UnexpectedResponse();
     }
 
-    private static string PolicyId(JsonObject obj)
+    private static string PolicyId(
+        JsonObject obj, string expectedScopeType = "platform", string expectedScopeId = "default")
     {
-        CheckScope(obj);
+        CheckScope(obj, expectedScopeType, expectedScopeId);
         var id = String(obj, "policyId");
         if (id.Length is 0 or > 128 ||
             id.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_' or '.')))
@@ -631,8 +705,27 @@ internal static class PolicyCommands
         obj[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : throw UnexpectedResponse();
 
     private static bool ValidCursor(string value) =>
-        value.Length is > 0 and <= 2048 &&
+        ValidCursor(value, 2048);
+
+    private static bool ValidCursor(string value, int maximumLength) =>
+        value.Length is > 0 && value.Length <= maximumLength &&
         value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+
+    private static string ProjectIdArgument(string? value)
+    {
+        if (!Guid.TryParseExact(value, "N", out var projectId))
+            throw new CliUsageException("Project Policy reads require --project-id <32-character ID>.");
+        return projectId.ToString("N");
+    }
+
+    private static string ProjectScopeId(JsonObject obj)
+    {
+        var value = String(obj, "scopeId");
+        if (!Guid.TryParseExact(value, "N", out var projectId) ||
+            !string.Equals(projectId.ToString("N"), value, StringComparison.Ordinal))
+            throw UnexpectedResponse();
+        return value;
+    }
 
     private static string ErrorMessage(int status, JsonNode? body)
     {
@@ -644,6 +737,8 @@ internal static class PolicyCommands
             (404, "native_acs_policy_not_found") or
             (500, "native_acs_policy_corrupt") or
             (503, "native_acs_policy_source_unavailable") or
+            (400, "native_acs_policy_read_request_invalid") or
+            (400, "native_acs_policy_scope_list_request_invalid") or
             (400, "native_acs_policy_history_request_invalid") or
             (400, "native_acs_policy_revision_request_invalid");
         return known ? $"The policy request failed (HTTP {status}, {code})." :

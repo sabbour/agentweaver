@@ -807,6 +807,7 @@ public sealed partial class GatewayClient : IGatewayClient
         };
         var hidePolicyEvidence = operationId is
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
+            "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
             "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";

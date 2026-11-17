@@ -17,6 +17,7 @@ public sealed class PolicyCommandTests
     private const string Time = "2026-11-16T00:00:00+00:00";
     private const string Canary = "POLICY_PRIVATE_CANARY";
     private const string ArtifactCanary = "67,65,78,65,82,89";
+    private const string ProjectId = "00000000000000000000000000000042";
     private static readonly string Hash = ArtifactHash(3);
     private static readonly string[] Target =
     [
@@ -49,6 +50,263 @@ public sealed class PolicyCommandTests
         Assert.Null(fixture.Authentication.Identity.RunId);
         Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
         Assert.Equal(InteractionPolicy.Never, fixture.Authentication.Interaction);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProjectShowReadsExpectedScopeAndKeepsIdentityUnbound(bool exact)
+    {
+        var fixture = new Fixture { Body = ProjectBody(exact), UseGatewayContract = true };
+        var args = exact
+            ? new[] { "show", "--scope", "project", "--project-id", ProjectId, "--revision", "2" }
+            : new[] { "show", "--scope", "project", "--project-id", ProjectId };
+
+        Assert.Equal(0, await fixture.Run(args));
+
+        var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Equal("project", output["scopeType"]!.GetValue<string>());
+        Assert.Equal(ProjectId, output["scopeId"]!.GetValue<string>());
+        Assert.Equal("canonical", output["policyId"]!.GetValue<string>());
+        Assert.Equal(2, output["revision"]!.GetValue<long>());
+        Assert.Equal(Hash, output["contentSha256"]!.GetValue<string>());
+        Assert.Equal(Time, output[exact ? "createdAt" : "updatedAt"]!.GetValue<string>());
+        Assert.Equal(
+            exact
+                ? $"/api/v1/policies/projects/{ProjectId}/revisions/2"
+                : $"/api/v1/policies/projects/{ProjectId}",
+            fixture.PolicyPath);
+        Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+        Assert.Null(fixture.Authentication.Identity!.ProjectId);
+        Assert.Null(fixture.Authentication.Identity.RunId);
+        Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
+        Assert.Equal(InteractionPolicy.Never, fixture.Authentication.Interaction);
+    }
+
+    [Fact]
+    public async Task ProjectHistoryReturnsOnePageAndForwardsTheCursor()
+    {
+        var fixture = new Fixture { Body = ProjectHistoryBody(), UseGatewayContract = true };
+
+        Assert.Equal(0, await fixture.Run(
+            "history", "--scope", "project", "--project-id", ProjectId, "--page-size", "1", "--cursor", "NEXT"));
+
+        var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Equal("project", output["scopeType"]!.GetValue<string>());
+        Assert.Equal(ProjectId, output["scopeId"]!.GetValue<string>());
+        Assert.Equal(3, output["snapshotRevision"]!.GetValue<long>());
+        Assert.Equal("NEXT", output["nextCursor"]!.GetValue<string>());
+        Assert.Single(output["items"]!.AsArray());
+        Assert.Equal($"/api/v1/policies/projects/{ProjectId}/revisions", fixture.PolicyPath);
+        Assert.Contains("pageSize=1", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("cursor=NEXT", fixture.PolicyQuery, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProjectListReturnsVisibleHeadsAndOneCursorPage()
+    {
+        const string nextCursor = "NEXT_PAGE";
+        var fixture = new Fixture
+        {
+            Body = ProjectListBody(nextCursor),
+            UseGatewayContract = true,
+        };
+
+        Assert.Equal(0, await fixture.Run(
+            "list", "--scope", "project", "--page-size", "2", "--cursor", "PREVIOUS_PAGE"));
+
+        var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Equal("project", output["scopeType"]!.GetValue<string>());
+        Assert.Equal(nextCursor, output["nextCursor"]!.GetValue<string>());
+        var items = output["items"]!.AsArray();
+        Assert.Equal(2, items.Count);
+        Assert.Equal(ProjectId, items[0]!["scopeId"]!.GetValue<string>());
+        Assert.Equal("00000000000000000000000000000043", items[1]!["scopeId"]!.GetValue<string>());
+        Assert.All(items, item => Assert.Equal("project", item!["scopeType"]!.GetValue<string>()));
+        Assert.Equal("/api/v1/policies/projects", fixture.PolicyPath);
+        Assert.Contains("pageSize=2", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("cursor=PREVIOUS_PAGE", fixture.PolicyQuery, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProjectListAcceptsAnEmptyPage()
+    {
+        var fixture = new Fixture
+        {
+            Body = """{"items":[],"nextCursor":null}""",
+            UseGatewayContract = true,
+        };
+
+        Assert.Equal(0, await fixture.Run("list", "--scope", "project"));
+
+        var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Empty(output["items"]!.AsArray());
+        Assert.Null(output["nextCursor"]);
+    }
+
+    [Fact]
+    public async Task ProjectListRejectsOutOfOrderScopeRows()
+    {
+        var body = JsonNode.Parse(ProjectListBody(null))!.AsObject();
+        var items = body["items"]!.AsArray();
+        var first = items[0]!.DeepClone();
+        items[0] = items[1]!.DeepClone();
+        items[1] = first;
+        var fixture = new Fixture { Body = body.ToJsonString(), UseGatewayContract = true };
+
+        Assert.Equal(1, await fixture.Run("list", "--scope", "project"));
+        Assert.Empty(fixture.Output.ToString());
+    }
+
+    [Fact]
+    public async Task ProjectHistoryAcceptsEmptyLineage()
+    {
+        var fixture = new Fixture
+        {
+            Body = $$"""{"scopeType":"project","scopeId":"{{ProjectId}}","policyId":null,"snapshotRevision":null,"items":[],"nextCursor":null}""",
+            UseGatewayContract = true,
+        };
+
+        Assert.Equal(0, await fixture.Run("history", "--scope", "project", "--project-id", ProjectId));
+
+        var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Null(output["policyId"]);
+        Assert.Null(output["snapshotRevision"]);
+        Assert.Empty(output["items"]!.AsArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProjectExportWritesFullVerifiedArtifactAndOnlyMetadata(bool exact)
+    {
+        var outputPath = NewOutputPath();
+        var fixture = new Fixture { Body = ProjectBody(exact), UseGatewayContract = true };
+        var args = exact
+            ? new[] { "export", "--scope", "project", "--project-id", ProjectId, "--revision", "2", "--output", outputPath }
+            : new[] { "export", "--scope", "project", "--project-id", ProjectId, "--output", outputPath };
+        try
+        {
+            Assert.Equal(0, await fixture.Run(args));
+
+            var exported = JsonNode.Parse(await File.ReadAllTextAsync(outputPath))!.AsObject();
+            Assert.Equal("project", exported["scopeType"]!.GetValue<string>());
+            Assert.Equal(ProjectId, exported["scopeId"]!.GetValue<string>());
+            Assert.Equal("canonical", exported["policyId"]!.GetValue<string>());
+            Assert.Equal(2, exported["revision"]!.GetValue<long>());
+            Assert.Equal(Hash, exported["contentSha256"]!.GetValue<string>());
+            Assert.Equal(Time, exported[exact ? "createdAt" : "updatedAt"]!.GetValue<string>());
+            Assert.Equal(Hash, exported["artifact"]!["contentSha256"]!.GetValue<string>());
+            Assert.Equal(new byte[] { 65, 65, 65 },
+                exported["artifact"]!["manifestBytes"]!.AsArray()
+                    .Select(value => value!.GetValue<byte>()).ToArray());
+            var files = exported["artifact"]!["files"]!.AsArray();
+            Assert.Equal(2, files.Count);
+            Assert.Equal("modules/network.rego", files[0]!["relativePath"]!.GetValue<string>());
+            Assert.Equal(new byte[] { 80, 79, 76, 73, 67, 89 },
+                files[0]!["bytes"]!.AsArray().Select(value => value!.GetValue<byte>()).ToArray());
+            Assert.Equal("data/policy.json", files[1]!["relativePath"]!.GetValue<string>());
+            Assert.Equal(
+                new byte[] { 123, 34, 101, 110, 97, 98, 108, 101, 100, 34, 58, 116, 114, 117, 101, 125 },
+                files[1]!["bytes"]!.AsArray().Select(value => value!.GetValue<byte>()).ToArray());
+            Assert.DoesNotContain(Canary, exported.ToJsonString(), StringComparison.Ordinal);
+
+            var summary = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal("project", summary["scopeType"]!.GetValue<string>());
+            Assert.Equal(ProjectId, summary["scopeId"]!.GetValue<string>());
+            Assert.Equal(outputPath, summary["output"]!.GetValue<string>());
+            Assert.DoesNotContain("manifestBytes", fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.Null(fixture.Authentication.Identity!.ProjectId);
+            Assert.Null(fixture.Authentication.Identity.RunId);
+            Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(200, "application/json")]
+    [InlineData(200, "text/plain")]
+    [InlineData(403, "application/json")]
+    public async Task ProjectArtifactResponsesNeverAppearInEvidence(int status, string mediaType)
+    {
+        var fixture = new Fixture
+        {
+            Body = ProjectBodyWithCanary(exact: false),
+            Status = (HttpStatusCode)status,
+            MediaType = mediaType,
+            UseGatewayContract = true,
+        };
+
+        var result = await fixture.Run("show", "--scope", "project", "--project-id", ProjectId);
+
+        Assert.Equal(status == 200 && mediaType == "application/json" ? 0 : 1, result);
+        Assert.DoesNotContain(ArtifactCanary, fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(ArtifactCanary, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(ArtifactCanary, fixture.Client!.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProjectShowRejectsAResponseForAnotherProject()
+    {
+        var body = JsonNode.Parse(ProjectBody(exact: false))!.AsObject();
+        body["scopeId"] = "00000000000000000000000000000043";
+        var fixture = new Fixture { Body = body.ToJsonString(), UseGatewayContract = true };
+
+        Assert.Equal(1, await fixture.Run("show", "--scope", "project", "--project-id", ProjectId));
+        Assert.Empty(fixture.Output.ToString());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("project-id")]
+    [InlineData("00000000-0000-0000-0000-000000000042")]
+    public async Task ProjectReadsRequireCanonicalProjectIdBeforeNetwork(string projectId)
+    {
+        var fixture = new Fixture();
+
+        Assert.Equal(1, await fixture.Run("show", "--scope", "project", "--project-id", projectId));
+        Assert.Equal(0, fixture.RequestCount);
+    }
+
+    [Fact]
+    public async Task ProjectListCursorUsesThePublishedGatewayBound()
+    {
+        var cursor = new string('A', 4096);
+        var fixture = new Fixture { Body = ProjectListBody(null), UseGatewayContract = true };
+
+        Assert.Equal(0, await fixture.Run("list", "--scope", "project", "--cursor", cursor));
+        Assert.Equal("/api/v1/policies/projects", fixture.PolicyPath);
+        Assert.Contains(cursor, fixture.PolicyQuery, StringComparison.Ordinal);
+
+        var client = fixture.Client!;
+        var policyRequestCount = fixture.PolicyRequestCount;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.InvokeAsync(
+            "listProjectNativeAcsPolicies",
+            new GatewayInvocation(Query: new Dictionary<string, string> { ["cursor"] = new string('A', 4097) }),
+            CancellationToken.None));
+        Assert.Equal(policyRequestCount, fixture.PolicyRequestCount);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.InvokeAsync(
+            "listProjectNativeAcsPolicyRevisions",
+            new GatewayInvocation(
+                new Dictionary<string, string> { ["projectId"] = ProjectId },
+                new Dictionary<string, string> { ["cursor"] = new string('A', 2049) }),
+            CancellationToken.None));
+        Assert.Equal(policyRequestCount, fixture.PolicyRequestCount);
+
+        await client.InvokeAsync(
+            "listProjectNativeAcsPolicyRevisions",
+            new GatewayInvocation(
+                new Dictionary<string, string> { ["projectId"] = ProjectId },
+                new Dictionary<string, string> { ["cursor"] = new string('A', 2048) }),
+            CancellationToken.None);
+        Assert.Equal($"/api/v1/policies/projects/{ProjectId}/revisions", fixture.PolicyPath);
     }
 
     [Theory]
@@ -1284,6 +1542,45 @@ public sealed class PolicyCommandTests
         return body.ToJsonString();
     }
 
+    private static string ProjectBody(bool exact)
+    {
+        var body = JsonNode.Parse(ShowBody(exact))!.AsObject();
+        body["scopeType"] = "project";
+        body["scopeId"] = ProjectId;
+        return body.ToJsonString();
+    }
+
+    private static string ProjectBodyWithCanary(bool exact)
+    {
+        var body = JsonNode.Parse(ShowBodyWithCanary(exact))!.AsObject();
+        body["scopeType"] = "project";
+        body["scopeId"] = ProjectId;
+        return body.ToJsonString();
+    }
+
+    private static string ProjectHistoryBody() =>
+        $$"""{"scopeType":"project","scopeId":"{{ProjectId}}","policyId":"canonical","snapshotRevision":3,"items":[{"revision":2,"contentSha256":"{{Hash}}","createdAt":"{{Time}}"}],"nextCursor":"NEXT"}""";
+
+    private static string ProjectListBody(string? nextCursor)
+    {
+        static JsonObject Summary(string scopeId) =>
+            new()
+            {
+                ["scopeType"] = "project",
+                ["scopeId"] = scopeId,
+                ["policyId"] = "canonical",
+                ["revision"] = 2,
+                ["contentSha256"] = Hash,
+                ["updatedAt"] = Time,
+            };
+
+        return new JsonObject
+        {
+            ["items"] = new JsonArray(Summary(ProjectId), Summary("00000000000000000000000000000043")),
+            ["nextCursor"] = nextCursor,
+        }.ToJsonString();
+    }
+
     private static string ExportInputWithRequestSize(int requestBytes)
     {
         var export = JsonNode.Parse(ExportInput(exact: false))!.AsObject();
@@ -1373,6 +1670,7 @@ public sealed class PolicyCommandTests
         public string? PolicyQuery;
         public string? PolicyMethod;
         public string? PolicyBody;
+        public int PolicyRequestCount;
         private int _applyRequestCount;
         public int ApplyRequestCount => Volatile.Read(ref _applyRequestCount);
 
@@ -1402,6 +1700,7 @@ public sealed class PolicyCommandTests
                 return await Response(HttpStatusCode.OK,
                     """{"contractVersion":1,"issuer":"https://identity.example/","actorId":"actor-1","tenantId":"tenant-1","membershipRevision":1,"boundProjectId":null,"boundRunId":null,"effectiveAuthority":[]}""",
                     "application/json").ConfigureAwait(false);
+            PolicyRequestCount++;
             PolicyPath = path;
             PolicyQuery = request.RequestUri.Query;
             PolicyMethod = request.Method.Method;

@@ -286,6 +286,44 @@ hashes without verifying each artifact. `show` and `history` return metadata,
 not artifact files or enforcement status. `export` writes source data; it does
 not activate or enforce policy.
 
+### Read Project Policy sources
+
+Project Policy reads use your current server-side project access. Sign in with
+`agentweaver auth login` and set the tenant target. The CLI uses an unbound
+identity with its base scopes. `--project-id` selects the Project route; it
+does not bind the token. These reads do not need `projects.admin`.
+
+List returns one page of visible Projects that have a saved Policy head. It
+does not show an inherited view. Tenant admins can read Projects in their
+tenant. Project owners, contributors, and viewers can read Projects where they
+have a current role. Platform admin status alone does not grant Project access.
+
+```powershell
+agentweaver policy list --scope project --page-size 20
+agentweaver policy list --scope project --page-size 20 --cursor CURSOR
+agentweaver policy show --scope project --project-id PROJECT_ID
+agentweaver policy show --scope project --project-id PROJECT_ID --revision 2
+agentweaver policy history --scope project --project-id PROJECT_ID --page-size 20
+agentweaver policy export --scope project --project-id PROJECT_ID --output .\project-policy.json
+agentweaver policy export --scope project --project-id PROJECT_ID --revision 2 --output .\project-policy-revision-2.json
+```
+
+Replace `PROJECT_ID` with the 32-character ID from the list output. Replace
+`CURSOR` with the returned `nextCursor`. List and history page sizes default to
+20 and range from 1 to 100. Pass each cursor unchanged with the same page size.
+List cursors can contain up to 4,096 characters. If a list cursor is rejected
+after a membership or role change, start again without a cursor.
+
+`show` returns Project scope, Project ID, Policy ID, revision, content hash,
+and timestamp. Exact revisions return `createdAt`; the current head returns
+`updatedAt`. `history` returns one page of revisions. An empty history has no
+items and null lineage fields.
+
+`export` writes the complete artifact to a new file and verifies its canonical
+hash. The file contains the manifest, all relative-path files, the Project ID,
+revision, hash, and timestamp. Standard output contains metadata and the output
+path, not artifact bytes. The command does not overwrite an existing file.
+
 ## Discover and invoke API operations
 
 The CLI reads the currently served Gateway `GET /openapi/v1.json` document for

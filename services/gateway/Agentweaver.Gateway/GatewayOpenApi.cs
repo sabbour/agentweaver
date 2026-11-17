@@ -1346,7 +1346,12 @@ else if (route.OperationId is
             return name switch
             {
                 "pageSize" => new { type = "integer", minimum = 1, maximum = 100, @default = 20 },
-                "cursor" => new { type = "string", minLength = 1, maxLength = 2048 },
+                "cursor" => new
+                {
+                    type = "string",
+                    minLength = 1,
+                    maxLength = operationId == "listProjectNativeAcsPolicies" ? 4096 : 2048,
+                },
                 _ => new { type = "string" },
             };
         }
