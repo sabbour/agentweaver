@@ -14,17 +14,38 @@ internal interface IRuntimeRateCardOwnerClient
 internal sealed class RuntimeRateCardOwnerClient : IRuntimeRateCardOwnerClient
 {
     internal const string Route = "/internal/runtime-rate-cards";
+    internal const string HttpClientName = nameof(RuntimeRateCardOwnerClient);
     internal const int MaximumResponseBytes = 256 * 1024;
     internal static readonly TimeSpan OwnerTimeout = TimeSpan.FromSeconds(3);
 
-    private readonly HttpClient _httpClient;
+    private readonly Func<HttpClient> _createHttpClient;
     private readonly PlatformComponentCollectorOptions _options;
     private readonly Func<CancellationToken, Task<string?>> _readToken;
     private readonly TimeSpan _timeout;
 
-    public RuntimeRateCardOwnerClient(HttpClient httpClient, PlatformComponentCollectorOptions options)
-        : this(httpClient, options, cancellationToken => ReadTokenAsync(options.TokenFile, cancellationToken), OwnerTimeout)
+    public RuntimeRateCardOwnerClient(
+        IHttpClientFactory httpClientFactory,
+        PlatformComponentCollectorOptions options)
+        : this(
+            httpClientFactory,
+            options,
+            cancellationToken => ReadTokenAsync(options.TokenFile, cancellationToken),
+            OwnerTimeout)
     {
+    }
+
+    internal RuntimeRateCardOwnerClient(
+        IHttpClientFactory httpClientFactory,
+        PlatformComponentCollectorOptions options,
+        Func<CancellationToken, Task<string?>> readToken,
+        TimeSpan timeout)
+        : this(
+            () => httpClientFactory.CreateClient(HttpClientName),
+            options,
+            readToken,
+            timeout)
+    {
+        ArgumentNullException.ThrowIfNull(httpClientFactory);
     }
 
     internal RuntimeRateCardOwnerClient(
@@ -32,13 +53,23 @@ internal sealed class RuntimeRateCardOwnerClient : IRuntimeRateCardOwnerClient
         PlatformComponentCollectorOptions options,
         Func<CancellationToken, Task<string?>> readToken,
         TimeSpan timeout)
+        : this(() => httpClient, options, readToken, timeout)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
+    }
+
+    internal RuntimeRateCardOwnerClient(
+        Func<HttpClient> createHttpClient,
+        PlatformComponentCollectorOptions options,
+        Func<CancellationToken, Task<string?>> readToken,
+        TimeSpan timeout)
+    {
+        ArgumentNullException.ThrowIfNull(createHttpClient);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(readToken);
         if (timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout));
-        _httpClient = httpClient;
+        _createHttpClient = createHttpClient;
         _options = options;
         _readToken = readToken;
         _timeout = timeout;
@@ -69,11 +100,12 @@ internal sealed class RuntimeRateCardOwnerClient : IRuntimeRateCardOwnerClient
             if (string.IsNullOrEmpty(token))
                 return false;
 
-            var path = $"{Route}/{Uri.EscapeDataString(id)}/{Uri.EscapeDataString(version)}";
-            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(ownerAddress, path));
+            using var httpClient = _createHttpClient();
+            var query = $"id={Uri.EscapeDataString(id)}&version={Uri.EscapeDataString(version)}";
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(ownerAddress, $"{Route}?{query}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            using var response = await _httpClient.SendAsync(
+            using var response = await httpClient.SendAsync(
                     request,
                     HttpCompletionOption.ResponseHeadersRead,
                     timeout.Token)

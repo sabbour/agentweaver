@@ -153,7 +153,7 @@ PlatformAdmin or project Owner check before it searches Azure Retail. It returns
 the bounded lookup result without saving a card or changing rate-card state.
 
 The private
-`GET /internal/runtime-rate-cards/{id}/{version}` route reads one exact saved
+`GET /internal/runtime-rate-cards?id={id}&version={version}` route reads one exact saved
 card. Events authorizes the configured Projects workload subject and returns
 the canonical card and provenance with a strong SHA-256 ETag and
 `Cache-Control: no-store`. The route does not write cards or expose pricing
