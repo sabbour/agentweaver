@@ -439,6 +439,12 @@ public sealed class PlatformPolicySourceTlsTests
         HostedModelCatalogPublicationTls.Configure(builder, certificates.CaPath, applyHttpsDefaults: false);
         PlatformPolicySourceTls.Configure(builder, certificates.CaPath);
         await using var app = builder.Build();
+        var httpRequests = 0;
+        app.Use((context, next) =>
+        {
+            Interlocked.Increment(ref httpRequests);
+            return next(context);
+        });
         app.UsePlatformPolicySourceGuard(port);
         app.MapGet(PlatformPolicySourceTls.RoutePath, () => Results.Ok());
         await app.StartAsync();
@@ -447,6 +453,7 @@ public sealed class PlatformPolicySourceTlsTests
             if (OperatingSystem.IsWindows())
             {
                 await RequestWithOpenSslAsync();
+                Assert.Equal(agentHostEnabled ? 0 : 1, Volatile.Read(ref httpRequests));
                 Assert.Equal(0, certificates.CrlRequestCount);
                 return;
             }
@@ -472,9 +479,24 @@ public sealed class PlatformPolicySourceTlsTests
                 return await reader.ReadToEndAsync();
             }
             if (agentHostEnabled)
-                await Assert.ThrowsAnyAsync<IOException>(RequestAsync);
+            {
+                var response = string.Empty;
+                try
+                {
+                    response = await RequestAsync();
+                }
+                catch (Exception exception) when (
+                    exception is IOException or System.Security.Authentication.AuthenticationException)
+                {
+                }
+                Assert.Empty(response);
+                Assert.Equal(0, Volatile.Read(ref httpRequests));
+            }
             else
-                Assert.Contains("403", await RequestAsync(), StringComparison.Ordinal);
+            {
+                Assert.Contains("HTTP/1.1 403", await RequestAsync(), StringComparison.Ordinal);
+                Assert.Equal(1, Volatile.Read(ref httpRequests));
+            }
             Assert.Equal(0, certificates.CrlRequestCount);
 
             async Task RequestWithOpenSslAsync()
