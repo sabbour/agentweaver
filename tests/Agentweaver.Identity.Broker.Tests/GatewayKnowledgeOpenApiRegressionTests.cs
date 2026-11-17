@@ -348,6 +348,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     private static readonly string[] IdempotentWriteOperationIds =
     [
         "createProjectRun",
+        "generateProjectWorkflow",
         "cancelProjectRun",
         "sendProjectRunMessage",
         "createChiefOfStaffPriority",
@@ -385,10 +386,13 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             Assert.True(header.GetProperty("required").GetBoolean());
 
             var schema = header.GetProperty("schema");
+            var workflowGeneration = operationId == "generateProjectWorkflow";
             Assert.Equal("string", schema.GetProperty("type").GetString());
             Assert.Equal(1, schema.GetProperty("minLength").GetInt32());
-            Assert.Equal(128, schema.GetProperty("maxLength").GetInt32());
-            Assert.Equal("^[A-Za-z0-9._:-]+$", schema.GetProperty("pattern").GetString());
+            Assert.Equal(workflowGeneration ? 256 : 128, schema.GetProperty("maxLength").GetInt32());
+            Assert.Equal(
+                workflowGeneration ? "^[\\x21-\\x7E]{1,256}$" : "^[A-Za-z0-9._:-]+$",
+                schema.GetProperty("pattern").GetString());
         }
 
         var operationsWithIdempotencyKey = new SortedSet<string>(StringComparer.Ordinal);
