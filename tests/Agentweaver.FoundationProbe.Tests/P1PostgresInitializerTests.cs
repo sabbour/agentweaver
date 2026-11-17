@@ -805,7 +805,17 @@ public sealed class P1PostgresInitializerTests
                 ]),
                 AppendOnlyTable("native_acs_policy_preparations"),
                 AppendOnlyTable("native_acs_policy_revisions"),
-                AppendOnlyTable("native_acs_policy_artifact_files"),
+                new("native_acs_policy_artifact_files", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("native_acs_policy_artifact_files_immutable", "reject_immutable_record_mutation()",
+                        27, "records in %.% are immutable", "55000"),
+                    new("native_acs_policy_artifact_files_no_truncate", "reject_immutable_record_mutation()",
+                        34, "records in %.% are immutable", "55000"),
+                    new("native_acs_policy_artifact_files_insert_with_revision",
+                        "require_native_acs_policy_file_insert_in_revision_transaction()", 7,
+                        "native ACS policy files must be inserted with their revision", "55000",
+                        NativeAcsPolicyFileRevisionFunctionSource),
+                ]),
                 AppendOnlyTable("native_acs_policy_idempotency"),
                 AppendOnlyTable("native_acs_policy_change_audit"),
                 AppendOnlyTable("native_acs_policy_outbox"),
@@ -814,6 +824,33 @@ public sealed class P1PostgresInitializerTests
             [
                 new("reject_immutable_record_mutation()", false),
                 new("require_native_acs_policy_head_advance()", false),
+                new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
+            ],
+        };
+        services[1] = services[1] with
+        {
+            Service = "environment",
+            Schema = "environment",
+            Tables =
+            [
+                new("platform_policy_apply_reservations", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("platform_policy_apply_reservations_consistent_identity",
+                        "enforce_platform_policy_apply_reservation_identity()", 7,
+                        "platform policy apply reservation content conflicts", "23514",
+                        PlatformPolicyApplyReservationIdentityFunctionSource),
+                    new("platform_policy_apply_reservations_immutable",
+                        "reject_platform_policy_apply_reservation_mutation()", 27,
+                        "platform policy apply reservations are append-only", "55000"),
+                    new("platform_policy_apply_reservations_no_truncate",
+                        "reject_platform_policy_apply_reservation_mutation()", 34,
+                        "platform policy apply reservations are append-only", "55000"),
+                ]),
+            ],
+            Functions =
+            [
+                new("enforce_platform_policy_apply_reservation_identity()", false),
+                new("reject_platform_policy_apply_reservation_mutation()", false),
             ],
         };
         services[3] = services[3] with
@@ -924,13 +961,58 @@ public sealed class P1PostgresInitializerTests
                 34, "records in %.% are immutable", "55000"),
         ]);
 
+    private const string PlatformPolicyApplyReservationIdentityFunctionSource =
+        """
+        BEGIN
+            PERFORM pg_advisory_xact_lock(hashtextextended(NEW.target_id, 0));
+            IF EXISTS (
+                SELECT 1
+                FROM environment.platform_policy_apply_reservations existing
+                WHERE existing.target_id = NEW.target_id
+                 AND existing.source_epoch = NEW.source_epoch
+                 AND existing.generation = NEW.generation
+                 AND (
+                     existing.source_id IS DISTINCT FROM NEW.source_id OR
+                     existing.source_revision IS DISTINCT FROM NEW.source_revision OR
+                     existing.source_hash IS DISTINCT FROM NEW.source_hash OR
+                     existing.intent_hash IS DISTINCT FROM NEW.intent_hash OR
+                     existing.provider_request_json IS DISTINCT FROM NEW.provider_request_json
+                 )
+            ) THEN
+                RAISE EXCEPTION 'platform policy apply reservation content conflicts'
+                   USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+
+    private const string NativeAcsPolicyFileRevisionFunctionSource =
+        """
+        BEGIN
+            IF NEW.write_transaction_id <> pg_catalog.pg_current_xact_id()::text
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM projects_config.native_acs_policy_revisions AS revision
+                    WHERE revision.scope_type = NEW.scope_type
+                      AND revision.scope_id = NEW.scope_id
+                      AND revision.policy_id = NEW.policy_id
+                      AND revision.revision = NEW.revision
+                      AND revision.write_transaction_id = NEW.write_transaction_id) THEN
+                RAISE EXCEPTION 'native ACS policy files must be inserted with their revision'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+
     private static MutationGuardState[] MutationGuardReadbacks(ServicePlan service, TablePlan table)
     {
         return InitializerChecks.GetMutationDenialGuards(table).Select(guard =>
         {
-            var source = $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
-                (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
-                "; END";
+            var source = guard.FunctionSource ??
+                $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
+                   (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
+                   "; END";
             return new MutationGuardState(table.Table, guard.Trigger, service.Schema, guard.Function,
                 guard.TriggerType, "O", false, true, true, 0, Owner, false, source);
         }).ToArray();

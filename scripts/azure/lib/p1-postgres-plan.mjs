@@ -241,6 +241,21 @@ const APPEND_ONLY_GUARDS = {
         triggerType: 7,
         message: 'native ACS policy files must be inserted with their revision',
         sqlState: '55000',
+        functionSource: `BEGIN
+          IF NEW.write_transaction_id <> pg_catalog.pg_current_xact_id()::text
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM projects_config.native_acs_policy_revisions AS revision
+                  WHERE revision.scope_type = NEW.scope_type
+                    AND revision.scope_id = NEW.scope_id
+                    AND revision.policy_id = NEW.policy_id
+                    AND revision.revision = NEW.revision
+                    AND revision.write_transaction_id = NEW.write_transaction_id) THEN
+              RAISE EXCEPTION 'native ACS policy files must be inserted with their revision'
+                  USING ERRCODE = '55000';
+          END IF;
+          RETURN NEW;
+        END;`,
       },
     ],
     native_acs_policy_idempotency: [
@@ -286,6 +301,27 @@ const APPEND_ONLY_GUARDS = {
         trigger: 'platform_policy_apply_reservations_consistent_identity',
         function: 'enforce_platform_policy_apply_reservation_identity()', triggerType: 7,
         message: 'platform policy apply reservation content conflicts', sqlState: '23514',
+        functionSource: `BEGIN
+          PERFORM pg_advisory_xact_lock(hashtextextended(NEW.target_id, 0));
+          IF EXISTS (
+              SELECT 1
+              FROM environment.platform_policy_apply_reservations existing
+              WHERE existing.target_id = NEW.target_id
+                AND existing.source_epoch = NEW.source_epoch
+                AND existing.generation = NEW.generation
+                AND (
+                    existing.source_id IS DISTINCT FROM NEW.source_id OR
+                    existing.source_revision IS DISTINCT FROM NEW.source_revision OR
+                    existing.source_hash IS DISTINCT FROM NEW.source_hash OR
+                    existing.intent_hash IS DISTINCT FROM NEW.intent_hash OR
+                    existing.provider_request_json IS DISTINCT FROM NEW.provider_request_json
+                )
+          ) THEN
+              RAISE EXCEPTION 'platform policy apply reservation content conflicts'
+                  USING ERRCODE = '23514';
+          END IF;
+          RETURN NEW;
+        END;`,
       },
       {
         trigger: 'platform_policy_apply_reservations_immutable',

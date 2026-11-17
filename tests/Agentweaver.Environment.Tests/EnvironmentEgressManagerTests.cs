@@ -2142,6 +2142,7 @@ public sealed class EnvironmentEgressManagerTests
             {
                 Metadata = policy.Metadata with
                 {
+                    Uid = $"fake-{CreateCount}",
                     ResourceVersion = NextVersion(),
                     Generation = 1
                 }
@@ -2154,16 +2155,35 @@ public sealed class EnvironmentEgressManagerTests
             CiliumNetworkPolicyDocument policy,
             string expectedResourceVersion,
             CancellationToken cancellationToken)
+            => Replace(policy, null, expectedResourceVersion);
+
+        public Task<CiliumNetworkPolicyDocument> ReplaceAsync(
+            CiliumNetworkPolicyDocument policy,
+            string expectedUid,
+            string expectedResourceVersion,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(expectedUid) || policy.Metadata.Uid != expectedUid)
+                throw new CiliumPolicyException("stale_object_uid", "Object UID changed.");
+            return Replace(policy, expectedUid, expectedResourceVersion);
+        }
+
+        private Task<CiliumNetworkPolicyDocument> Replace(
+            CiliumNetworkPolicyDocument policy,
+            string? expectedUid,
+            string expectedResourceVersion)
         {
             ReplaceCount++;
             var key = (policy.Metadata.Namespace, policy.Metadata.Name);
             if (!_resources.TryGetValue(key, out var current) ||
+                (expectedUid is not null && current.Metadata.Uid != expectedUid) ||
                 current.Metadata.ResourceVersion != expectedResourceVersion)
                 throw new CiliumPolicyException("stale_generation", "Resource version changed.");
             var persisted = policy with
             {
                 Metadata = policy.Metadata with
                 {
+                    Uid = current.Metadata.Uid,
                     ResourceVersion = NextVersion(),
                     Generation = (current.Metadata.Generation ?? 0) + 1
                 }
