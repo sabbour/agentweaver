@@ -1257,7 +1257,16 @@ public static class IdentityBrokerEndpoints
             ? Results.Json(
                 new { error = "temporarily_unavailable", error_description = "The project authorization owner is unavailable." },
                 statusCode: StatusCodes.Status503ServiceUnavailable)
-            : Forbid(deniedError, "The project and run authorization is no longer active.");
+            : Forbid(
+                deniedError,
+                check.ReasonCode switch
+                {
+                    BrokerRunBindingReasonCode.OrchestratorRoleRequired =>
+                        "The Project Orchestrator role is required for this project.",
+                    BrokerRunBindingReasonCode.RunSelectionNotFound =>
+                        "The run has no accepted selection.",
+                    _ => "The project and run authorization is no longer active.",
+                });
 
     /// <summary>
     /// Returns silent upstream interaction failures through the original, one-use

@@ -402,6 +402,10 @@ public sealed class ProjectConfigException(
     public static ProjectConfigException NotFound() =>
         new("not_found", "The requested project or configuration was not found.", StatusCodes.Status404NotFound);
 
+    /// <summary>Creates a not-found response with a stable caller-selected code.</summary>
+    public static ProjectConfigException NotFound(string code) =>
+        new(code, "The requested project or configuration was not found.", StatusCodes.Status404NotFound);
+
     /// <summary>Creates a revision-conflict response with the supplied safe detail.</summary>
     public static ProjectConfigException Conflict(string message) =>
         new("revision_conflict", message, StatusCodes.Status409Conflict);
@@ -421,4 +425,8 @@ public sealed class ProjectConfigException(
     /// <summary>Creates a forbidden response for a caller who cannot perform the requested operation.</summary>
     public static ProjectConfigException Forbidden() =>
         new("forbidden", "The authenticated caller is not authorized for this operation.", StatusCodes.Status403Forbidden);
+
+    /// <summary>Creates a forbidden response with a stable caller-selected code.</summary>
+    public static ProjectConfigException Forbidden(string code) =>
+        new(code, "The authenticated caller is not authorized for this operation.", StatusCodes.Status403Forbidden);
 }

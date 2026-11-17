@@ -1020,18 +1020,45 @@ public sealed partial class ProjectsConfigService
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
         caller.RequireExactRunBinding(projectId, runId);
+        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken)
+            .ConfigureAwait(false);
+        if (project.State != ProjectLifecycleState.Active)
+            throw ProjectConfigException.NotFound();
+
+        var hasProjectVisibility =
+            await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin,
+                cancellationToken).ConfigureAwait(false) ||
+            await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Tenant,
+                caller.TenantId,
+                ProjectAuthorityRole.TenantAdmin,
+                cancellationToken).ConfigureAwait(false) ||
+            await HasAnyCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Project,
+                projectId,
+                [
+                    ProjectAuthorityRole.Owner,
+                    ProjectAuthorityRole.Contributor,
+                    ProjectAuthorityRole.Viewer,
+                    ProjectAuthorityRole.Orchestrator,
+                ],
+                cancellationToken).ConfigureAwait(false);
+        if (!hasProjectVisibility)
+            throw ProjectConfigException.NotFound();
+
         if (!await HasCurrentRoleAsync(
             caller,
             ProjectAuthorityResourceType.Project,
             projectId,
             ProjectAuthorityRole.Orchestrator,
             cancellationToken).ConfigureAwait(false))
-            throw ProjectConfigException.Forbidden();
-
-        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken)
-            .ConfigureAwait(false);
-        if (project.State != ProjectLifecycleState.Active)
-            throw ProjectConfigException.NotFound();
+            throw ProjectConfigException.Forbidden("orchestrator_role_required");
 
         var assignments = caller.Grants.Where(grant =>
             grant.ResourceType == ProjectAuthorityResourceType.Project &&
@@ -1060,7 +1087,7 @@ public sealed partial class ProjectsConfigService
                 item => item.ProjectId == projectId && item.RunId == runId,
                 cancellationToken)
             .ConfigureAwait(false)
-            ?? throw ProjectConfigException.NotFound();
+            ?? throw ProjectConfigException.NotFound("run_selection_not_found");
         var selection = DeserializeRunSelection(record.SnapshotJson);
         if (selection.ProjectId != projectId ||
             selection.RunId != runId ||
