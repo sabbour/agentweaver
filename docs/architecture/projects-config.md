@@ -49,6 +49,44 @@ sequenceDiagram
     end
 ```
 
+## BYOK credential publication
+
+The public Draft routes accept provider metadata, not credentials. The private
+Broker contract attaches one exact 32-character credential version to an
+existing provider Draft. The Broker caller must check current authority before
+it requests publication. The Projects route verifies the short-lived token,
+its purpose, the native TLS handshake, and every request field against signed
+claims.
+
+`POST /internal/byok/credential-publications` appends an immutable provider
+revision. It copies the current metadata, configuration hash, and rate-card
+references, then sets `credentialVersion`. A concurrent update returns `409`.
+An exact retry returns the original receipt, including after a later metadata
+edit. Reusing the operation ID with changed content returns `409`. Metadata
+saves preserve the published credential version. The route does not activate
+or select the provider and is not exposed through the Gateway. Gateway Draft
+reads expose only `hasCredential`; they do not return the credential version.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Broker as Identity Broker
+    participant Projects as Projects & Config
+    participant DB as PostgreSQL
+    Note over Broker,Projects: The management caller checks current authority before invoking this private contract.
+    Broker->>Projects: POST exact credential version with short-lived purpose-bound token
+    Projects->>Projects: Check native TLS and exact token-to-body binding
+    Projects->>DB: Compare expected revision and append immutable provider revision
+    DB-->>Projects: Commit provider revision and receipt
+    Projects-->>Broker: Return no-store receipt
+    alt Broker retries the same operation
+        Broker->>Projects: Send the same operation and request
+        Projects->>DB: Find matching operation fingerprint
+        DB-->>Projects: Original provider revision
+        Projects-->>Broker: Return original receipt
+    end
+```
+
 ## Project creation authority
 
 Creating a project also makes its authenticated creator an active Owner. The
@@ -106,8 +144,8 @@ with `VerifyFull`, explicit authentication authority and audience, an immutable
 product image, reviewed image user/group, and an existing Projects-only TLS Secret.
 It exposes private HTTPS and leaves system certificate trust unchanged.
 
-When configured, `ProjectsConfig:Authentication:BrokerRunBindingAudience` maps only
-the private Broker proof route. This route requires
+When configured, `ProjectsConfig:Authentication:BrokerRunBindingAudience` maps
+the private Broker run-binding and credential-publication routes. Both require
 `ProjectsConfig:Tls:CertificatePath`, `ProjectsConfig:Tls:KeyPath`, and
 `ProjectsConfig:Tls:ServerCertificateSha256`. The absolute certificate/key paths
 must identify a current non-CA server certificate with the server
@@ -116,8 +154,10 @@ The private route also requires a native TLS 1.2 or TLS 1.3 handshake; proxy
 headers cannot stand in for TLS. The deployed TLS Secret and Kestrel default
 certificate must use the same leaf certificate. The canonical Kubernetes
 runtime ConfigMap supplies this audience and TLS profile together; its audience
-and leaf pin must match the Broker's run-binding settings. The certificate and
-key paths refer to the existing read-only `projects-config-tls` mount.
+and leaf pin must match the Broker's private Projects settings. The credential
+publication route also requires a short-lived typed token bound to the exact
+request. The certificate and key paths refer to the existing read-only
+`projects-config-tls` mount.
 
 The provider catalog owner must supply an existing immutable, nonempty ConfigMap
 in the same namespace and its reviewed source commit.
@@ -240,6 +280,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/policies/platform` | Store a validated complete Platform Policy preparation at an expected revision. Requires `api.read`, `projects.admin`, and a current unbound PlatformAdmin. Off by default: returns `503` unless `NativeAcsPolicy:HeadWritesEnabled` is true. Exact retries return the saved preparation after current authority and head checks. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
+| `POST /internal/byok/credential-publications` | Private Broker-only write, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3 and a short-lived credential-publication token bound to the exact request. It appends one immutable Draft revision and returns a bounded `Cache-Control: no-store` receipt. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
 | `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |

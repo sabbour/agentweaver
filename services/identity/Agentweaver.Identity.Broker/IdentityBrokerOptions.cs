@@ -33,7 +33,7 @@ public sealed class IdentityBrokerOptions
     [Required]
     public required SecretRedemptionOptions SecretRedemption { get; set; }
 
-    /// <summary>Optional pinned address and TLS settings for the Projects run-binding owner.</summary>
+    /// <summary>Optional pinned address and TLS settings for private Projects owner calls.</summary>
     public BrokerRunBindingOptions? RunBinding { get; set; }
 
     /// <summary>Optional allowlist of remote OAuth issuers and their approved resources and scopes.</summary>
@@ -52,13 +52,13 @@ public sealed class IdentityBrokerOptions
     public required IReadOnlyList<BrokerClientOptions> Clients { get; set; }
 }
 
-/// <summary>Optional pinned TLS and audience settings for calls to the Projects run-binding owner.</summary>
+/// <summary>Optional pinned TLS and audience settings for private calls to the Projects owner.</summary>
 public sealed class BrokerRunBindingOptions
 {
-    /// <summary>Projects owner base address used to verify run-binding requests.</summary>
+    /// <summary>Projects owner base address used for private owner requests.</summary>
     public string? ProjectsOwnerAddress { get; set; }
 
-    /// <summary>Expected audience for calls to the Projects owner.</summary>
+    /// <summary>Expected audience for private calls to the Projects owner.</summary>
     public string? ProjectsAudience { get; set; }
 
     /// <summary>Optional SHA-256 pin for the Projects owner's server certificate.</summary>

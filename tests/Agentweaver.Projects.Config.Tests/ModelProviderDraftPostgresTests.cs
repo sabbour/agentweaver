@@ -282,6 +282,71 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task CredentialPublicationAppendsReplaysAfterRenameAndPreservesTheVersion()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "provider-publication-tenant-" + suffix;
+        var admin = await SeedCallerAsync(
+            db, authorityStore, "provider-publication-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var service = new ModelProviderDraftService(db, TimeProvider.System);
+        var providerId = "publication-provider-" + suffix;
+        var initial = await service.SaveAsync(
+            admin,
+            ModelProviderBindingScope.Platform,
+            null,
+            providerId,
+            DraftRequest(Guid.NewGuid(), 0),
+            CancellationToken.None);
+        var publication = new ModelProviderCredentialPublicationRequest(
+            Guid.NewGuid(),
+            initial.Binding.ProviderRevision,
+            ModelProviderBindingScope.Platform,
+            null,
+            providerId,
+            "0123456789abcdef0123456789abcdef");
+
+        var receipt = await service.PublishCredentialAsync(publication, admin.ActorId, CancellationToken.None);
+
+        Assert.Equal(publication.OperationId, receipt.OperationId);
+        Assert.Equal(2, receipt.ProviderRevision);
+        Assert.Equal(publication.CredentialVersion, receipt.CredentialVersion);
+        Assert.Equal(initial.Binding.ConfigurationHash, receipt.ConfigurationHash);
+
+        var renamed = await service.SaveAsync(
+            admin,
+            ModelProviderBindingScope.Platform,
+            null,
+            providerId,
+            DraftRequest(Guid.NewGuid(), receipt.ProviderRevision) with { DisplayName = "Renamed model" },
+            CancellationToken.None);
+        Assert.Equal(3, renamed.Binding.ProviderRevision);
+        Assert.Equal(publication.CredentialVersion, renamed.Binding.CredentialVersion);
+        Assert.True(ModelProviderDraftEndpoints.Project(renamed).HasCredential);
+
+        var replay = await service.PublishCredentialAsync(publication, admin.ActorId, CancellationToken.None);
+        Assert.Equal(receipt, replay);
+        Assert.Equal(3, await db.ModelProviderDraftRevisions.CountAsync(item => item.ProviderId == providerId));
+
+        var changedReplay = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
+            service.PublishCredentialAsync(
+                publication with { CredentialVersion = "fedcba9876543210fedcba9876543210" },
+                admin.ActorId,
+                CancellationToken.None));
+        Assert.Equal("model_provider_draft_conflict", changedReplay.Code);
+
+        var stale = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
+            service.PublishCredentialAsync(
+                publication with { OperationId = Guid.NewGuid(), ExpectedProviderRevision = 1 },
+                admin.ActorId,
+                CancellationToken.None));
+        Assert.Equal("model_provider_draft_conflict", stale.Code);
+    }
+
+    [Fact]
     public async Task ConcurrentSavesUseCasAndSameOperationRetriesReturnOneRevision()
     {
         await using var db = CreateDbContext();

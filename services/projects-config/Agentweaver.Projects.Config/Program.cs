@@ -259,7 +259,7 @@ if (brokerRunBindingAudience is not null)
             publicAudience.AbsoluteUri,
             StringComparison.Ordinal))
         throw new InvalidOperationException(
-            "The Broker run-binding audience must be a distinct, absolute HTTPS audience.");
+            "The private Broker audience must be a distinct, absolute HTTPS audience.");
     brokerRunBindingAudienceUri = parsedBrokerAudience;
 }
 BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null,
@@ -305,6 +305,28 @@ if (brokerRunBindingAudienceUri is not null)
             options.TokenValidationParameters.ClockSkew = TimeSpan.FromSeconds(5);
             options.Events = BrokerRunBindingTokenValidation.CreateEvents(TimeProvider.System);
         });
+    builder.Services.AddAuthentication().AddJwtBearer(
+        ProjectAuthorizationOwner.BrokerCredentialPublicationAuthenticationScheme,
+        options =>
+        {
+            options.Authority = authorityUri.AbsoluteUri;
+            options.Audience = brokerRunBindingAudienceUri.AbsoluteUri;
+            options.RequireHttpsMetadata = true;
+            options.MapInboundClaims = false;
+            options.TokenValidationParameters.ValidateIssuer = true;
+            options.TokenValidationParameters.ValidIssuer = authorityUri.AbsoluteUri;
+            options.TokenValidationParameters.ValidateAudience = true;
+            options.TokenValidationParameters.ValidAudience = brokerRunBindingAudienceUri.AbsoluteUri;
+            options.TokenValidationParameters.ValidateIssuerSigningKey = true;
+            options.TokenValidationParameters.ValidateLifetime = true;
+            options.TokenValidationParameters.RequireExpirationTime = true;
+            options.TokenValidationParameters.RequireSignedTokens = true;
+            options.TokenValidationParameters.ValidTypes =
+                [ProjectAuthorizationOwner.BrokerCredentialPublicationTokenType];
+            options.TokenValidationParameters.ValidAlgorithms = [SecurityAlgorithms.RsaSha256];
+            options.TokenValidationParameters.ClockSkew = TimeSpan.FromSeconds(5);
+            options.Events = BrokerRunBindingTokenValidation.CreateEvents(TimeProvider.System);
+        });
 }
 builder.Services.AddAuthorization(options =>
 {
@@ -314,6 +336,11 @@ builder.Services.AddAuthorization(options =>
             ProjectAuthorizationOwner.BrokerRunBindingAuthorizationPolicy,
             policy => policy
                 .AddAuthenticationSchemes(ProjectAuthorizationOwner.BrokerRunBindingAuthenticationScheme)
+                .RequireAuthenticatedUser());
+        options.AddPolicy(
+            ProjectAuthorizationOwner.BrokerCredentialPublicationAuthorizationPolicy,
+            policy => policy
+                .AddAuthenticationSchemes(ProjectAuthorizationOwner.BrokerCredentialPublicationAuthenticationScheme)
                 .RequireAuthenticatedUser());
     }
 });
@@ -331,6 +358,7 @@ await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions)
 await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 app.UseRouting();
 app.UseModelProviderDraftNoStore();
+app.UseModelProviderCredentialPublicationNoStore();
 if (platformPolicySourceEnabled)
     app.UsePlatformPolicySourceGuard(
         app.Services.GetRequiredService<PlatformPolicySourceTlsIdentity>().ListenerPort);

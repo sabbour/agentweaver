@@ -417,7 +417,8 @@ internal static class ModelProviderDraftEndpoints
             binding.ProviderId, binding.DisplayName, binding.ProviderType, binding.BaseUrl, binding.Deployment,
             binding.WireApi, binding.AzureApiVersion, binding.ReasoningEfforts, binding.PromptCapacityTokens,
             binding.Scope == ModelProviderBindingScope.Platform ? "platform" : "project",
-            binding.ProjectId, "Draft", binding.ProviderRevision, binding.ConfigurationHash, false, false, false);
+            binding.ProjectId, "Draft", binding.ProviderRevision, binding.ConfigurationHash,
+            false, false, binding.CredentialVersion is not null);
     }
 
     private static void ValidatePublicUrl(string value, string providerType, string providerId, long revision)

@@ -129,6 +129,16 @@ after the slot is disabled. Disabling a slot changes ledger state; it does not
 disable or delete the Key Vault secret. Runtime use checks the exact run and
 purpose grant before and after redemption.
 
+The Broker has a private Projects client for credential publication. It sends
+the operation ID, expected provider revision, scope, project ID, provider ID,
+and exact credential version. It sends no key, secret name, or vault URI. A
+30-second signed token binds the actor and every request field to the
+`credential-publication` purpose. The client uses the pinned Projects TLS
+channel and accepts only a bounded no-store receipt for the same operation.
+The management caller must check current authority before it invokes this
+client. The credential ledger does not call it, and no management HTTP route
+currently exposes publication. A retry sends the same operation ID and body.
+
 ```mermaid
 sequenceDiagram
     participant Owner as Trusted owner

@@ -292,6 +292,11 @@ public sealed class ProjectAuthorizationOwner(
     public const string BrokerRunBindingTokenType = "agentweaver-run-binding-query+jwt";
     public const string BrokerRunBindingPurpose = "run-binding-query";
     public const string BrokerRunBindingServiceSubject = "identity-broker";
+    public const string BrokerCredentialPublicationAuthenticationScheme = "ProjectsBrokerCredentialPublication";
+    public const string BrokerCredentialPublicationAuthorizationPolicy = "ProjectsBrokerCredentialPublication";
+    public const string BrokerCredentialPublicationTokenType = "agentweaver-credential-publication+jwt";
+    public const string BrokerCredentialPublicationPurpose = "credential-publication";
+    public const string BrokerCredentialPublicationServiceSubject = "identity-broker";
 
     /// <summary>
     /// Resolves one active issuer/subject membership and its active role assignments, enforcing tenant-selector consistency.
@@ -510,7 +515,7 @@ internal static class BrokerRunBindingTokenValidation
                 _ => false,
             };
             if (!valid)
-                context.Fail("The Broker run-binding ticket lifetime is invalid.");
+                context.Fail("The Broker service ticket lifetime is invalid.");
             return Task.CompletedTask;
         },
     };

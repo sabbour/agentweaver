@@ -1218,6 +1218,7 @@ public static class ProjectConfigEndpoints
 
         app.MapNativeAcsPolicyEndpoints();
         app.MapModelProviderDraftEndpoints();
+        app.MapModelProviderCredentialPublicationEndpoints(enableBrokerRunBinding);
         return app;
     }
 

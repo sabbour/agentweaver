@@ -55,8 +55,10 @@ does not resolve DNS or approve runtime egress.
 A saved row contains `id`, `name`, `type`, `base_url`, `model`, `wire_api`,
 `azure_api_version`, `reasoning_efforts`, `prompt_capacity_tokens`, `scope`,
 nullable `projectId`, `state`, `revision`, and `configurationHash`. It also
-contains `has_api_key: false`, `is_active: false`, and `hasCredential: false`.
-The response omits credentials, rate-card references, and audit identities.
+contains `has_api_key: false`, `is_active: false`, and `hasCredential`, which
+is true when the current revision has a published credential version. The
+response omits the credential version, rate-card references, and audit
+identities.
 A save returns the immutable revision written by that operation. An exact
 retry returns the same revision, including after a later edit.
 
@@ -201,10 +203,38 @@ optional prompt capacity, provider revision, optional credential-version and
 rate-card references, and a configuration hash.
 
 The Projects & Config draft service stores metadata in a mutable Draft head and
-an append-only revision ledger. Draft revisions have no credential or rate-card
-reference. They contain no key, secret name, header, or price. This source slice
-adds no HTTP route and does not change model eligibility or accepted run
-selections. Every read and write requires `api.read` and `projects.admin`.
+an append-only revision ledger. Public metadata requests do not accept
+credentials, headers, vault references, or rate-card references. The private
+Broker contract can attach an exact credential version to an existing Draft.
+It stores no key, secret name, or vault URI. It does not activate or select a
+provider or change accepted run selections.
+
+`POST /internal/byok/credential-publications` accepts a JSON request with
+`operationId`, `expectedProviderRevision`, `scope` (`platform` or `project`),
+nullable `projectId`, `providerId`, and `credentialVersion`. The credential
+version is 32 hexadecimal characters. Set `projectId` to `null` for platform
+scope and include the project ID for project scope.
+`expectedProviderRevision` must be positive. Unknown or duplicate fields,
+invalid identifiers, or an invalid version return `400`. The request body limit
+is 8 KiB.
+
+`ProjectsConfig:Authentication:BrokerRunBindingAudience` maps the route. It
+requires the private Projects audience, a signed short-lived
+`agentweaver-credential-publication+jwt` token with purpose
+`credential-publication`, and a native TLS 1.2 or TLS 1.3 handshake. The token
+binds the actor and every request field. It is not exposed through Gateway.
+The Broker caller must check current authority before it sends the request.
+
+Projects requires an existing provider Draft at `expectedProviderRevision`.
+It appends a revision that copies the current metadata, configuration hash, and
+rate-card references, then sets `credentialVersion`. A metadata save keeps
+that version. The response is a no-store receipt with `operationId`, `scope`,
+`projectId`, `providerId`, `providerRevision`, `credentialVersion`, and
+`configurationHash`. An exact retry returns the original receipt after later
+edits. Changed-content reuse and stale revisions return `409`; a missing Draft
+returns `404`. The route leaves model eligibility unchanged.
+
+Public Draft reads and writes still require `api.read` and `projects.admin`.
 Platform calls require an unbound PlatformAdmin request. Project calls require
 an exact project binding with no run binding and a project Owner or
 PlatformAdmin. See

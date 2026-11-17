@@ -26,6 +26,7 @@ bytes only after Identity approves that binding.
 | `RefreshTokenHandlers.cs` | Atomic refresh redemption and replay handling |
 | `IdentityGrantAuthority.cs` | Revisioned secret grants |
 | `SecretRedemptionEndpoints.cs` | Authenticated secret redemption |
+| `BrokerModelProviderCredentialPublicationClient.cs` | Private Projects credential-version publication |
 | `RuntimeGrantAuthority.cs` | Runtime bootstrap, source, and model-session grants |
 | `AuthorizedSecretRedemption.cs` | Exact grant checks |
 | `RuntimeOwnerHttpTransport.cs` | Shared internal owner HTTPS trust and bounded requests |
@@ -78,6 +79,19 @@ Project/run-bound tokens use one of two paths:
 
 The Broker repeats the relevant check during exchange and refresh. A signed
 binding restricts a token to that project and run; it is not a project role.
+
+### Publish a BYOK credential version
+
+The Broker registers a private Projects client that publishes an exact
+credential version to an existing provider Draft. The request contains no key,
+secret name, or vault URI. The client binds a short-lived typed token to the
+actor and request, then uses the pinned Projects TLS channel. Projects appends
+an immutable provider revision and returns a replayable receipt.
+
+The calling management operation must check current Projects authority before
+it invokes the client. This slice adds no management route that invokes it.
+See the
+[credential publication contract](../reference/contracts.md#customer-provided-model-provider-draft-contract).
 
 A `SecretRef` identifies a secret and version. Grant records persist the
 reference and authorization metadata, not the secret value. A

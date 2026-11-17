@@ -145,16 +145,23 @@ not guarantee that every internal provider request stays below a hard
 admission threshold.
 
 Projects & Config also stores customer-provided model-provider metadata in
-Draft-only revisions. These drafts stay separate from the deployment-owned
-model eligibility snapshot and accepted run selection. A separate Identity
-credential ledger stores exact Key Vault references. A slot-backed BYOK
-selection carries the slot identity and exact `SecretRef`; Identity matches
-both against enabled history and uses the recorded vault. An enabled historical
-version remains usable after slot disable. The ledger stores no credential
-value or rate-card data. See
-[Identity and secrets](./identity-secrets.md#understand-runtime-and-connection-credentials)
-for the redemption path and [issue #2635](https://github.com/sabbour/agentweaver/issues/2635)
-for the Draft-only metadata source.
+Draft-only revisions. The private
+`POST /internal/byok/credential-publications` route appends an exact credential
+version to a provider Draft and returns a replayable receipt. These drafts stay
+separate from the deployment-owned model eligibility snapshot and accepted run
+selection. A separate Identity credential ledger stores exact Key Vault
+references. A slot-backed BYOK selection carries the slot identity and exact
+`SecretRef`; Identity matches both against enabled history and uses the
+recorded vault. An enabled historical version remains usable after slot
+disable. The ledger stores no credential value or rate-card data. The
+publication route does not expose credential values, activate or select a
+provider, or add rate-card data. Public Gateway Draft responses expose only
+whether the current revision has a credential. See the
+[credential publication contract](../reference/contracts.md#customer-provided-model-provider-draft-contract)
+and [Identity and secrets](./identity-secrets.md#understand-runtime-and-connection-credentials)
+for the redemption path. See
+[issue #2635](https://github.com/sabbour/agentweaver/issues/2635) for the
+Draft-only metadata source.
 
 ### Diagnose resolution failures
 

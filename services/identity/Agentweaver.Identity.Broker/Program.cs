@@ -383,6 +383,12 @@ builder.Services.AddScoped(provider => new BrokerRunBindingAuthority(
     provider.GetRequiredService<IHttpClientFactory>()
         .CreateClient(BrokerRunBindingAuthority.HttpClientName),
     provider.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped(provider => new BrokerModelProviderCredentialPublicationClient(
+    identityOptions,
+    provider.GetRequiredService<X509Certificate2>(),
+    provider.GetRequiredService<IHttpClientFactory>()
+        .CreateClient(BrokerRunBindingAuthority.HttpClientName),
+    provider.GetRequiredService<TimeProvider>()));
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Identity.Broker")
     .PersistKeysToFileSystem(new DirectoryInfo(identityOptions.DataProtectionKeyPath))

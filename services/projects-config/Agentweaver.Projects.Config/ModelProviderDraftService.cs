@@ -152,6 +152,15 @@ public sealed class ModelProviderDraftService(
             throw ModelProviderDraftException.Conflict();
         }
 
+        var currentCredentialVersion = current is null
+            ? null
+            : await db.ModelProviderDraftRevisions.AsNoTracking()
+                .Where(revision =>
+                    revision.ProviderId == providerId &&
+                    revision.ProviderRevision == current.CurrentRevision)
+                .Select(revision => revision.CredentialVersion)
+                .SingleAsync(cancellationToken)
+                .ConfigureAwait(false);
         var nextRevision = request.ExpectedRevision + 1;
         var now = timeProvider.GetUtcNow();
         var revisionRecord = new ModelProviderDraftRevisionRecord
@@ -171,6 +180,7 @@ public sealed class ModelProviderDraftService(
             ReasoningEfforts = metadata.ReasoningEfforts,
             PromptCapacityTokens = metadata.PromptCapacityTokens,
             ConfigurationHash = configurationHash,
+            CredentialVersion = currentCredentialVersion,
             CreatedByActorId = caller.ActorId,
             CreatedAt = now,
         };
@@ -261,6 +271,148 @@ public sealed class ModelProviderDraftService(
 
         DetachTrackedProvider(providerId);
         return ToDraft(ModelProviderDraftState.Draft, revisionRecord);
+    }
+
+    internal async Task<ModelProviderCredentialPublicationReceipt> PublishCredentialAsync(
+        ModelProviderCredentialPublicationRequest request,
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!request.IsValid ||
+            string.IsNullOrWhiteSpace(actorId) ||
+            actorId.Length > ModelProviderDraftLimits.ActorId ||
+            actorId.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) &&
+                character is not ('.' or '_' or '-' or ':')))
+            throw ModelProviderDraftException.InvalidRequest("Credential publication metadata is invalid.");
+
+        var requestFingerprint = Hash(new CredentialPublicationFingerprint(
+            "credential-publication",
+            request.OperationId,
+            request.ExpectedProviderRevision,
+            request.Scope.ToString(),
+            request.ProjectId,
+            request.ProviderId,
+            request.CredentialVersion,
+            actorId));
+        var replay = await ReadReplayAsync(
+                request.OperationId,
+                request.ProviderId,
+                request.Scope,
+                request.ProjectId,
+                requestFingerprint,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (replay is not null)
+            return ToCredentialPublicationReceipt(replay, request.OperationId);
+
+        var current = await db.ModelProviderDrafts.AsNoTracking()
+            .SingleOrDefaultAsync(head => head.ProviderId == request.ProviderId, cancellationToken)
+            .ConfigureAwait(false);
+        if (current is null || current.Scope != request.Scope || current.ProjectId != request.ProjectId)
+            throw ModelProviderDraftException.NotFound();
+        if (current.State != ModelProviderDraftState.Draft ||
+            current.CurrentRevision != request.ExpectedProviderRevision)
+        {
+            var concurrentReplay = await ReadReplayAsync(
+                    request.OperationId,
+                    request.ProviderId,
+                    request.Scope,
+                    request.ProjectId,
+                    requestFingerprint,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (concurrentReplay is not null)
+                return ToCredentialPublicationReceipt(concurrentReplay, request.OperationId);
+            throw ModelProviderDraftException.Conflict();
+        }
+
+        var currentRevision = await db.ModelProviderDraftRevisions.AsNoTracking()
+            .SingleAsync(
+                revision =>
+                    revision.ProviderId == request.ProviderId &&
+                    revision.ProviderRevision == current.CurrentRevision,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var nextRevision = request.ExpectedProviderRevision + 1;
+        var now = timeProvider.GetUtcNow();
+        var revisionRecord = new ModelProviderDraftRevisionRecord
+        {
+            ProviderId = request.ProviderId,
+            Scope = request.Scope,
+            ProjectId = request.ProjectId,
+            ProviderRevision = nextRevision,
+            OperationId = request.OperationId,
+            RequestFingerprint = requestFingerprint,
+            DisplayName = currentRevision.DisplayName,
+            ProviderType = currentRevision.ProviderType,
+            BaseUrl = currentRevision.BaseUrl,
+            Deployment = currentRevision.Deployment,
+            WireApi = currentRevision.WireApi,
+            AzureApiVersion = currentRevision.AzureApiVersion,
+            ReasoningEfforts = currentRevision.ReasoningEfforts,
+            PromptCapacityTokens = currentRevision.PromptCapacityTokens,
+            ConfigurationHash = currentRevision.ConfigurationHash,
+            CredentialVersion = request.CredentialVersion,
+            RateCardId = currentRevision.RateCardId,
+            RateCardVersion = currentRevision.RateCardVersion,
+            CreatedByActorId = actorId,
+            CreatedAt = now,
+        };
+
+        try
+        {
+            await using var transaction = await db.Database
+                .BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var updated = await db.ModelProviderDrafts
+                .Where(head =>
+                    head.ProviderId == request.ProviderId &&
+                    head.Scope == request.Scope &&
+                    head.ProjectId == request.ProjectId &&
+                    head.State == ModelProviderDraftState.Draft &&
+                    head.CurrentRevision == request.ExpectedProviderRevision)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(head => head.CurrentRevision, nextRevision)
+                        .SetProperty(head => head.UpdatedByActorId, actorId)
+                        .SetProperty(head => head.UpdatedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (updated != 1)
+                throw ModelProviderDraftException.Conflict();
+
+            db.ModelProviderDraftRevisions.Add(revisionRecord);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            DetachTrackedProvider(request.ProviderId);
+            if (exception is ModelProviderDraftException { Code: "model_provider_draft_conflict" } ||
+                IsUniqueConflict(exception))
+            {
+                var concurrentReplay = await ReadReplayAsync(
+                        request.OperationId,
+                        request.ProviderId,
+                        request.Scope,
+                        request.ProjectId,
+                        requestFingerprint,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (concurrentReplay is not null)
+                    return ToCredentialPublicationReceipt(concurrentReplay, request.OperationId);
+            }
+            if (IsUniqueConflict(exception))
+                throw ModelProviderDraftException.Conflict();
+            throw;
+        }
+
+        DetachTrackedProvider(request.ProviderId);
+        return ToCredentialPublicationReceipt(
+            ToDraft(ModelProviderDraftState.Draft, revisionRecord),
+            request.OperationId);
     }
 
     private async Task AuthorizeAsync(
@@ -487,6 +639,22 @@ public sealed class ModelProviderDraftService(
             revision.RateCardVersion,
             revision.ConfigurationHash));
 
+    private static ModelProviderCredentialPublicationReceipt ToCredentialPublicationReceipt(
+        ModelProviderDraft draft,
+        Guid operationId)
+    {
+        var binding = draft.Binding;
+        return new ModelProviderCredentialPublicationReceipt(
+            operationId,
+            binding.Scope,
+            binding.ProjectId,
+            binding.ProviderId,
+            binding.ProviderRevision,
+            binding.CredentialVersion
+                ?? throw new InvalidOperationException("The published provider revision has no credential version."),
+            binding.ConfigurationHash);
+    }
+
     private void DetachTrackedProvider(string providerId)
     {
         // Detach the head and revision records this operation added, so a failed save cannot leave them pending in the scoped context and a successful save does not leave them tracked.
@@ -539,4 +707,14 @@ public sealed class ModelProviderDraftService(
         int? PromptCapacityTokens);
 
     private sealed record SaveFingerprint(MetadataFingerprint Metadata, long ExpectedRevision);
+
+    private sealed record CredentialPublicationFingerprint(
+        string Mutation,
+        Guid OperationId,
+        long ExpectedProviderRevision,
+        string Scope,
+        string? ProjectId,
+        string ProviderId,
+        string CredentialVersion,
+        string ActorId);
 }

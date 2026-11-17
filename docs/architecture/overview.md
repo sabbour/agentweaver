@@ -21,8 +21,8 @@ permission.
 | Boundary | Responsibility | Not its responsibility |
 | --- | --- | --- |
 | Gateway/BFF | Authenticate and route a finite HTTP API for browser and native CLI callers | Approve workflow transitions or select arbitrary upstream URLs |
-| Identity Broker | Sign-in, tokens, purpose-bound grants and credential redemption | Assign project roles |
-| Projects & Config | Current project authority, immutable accepted run selections, revisioned native ACS artifact storage, and the private Environment mTLS source route for pending Platform artifacts | Admit or apply policies, or change the v4 Policy path |
+| Identity Broker | Sign-in, tokens, purpose-bound grants, credential redemption, and private provider-credential publication | Assign project roles |
+| Projects & Config | Current project authority, immutable accepted run selections, provider Draft revisions, revisioned native ACS artifact storage, and private Environment mTLS source for pending Platform artifacts | Admit or apply policies, or change the v4 Policy path |
 | Orchestrator and Core | Decisions, gates, session tree, execution fences and MAF checkpoints | Treat model text as approval |
 | Environment | Resource lifecycle, network intent, unadmitted Platform egress candidates, workspace volumes and Sandbox placement | Admit or apply Platform policy, or own workflow completion |
 | AgentHost and AgentRuntime | Guard native SDK turns and tools against current owner bindings | Schedule itself or choose a new model/credential |
@@ -153,7 +153,7 @@ their external boundaries.
 | `Agentweaver.ObjectStore.AzureBlob` | Opaque-object Azure Blob adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Telemetry` | In-process OpenTelemetry traces, metrics, and logs. | — |
 | `Agentweaver.Telemetry.AzureMonitor` | Opt-in Azure Monitor exporters. | `Agentweaver.Telemetry` |
-| `Agentweaver.Identity.Broker` | OAuth, secret-redemption, and Identity-owned GitHub App connection/token-mint host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.SourceControl` |
+| `Agentweaver.Identity.Broker` | OAuth, secret-redemption and provider-credential publication host; Identity-owned GitHub App connection/token-mint host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.SourceControl` |
 | `Agentweaver.EventsAndSessions` | Native journal, addressed messages, reference-only SDK usage admission, immutable Cost pricing, and exact usage totals. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Knowledge` | Project-wide discovery plus run/agent-scoped Memory API, context compiler, native PostgreSQL default, and optional Cosmos and Redis adapter candidates. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Environment` | Environment-owned egress, workspace volumes, Sandbox leases, registered runtime profiles, and authenticated nonce delivery. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles`, `Agentweaver.Providers.Sandbox.AgentSandbox` |

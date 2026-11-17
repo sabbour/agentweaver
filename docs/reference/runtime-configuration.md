@@ -322,7 +322,7 @@ not from the checked-in non-secret runtime map:
 | --- | --- |
 | `IdentityBroker:Signing:PfxPath` | Required path to the signing PFX mounted from `identity-broker-signing`. |
 | `IdentityBroker:Signing:PfxPassword` | Required PFX password from the same Kubernetes Secret. Never put it in a ConfigMap. |
-| `IdentityBroker:RunBinding:*` | Optional Projects run-binding owner address, audience, and certificate/trust-bundle SHA-256 pins. |
+| `IdentityBroker:RunBinding:*` | Optional private Broker-to-Projects owner address, audience, and certificate/trust-bundle SHA-256 pins. The channel carries run-binding proofs and credential publications. |
 | `IdentityBroker:RemoteMcpOAuth:*` | Optional remote OAuth allowlist. When enabled, it requires Projects and Environment owner roots and at least one provider. Each provider requires an issuer, client ID, redirect URI, at least one approved resource and scope, and at least two approved OAuth endpoints. The Broker rejects values outside this allowlist. |
 | `IdentityBroker:CopilotConnection:*` | Optional GitHub Copilot user OAuth settings. Requires a Projects owner root address, client ID, exact HTTPS callback URI, and exact Key Vault client-secret name and version. |
 | `IdentityBroker:GitHubRepoApp:*` | Optional GitHub OAuth and App settings. Requires OAuth client ID and secret, HTTPS callback URI, positive App ID, App slug, and exact Key Vault private-key secret name and version. Store the OAuth secret in an existing Kubernetes Secret and configure only its name/key reference. |
@@ -471,8 +471,8 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__Database__WorkloadIdentity__TokenFilePath` | Required absolute projected-token path. |
 | `ProjectsConfig__Authentication__Authority` | Required absolute HTTPS Broker authority. |
 | `ProjectsConfig__Authentication__Audience` | Required token audience for Projects & Config. |
-| `ProjectsConfig__Authentication__BrokerRunBindingAudience` | Optional private Broker run-binding proof audience. When enabled, it must match `IdentityBroker__RunBinding__ProjectsAudience`. |
-| `ProjectsConfig__Tls__CertificatePath`, `ProjectsConfig__Tls__KeyPath` | Absolute paths to the leaf certificate and private key in the existing read-only `projects-config-tls` mount. Required together with the private Broker run-binding audience. |
+| `ProjectsConfig__Authentication__BrokerRunBindingAudience` | Optional private Broker proof audience for run binding and credential publication. When enabled, it must match `IdentityBroker__RunBinding__ProjectsAudience`. |
+| `ProjectsConfig__Tls__CertificatePath`, `ProjectsConfig__Tls__KeyPath` | Absolute paths to the leaf certificate and private key in the existing read-only `projects-config-tls` mount. Required together with the private Broker audience. |
 | `ProjectsConfig__Tls__ServerCertificateSha256` | SHA-256 pin of the exact Projects leaf certificate. It must match `IdentityBroker__RunBinding__ProjectsServerCertificateSha256`; the Broker separately pins the trusted client CA bundle. |
 | `ProjectsConfig__Knowledge__BaseAddress` | Required HTTPS Knowledge service root. Projects uses the mounted backend CA and forwards the current caller's bearer and tenant selector to read private agent history. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedIssuer` | Exact issuer approved for the privileged project-setup command: `https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`. |

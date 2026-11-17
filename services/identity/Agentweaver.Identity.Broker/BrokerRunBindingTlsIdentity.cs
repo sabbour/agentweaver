@@ -7,7 +7,7 @@ using System.Text;
 namespace Agentweaver.Identity.Broker;
 
 /// <summary>
-/// Builds the pinned Projects-owner TLS handler for run-binding requests. It verifies the
+/// Builds the pinned Projects-owner TLS handler for private owner requests. It verifies the
 /// mounted CA bundle digest, leaf certificate pin, server-auth usage and chain, with no
 /// proxy, redirects, cookies or certificate downloads.
 /// </summary>
