@@ -81,6 +81,33 @@ jobs:
       - id: matrix
         run: echo "matrix=$(node scripts/ci/v1-test-plan.mjs matrix)" >> "$GITHUB_OUTPUT"
 
+  acs-lint:
+    name: v1 exported ACS policy lint
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.13.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+      - name: Install locked AGT lint tools
+        run: uv sync --project scripts/acs-lint --locked
+      - name: Test ACS export and lint scripts
+        run: uv run --project scripts/acs-lint --locked --offline --no-sync --no-python-downloads python scripts/acs-lint/test_acs_lint.py
+      - name: Materialize exported ACS fixture
+        run: python scripts/acs-lint/materialize_export.py scripts/acs-lint/fixtures/finite-network-v1.export.json --output-dir artifacts/acs-lint/finite-network-v1
+      - name: Lint the explicit ACS manifest offline
+        env:
+          UV_OFFLINE: '1'
+        run: uv run --project scripts/acs-lint --locked --offline --no-sync --no-python-downloads python scripts/acs-lint/lint.py artifacts/acs-lint/finite-network-v1/manifest.yaml
+
   cli-package:
     name: v1 CLI candidate packaging
     needs: changes
@@ -742,7 +769,7 @@ jobs:
           retention-days: 30
 
   foundation:
-    needs: [changes, harness, go, images, node, web, dotnet, coverage, cli-package]
+    needs: [changes, harness, go, images, node, web, dotnet, coverage, cli-package, acs-lint]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -753,7 +780,7 @@ jobs:
           node --input-type=module -e '
             const jobs = JSON.parse(process.env.RESULTS);
             const expected = {
-              changes: true, harness: true, go: true, node: true,
+              changes: true, harness: true, go: true, node: true, "acs-lint": true,
               images: jobs.changes.outputs.images === "true",
               web: jobs.changes.outputs.web === "true",
               dotnet: jobs.changes.outputs.dotnet === "true",

@@ -1,0 +1,20 @@
+[project]
+name = "agentweaver-acs-lint"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "agent-control-specification",
+    "agent-governance-toolkit-compliance",
+]
+
+[tool.uv]
+build-constraint-dependencies = [
+    "maturin==1.8.7",
+    "setuptools==80.9.0",
+    "wheel==0.45.1",
+]
+package = false
+
+[tool.uv.sources]
+agent-control-specification = { git = "https://github.com/microsoft/agent-governance-toolkit", rev = "48f04e5ad1efd4f2e5692d4b67def2e0f99a6870", subdirectory = "policy-engine/sdk/python" }
+agent-governance-toolkit-compliance = { git = "https://github.com/microsoft/agent-governance-toolkit", rev = "48f04e5ad1efd4f2e5692d4b67def2e0f99a6870", subdirectory = "agent-governance-python/agent-compliance" }
