@@ -1014,6 +1014,54 @@ sequenceDiagram
     O->>P: Refresh current selection permission
 ```
 
+## Governance decision chains
+
+Projects stores governance decision records in owner- and resource-scoped streams.
+Each record uses a versioned canonical JSON form. Its SHA-256 hash binds the
+record to its previous hash and the fixed `agentweaver-governance-decision-v1`
+domain separator, encoded as UTF-8 with a trailing zero byte. The database
+stores the exact canonical bytes so JSON normalization cannot change the hashed
+record. Role revision entries use ascending ordinal order by canonical GUID
+text.
+
+The stream head stores the sequence, fence generation, and current hash.
+An append locks the head and checks the caller's expected sequence, fence, and
+hash. A stale writer receives a conflict. An exact idempotent retry returns the
+original receipt before checking the head; reuse of a key for changed decision
+data conflicts.
+
+Projects writes the decision record and outbox event with the head update in one
+serializable transaction. A failure leaves no partial append. The outbox event
+references the decision ID, sequence, and hash. A1 adds durable dispatch intent;
+it does not add a relay or connect domain receipts to the chain.
+
+Decision records and outbox rows reject update, delete, and truncate operations.
+Insert triggers stamp the transaction ID on each row. The head can advance only
+with its matching decision and outbox rows in the same transaction. The
+Projects runtime role has read/insert rights on those rows and column-scoped
+head updates. Platform and project owners use separate streams.
+
+```mermaid
+sequenceDiagram
+    participant Owner as Projects owner
+    participant Store as Decision append store
+    participant DB as Projects PostgreSQL
+    Owner->>Store: Decision, stream key, idempotency key, expected head
+    Store->>DB: Begin serializable transaction
+    Store->>DB: Find exact idempotent replay
+    alt Exact replay
+        DB-->>Store: Original receipt
+        Store->>DB: Commit read transaction
+        Store-->>Owner: Original receipt
+    else New append
+        Store->>DB: Lock head and check sequence, fence, and hash
+        Store->>DB: Insert canonical record and outbox event
+        Store->>DB: Advance head with matching record hash
+        Store->>DB: Commit all writes
+        Store-->>Owner: Sequence, fence, and record hash
+    end
+```
+
 ## Validation
 
 Run the pure validator tests and the PostgreSQL integration test from the repository root:

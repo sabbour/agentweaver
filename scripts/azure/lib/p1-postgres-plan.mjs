@@ -67,7 +67,7 @@ const GROUPS = {
     SELECT: 'tenant_memberships __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -294,6 +294,52 @@ const APPEND_ONLY_GUARDS = {
         message: 'records in %.% are immutable', sqlState: '55000',
       },
     ],
+    project_governance_decision_stream_heads: [
+      {
+        trigger: 'project_governance_decision_heads_no_delete',
+        function: 'reject_governance_decision_head_removal()', triggerType: 11,
+        message: 'governance decision stream heads cannot be removed', sqlState: '55000',
+      },
+      {
+        trigger: 'project_governance_decision_heads_no_truncate',
+        function: 'reject_governance_decision_head_removal()', triggerType: 34,
+        message: 'governance decision stream heads cannot be removed', sqlState: '55000',
+      },
+    ],
+    project_governance_decisions: [
+      {
+        trigger: 'project_governance_decisions_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'project_governance_decisions_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'project_governance_decisions_stamp_transaction',
+        function: 'stamp_governance_decision_transaction_id()', triggerType: 7,
+        functionSource: 'BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END',
+      },
+    ],
+    project_governance_decision_outbox: [
+      {
+        trigger: 'project_governance_decision_outbox_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'project_governance_decision_outbox_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'project_governance_decision_outbox_stamp_transaction',
+        function: 'stamp_governance_decision_transaction_id()', triggerType: 7,
+        functionSource: 'BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END',
+      },
+    ],
   },
   environment: {
     platform_policy_apply_reservations: [
@@ -370,6 +416,10 @@ const FUNCTIONS = {
     'reject_immutable_record_mutation()',
     'require_native_acs_policy_file_insert_in_revision_transaction()',
     'require_native_acs_policy_head_advance()',
+    'require_governance_decision_head_initialize()',
+    'require_governance_decision_head_advance()',
+    'reject_governance_decision_head_removal()',
+    'stamp_governance_decision_transaction_id()',
     'reject_authority_audit_mutation()',
     'reject_project_setup_operation_mutation()',
     'lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
@@ -428,14 +478,14 @@ const FUNCTIONS = {
   ],
 };
 
-// Column-scoped UPDATE for tables whose rows may change only in named columns. These tables have no
-// table-level UPDATE and no row-lock guard. Revoking a role assignment changes only its state, revision
-// and revocation fields, never who, what or where it applies. This is exactly the optional set that the
-// Projects & Config startup authority check accepts.
+// Column-scoped UPDATE for rows that may change only in named columns. These tables have no table-level
+// UPDATE. Role revocation changes only its state and audit fields; decision heads advance only through
+// the fenced append transaction.
 const UPDATE_COLUMNS = {
   projects_config: {
     project_role_assignments: ['state', 'revision', 'revoked_by', 'revoked_at'],
     native_acs_policy_heads: ['current_revision', 'updated_at'],
+    project_governance_decision_stream_heads: ['sequence', 'fence_generation', 'head_hash', 'updated_at'],
   },
 };
 

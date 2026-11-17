@@ -1223,6 +1223,201 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("project_configuration_revisions", "projects_config");
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectGovernanceDecisionOutboxRecord", b =>
+                {
+                    b.Property<Guid>("OutboxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("outbox_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("DecisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("decision_id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(96)
+                        .HasColumnType("character varying(96)")
+                        .HasColumnName("event_type");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<string>("RecordHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("record_hash");
+
+                    b.Property<long>("Sequence")
+                        .HasColumnType("bigint")
+                        .HasColumnName("sequence");
+
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasColumnName("write_transaction_id")
+                        .HasDefaultValueSql("pg_current_xact_id()::text");
+
+                    b.HasKey("OutboxId");
+
+                    b.HasIndex("DecisionId")
+                        .IsUnique();
+
+                    b.ToTable("project_governance_decision_outbox", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_governance_decision_outbox_event", "event_type = 'project.governance_decision_appended.v1'");
+
+                            t.HasCheckConstraint("ck_project_governance_decision_outbox_hash", "record_hash ~ '^[0-9a-f]{64}$'");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectGovernanceDecisionRecord", b =>
+                {
+                    b.Property<string>("ScopeType")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope_type");
+
+                    b.Property<string>("ScopeId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("scope_id");
+
+                    b.Property<string>("ResourceType")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("resource_type");
+
+                    b.Property<string>("ResourceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("resource_id");
+
+                    b.Property<long>("Sequence")
+                        .HasColumnType("bigint")
+                        .HasColumnName("sequence");
+
+                    b.Property<byte[]>("CanonicalRecord")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("canonical_record");
+
+                    b.Property<Guid>("DecisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("decision_id");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("PreviousHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("previous_hash");
+
+                    b.Property<string>("RecordHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("record_hash");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at");
+
+                    b.Property<string>("RequestDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_digest");
+
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasColumnName("write_transaction_id")
+                        .HasDefaultValueSql("pg_current_xact_id()::text");
+
+                    b.HasKey("ScopeType", "ScopeId", "ResourceType", "ResourceId", "Sequence");
+
+                    b.HasIndex("ScopeType", "ScopeId", "ResourceType", "ResourceId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("project_governance_decisions", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_governance_decisions_hash", "request_digest ~ '^[0-9a-f]{64}$' AND previous_hash ~ '^[0-9a-f]{64}$' AND record_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_project_governance_decisions_scope", "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+
+                            t.HasCheckConstraint("ck_project_governance_decisions_sequence", "sequence > 0");
+
+                            t.HasCheckConstraint("ck_project_governance_decisions_size", "octet_length(canonical_record) BETWEEN 1 AND 65536");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectGovernanceDecisionStreamHeadRecord", b =>
+                {
+                    b.Property<string>("ScopeType")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope_type");
+
+                    b.Property<string>("ScopeId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("scope_id");
+
+                    b.Property<string>("ResourceType")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("resource_type");
+
+                    b.Property<string>("ResourceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("resource_id");
+
+                    b.Property<long>("FenceGeneration")
+                        .HasColumnType("bigint")
+                        .HasColumnName("fence_generation");
+
+                    b.Property<string>("HeadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("head_hash");
+
+                    b.Property<long>("Sequence")
+                        .HasColumnType("bigint")
+                        .HasColumnName("sequence");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("ScopeType", "ScopeId", "ResourceType", "ResourceId");
+
+                    b.ToTable("project_governance_decision_stream_heads", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_governance_decision_stream_heads_hash", "head_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_project_governance_decision_stream_heads_position", "sequence >= 0 AND fence_generation = sequence");
+
+                            t.HasCheckConstraint("ck_project_governance_decision_stream_heads_scope", "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectMarketplaceSourceRecord", b =>
                 {
                     b.Property<Guid>("SourceId")
@@ -1982,6 +2177,25 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectGovernanceDecisionOutboxRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectGovernanceDecisionRecord", null)
+                        .WithOne()
+                        .HasForeignKey("Agentweaver.Projects.Config.ProjectGovernanceDecisionOutboxRecord", "DecisionId")
+                        .HasPrincipalKey("Agentweaver.Projects.Config.ProjectGovernanceDecisionRecord", "DecisionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectGovernanceDecisionRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectGovernanceDecisionStreamHeadRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ScopeType", "ScopeId", "ResourceType", "ResourceId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

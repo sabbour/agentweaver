@@ -157,10 +157,10 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 23 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 11)
+        if (services.Length != 5 || protectedTables.Length != 26 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 14)
             throw new InvalidOperationException(
-                "The exact fourteen row-lock columns and eleven append-only ledger mutation guards are required.");
+                "The exact fourteen row-lock columns and fourteen append-only ledger mutation guards are required.");
 
         foreach (var (service, table) in protectedTables)
         {
@@ -183,8 +183,27 @@ internal static class InitializerChecks
                 typeSevenGuards[0].Message == "native ACS policy files must be inserted with their revision" &&
                 typeSevenGuards[0].SqlState == "55000" &&
                 !string.IsNullOrWhiteSpace(typeSevenGuards[0].FunctionSource);
-            var hasKnownTypeSevenGuard = hasReservationIdentityGuard || hasNativeAcsRevisionGuard;
-            var mutationGuardCount = guards.Count(guard => guard.TriggerType is 19 or 27 or 34);
+            var governanceStampTrigger = table.Table switch
+            {
+                "project_governance_decisions" => "project_governance_decisions_stamp_transaction",
+                "project_governance_decision_outbox" => "project_governance_decision_outbox_stamp_transaction",
+                _ => null,
+            };
+            const string governanceStampFunctionSource =
+                "BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END";
+            var hasGovernanceStampGuard =
+                service.Service == "projects-config" &&
+                service.Schema == "projects_config" &&
+                governanceStampTrigger is not null &&
+                typeSevenGuards.Length == 1 &&
+                typeSevenGuards[0].Trigger == governanceStampTrigger &&
+                typeSevenGuards[0].Function == "stamp_governance_decision_transaction_id()" &&
+                typeSevenGuards[0].Message is null &&
+                typeSevenGuards[0].SqlState is null &&
+                typeSevenGuards[0].FunctionSource == governanceStampFunctionSource;
+            var hasKnownTypeSevenGuard =
+                hasReservationIdentityGuard || hasNativeAcsRevisionGuard || hasGovernanceStampGuard;
+            var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
                 guards.Length != mutationGuardCount + (hasKnownTypeSevenGuard ? 1 : 0) ||
@@ -201,13 +220,14 @@ internal static class InitializerChecks
                         .Where(function => function.Signature == guard.Function).ToArray();
                     return string.IsNullOrWhiteSpace(guard.Trigger) ||
                         string.IsNullOrWhiteSpace(guard.Function) ||
-                        guard.TriggerType is not (7 or 19 or 27 or 34) ||
+                        guard.TriggerType is not (7 or 11 or 19 or 27 or 34) ||
                         (guard.TriggerType == 7 &&
                          (guard.FunctionSource is null ||
-                          !guard.FunctionSource.Contains($"RAISE EXCEPTION '{guard.Message}'", StringComparison.Ordinal) ||
-                          !guard.FunctionSource.Contains($"USING ERRCODE = '{guard.SqlState}'", StringComparison.Ordinal))) ||
+                          (!hasGovernanceStampGuard &&
+                           (!guard.FunctionSource.Contains($"RAISE EXCEPTION '{guard.Message}'", StringComparison.Ordinal) ||
+                            !guard.FunctionSource.Contains($"USING ERRCODE = '{guard.SqlState}'", StringComparison.Ordinal)))) ||
                         (guard.TriggerType != 7 && guard.FunctionSource is not null) ||
-                        string.IsNullOrWhiteSpace(guard.Message) ||
+                        (string.IsNullOrWhiteSpace(guard.Message) && !hasGovernanceStampGuard) ||
                         (guard.SqlState is not null &&
                          !System.Text.RegularExpressions.Regex.IsMatch(guard.SqlState, "^[0-9A-Z]{5}$")) ||
                         matchingFunctions.Length != 1 || matchingFunctions[0].Execute;
@@ -564,8 +584,7 @@ internal static class InitializerChecks
             if (matches.Length != 1)
                 throw new InvalidOperationException($"The {service.Service} {table} mutation guard is missing or duplicated.");
             var actual = matches[0];
-            var expectedBody = NormalizeGuardSource(
-                expected.FunctionSource ??
+            var expectedBody = NormalizeGuardSource(expected.FunctionSource ??
                 $"BEGIN RAISE EXCEPTION '{expected.Message}'" +
                     (expected.SqlState is null ? string.Empty : $" USING ERRCODE = '{expected.SqlState}'") +
                     "; END");
@@ -821,9 +840,9 @@ internal sealed record TablePlan(string Table, string[] Privileges, string? Lock
     /// <summary>Columns the runtime role may UPDATE on a table that has no table-level UPDATE; empty when none.</summary>
     public string[] UpdateColumns { get; init; } = [];
 }
-/// <summary>Expected trigger and owner-only function for a protected table mutation rule.</summary>
+/// <summary>Expected trigger and owner-only function for a protected table.</summary>
 internal sealed record MutationDenialGuardPlan(string Trigger, string Function, int TriggerType,
-    string Message, string? SqlState, string? FunctionSource = null);
+    string? Message = null, string? SqlState = null, string? FunctionSource = null);
 /// <summary>Readback of a mutation guard's catalog state and function source.</summary>
 internal sealed record MutationGuardState(string Table, string? TriggerName, string? FunctionSchema,
     string? FunctionName, int? TriggerType, string? Enabled, bool? IsInternal, bool? NoColumnFilter,

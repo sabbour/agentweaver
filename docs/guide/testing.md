@@ -796,6 +796,15 @@ the dedicated owner receives the schema and objects, missing operator role
 assumption is rejected before writes, and a grant-reconciliation failure rolls
 back both the schema and temporary membership.
 
+Run the Projects governance decision chain tests against disposable PostgreSQL:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~GovernanceDecision"
+```
+
+These tests check canonical serialization, fenced appends, idempotent retries,
+atomic outbox writes, and the runtime grants.
+
 ## Test Broker TLS listener composition
 
 Run the focused Broker composition tests from the repository root:
