@@ -457,7 +457,7 @@ public sealed class NativeAcsPolicyTests
         var actionEdit = ReplaceComposedFile(
             original,
             NativeAcsComposableDomainsProfile.ActionsDataPath,
-            """{"agentweaver_actions":{"allowed_action_ids":["inspect"]}}""");
+            """{"allowed_action_ids":["inspect"]}""");
         var actionChanges = NativeAcsComposableDomainsProfile.ClassifyChanges(original, actionEdit);
 
         Assert.True(actionChanges.IsValid);
@@ -515,11 +515,11 @@ public sealed class NativeAcsPolicyTests
         var duplicateKey = ReplaceComposedFile(
             original,
             NativeAcsComposableDomainsProfile.ActionsDataPath,
-            """{"agentweaver_actions":{"allowed_action_ids":["merge"],"allowed_action_ids":["inspect"]}}""");
+            """{"allowed_action_ids":["merge"],"allowed_action_ids":["inspect"]}""");
         var injectedNamespace = ReplaceComposedFile(
             original,
             NativeAcsComposableDomainsProfile.ActionsDataPath,
-            """{"agentweaver_actions":{"allowed_action_ids":["merge"]},"agentweaver":{"shared":"value"}}""");
+            """{"allowed_action_ids":["merge"],"agentweaver":{"shared":"value"}}""");
         var removedDomain = Rehash(original with
         {
             Files = original.Files
@@ -822,7 +822,7 @@ public sealed class NativeAcsPolicyTests
 
     private static NativeAcsArtifact CreateComposedArtifact() =>
         NativeAcsComposableDomainsProfile.CreateArtifact(
-            """{"agentweaver_actions":{"allowed_action_ids":["merge"]}}""",
+            """{"allowed_action_ids":["merge"]}""",
             ComposedNetworkData);
 
     private const string ComposedNetworkData = """

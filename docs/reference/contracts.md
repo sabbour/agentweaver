@@ -263,11 +263,11 @@ artifacts and native runtime failures return an error rather than an allow.
 
 The `composable-domains-v1` profile adds reviewed `actions` and
 `platform_network` domains to one artifact. It pins the manifest and all three
-Rego modules. The `agentweaver_actions` and `agentweaver` data namespaces stay
-in separate files. Separate input-fact allowlists restrict the action and
-network rules; the selector reads only the caller-selected `domain_id`. The
-`agentweaver_domains_v1` selector
-invokes only that domain's rule at `pre_model_call`. Domain changes can update
+Rego modules. Actions data under `data.actions` and network data under
+`data.agentweaver` stay in separate files. Separate input-fact allowlists
+restrict the action and network rules; the selector reads only the caller-
+selected `domain_id`. The `agentweaver_domains_v1` selector invokes only that
+domain's rule at `pre_model_call`. Domain changes can update
 their own data file; they cannot change the manifest or policy modules.
 
 `NativeAcsPolicyEvaluator.EvaluateComposedAsync` requires a

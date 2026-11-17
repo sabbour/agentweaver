@@ -457,7 +457,7 @@ public sealed class PlatformEgressAcsCompilerTests
         var networkData = Encoding.UTF8.GetString(
             networkArtifact.Files.Single(file => file.RelativePath == "policy/data.json").Bytes.AsSpan());
         return NativeAcsComposableDomainsProfile.CreateArtifact(
-            """{"agentweaver_actions":{"allowed_action_ids":["merge"]}}""",
+            """{"allowed_action_ids":["merge"]}""",
             networkData);
     }
 

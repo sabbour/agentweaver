@@ -22,7 +22,7 @@ public static class NativeAcsComposableDomainsProfile
     internal const string ActionsModulePath = "policy/actions.rego";
     internal const string NetworkModulePath = "policy/network.rego";
     internal const string SelectorModulePath = "policy/domains.rego";
-    internal const string ActionsDataPath = "policy/actions-data.json";
+    internal const string ActionsDataPath = "policy/actions/data.json";
     internal const string NetworkDataPath = "policy/data.json";
 
     private const string ManifestResource = "Agentweaver.Policy.Acs.ComposableDomainsV1.manifest.yaml";
@@ -251,10 +251,8 @@ public static class NativeAcsComposableDomainsProfile
             }
 
             var root = document.RootElement;
-            if (!HasProperties(root, "agentweaver_actions") ||
-                !root.TryGetProperty("agentweaver_actions", out var actions) ||
-                !HasProperties(actions, "allowed_action_ids") ||
-                !actions.TryGetProperty("allowed_action_ids", out var ids) ||
+            if (!HasProperties(root, "allowed_action_ids") ||
+                !root.TryGetProperty("allowed_action_ids", out var ids) ||
                 ids.ValueKind != JsonValueKind.Array)
             {
                 failureCode = "actions_data_shape";

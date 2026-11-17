@@ -31,10 +31,10 @@ paths, policy IDs, and input facts:
 
 | Domain or component | Policy ID or path | Rule |
 | --- | --- | --- |
-| Actions | `agentweaver_actions`, `policy/actions.rego` | Allows an action ID listed in `data.agentweaver_actions.allowed_action_ids`; otherwise denies. |
+| Actions | `agentweaver_actions`, `policy/actions.rego` | Allows an action ID listed in `data.actions.allowed_action_ids`; otherwise denies. |
 | Platform network | `agentweaver_platform_network`, `policy/network.rego` | Uses the existing finite network profile and its validated System catalog. |
 | Selector | `agentweaver_domains_v1`, `policy/domains.rego` | Reads the server-selected `domain_id` and invokes only that domain at `pre_model_call`. |
-| Actions data | `policy/actions-data.json` | Contains only the closed `agentweaver_actions.allowed_action_ids` schema. |
+| Actions data | `policy/actions/data.json` | Contains only the closed `allowed_action_ids` schema in `data.actions`. |
 | Network data | `policy/data.json` | Contains only the existing finite network data schema. |
 
 The artifact contains exactly the reviewed manifest, three reviewed Rego

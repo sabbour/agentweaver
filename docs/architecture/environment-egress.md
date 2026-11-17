@@ -73,7 +73,7 @@ destinations, unknown fields, and other modules or data files.
 
 The `composable-domains-v1` profile adds the fixed `actions` and
 `platform_network` domains. It keeps action data in
-`policy/actions-data.json` and network data in `policy/data.json`. Its explicit
+`policy/actions/data.json` and network data in `policy/data.json`. Its explicit
 Environment candidate compiler reads only the network domain to build an
 egress candidate; the candidate hash still covers the full artifact. The
 existing compiler entrypoints keep accepting only `finite-network-v1`.
