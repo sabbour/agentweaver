@@ -406,6 +406,42 @@
       ]
     },
     {
+      "name": "Platform Policy preparation journal",
+      "sourcePrefixes": [
+        "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyRecords.cs",
+        "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyStore.cs",
+        "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyEndpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectsConfigDbContext.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectsConfigMigrator.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Migrations/",
+        "scripts/azure/lib/p1-postgres-plan.mjs",
+        "scripts/azure/lib/p1-postgres-plan.json",
+        "scripts/azure/tests/p1-postgres-plan.test.mjs",
+        "scripts/azure/lib/db-maintenance.mjs",
+        "deploy/k8s/migrations/p1-postgres/orchestrator-job.yaml",
+        "deploy/k8s/migrations/p1-postgres/events-and-sessions-job.yaml",
+        "deploy/k8s/migrations/p1-postgres/environment-job.yaml",
+        "tools/P1PostgresInitializer/InitializerChecks.cs",
+        "tests/Agentweaver.Persistence.Postgres.Tests/PlannedRuntimeGrantsTests.cs",
+        "tests/Agentweaver.FoundationProbe.Tests/P1PostgresInitializerTests.cs",
+        "tests/Agentweaver.Identity.Broker.Tests/ProjectsConfigResourceServer.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.NativeAcsPreparations.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.PlatformPolicySource.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RoleAssignments.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RuntimeGrants.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigMigrationInventoryTests.cs"
+      ],
+      "required": [
+        "docs/architecture/environment-egress.md",
+        "docs/architecture/projects-config.md",
+        "docs/deep-dive/projects-config.md",
+        "docs/reference/api.md",
+        "docs/reference/contracts.md",
+        "docs/guide/testing.md"
+      ]
+    },
+    {
       "name": "Platform components report",
       "sourcePrefixes": [
         "packages/Agentweaver.Abstractions/PlatformComponent",

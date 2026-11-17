@@ -437,6 +437,8 @@ public sealed partial class ProjectsConfigPostgresTests
                 $"GRANT SELECT, INSERT, UPDATE ON projects_config.model_providers TO \"{roleName}\"");
             await OwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.model_provider_revisions TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");
             await OwnerSqlAsync($"""
                 GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(
                     uuid, text, text, text, bigint, text, boolean) TO "{roleName}"

@@ -78,6 +78,7 @@ test('Only exact table DML is planned; history and memberships stay SELECT-only'
   assert.deepEqual(nativeHead.privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(nativeHead.updateColumns, ['current_revision', 'updated_at']);
   for (const name of [
+    'native_acs_policy_preparations',
     'native_acs_policy_revisions',
     'native_acs_policy_artifact_files',
     'native_acs_policy_idempotency',
@@ -441,7 +442,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 134);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 135);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);

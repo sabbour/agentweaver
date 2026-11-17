@@ -56,6 +56,17 @@ public sealed partial class ProjectsConfigPostgresTests
                  'agentweaver-id-projects-config', 'projects_config.native_acs_policy_heads', 'SELECT')
                AND has_table_privilege(
                  'agentweaver-id-projects-config', 'projects_config.native_acs_policy_heads', 'INSERT')),
+              ('native ACS preparations SELECT and INSERT only',
+               has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_preparations', 'SELECT')
+               AND has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_preparations', 'INSERT')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_preparations', 'UPDATE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_preparations', 'DELETE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_preparations', 'TRUNCATE')),
               ('native ACS heads table UPDATE denied',
                NOT has_table_privilege(
                  'agentweaver-id-projects-config', 'projects_config.native_acs_policy_heads', 'UPDATE')),

@@ -191,6 +191,30 @@
           ]
         },
         {
+          "table": "native_acs_policy_preparations",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "native_acs_policy_preparations_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "native_acs_policy_preparations_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
           "table": "native_acs_policy_revisions",
           "privileges": [
             "SELECT",

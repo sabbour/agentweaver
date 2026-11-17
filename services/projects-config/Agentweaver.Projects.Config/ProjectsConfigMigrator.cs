@@ -107,6 +107,13 @@ public static class ProjectsConfigMigrator
                    current_user, 'projects_config.model_provider_revisions', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'projects_config.model_provider_revisions', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.model_provider_revisions', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'SELECT')
+               AND has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'UPDATE')
+               AND NOT has_any_column_privilege(
+                   current_user, 'projects_config.native_acs_policy_preparations', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'TRUNCATE')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'SELECT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'UPDATE')
@@ -140,7 +147,7 @@ public static class ProjectsConfigMigrator
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog and model_providers, SELECT/INSERT but no UPDATE/DELETE/TRUNCATE on model_provider_revisions, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
+                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog and model_providers, SELECT/INSERT but no UPDATE/DELETE/TRUNCATE on model_provider_revisions and native_acs_policy_preparations, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
     }
 
     /// <summary>

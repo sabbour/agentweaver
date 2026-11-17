@@ -803,6 +803,7 @@ public sealed class P1PostgresInitializerTests
                     new("model_provider_revisions_no_truncate", "reject_immutable_record_mutation()",
                         34, "records in %.% are immutable", "55000"),
                 ]),
+                AppendOnlyTable("native_acs_policy_preparations"),
                 AppendOnlyTable("native_acs_policy_revisions"),
                 AppendOnlyTable("native_acs_policy_artifact_files"),
                 AppendOnlyTable("native_acs_policy_idempotency"),

@@ -249,6 +249,131 @@ internal sealed class NativeAcsPolicyStore(
         return receipt;
     }
 
+    internal async Task<NativeAcsPolicyPreparationReceipt?> FindPreparationReplayAsync(
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidatePreparationRequest(request);
+        EnsurePlatformPreparationRequest(request);
+        var roleGrants = EnsureWriteAuthorized(caller, request);
+        var requestDigest = RequestDigest(request);
+        var scopeDigest = ScopeDigest(caller, request);
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            .ConfigureAwait(false);
+        await LockAndCheckAuthorityAsync(db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
+        var receipt = await FindPreparationReceiptAsync(
+            db, caller, request, scopeDigest, requestDigest, cancellationToken).ConfigureAwait(false);
+        var currentHead = await LockPreparationHeadAsync(db, request, cancellationToken).ConfigureAwait(false);
+        EnsureExpectedHead(request, currentHead);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
+
+    internal async Task<NativeAcsPolicyPreparationReceipt> PrepareAsync(
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidatePreparationRequest(request);
+        EnsurePlatformPreparationRequest(request);
+        var roleGrants = EnsureWriteAuthorized(caller, request);
+        var requestDigest = RequestDigest(request);
+        var scopeDigest = ScopeDigest(caller, request);
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+            .ConfigureAwait(false);
+
+        try
+        {
+            var authorizingGrant = await LockAndCheckAuthorityAsync(
+                db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
+            var replay = await FindPreparationReceiptAsync(
+                db, caller, request, scopeDigest, requestDigest, cancellationToken).ConfigureAwait(false);
+            var currentHead = await LockPreparationHeadAsync(db, request, cancellationToken).ConfigureAwait(false);
+            EnsureExpectedHead(request, currentHead);
+            if (replay is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return replay;
+            }
+
+            var record = new NativeAcsPolicyPreparationRecord
+            {
+                PreparationId = Guid.NewGuid(),
+                ScopeDigest = scopeDigest,
+                ScopeType = request.ScopeType,
+                ScopeId = request.ScopeId,
+                PolicyId = request.PolicyId,
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                MembershipId = caller.MembershipId,
+                MembershipRevision = caller.MembershipRevision,
+                RoleAssignmentId = authorizingGrant.AssignmentId,
+                RoleAssignmentRevision = authorizingGrant.Revision,
+                IdempotencyKey = request.IdempotencyKey,
+                RequestDigest = requestDigest,
+                ExpectedHeadPolicyId = currentHead?.PolicyId,
+                ExpectedHeadRevision = currentHead?.Revision,
+                ExpectedHeadContentSha256 = currentHead?.ContentSha256,
+                ProposedContentSha256 = request.Artifact.ContentSha256,
+                ArtifactJson = JsonSerializer.Serialize(request.Artifact, JsonOptions),
+                Reason = request.Reason,
+                CorrelationId = request.CorrelationId,
+                CreatedAt = timeProvider.GetUtcNow(),
+            };
+            db.NativeAcsPolicyPreparations.Add(record);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            record.CreatedAt = await db.NativeAcsPolicyPreparations.AsNoTracking()
+                .Where(item => item.PreparationId == record.PreparationId)
+                .Select(item => item.CreatedAt)
+                .SingleAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var rechecked = await LockAndCheckAuthorityAsync(
+                db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
+            if (rechecked.AssignmentId != authorizingGrant.AssignmentId ||
+                rechecked.Revision != authorizingGrant.Revision)
+                throw ProjectConfigException.Forbidden();
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return ToPreparationReceipt(record, replayed: false);
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+        })
+        {
+            throw ProjectConfigException.Conflict("The native ACS policy preparation conflicted with another request.");
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.SerializationFailure,
+        })
+        {
+            throw ProjectConfigException.Conflict("The native ACS policy preparation conflicted with a concurrent update.");
+        }
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.SerializationFailure)
+        {
+            throw ProjectConfigException.Conflict("The native ACS policy preparation conflicted with a concurrent update.");
+        }
+        catch (InvalidOperationException exception) when (exception.InnerException is DbUpdateException
+        {
+            InnerException: PostgresException { SqlState: PostgresErrorCodes.SerializationFailure },
+        })
+        {
+            throw ProjectConfigException.Conflict("The native ACS policy preparation conflicted with a concurrent update.");
+        }
+    }
+
     /// <summary>Returns the stable policy ID of the one head for a scope, or null when the scope has no head.</summary>
     internal async Task<string?> FindPolicyIdAsync(
         NativeAcsPolicyScopeType scopeType,
@@ -680,6 +805,11 @@ internal sealed class NativeAcsPolicyStore(
         int PageSize,
         long LastRevision);
 
+    private sealed record NativeAcsPolicyHeadSnapshot(
+        string PolicyId,
+        long Revision,
+        string ContentSha256);
+
     internal static IReadOnlyList<ProjectAuthorizationGrant> EnsureWriteAuthorized(
         ProjectAuthorizationContext caller,
         NativeAcsPolicyWriteRequest request)
@@ -817,6 +947,104 @@ internal sealed class NativeAcsPolicyStore(
         return replay with { Replayed = true };
     }
 
+    private static async Task<NativeAcsPolicyPreparationReceipt?> FindPreparationReceiptAsync(
+        ProjectsConfigDbContext db,
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request,
+        string scopeDigest,
+        string requestDigest,
+        CancellationToken cancellationToken)
+    {
+        var prior = await db.NativeAcsPolicyPreparations.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ScopeDigest == scopeDigest, cancellationToken)
+            .ConfigureAwait(false);
+        if (prior is null)
+            return null;
+        if (prior.ScopeType != request.ScopeType ||
+            prior.ScopeId != request.ScopeId ||
+            prior.PolicyId != request.PolicyId ||
+            prior.ActorIssuer != caller.Issuer ||
+            prior.ActorId != caller.ActorId ||
+            prior.IdempotencyKey != request.IdempotencyKey ||
+            prior.RequestDigest != requestDigest)
+            throw IdempotencyConflict();
+
+        return ToPreparationReceipt(prior, replayed: true);
+    }
+
+    private static NativeAcsPolicyPreparationReceipt ToPreparationReceipt(
+        NativeAcsPolicyPreparationRecord record,
+        bool replayed) =>
+        new(
+            record.PreparationId,
+            record.ScopeType,
+            record.ScopeId,
+            record.PolicyId,
+            record.ExpectedHeadPolicyId,
+            record.ExpectedHeadRevision,
+            record.ExpectedHeadContentSha256,
+            record.ProposedContentSha256,
+            "pending",
+            Checkpoint: null,
+            record.CreatedAt,
+            replayed);
+
+    private static async Task<NativeAcsPolicyHeadSnapshot?> LockPreparationHeadAsync(
+        ProjectsConfigDbContext db,
+        NativeAcsPolicyWriteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT head.policy_id, head.current_revision, revision.content_sha256
+            FROM projects_config.native_acs_policy_heads AS head
+            LEFT JOIN projects_config.native_acs_policy_revisions AS revision
+              ON revision.scope_type = head.scope_type
+             AND revision.scope_id = head.scope_id
+             AND revision.policy_id = head.policy_id
+             AND revision.revision = head.current_revision
+            WHERE head.scope_type = @scope_type
+              AND head.scope_id = @scope_id
+            FOR UPDATE OF head
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("scope_type", request.ScopeType.ToString());
+        command.Parameters.AddWithValue("scope_id", request.ScopeId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        if (reader.IsDBNull(2))
+            throw Corrupt("The native ACS policy head points to a missing revision.");
+        var result = new NativeAcsPolicyHeadSnapshot(
+            reader.GetString(0),
+            reader.GetInt64(1),
+            reader.GetString(2));
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw Corrupt("The native ACS policy scope has more than one head.");
+        return result;
+    }
+
+    private static void EnsureExpectedHead(
+        NativeAcsPolicyWriteRequest request,
+        NativeAcsPolicyHeadSnapshot? currentHead)
+    {
+        if (currentHead?.Revision != request.ExpectedRevision ||
+            currentHead is not null && currentHead.PolicyId != request.PolicyId)
+            throw ProjectConfigException.Conflict("The native ACS policy head has changed.");
+    }
+
+    private static void EnsurePlatformPreparationRequest(NativeAcsPolicyWriteRequest request)
+    {
+        if (request.ScopeType != NativeAcsPolicyScopeType.Platform ||
+            request.ScopeId != ProjectAuthorizationOwner.PlatformResourceId)
+            throw ProjectConfigException.Invalid(
+                "native_acs_policy_invalid",
+                "Only the Platform Policy can be prepared.");
+    }
+
     private static async Task<long?> LockHeadAsync(
         ProjectsConfigDbContext db,
         NativeAcsPolicyWriteRequest request,
@@ -874,6 +1102,20 @@ internal sealed class NativeAcsPolicyStore(
     {
         ValidateWriteMetadata(request);
         ValidateArtifact(request.Artifact);
+    }
+
+    private static void ValidatePreparationRequest(NativeAcsPolicyWriteRequest request)
+    {
+        ValidateRequest(request);
+        var artifact = request.Artifact;
+        if (artifact.ManifestBytes.Length > MaximumPolicySourceManifestBytes ||
+            artifact.Files.Length > MaximumPolicySourceFiles ||
+            artifact.Files.Any(file => file.Bytes.Length > MaximumPolicySourceFileBytes) ||
+            artifact.ManifestBytes.Length + artifact.Files.Sum(file => (long)file.Bytes.Length) >
+                MaximumPolicySourceArtifactBytes)
+            throw ProjectConfigException.Invalid(
+                "native_acs_policy_invalid",
+                "The native ACS policy artifact exceeds its storage limits.");
     }
 
     internal static void ValidateWriteMetadata(NativeAcsPolicyWriteRequest request)
