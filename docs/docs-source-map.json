@@ -222,6 +222,7 @@
       ],
       "required": [
         "docs/reference/api.md",
+        "docs/reference/mcp-tools.md",
         "docs/guide/cli.md",
         "docs/guide/testing.md",
         "docs/guide/api-acceptance-migration.md",
@@ -232,6 +233,19 @@
         "docs/deep-dive/testing-strategy.md",
         "docs/reference/web-ui-parity.md",
         "docs/specs/native-cli-api-acceptance.md"
+      ]
+    },
+    {
+      "name": "Gateway MCP tool catalog",
+      "sourcePrefixes": [
+        "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
+        "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs",
+        "services/gateway/Agentweaver.Gateway/Agents/agentweaver.agent.md",
+        ".github/agents/agentweaver.agent.md",
+        "tests/Agentweaver.Identity.Broker.Tests/GatewayAgentDefinitionTests.cs"
+      ],
+      "required": [
+        "docs/reference/mcp-tools.md"
       ]
     },
     {
@@ -453,6 +467,9 @@
       "name": "Gateway REST and SSE",
       "sourcePrefixes": [
         "services/gateway/"
+      ],
+      "sourceExclusions": [
+        "services/gateway/Agentweaver.Gateway/Agents/agentweaver.agent.md"
       ],
       "required": [
         "docs/architecture/design/services-and-release.md",
@@ -782,6 +799,9 @@
       "name": "Deep dive: Gateway and API inventory",
       "sourcePrefixes": [
         "services/gateway/"
+      ],
+      "sourceExclusions": [
+        "services/gateway/Agentweaver.Gateway/Agents/agentweaver.agent.md"
       ],
       "required": [
         "docs/deep-dive/gateway.md",

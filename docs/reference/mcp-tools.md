@@ -206,6 +206,7 @@ staged proposal with the casting tools. See [AgentSuite import and export](./age
 | `selectWorkflow` | Select a workflow. |
 | `proposeWorkPlan` | Submit a work plan. |
 | `reviseWorkPlan` | Submit a revised plan. |
+| `dispatchCoordinatorExecution` | Dispatch a confirmed work plan and read task completion evidence. |
 | `requestAssembly` | Request assembly. |
 | `readDecisions` | Read decision state and pending gate. |
 | `readSessionTree` | Read the session tree. |
