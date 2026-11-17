@@ -84,7 +84,7 @@ public static class NativeAcsPolicyEndpoints
                     context.Request.Query["pageSize"].Count > 1 ||
                     context.Request.Query["cursor"].Count > 1)
                     throw NativeAcsPolicyStore.HistoryRequestInvalid();
-                EnsureNoReadBody(context, NativeAcsPolicyStore.HistoryRequestInvalid);
+                EnsureNoReadBody(context, () => NativeAcsPolicyStore.HistoryRequestInvalid());
                 var pageSize = NativeAcsPolicyStore.ParseHistoryPageSize(
                     context.Request.Query.TryGetValue("pageSize", out var sizes) ? sizes[0] : null);
                 var cursor = context.Request.Query.TryGetValue("cursor", out var cursors)
@@ -127,7 +127,7 @@ public static class NativeAcsPolicyEndpoints
             {
                 if (context.Request.Query.Count != 0)
                     throw NativeAcsPolicyStore.RevisionRequestInvalid();
-                EnsureNoReadBody(context, NativeAcsPolicyStore.RevisionRequestInvalid);
+                EnsureNoReadBody(context, () => NativeAcsPolicyStore.RevisionRequestInvalid());
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
                 await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
@@ -261,6 +261,184 @@ public static class NativeAcsPolicyEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(MaximumRequestBodyBytes))
             .WithName("WritePlatformNativeAcsPolicy");
 
+        var projects = app.MapGroup("/api/policies/projects").RequireAuthorization();
+        projects.MapGet("/", async (
+            HttpContext context,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Keys.Any(key => key is not ("pageSize" or "cursor")) ||
+                    context.Request.Query["pageSize"].Count > 1 ||
+                    context.Request.Query["cursor"].Count > 1)
+                    throw NativeAcsPolicyStore.ScopeListRequestInvalid();
+                EnsureNoReadBody(context, () => NativeAcsPolicyStore.ScopeListRequestInvalid());
+                var pageSize = NativeAcsPolicyStore.ParseScopeListPageSize(
+                    context.Request.Query.TryGetValue("pageSize", out var sizes) ? sizes[0] : null);
+                var cursor = context.Request.Query.TryGetValue("cursor", out var cursors)
+                    ? cursors[0] ?? string.Empty
+                    : null;
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var page = await policyStore.ReadProjectPolicyScopesAsync(
+                    caller,
+                    pageSize,
+                    cursor,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(page);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+        }).WithName("ListProjectNativeAcsPolicies");
+
+        projects.MapGet("/{projectId}", async (
+            string projectId,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                EnsureNoQuery(context);
+                EnsureNoReadBody(context, () => NativeAcsPolicyStore.ReadRequestInvalid("Project"));
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                var result = await policyStore.ReadAsync(
+                    NativeAcsPolicyScopeType.Project,
+                    projectId,
+                    cancellationToken).ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                return result is null
+                    ? Results.NotFound(new { code = "native_acs_policy_not_found" })
+                    : Results.Ok(result);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+        }).WithName("ReadProjectNativeAcsPolicy");
+
+        projects.MapGet("/{projectId}/revisions", async (
+            string projectId,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Keys.Any(key => key is not ("pageSize" or "cursor")) ||
+                    context.Request.Query["pageSize"].Count > 1 ||
+                    context.Request.Query["cursor"].Count > 1)
+                    throw NativeAcsPolicyStore.HistoryRequestInvalid("Project");
+                EnsureNoReadBody(context, () => NativeAcsPolicyStore.HistoryRequestInvalid("Project"));
+                var pageSize = NativeAcsPolicyStore.ParseHistoryPageSize(
+                    context.Request.Query.TryGetValue("pageSize", out var sizes) ? sizes[0] : null,
+                    "Project");
+                var cursor = context.Request.Query.TryGetValue("cursor", out var cursors)
+                    ? cursors[0] ?? string.Empty
+                    : null;
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                var page = await policyStore.ReadHistoryAsync(
+                    NativeAcsPolicyScopeType.Project,
+                    projectId,
+                    pageSize,
+                    cursor,
+                    cancellationToken).ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(page);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+        }).WithName("ListProjectNativeAcsPolicyRevisions");
+
+        projects.MapGet("/{projectId}/revisions/{revision}", async (
+            string projectId,
+            string revision,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw NativeAcsPolicyStore.RevisionRequestInvalid("Project");
+                EnsureNoReadBody(context, () => NativeAcsPolicyStore.RevisionRequestInvalid("Project"));
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                var result = await policyStore.ReadRevisionAsync(
+                    NativeAcsPolicyScopeType.Project,
+                    projectId,
+                    NativeAcsPolicyStore.ParseRevision(revision, "Project"),
+                    cancellationToken).ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                return result is null
+                    ? Results.NotFound(new { code = "native_acs_policy_not_found" })
+                    : Results.Ok(result);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                return SourceUnavailable("Project");
+            }
+        }).WithName("ReadProjectNativeAcsPolicyRevision");
+
         return app;
     }
 
@@ -362,10 +540,10 @@ public static class NativeAcsPolicyEndpoints
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
 
-    private static IResult SourceUnavailable() =>
+    private static IResult SourceUnavailable(string scope = "Platform") =>
         Results.Problem(
             title: "native_acs_policy_source_unavailable",
-            detail: "The Platform Policy source is unavailable.",
+            detail: $"The {scope} Policy source is unavailable.",
             statusCode: StatusCodes.Status503ServiceUnavailable,
             extensions: new Dictionary<string, object?>
             {

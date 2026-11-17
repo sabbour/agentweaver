@@ -257,23 +257,25 @@ Run the database-free selector tests and Gateway route/OpenAPI tests after the
 Release build:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicyHistoryRequestTests"
-dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~PlatformPolicyRoutesAreBoundedAndExcludedFromMcp|FullyQualifiedName~PlatformPolicyHistory|FullyQualifiedName~PlatformPolicyRevisionRoutesEnforceQueryAndHeaderForwarding"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicyHistoryRequestTests|FullyQualifiedName~NativeAcsPolicyRequestGateTests"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~PlatformPolicyRoutesAreBoundedAndExcludedFromMcp|FullyQualifiedName~PlatformPolicyHistory|FullyQualifiedName~PlatformPolicyRevisionRoutesEnforceQueryAndHeaderForwarding|FullyQualifiedName~ProjectPolicyRoutesAreBoundedAndExcludedFromMcp|FullyQualifiedName~ProjectPolicyRoutesForwardTenantAndRejectUnknownQueryValues|FullyQualifiedName~ProjectPolicyReadsPublishTypedOpenApiContracts"
 ```
 
 Run the Projects & Config PostgreSQL tests in hosted CI:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicy|FullyQualifiedName~NativeAcsPlatformPolicy"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicy|FullyQualifiedName~NativeAcsPlatformPolicy|FullyQualifiedName~NativeAcsProjectPolicyRead|FullyQualifiedName~NativeAcsProjectPolicyList"
 ```
 
-These controlled tests use disposable PostgreSQL. They check the source API and
-database state. They check preparation persistence and replay, duplicate
-requests, stale heads, revoked authority, rollback, and unchanged canonical
-state. The private source test stages a preparation and confirms that the
-source still returns only the committed artifact with pending/null admission.
-These tests do not install a provider barrier or admit a policy. They do not
-call a live API or prove that a deployed image contains the pinned ACS assets.
+These controlled tests use disposable PostgreSQL. They check Platform and
+Project source reads, current authorization, history pagination, exact bytes,
+opaque list cursors, bounded set-based list authorization, and unchanged
+policy tables. They also check preparation persistence and
+replay, duplicate requests, stale heads, revoked authority, and rollback. The
+private source test stages a preparation and confirms that the source still
+returns only the committed artifact with pending/null admission. These tests
+do not install a provider barrier or admit a policy. They do not call a live
+API or prove that a deployed image contains the pinned ACS assets.
 
 ### Test the private Environment Policy source
 

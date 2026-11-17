@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -3564,6 +3565,9 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             .UseNpgsql(fixture.DataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
+
+    private static IDataProtectionProvider CreateTestDataProtectionProvider() =>
+        new EphemeralDataProtectionProvider();
 
     private static ProviderCatalog CreateProviderCatalog(bool sandboxEnabled = true, bool includeMemory = false)
     {

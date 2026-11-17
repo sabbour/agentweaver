@@ -281,7 +281,9 @@ public sealed partial class ProjectsConfigPostgresTests
                 before.Where(head => head.StartsWith(singleScope, StringComparison.Ordinal)),
                 await ReadMigrationHeadsAsync(singleScope, duplicateScope));
             var kept = await new NativeAcsPolicyStore(
-                    new TestDbContextFactory(CreateDbContextOptions()), TimeProvider.System)
+                    new TestDbContextFactory(CreateDbContextOptions()),
+                    TimeProvider.System,
+                    CreateTestDataProtectionProvider())
                 .FindPolicyIdAsync(NativeAcsPolicyScopeType.Project, singleScope, CancellationToken.None);
             Assert.Equal(seeded[0].PolicyId, kept);
         }
@@ -518,7 +520,8 @@ public sealed partial class ProjectsConfigPostgresTests
             .UseNpgsql(runtimeDataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
-        var store = new NativeAcsPolicyStore(new TestDbContextFactory(runtimeOptions), TimeProvider.System);
+        var store = new NativeAcsPolicyStore(
+            new TestDbContextFactory(runtimeOptions), TimeProvider.System, CreateTestDataProtectionProvider());
 
         var receipt = await store.WriteAsync(
             caller,
@@ -549,7 +552,10 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     private NativeAcsPolicyStore CreateNativeAcsStore() =>
-        new(new TestDbContextFactory(CreateDbContextOptions()), TimeProvider.System);
+        new(
+            new TestDbContextFactory(CreateDbContextOptions()),
+            TimeProvider.System,
+            CreateTestDataProtectionProvider());
 
     private static NativeAcsPolicyWriteRequest Request(
         string projectId,

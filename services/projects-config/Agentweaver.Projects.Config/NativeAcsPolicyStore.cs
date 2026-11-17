@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
@@ -14,7 +15,8 @@ namespace Agentweaver.Projects.Config;
 
 internal sealed class NativeAcsPolicyStore(
     IDbContextFactory<ProjectsConfigDbContext> contextFactory,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IDataProtectionProvider dataProtectionProvider)
 {
     private const string PolicyRevisionEventType = "native_acs.policy_revision_committed.v1";
     private const int MaximumPolicySourceManifestBytes = 65_536;
@@ -22,8 +24,12 @@ internal sealed class NativeAcsPolicyStore(
     private const int MaximumPolicySourceFileBytes = 262_144;
     private const int MaximumPolicySourceArtifactBytes = 1_048_576;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly IDataProtector _scopeListCursorProtector =
+        dataProtectionProvider.CreateProtector("Agentweaver.Projects.Config.ProjectPolicyScopeListCursor.v2");
     private const int HistoryCursorVersion = 1;
     private const string HistoryCursorOrder = "revision-descending";
+    private const int ScopeListCursorVersion = 2;
+    private const string ScopeListCursorOrder = "scope-id-ascending";
 
     internal async Task<NativeAcsPolicyWriteReceipt> WriteAsync(
         ProjectAuthorizationContext caller,
@@ -550,49 +556,58 @@ internal sealed class NativeAcsPolicyStore(
             head.UpdatedAt);
     }
 
+    internal Task<NativeAcsPolicyRevisionPage> ReadHistoryAsync(
+        int pageSize,
+        string? cursor,
+        CancellationToken cancellationToken) =>
+        ReadHistoryAsync(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            pageSize,
+            cursor,
+            cancellationToken);
+
     internal async Task<NativeAcsPolicyRevisionPage> ReadHistoryAsync(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
         int pageSize,
         string? cursor,
         CancellationToken cancellationToken)
     {
+        var scopeName = PolicyDisplayName(scopeType);
         if (pageSize is < 1 or > 100)
-            throw HistoryRequestInvalid();
+            throw HistoryRequestInvalid(scopeName);
+        ValidatePolicyScope(scopeType, scopeId, () => HistoryRequestInvalid(scopeName));
 
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         var head = await db.NativeAcsPolicyHeads.AsNoTracking()
             .SingleOrDefaultAsync(item =>
-                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
-                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId,
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId,
                 cancellationToken)
             .ConfigureAwait(false);
         if (head is null)
         {
             if (cursor is not null)
-                throw HistoryRequestInvalid();
-            return new NativeAcsPolicyRevisionPage(
-                NativeAcsPolicyScopeType.Platform,
-                ProjectAuthorizationOwner.PlatformResourceId,
-                null,
-                null,
-                [],
-                null);
+                throw HistoryRequestInvalid(scopeName);
+            return new NativeAcsPolicyRevisionPage(scopeType, scopeId, null, null, [], null);
         }
 
         var snapshotRevision = head.CurrentRevision;
         long? beforeRevision = null;
         if (cursor is not null)
         {
-            var decoded = DecodeHistoryCursor(cursor, pageSize);
+            var decoded = DecodeHistoryCursor(cursor, pageSize, scopeType, scopeId);
             if (decoded.PolicyId != head.PolicyId || decoded.SnapshotRevision > head.CurrentRevision)
-                throw HistoryRequestInvalid();
+                throw HistoryRequestInvalid(scopeName);
             snapshotRevision = decoded.SnapshotRevision;
             beforeRevision = decoded.LastRevision;
         }
 
         var query = db.NativeAcsPolicyRevisions.AsNoTracking()
             .Where(item =>
-                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
-                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId &&
                 item.PolicyId == head.PolicyId &&
                 item.Revision <= snapshotRevision);
         if (beforeRevision is { } lastRevision)
@@ -607,32 +622,155 @@ internal sealed class NativeAcsPolicyStore(
         var items = rows.Take(pageSize).ToImmutableArray();
         var nextCursor = rows.Length > pageSize
             ? EncodeHistoryCursor(
+                scopeType,
+                scopeId,
                 head.PolicyId,
                 snapshotRevision,
                 pageSize,
                 items[^1].Revision)
             : null;
         return new NativeAcsPolicyRevisionPage(
-            NativeAcsPolicyScopeType.Platform,
-            ProjectAuthorizationOwner.PlatformResourceId,
+            scopeType,
+            scopeId,
             head.PolicyId,
             snapshotRevision,
             items,
             nextCursor);
     }
 
+    internal async Task<NativeAcsPolicyScopePage> ReadProjectPolicyScopesAsync(
+        ProjectAuthorizationContext caller,
+        int pageSize,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireUnboundRequest();
+        if (pageSize is < 1 or > 100 || string.IsNullOrWhiteSpace(caller.TenantId))
+            throw ScopeListRequestInvalid();
+        var authorizationFingerprint = ScopeListAuthorizationFingerprint(caller);
+        var afterScopeId = cursor is null
+            ? null
+            : DecodeScopeListCursor(cursor, caller, pageSize, authorizationFingerprint).LastScopeId;
+        var isTenantAdmin = caller.IsTenantAdmin;
+        var hasProjectReaderRole = caller.Grants.Any(grant =>
+            grant.ResourceType == ProjectAuthorityResourceType.Project &&
+            (grant.Role is ProjectAuthorityRole.Owner or
+                ProjectAuthorityRole.Contributor or
+                ProjectAuthorityRole.Viewer));
+        if (!isTenantAdmin && !hasProjectReaderRole)
+            return new NativeAcsPolicyScopePage([], null);
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        ProjectAuthorityRole[] projectReaderRoles =
+        [
+            ProjectAuthorityRole.Owner,
+            ProjectAuthorityRole.Contributor,
+            ProjectAuthorityRole.Viewer,
+        ];
+        var query =
+            from head in db.NativeAcsPolicyHeads.AsNoTracking()
+            join project in db.Projects.AsNoTracking()
+                on head.ScopeId equals project.ProjectId
+            join revision in db.NativeAcsPolicyRevisions.AsNoTracking()
+                on new
+                {
+                    head.ScopeType,
+                    head.ScopeId,
+                    head.PolicyId,
+                    Revision = head.CurrentRevision,
+                }
+                equals new
+                {
+                    revision.ScopeType,
+                    revision.ScopeId,
+                    revision.PolicyId,
+                    revision.Revision,
+                }
+                into matchingRevisions
+            from revision in matchingRevisions.DefaultIfEmpty()
+            where head.ScopeType == NativeAcsPolicyScopeType.Project &&
+                project.TenantId == caller.TenantId &&
+                db.TenantMemberships.AsNoTracking().Any(membership =>
+                    membership.MembershipId == caller.MembershipId &&
+                    membership.Issuer == caller.Issuer &&
+                    membership.Subject == caller.ActorId &&
+                    membership.TenantId == caller.TenantId &&
+                    membership.Revision == caller.MembershipRevision &&
+                    membership.State == ProjectAuthorityRecordState.Active) &&
+                ((isTenantAdmin &&
+                    db.RoleAssignments.AsNoTracking().Any(assignment =>
+                        assignment.MembershipId == caller.MembershipId &&
+                        assignment.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                        assignment.ResourceId == caller.TenantId &&
+                        assignment.Role == ProjectAuthorityRole.TenantAdmin &&
+                        assignment.State == ProjectAuthorityRecordState.Active)) ||
+                 (hasProjectReaderRole &&
+                    db.RoleAssignments.AsNoTracking().Any(assignment =>
+                        assignment.MembershipId == caller.MembershipId &&
+                        assignment.ResourceType == ProjectAuthorityResourceType.Project &&
+                        assignment.ResourceId == project.ProjectId &&
+                        projectReaderRoles.Contains(assignment.Role) &&
+                        assignment.State == ProjectAuthorityRecordState.Active)))
+            select new
+            {
+                head.ScopeType,
+                head.ScopeId,
+                head.PolicyId,
+                Revision = head.CurrentRevision,
+                ContentSha256 = revision == null ? null : revision.ContentSha256,
+                head.UpdatedAt,
+            };
+        if (afterScopeId is not null)
+            query = query.Where(item => item.ScopeId.CompareTo(afterScopeId) > 0);
+
+        var rows = await query.OrderBy(item => item.ScopeId)
+            .Take(pageSize + 1)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (rows.Any(item => item.ContentSha256 is null))
+            throw Corrupt("A current Project Policy revision is unavailable.");
+
+        var items = rows.Take(pageSize)
+            .Select(item => new NativeAcsPolicyScopeSummary(
+                item.ScopeType,
+                item.ScopeId,
+                item.PolicyId,
+                item.Revision,
+                item.ContentSha256!,
+                item.UpdatedAt))
+            .ToImmutableArray();
+        var nextCursor = rows.Length > pageSize
+            ? EncodeScopeListCursor(caller, pageSize, items[^1].ScopeId, authorizationFingerprint)
+            : null;
+        return new NativeAcsPolicyScopePage(items, nextCursor);
+    }
+
+    internal Task<NativeAcsPolicyRevisionReadResult?> ReadRevisionAsync(
+        long requestedRevision,
+        CancellationToken cancellationToken) =>
+        ReadRevisionAsync(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            requestedRevision,
+            cancellationToken);
+
     internal async Task<NativeAcsPolicyRevisionReadResult?> ReadRevisionAsync(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
         long requestedRevision,
         CancellationToken cancellationToken)
     {
         if (requestedRevision <= 0)
-            throw RevisionRequestInvalid();
+            throw RevisionRequestInvalid(PolicyDisplayName(scopeType));
+        ValidatePolicyScope(scopeType, scopeId, () => RevisionRequestInvalid(PolicyDisplayName(scopeType)));
 
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         var head = await db.NativeAcsPolicyHeads.AsNoTracking()
             .SingleOrDefaultAsync(item =>
-                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
-                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId,
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId,
                 cancellationToken)
             .ConfigureAwait(false);
         if (head is null || requestedRevision > head.CurrentRevision)
@@ -640,8 +778,8 @@ internal sealed class NativeAcsPolicyStore(
 
         var revision = await db.NativeAcsPolicyRevisions.AsNoTracking()
             .SingleOrDefaultAsync(item =>
-                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
-                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId &&
                 item.PolicyId == head.PolicyId &&
                 item.Revision == requestedRevision,
                 cancellationToken)
@@ -649,8 +787,8 @@ internal sealed class NativeAcsPolicyStore(
             ?? throw Corrupt("The requested native ACS policy revision is unavailable.");
         var storedFiles = await db.NativeAcsPolicyArtifactFiles.AsNoTracking()
             .Where(item =>
-                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
-                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId &&
                 item.PolicyId == head.PolicyId &&
                 item.Revision == requestedRevision)
             .ToArrayAsync(cancellationToken)
@@ -669,32 +807,54 @@ internal sealed class NativeAcsPolicyStore(
             revision.CreatedAt);
     }
 
-    internal static int ParseHistoryPageSize(string? value)
+    internal static int ParseHistoryPageSize(string? value, string scope = "Platform")
     {
         if (value is null)
             return 20;
         if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var pageSize) ||
             pageSize is < 1 or > 100)
-            throw HistoryRequestInvalid();
+            throw HistoryRequestInvalid(scope);
         return pageSize;
     }
 
-    internal static long ParseRevision(string value)
+    internal static int ParseScopeListPageSize(string? value)
+    {
+        if (value is null)
+            return 20;
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var pageSize) ||
+            pageSize is < 1 or > 100)
+            throw ScopeListRequestInvalid();
+        return pageSize;
+    }
+
+    internal static long ParseRevision(string value, string scope = "Platform")
     {
         if (value.Length == 0 ||
             value.Length > 1 && value[0] == '0' ||
             value.Any(character => character is < '0' or > '9') ||
             !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var revision) ||
             revision <= 0)
-            throw RevisionRequestInvalid();
+            throw RevisionRequestInvalid(scope);
         return revision;
     }
 
-    internal static HistoryCursor DecodeHistoryCursor(string value, int pageSize)
+    internal static HistoryCursor DecodeHistoryCursor(string value, int pageSize) =>
+        DecodeHistoryCursor(
+            value,
+            pageSize,
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId);
+
+    internal static HistoryCursor DecodeHistoryCursor(
+        string value,
+        int pageSize,
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId)
     {
+        var invalid = () => HistoryRequestInvalid(PolicyDisplayName(scopeType));
         if (value.Length is 0 or > 2048 ||
             value.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_')))
-            throw HistoryRequestInvalid();
+            throw invalid();
         try
         {
             var base64 = value.Replace('-', '+').Replace('_', '/');
@@ -703,41 +863,41 @@ internal sealed class NativeAcsPolicyStore(
                 0 => string.Empty,
                 2 => "==",
                 3 => "=",
-                _ => throw HistoryRequestInvalid(),
+                _ => throw invalid(),
             };
             var payload = Convert.FromBase64String(base64);
             using var document = JsonDocument.Parse(payload);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
-                throw HistoryRequestInvalid();
+                throw invalid();
             var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var property in document.RootElement.EnumerateObject())
                 if (!names.Add(property.Name))
-                    throw HistoryRequestInvalid();
+                    throw invalid();
             if (names.Count != 8 ||
                 !names.SetEquals(["version", "order", "scopeType", "scopeId", "policyId",
                     "snapshotRevision", "pageSize", "lastRevision"]))
-                throw HistoryRequestInvalid();
+                throw invalid();
             var cursor = JsonSerializer.Deserialize<HistoryCursor>(payload, HistoryCursorJsonOptions);
             if (cursor is null ||
                 cursor.Version != HistoryCursorVersion ||
                 cursor.Order != HistoryCursorOrder ||
-                cursor.ScopeType != "platform" ||
-                cursor.ScopeId != ProjectAuthorizationOwner.PlatformResourceId ||
+                cursor.ScopeType != PolicyScopeName(scopeType) ||
+                cursor.ScopeId != scopeId ||
                 string.IsNullOrEmpty(cursor.PolicyId) ||
                 cursor.SnapshotRevision <= 0 ||
                 cursor.PageSize != pageSize ||
                 cursor.LastRevision <= 0 ||
                 cursor.LastRevision > cursor.SnapshotRevision)
-                throw HistoryRequestInvalid();
+                throw invalid();
             return cursor;
         }
         catch (FormatException)
         {
-            throw HistoryRequestInvalid();
+            throw invalid();
         }
         catch (JsonException)
         {
-            throw HistoryRequestInvalid();
+            throw invalid();
         }
     }
 
@@ -746,20 +906,169 @@ internal sealed class NativeAcsPolicyStore(
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
-    internal static string EncodeHistoryCursor(string policyId, long snapshotRevision, int pageSize, long lastRevision)
+    internal static string EncodeHistoryCursor(string policyId, long snapshotRevision, int pageSize, long lastRevision) =>
+        EncodeHistoryCursor(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            policyId,
+            snapshotRevision,
+            pageSize,
+            lastRevision);
+
+    internal static string EncodeHistoryCursor(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string policyId,
+        long snapshotRevision,
+        int pageSize,
+        long lastRevision)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(
             new HistoryCursor(
                 HistoryCursorVersion,
                 HistoryCursorOrder,
-                "platform",
-                ProjectAuthorizationOwner.PlatformResourceId,
+                PolicyScopeName(scopeType),
+                scopeId,
                 policyId,
                 snapshotRevision,
                 pageSize,
                 lastRevision),
             HistoryCursorJsonOptions);
         return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private ScopeListCursor DecodeScopeListCursor(
+        string value,
+        ProjectAuthorizationContext caller,
+        int pageSize,
+        string authorizationFingerprint)
+    {
+        if (value.Length is 0 or > 4096 ||
+            value.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_')))
+            throw ScopeListRequestInvalid();
+        try
+        {
+            var base64 = value.Replace('-', '+').Replace('_', '/');
+            base64 += (base64.Length % 4) switch
+            {
+                0 => string.Empty,
+                2 => "==",
+                3 => "=",
+                _ => throw ScopeListRequestInvalid(),
+            };
+            var payload = _scopeListCursorProtector.Unprotect(Convert.FromBase64String(base64));
+            using var document = JsonDocument.Parse(payload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw ScopeListRequestInvalid();
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+                if (!names.Add(property.Name))
+                    throw ScopeListRequestInvalid();
+            if (names.Count != 10 ||
+                !names.SetEquals([
+                    "version", "order", "tenantId", "membershipId", "membershipRevision",
+                    "actorIssuer", "actorId", "authorizationFingerprint", "pageSize", "lastScopeId",
+                ]))
+                throw ScopeListRequestInvalid();
+            var cursor = JsonSerializer.Deserialize<ScopeListCursor>(payload, HistoryCursorJsonOptions);
+            if (cursor is null ||
+                cursor.Version != ScopeListCursorVersion ||
+                cursor.Order != ScopeListCursorOrder ||
+                cursor.TenantId != caller.TenantId ||
+                cursor.MembershipId != caller.MembershipId ||
+                cursor.MembershipRevision != caller.MembershipRevision ||
+                cursor.ActorIssuer != caller.Issuer ||
+                cursor.ActorId != caller.ActorId ||
+                cursor.AuthorizationFingerprint != authorizationFingerprint ||
+                cursor.PageSize != pageSize ||
+                !Guid.TryParseExact(cursor.LastScopeId, "N", out _))
+                throw ScopeListRequestInvalid();
+            return cursor;
+        }
+        catch (FormatException)
+        {
+            throw ScopeListRequestInvalid();
+        }
+        catch (JsonException)
+        {
+            throw ScopeListRequestInvalid();
+        }
+        catch (CryptographicException)
+        {
+            throw ScopeListRequestInvalid();
+        }
+    }
+
+    private string EncodeScopeListCursor(
+        ProjectAuthorizationContext caller,
+        int pageSize,
+        string lastScopeId,
+        string authorizationFingerprint)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            new ScopeListCursor(
+                ScopeListCursorVersion,
+                ScopeListCursorOrder,
+                caller.TenantId,
+                caller.MembershipId,
+                caller.MembershipRevision,
+                caller.Issuer,
+                caller.ActorId,
+                authorizationFingerprint,
+                pageSize,
+                lastScopeId),
+            HistoryCursorJsonOptions);
+        return Convert.ToBase64String(_scopeListCursorProtector.Protect(bytes))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private static string ScopeListAuthorizationFingerprint(ProjectAuthorizationContext caller)
+    {
+        var grants = caller.Grants
+            .Where(grant =>
+                (grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                    grant.ResourceId == caller.TenantId &&
+                    grant.Role == ProjectAuthorityRole.TenantAdmin) ||
+                (grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                    (grant.Role is ProjectAuthorityRole.Owner or
+                        ProjectAuthorityRole.Contributor or
+                        ProjectAuthorityRole.Viewer)))
+            .OrderBy(grant => grant.ResourceType)
+            .ThenBy(grant => grant.ResourceId, StringComparer.Ordinal)
+            .ThenBy(grant => grant.Role)
+            .ThenBy(grant => grant.AssignmentId)
+            .ToArray();
+        return Convert.ToHexString(SHA256.HashData(
+            JsonSerializer.SerializeToUtf8Bytes(grants, HistoryCursorJsonOptions)));
+    }
+
+    private static string PolicyScopeName(NativeAcsPolicyScopeType scopeType) =>
+        scopeType switch
+        {
+            NativeAcsPolicyScopeType.Platform => "platform",
+            NativeAcsPolicyScopeType.Project => "project",
+            _ => throw new ArgumentOutOfRangeException(nameof(scopeType)),
+        };
+
+    private static string PolicyDisplayName(NativeAcsPolicyScopeType scopeType) =>
+        scopeType switch
+        {
+            NativeAcsPolicyScopeType.Platform => "Platform",
+            NativeAcsPolicyScopeType.Project => "Project",
+            _ => throw new ArgumentOutOfRangeException(nameof(scopeType)),
+        };
+
+    private static void ValidatePolicyScope(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        Func<ProjectConfigException> invalidRequest)
+    {
+        if (!Enum.IsDefined(scopeType) ||
+            scopeType == NativeAcsPolicyScopeType.Platform &&
+            scopeId != ProjectAuthorizationOwner.PlatformResourceId ||
+            scopeType == NativeAcsPolicyScopeType.Project &&
+            !Guid.TryParseExact(scopeId, "N", out _))
+            throw invalidRequest();
     }
 
     private static NativeAcsArtifact ReconstructArtifact(
@@ -785,15 +1094,25 @@ internal sealed class NativeAcsPolicyStore(
     private static ProjectConfigException Corrupt(string message) =>
         new("native_acs_policy_corrupt", message, StatusCodes.Status500InternalServerError);
 
-    internal static ProjectConfigException HistoryRequestInvalid() =>
+    internal static ProjectConfigException HistoryRequestInvalid(string scope = "Platform") =>
         ProjectConfigException.Invalid(
             "native_acs_policy_history_request_invalid",
-            "The Platform Policy history request is invalid.");
+            $"The {scope} Policy history request is invalid.");
 
-    internal static ProjectConfigException RevisionRequestInvalid() =>
+    internal static ProjectConfigException RevisionRequestInvalid(string scope = "Platform") =>
         ProjectConfigException.Invalid(
             "native_acs_policy_revision_request_invalid",
-            "The Platform Policy revision request is invalid.");
+            $"The {scope} Policy revision request is invalid.");
+
+    internal static ProjectConfigException ScopeListRequestInvalid() =>
+        ProjectConfigException.Invalid(
+            "native_acs_policy_scope_list_request_invalid",
+            "The Project Policy list request is invalid.");
+
+    internal static ProjectConfigException ReadRequestInvalid(string scope = "Platform") =>
+        ProjectConfigException.Invalid(
+            "native_acs_policy_read_request_invalid",
+            $"The {scope} Policy read request is invalid.");
 
     internal sealed record HistoryCursor(
         int Version,
@@ -804,6 +1123,18 @@ internal sealed class NativeAcsPolicyStore(
         long SnapshotRevision,
         int PageSize,
         long LastRevision);
+
+    private sealed record ScopeListCursor(
+        int Version,
+        string Order,
+        string TenantId,
+        Guid MembershipId,
+        long MembershipRevision,
+        string ActorIssuer,
+        string ActorId,
+        string AuthorizationFingerprint,
+        int PageSize,
+        string LastScopeId);
 
     private sealed record NativeAcsPolicyHeadSnapshot(
         string PolicyId,

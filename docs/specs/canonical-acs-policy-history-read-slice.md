@@ -6,6 +6,9 @@ This specification defines two read-only Platform Policy operations for
 Projects & Config and their finite Gateway routes. It does not enable writes
 or enforcement.
 
+Project-scoped source, head, history, and list reads are defined in the
+[Project Policy read slice](./canonical-acs-project-policy-read-slice.md).
+
 ## Problem and goals
 
 The current Policy API returns only the head. Authorized callers need bounded

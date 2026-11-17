@@ -446,6 +446,28 @@ public sealed partial class ProjectsConfigService
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
     {
+        var projects = await ListReadableProjectsAsync(caller, cancellationToken).ConfigureAwait(false);
+        var visible = ImmutableArray.CreateBuilder<ProjectSummary>(projects.Length);
+        foreach (var project in projects)
+            visible.Add(await ToSummaryAsync(project, caller, cancellationToken).ConfigureAwait(false));
+        return visible.ToImmutable();
+    }
+
+    internal async Task EnsureProjectPolicyReaderAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        _ = await FindProjectAsync(caller, projectId, ProjectAccess.Read, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<ImmutableArray<ProjectRecord>> ListReadableProjectsAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireUnboundRequest();
         await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
@@ -459,7 +481,7 @@ public sealed partial class ProjectsConfigService
             cancellationToken).ConfigureAwait(false);
         var projects = await query.OrderBy(project => project.CreatedAt)
             .ToArrayAsync(cancellationToken).ConfigureAwait(false);
-        var visible = ImmutableArray.CreateBuilder<ProjectSummary>();
+        var visible = ImmutableArray.CreateBuilder<ProjectRecord>();
         foreach (var project in projects)
         {
             // Tenant admins see every project in their selected tenant; other callers need a current project read role.
@@ -475,7 +497,7 @@ public sealed partial class ProjectsConfigService
                     cancellationToken).ConfigureAwait(false))
                 continue;
 
-            visible.Add(await ToSummaryAsync(project, caller, cancellationToken).ConfigureAwait(false));
+            visible.Add(project);
         }
         return visible.ToImmutable();
     }

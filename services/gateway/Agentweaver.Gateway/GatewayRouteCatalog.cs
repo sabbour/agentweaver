@@ -501,6 +501,26 @@ public static class GatewayRouteCatalog
             body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/projects", "/api/policies/projects/",
+            "listProjectNativeAcsPolicies", "List visible Project Policy heads",
+            ["pageSize", "cursor"], forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/projects/{projectId}", "/api/policies/projects/{projectId}",
+            "readProjectNativeAcsPolicy", "Read the current Project Policy source",
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/projects/{projectId}/revisions",
+            "/api/policies/projects/{projectId}/revisions",
+            "listProjectNativeAcsPolicyRevisions", "List Project Policy revision history",
+            ["pageSize", "cursor"], forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/projects/{projectId}/revisions/{revision}",
+            "/api/policies/projects/{projectId}/revisions/{revision}",
+            "readProjectNativeAcsPolicyRevision", "Read an exact Project Policy revision",
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
 
         var sourceControl = "/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}";
         void SourceControl(

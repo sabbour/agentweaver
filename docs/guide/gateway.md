@@ -569,6 +569,16 @@ owner dispatch and does not forward `Idempotency-Key` or `If-Match` for these
 two reads. The owner performs policy authorization and validation. See the
 [API reference](../reference/api.md#catalog-and-platform-routes).
 
+The four Project Policy source and history routes accept responses up to 5 MiB.
+They forward the optional tenant selector, expose `Cache-Control`, and are not
+available as MCP tools. The list and history routes accept only `pageSize` and
+`cursor`; current and exact-revision reads accept no query values. The Gateway
+rejects other query keys before owner dispatch and does not forward
+`Idempotency-Key` or `If-Match`. Projects & Config checks current Project
+Policy read authority in the bounded list-page query and before and after
+other reads. See the
+[API reference](../reference/api.md#catalog-and-platform-routes).
+
 The Gateway does not expose journal object-content reads. It exposes
 run-produced files only through the Source Control output-capture routes:
 capture, list, read, diff, and file. Each capture is a pinned, immutable copy

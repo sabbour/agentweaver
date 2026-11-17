@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -7,6 +8,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Policy.Acs;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
@@ -58,6 +60,417 @@ public sealed partial class ProjectsConfigPostgresTests
         var manifest = root.GetProperty("artifact").GetProperty("manifestBytes")
             .EnumerateArray().Select(value => value.GetByte()).ToArray();
         Assert.Equal(artifact.ManifestBytes.ToArray(), manifest);
+    }
+
+    [Fact]
+    public async Task NativeAcsProjectPolicyReadsEnforceScopeAndReturnOnlyStoredSources()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "acs-project-reader-tenant-" + suffix;
+        var tenantAdminSubject = "acs-project-tenant-admin-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, tenantAdminSubject, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var projectsService = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var projects = new List<ProjectSummary>();
+        for (var index = 0; index < 5; index++)
+            projects.Add(await projectsService.CreateProjectAsync(
+                tenantAdmin, $"Project policy read {suffix} {index}", CancellationToken.None));
+
+        var roles = new[]
+        {
+            ProjectAuthorityRole.Owner,
+            ProjectAuthorityRole.Contributor,
+            ProjectAuthorityRole.Viewer,
+            ProjectAuthorityRole.Owner,
+        };
+        var readerSubjects = new List<string>();
+        for (var index = 0; index < roles.Length; index++)
+        {
+            var subject = $"acs-project-reader-{index}-{suffix}";
+            readerSubjects.Add(subject);
+            _ = await SeedCallerAsync(
+                db, authorityStore, subject, tenantId,
+                ["api.read"], ProjectAuthorityResourceType.Project,
+                projects[index].ProjectId, roles[index]);
+        }
+        var platformAdminSubject = "acs-project-platform-admin-" + suffix;
+        _ = await SeedCallerAsync(
+            db, authorityStore, platformAdminSubject, tenantId,
+            ["api.read"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+
+        var store = CreateNativeAcsStore();
+        var artifacts = new List<NativeAcsArtifact>();
+        var receipts = new List<NativeAcsPolicyWriteReceipt>();
+        string? firstProjectHistoryCursor = null;
+        for (var index = 0; index < 4; index++)
+        {
+            var artifact = HistoryArtifact($"project policy {suffix} {index} first");
+            artifacts.Add(artifact);
+            receipts.Add(await store.WriteAsync(
+                tenantAdmin,
+                Request(
+                    projects[index].ProjectId,
+                    artifact,
+                    expectedRevision: null,
+                    $"acs-project-policy-{suffix}-{index}"),
+                CancellationToken.None));
+        }
+        var secondArtifact = HistoryArtifact($"project policy {suffix} first second");
+        artifacts.Add(secondArtifact);
+        receipts.Add(await store.WriteAsync(
+            tenantAdmin,
+            Request(
+                projects[0].ProjectId,
+                secondArtifact,
+                expectedRevision: 1,
+                $"acs-project-policy-{suffix}-second"),
+            CancellationToken.None));
+
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
+        var stateBeforeReads = await CapturePolicyTableStateAsync();
+        using var tenantAdminClient = CreateProjectPolicyReader(host, tenantAdminSubject, tenantId);
+        using var firstList = await tenantAdminClient.GetAsync("/api/policies/projects?pageSize=2");
+        Assert.Equal(System.Net.HttpStatusCode.OK, firstList.StatusCode);
+        Assert.True(firstList.Headers.CacheControl?.NoStore);
+        using var firstListBody = JsonDocument.Parse(await firstList.Content.ReadAsStringAsync());
+        var firstListItems = firstListBody.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(2, firstListItems.Length);
+        Assert.All(firstListItems, item =>
+        {
+            Assert.Equal("project", item.GetProperty("scopeType").GetString());
+            Assert.False(item.TryGetProperty("artifact", out _));
+        });
+        var listCursor = firstListBody.RootElement.GetProperty("nextCursor").GetString();
+        Assert.NotNull(listCursor);
+        using var secondList = await tenantAdminClient.GetAsync(
+            "/api/policies/projects?pageSize=2&cursor=" + Uri.EscapeDataString(listCursor!));
+        Assert.Equal(System.Net.HttpStatusCode.OK, secondList.StatusCode);
+        using var secondListBody = JsonDocument.Parse(await secondList.Content.ReadAsStringAsync());
+        Assert.Equal(2, secondListBody.RootElement.GetProperty("items").GetArrayLength());
+        Assert.Null(secondListBody.RootElement.GetProperty("nextCursor").GetString());
+        var listedIds = firstListItems
+            .Concat(secondListBody.RootElement.GetProperty("items").EnumerateArray())
+            .Select(item => item.GetProperty("scopeId").GetString())
+            .ToArray();
+        Assert.Equal(projects.Take(4).Select(project => project.ProjectId).Order(StringComparer.Ordinal), listedIds);
+        using var tenantAdminHead = await tenantAdminClient.GetAsync(
+            $"/api/policies/projects/{projects[0].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.OK, tenantAdminHead.StatusCode);
+
+        for (var index = 0; index < 4; index++)
+        {
+            using var reader = CreateProjectPolicyReader(host, readerSubjects[index], tenantId);
+            using var currentResponse = await reader.GetAsync($"/api/policies/projects/{projects[index].ProjectId}");
+            Assert.Equal(System.Net.HttpStatusCode.OK, currentResponse.StatusCode);
+            Assert.True(currentResponse.Headers.CacheControl?.NoStore);
+            using var current = JsonDocument.Parse(await currentResponse.Content.ReadAsStringAsync());
+            var selectedArtifact = index == 0 ? secondArtifact : artifacts[index];
+            var selectedReceipt = index == 0 ? receipts[^1] : receipts[index];
+            Assert.Equal(selectedReceipt.PolicyId, current.RootElement.GetProperty("policyId").GetString());
+            Assert.Equal(selectedReceipt.Revision, current.RootElement.GetProperty("revision").GetInt64());
+            Assert.Equal(selectedArtifact.ContentSha256, current.RootElement.GetProperty("contentSha256").GetString());
+            Assert.Equal(
+                selectedArtifact.ManifestBytes.ToArray(),
+                current.RootElement.GetProperty("artifact").GetProperty("manifestBytes")
+                    .EnumerateArray().Select(value => value.GetByte()).ToArray());
+
+            using var historyResponse = await reader.GetAsync(
+                $"/api/policies/projects/{projects[index].ProjectId}/revisions?pageSize=1");
+            Assert.Equal(System.Net.HttpStatusCode.OK, historyResponse.StatusCode);
+            using var history = JsonDocument.Parse(await historyResponse.Content.ReadAsStringAsync());
+            Assert.Equal(selectedReceipt.PolicyId, history.RootElement.GetProperty("policyId").GetString());
+            Assert.Single(history.RootElement.GetProperty("items").EnumerateArray());
+            if (index == 0)
+            {
+                var cursor = history.RootElement.GetProperty("nextCursor").GetString();
+                Assert.NotNull(cursor);
+                firstProjectHistoryCursor = cursor;
+                using var continuation = await reader.GetAsync(
+                    $"/api/policies/projects/{projects[index].ProjectId}/revisions?pageSize=1&cursor=" +
+                    Uri.EscapeDataString(cursor!));
+                Assert.Equal(System.Net.HttpStatusCode.OK, continuation.StatusCode);
+                using var secondHistory = JsonDocument.Parse(await continuation.Content.ReadAsStringAsync());
+                Assert.Equal(1, secondHistory.RootElement.GetProperty("items")[0]
+                    .GetProperty("revision").GetInt64());
+                using var exact = await reader.GetAsync(
+                    $"/api/policies/projects/{projects[index].ProjectId}/revisions/1");
+                Assert.Equal(System.Net.HttpStatusCode.OK, exact.StatusCode);
+                using var exactBody = JsonDocument.Parse(await exact.Content.ReadAsStringAsync());
+                Assert.Equal(artifacts[0].Files.OrderBy(file => file.RelativePath, StringComparer.Ordinal).First()
+                        .Bytes.ToArray(),
+                    exactBody.RootElement.GetProperty("artifact").GetProperty("files")[0]
+                        .GetProperty("bytes").EnumerateArray().Select(value => value.GetByte()).ToArray());
+            }
+        }
+
+        using var crossProjectCursor = await tenantAdminClient.GetAsync(
+            $"/api/policies/projects/{projects[1].ProjectId}/revisions?pageSize=1&cursor=" +
+            Uri.EscapeDataString(firstProjectHistoryCursor!));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, crossProjectCursor.StatusCode);
+
+        using var owner = CreateProjectPolicyReader(host, readerSubjects[0], tenantId, projects[0].ProjectId);
+        using var boundRead = await owner.GetAsync($"/api/policies/projects/{projects[0].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.OK, boundRead.StatusCode);
+        using var boundList = await owner.GetAsync("/api/policies/projects");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, boundList.StatusCode);
+        using var unboundOwner = CreateProjectPolicyReader(host, readerSubjects[0], tenantId);
+        using var ownerList = await unboundOwner.GetAsync("/api/policies/projects");
+        Assert.Equal(System.Net.HttpStatusCode.OK, ownerList.StatusCode);
+        using var ownerListBody = JsonDocument.Parse(await ownerList.Content.ReadAsStringAsync());
+        var ownerListItem = Assert.Single(ownerListBody.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(projects[0].ProjectId, ownerListItem.GetProperty("scopeId").GetString());
+        using var crossProjectRead = await owner.GetAsync($"/api/policies/projects/{projects[1].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, crossProjectRead.StatusCode);
+        using var runBound = CreateProjectPolicyReader(
+            host, readerSubjects[0], tenantId, projects[0].ProjectId, runId: "bound-run-" + suffix);
+        using var runBoundRead = await runBound.GetAsync($"/api/policies/projects/{projects[0].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, runBoundRead.StatusCode);
+        using var purposeBound = CreateProjectPolicyReader(
+            host, readerSubjects[0], tenantId, projects[0].ProjectId, purpose: "policy.read");
+        using var purposeBoundRead = await purposeBound.GetAsync($"/api/policies/projects/{projects[0].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, purposeBoundRead.StatusCode);
+
+        using var platformAdmin = CreateProjectPolicyReader(host, platformAdminSubject, tenantId);
+        using var platformAdminRead = await platformAdmin.GetAsync($"/api/policies/projects/{projects[0].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, platformAdminRead.StatusCode);
+
+        using var noHeadHistory = await tenantAdminClient.GetAsync(
+            $"/api/policies/projects/{projects[4].ProjectId}/revisions");
+        Assert.Equal(System.Net.HttpStatusCode.OK, noHeadHistory.StatusCode);
+        using var emptyHistory = JsonDocument.Parse(await noHeadHistory.Content.ReadAsStringAsync());
+        Assert.Null(emptyHistory.RootElement.GetProperty("policyId").GetString());
+        Assert.Empty(emptyHistory.RootElement.GetProperty("items").EnumerateArray());
+        using var noHead = await tenantAdminClient.GetAsync($"/api/policies/projects/{projects[4].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, noHead.StatusCode);
+        using var missingRevision = await tenantAdminClient.GetAsync(
+            $"/api/policies/projects/{projects[0].ProjectId}/revisions/99");
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, missingRevision.StatusCode);
+
+        using var changedTenant = CreateProjectPolicyReader(host, tenantAdminSubject, "another-tenant-" + suffix);
+        using var tenantDenied = await changedTenant.GetAsync($"/api/policies/projects/{projects[0].ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, tenantDenied.StatusCode);
+        Assert.Equal(stateBeforeReads, await CapturePolicyTableStateAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsProjectPolicyListProtectsRevokedCursorAndUsesOneBoundedAuthorizationQuery()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "acs-project-list-tenant-" + suffix;
+        var tenantAdminSubject = "acs-project-list-admin-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, tenantAdminSubject, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var projectsService = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var projects = new List<ProjectSummary>();
+        for (var index = 0; index < 4; index++)
+            projects.Add(await projectsService.CreateProjectAsync(
+                tenantAdmin, $"Project policy list {suffix} {index}", CancellationToken.None));
+
+        var readerSubject = "acs-project-list-reader-" + suffix;
+        _ = await SeedCallerAsync(db, authorityStore, readerSubject, tenantId, ["api.read"]);
+        var roleService = new ProjectRoleAssignmentService(
+            new TestDbContextFactory(CreateDbContextOptions()), TimeProvider.System);
+        var assignments = new Dictionary<string, ProjectRoleAssignmentView>(StringComparer.Ordinal);
+        var store = CreateNativeAcsStore();
+        foreach (var project in projects)
+        {
+            assignments.Add(project.ProjectId, await roleService.AssignAsync(
+                tenantAdmin,
+                project.ProjectId,
+                new AssignProjectRoleRequest
+                {
+                    PrincipalId = readerSubject,
+                    Role = ProjectAuthorityRole.Viewer,
+                },
+                CancellationToken.None));
+            await store.WriteAsync(
+                tenantAdmin,
+                Request(
+                    project.ProjectId,
+                    HistoryArtifact($"project list policy {suffix} {project.ProjectId}"),
+                    expectedRevision: null,
+                    $"acs-project-list-policy-{suffix}-{project.ProjectId}"),
+                CancellationToken.None);
+        }
+
+        var queryInterceptor = new PolicyScopeListQueryInterceptor();
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath: null, commandInterceptor: queryInterceptor);
+        using var reader = CreateProjectPolicyReader(host, readerSubject, tenantId);
+        using var firstPage = await reader.GetAsync("/api/policies/projects?pageSize=1");
+        Assert.Equal(System.Net.HttpStatusCode.OK, firstPage.StatusCode);
+        using var firstPageBody = JsonDocument.Parse(await firstPage.Content.ReadAsStringAsync());
+        var firstItem = Assert.Single(firstPageBody.RootElement.GetProperty("items").EnumerateArray());
+        var revokedProjectId = firstItem.GetProperty("scopeId").GetString()!;
+        var cursor = firstPageBody.RootElement.GetProperty("nextCursor").GetString();
+        Assert.NotNull(cursor);
+        Assert.False(cursor!.Contains(revokedProjectId, StringComparison.Ordinal));
+
+        var listQuery = Assert.Single(queryInterceptor.ScopeListQueries);
+        Assert.Contains("LIMIT", listQuery, StringComparison.OrdinalIgnoreCase);
+
+        var assignment = assignments[revokedProjectId];
+        await roleService.RevokeAsync(
+            tenantAdmin,
+            revokedProjectId,
+            assignment.AssignmentId,
+            assignment.Revision,
+            CancellationToken.None);
+
+        using var stalePage = await reader.GetAsync(
+            "/api/policies/projects?pageSize=1&cursor=" + Uri.EscapeDataString(cursor));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, stalePage.StatusCode);
+        var staleBody = await stalePage.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(revokedProjectId, staleBody, StringComparison.Ordinal);
+
+        using var refreshedPage = await reader.GetAsync("/api/policies/projects?pageSize=10");
+        Assert.Equal(System.Net.HttpStatusCode.OK, refreshedPage.StatusCode);
+        using var refreshedBody = JsonDocument.Parse(await refreshedPage.Content.ReadAsStringAsync());
+        var visibleIds = refreshedBody.RootElement.GetProperty("items")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("scopeId").GetString()!)
+            .ToArray();
+        Assert.Equal(
+            projects.Select(project => project.ProjectId)
+                .Where(projectId => projectId != revokedProjectId)
+                .Order(StringComparer.Ordinal),
+            visibleIds);
+    }
+
+    [Theory]
+    [InlineData("/api/policies/projects?unknown=x", "native_acs_policy_scope_list_request_invalid")]
+    [InlineData("/api/policies/projects?pageSize=1&pageSize=2", "native_acs_policy_scope_list_request_invalid")]
+    [InlineData("/api/policies/projects?pageSize=101", "native_acs_policy_scope_list_request_invalid")]
+    [InlineData("/api/policies/projects/00000000000000000000000000000001?cursor=x",
+        "native_acs_policy_query_not_supported")]
+    [InlineData("/api/policies/projects/00000000000000000000000000000001/revisions?unknown=x",
+        "native_acs_policy_history_request_invalid")]
+    [InlineData("/api/policies/projects/00000000000000000000000000000001/revisions/1?cursor=x",
+        "native_acs_policy_revision_request_invalid")]
+    public async Task NativeAcsProjectPolicyReadsRejectUndeclaredAndDuplicateQueryValues(
+        string path,
+        string expectedCode)
+    {
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
+        using var client = CreateProjectPolicyReader(host, "invalid-project-query", "invalid-project-tenant");
+
+        using var response = await client.GetAsync(path);
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(expectedCode, body.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task NativeAcsProjectPolicyReadRejectsCorruptArtifactBytes()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "acs-project-corrupt-tenant-" + suffix;
+        var tenantAdminSubject = "acs-project-corrupt-admin-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, tenantAdminSubject, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Project Policy corrupt read", CancellationToken.None);
+        var artifact = Artifact("project source integrity " + suffix);
+        var receipt = await CreateNativeAcsStore().WriteAsync(
+            tenantAdmin,
+            Request(project.ProjectId, artifact, null, "acs-project-corrupt-" + suffix),
+            CancellationToken.None);
+        await using var readDb = CreateDbContext();
+        var file = await readDb.NativeAcsPolicyArtifactFiles.AsNoTracking()
+            .SingleAsync(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Project &&
+                item.ScopeId == project.ProjectId &&
+                item.PolicyId == receipt.PolicyId &&
+                item.Revision == receipt.Revision);
+        var originalBytes = file.Bytes.ToArray();
+        var relativePath = file.RelativePath;
+        var stateBeforeCorruption = await CapturePolicyTableStateAsync();
+        try
+        {
+            await WithArtifactFilesImmutableTriggerDisabledAsync(
+                () => SetProjectArtifactFileBytesAsync(
+                    project.ProjectId, receipt.PolicyId, receipt.Revision, relativePath, [.. originalBytes, 0x7f]));
+            using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
+            using var client = CreateProjectPolicyReader(host, tenantAdminSubject, tenantId);
+            var stateBeforeRead = await CapturePolicyTableStateAsync();
+
+            using var response = await client.GetAsync($"/api/policies/projects/{project.ProjectId}");
+
+            Assert.Equal(System.Net.HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            var body = await response.Content.ReadAsStringAsync();
+            using var result = JsonDocument.Parse(body);
+            Assert.Equal("native_acs_policy_corrupt", result.RootElement.GetProperty("code").GetString());
+            Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
+            Assert.Equal(stateBeforeRead, await CapturePolicyTableStateAsync());
+        }
+        finally
+        {
+            await WithArtifactFilesImmutableTriggerDisabledAsync(
+                () => SetProjectArtifactFileBytesAsync(
+                    project.ProjectId, receipt.PolicyId, receipt.Revision, relativePath, originalBytes));
+        }
+        Assert.Equal(stateBeforeCorruption, await CapturePolicyTableStateAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsProjectPolicyReadRechecksMembershipAfterRetrieval()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "acs-project-revoked-tenant-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, "acs-project-revoked-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Project Policy revocation read", CancellationToken.None);
+        var ownerSubject = "acs-project-revoked-owner-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, ownerSubject, tenantId,
+            ["api.read"], ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
+        var receipt = await CreateNativeAcsStore().WriteAsync(
+            tenantAdmin,
+            Request(project.ProjectId, Artifact("revoke during project source read " + suffix),
+                null, "acs-project-revoke-read-" + suffix),
+            CancellationToken.None);
+        var revoked = 0;
+        var interceptor = new PolicyReadInterceptor(async cancellationToken =>
+        {
+            if (Interlocked.Exchange(ref revoked, 1) == 0)
+                await authorityStore.RevokeMembershipAsync(
+                    owner.MembershipId, owner.MembershipRevision, "fixture", cancellationToken);
+        });
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath: null, commandInterceptor: interceptor);
+        using var client = CreateProjectPolicyReader(host, ownerSubject, tenantId);
+        var stateBeforeRead = await CapturePolicyTableStateAsync();
+
+        using var response = await client.GetAsync($"/api/policies/projects/{project.ProjectId}");
+
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(receipt.PolicyId, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
+        Assert.Equal(1, revoked);
+        Assert.Equal(stateBeforeRead, await CapturePolicyTableStateAsync());
     }
 
     [Fact]
@@ -242,7 +655,7 @@ public sealed partial class ProjectsConfigPostgresTests
             Assert.Equal(stateBeforeEmptyReads, await CapturePolicyTableStateAsync(emptyFixture.DataSource));
 
             var store = new NativeAcsPolicyStore(
-                new TestDbContextFactory(options), TimeProvider.System);
+                new TestDbContextFactory(options), TimeProvider.System, CreateTestDataProtectionProvider());
             var policyId = "stable-lineage-" + suffix;
             var receipts = new List<NativeAcsPolicyWriteReceipt>();
             for (var index = 0; index < 3; index++)
@@ -939,6 +1352,27 @@ public sealed partial class ProjectsConfigPostgresTests
         return client;
     }
 
+    private static HttpClient CreateProjectPolicyReader(
+        IHost host,
+        string subject,
+        string tenantId,
+        string? projectId = null,
+        string? runId = null,
+        string? purpose = null)
+    {
+        var client = host.GetTestClient();
+        client.DefaultRequestHeaders.Add("X-Test-Subject", subject);
+        client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read");
+        client.DefaultRequestHeaders.Add(ProjectAuthorizationOwner.TenantSelectorHeader, tenantId);
+        if (projectId is not null)
+            client.DefaultRequestHeaders.Add("X-Test-Project", projectId);
+        if (runId is not null)
+            client.DefaultRequestHeaders.Add("X-Test-Run", runId);
+        if (purpose is not null)
+            client.DefaultRequestHeaders.Add("X-Test-Purpose", purpose);
+        return client;
+    }
+
     private ProjectsConfigDbContext CreateDbContext(NpgsqlDataSource dataSource) =>
         new(new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
@@ -1044,6 +1478,31 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
+    private async Task SetProjectArtifactFileBytesAsync(
+        string projectId,
+        string policyId,
+        long revision,
+        string relativePath,
+        byte[] bytes)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE projects_config.native_acs_policy_artifact_files
+            SET bytes = @bytes
+            WHERE scope_type = 'Project' AND scope_id = @scope_id
+              AND policy_id = @policy_id AND revision = @revision
+              AND relative_path = @relative_path
+            """,
+            connection);
+        command.Parameters.AddWithValue("bytes", bytes);
+        command.Parameters.AddWithValue("scope_id", projectId);
+        command.Parameters.AddWithValue("policy_id", policyId);
+        command.Parameters.AddWithValue("revision", revision);
+        command.Parameters.AddWithValue("relative_path", relativePath);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
     [Fact]
     public async Task NativeAcsPolicyRequestRejectsUnknownNestedArtifactFields()
     {
@@ -1097,6 +1556,7 @@ public sealed partial class ProjectsConfigPostgresTests
                         .AddScheme<AuthenticationSchemeOptions, ProjectSummaryTestAuthenticationHandler>(
                             ProjectSummaryTestAuthenticationHandler.SchemeName, _ => { });
                     services.AddAuthorization();
+                    services.AddSingleton<IDataProtectionProvider>(CreateTestDataProtectionProvider());
                     services.AddDbContextFactory<ProjectsConfigDbContext>(options =>
                     {
                         options.UseNpgsql(
@@ -1129,6 +1589,25 @@ public sealed partial class ProjectsConfigPostgresTests
                 });
             })
             .StartAsync();
+
+    private sealed class PolicyScopeListQueryInterceptor : DbCommandInterceptor
+    {
+        private readonly ConcurrentQueue<string> _scopeListQueries = new();
+
+        public IReadOnlyCollection<string> ScopeListQueries => _scopeListQueries.ToArray();
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("native_acs_policy_heads", StringComparison.OrdinalIgnoreCase) &&
+                command.CommandText.Contains("project_role_assignments", StringComparison.OrdinalIgnoreCase))
+                _scopeListQueries.Enqueue(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
 
     private sealed class PolicyReadInterceptor(
         Func<CancellationToken, Task> intercept,

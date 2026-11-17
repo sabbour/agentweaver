@@ -74,6 +74,18 @@ public sealed record NativeAcsPolicyRevisionReadResult(
     NativeAcsArtifact Artifact,
     DateTimeOffset CreatedAt);
 
+public sealed record NativeAcsPolicyScopeSummary(
+    NativeAcsPolicyScopeType ScopeType,
+    string ScopeId,
+    string PolicyId,
+    long Revision,
+    string ContentSha256,
+    DateTimeOffset UpdatedAt);
+
+public sealed record NativeAcsPolicyScopePage(
+    ImmutableArray<NativeAcsPolicyScopeSummary> Items,
+    string? NextCursor);
+
 public sealed class NativeAcsPolicyHeadRecord
 {
     public NativeAcsPolicyScopeType ScopeType { get; set; }
