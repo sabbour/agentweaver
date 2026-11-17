@@ -9,7 +9,7 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests of plan validation; no database is needed.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "1e209db35e95aeb8bc1b38169bbe49d4f47f8cd4b3dae31b693d1ceef4a0ae9c";
+    private const string ReviewedPlanSha256 = "dc4e65996bfa0e550053d1985c2e2ab64a3c7c67d2098aaa30ca5f54f6676258";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 12)];
