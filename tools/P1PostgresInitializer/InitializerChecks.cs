@@ -5,6 +5,10 @@ namespace Agentweaver.P1PostgresInitializer;
 /// <summary>Builds exact database readbacks and enforces the initializer's ownership and grant invariants.</summary>
 internal static class InitializerChecks
 {
+    private const string GovernanceDecisionHeadTable = "project_governance_decision_stream_heads";
+    private static readonly string[] GovernanceDecisionHeadUpdateColumns =
+        ["sequence", "fence_generation", "head_hash", "updated_at"];
+
     // Captures the pre-existing database ACL and protected objects so every committed stage can prove its delta.
     internal const string ExistingBoundaryQuery = """
         WITH database AS (
@@ -204,6 +208,11 @@ internal static class InitializerChecks
             var hasKnownTypeSevenGuard =
                 hasReservationIdentityGuard || hasNativeAcsRevisionGuard || hasGovernanceStampGuard;
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
+            var governanceDecisionHead = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == GovernanceDecisionHeadTable;
+            var invalidColumnUpdates = governanceDecisionHead
+                ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
+                : table.UpdateColumns is { Length: > 0 };
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
                 guards.Length != mutationGuardCount + (hasKnownTypeSevenGuard ? 1 : 0) ||
@@ -211,7 +220,8 @@ internal static class InitializerChecks
                 (table.LockColumn is not null &&
                  mutationGuardCount != (table.MutationDenialGuards is { Length: > 0 } ? 2 : 1)) ||
                 (table.LockColumn is null && mutationGuardCount != 2) ||
-                (table.LockColumn is null && table.UpdateColumns is { Length: > 0 }) ||
+                invalidColumnUpdates ||
+                (governanceDecisionHead && table.LockColumn is not null) ||
                 (table.LockColumn is not null && table.MutationDenialGuards is { Length: > 0 } &&
                  (table.MutationDenialGuards.Length != 1 || table.MutationDenialGuards[0].TriggerType != 34)) ||
                 guards.Any(guard =>
@@ -244,30 +254,40 @@ internal static class InitializerChecks
     }
 
     /// <summary>
-    /// Requires the exact reviewed column-scoped UPDATE inventory: only the Projects role-assignment revoke
-    /// columns, on a table with no table-level UPDATE and no row-lock guard.
+    /// Requires the exact reviewed column-scoped UPDATE inventory, without table-level UPDATE grants.
     /// </summary>
     internal static void AssertColumnUpdatePlan(ServicePlan[] services)
     {
-        string[] revokeColumns = ["state", "revision", "revoked_by", "revoked_at"];
+        (string Service, string Schema, string Table, string[] Privileges, string[] Columns, bool Guarded)[]
+            expected =
+            [
+                ("projects-config", "projects_config", "project_role_assignments",
+                    ["SELECT", "INSERT"], ["state", "revision", "revoked_by", "revoked_at"], false),
+                ("projects-config", "projects_config", "native_acs_policy_heads",
+                    ["SELECT", "INSERT"], ["current_revision", "updated_at"], false),
+                ("projects-config", "projects_config", GovernanceDecisionHeadTable,
+                    ["SELECT", "INSERT"], GovernanceDecisionHeadUpdateColumns, true),
+            ];
         var planned = services.SelectMany(service => service.Tables
             .Where(table => table.UpdateColumns is not { Length: 0 })
             .Select(table => (Service: service, Table: table))).ToArray();
-        // One reviewed entry exists. Any other table gaining column updates means the plan changed without
-        // this check being reviewed with it, so stop before any connection.
-        if (planned.Length != 1 || planned[0].Service.Schema != "projects_config" ||
-            planned[0].Table.Table != "project_role_assignments" ||
-            !(planned[0].Table.UpdateColumns ?? []).SequenceEqual(revokeColumns, StringComparer.Ordinal))
+        if (planned.Length != expected.Length || expected.Any(item => !planned.Any(candidate =>
+                candidate.Service.Service == item.Service && candidate.Service.Schema == item.Schema &&
+                candidate.Table.Table == item.Table &&
+                candidate.Table.Privileges.SequenceEqual(item.Privileges, StringComparer.Ordinal) &&
+                candidate.Table.UpdateColumns.SequenceEqual(item.Columns, StringComparer.Ordinal))))
             throw new InvalidOperationException(
-                "The exact planned column-scoped UPDATE set is only the Projects role-assignment revoke columns.");
-        // Column updates replace table-level UPDATE. Mixing them with a table UPDATE would make the column list
-        // meaningless, and mixing them with a row lock would weaken the lock's single-column guarantee.
-        var table = planned[0].Table;
-        if (table.Privileges.Contains("UPDATE") || table.LockColumn is not null ||
-            table.MutationDenialRequired || table.MutationDenialGuard is not null ||
-            table.MutationDenialGuards is { Length: > 0 })
-            throw new InvalidOperationException(
-                "Column-scoped UPDATE tables must have no table-level UPDATE and no row-lock guard.");
+                "The planned column-scoped UPDATE grants must match the reviewed Projects tables and columns.");
+
+        foreach (var (service, table) in planned)
+        {
+            var guarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
+                table.Table == GovernanceDecisionHeadTable;
+            if (table.LockColumn is not null || table.MutationDenialRequired != guarded ||
+                GetMutationDenialGuards(table).Length != (guarded ? 2 : 0))
+                throw new InvalidOperationException(
+                    "Column-scoped UPDATE grants require the reviewed governance-head guards and no row-lock guard.");
+        }
     }
 
     /// <summary>Returns every column the plan lets the runtime role UPDATE on a table without table-level UPDATE.</summary>

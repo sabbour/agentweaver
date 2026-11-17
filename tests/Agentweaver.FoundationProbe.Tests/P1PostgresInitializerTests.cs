@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Agentweaver.P1PostgresInitializer;
 using Xunit;
@@ -600,38 +601,108 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
-    public void ColumnUpdatePlanAllowsOnlyTheRoleAssignmentRevokeColumns()
+    public void ColumnUpdatePlanAllowsOnlyTheReviewedProjectsColumns()
     {
         InitializerChecks.AssertColumnUpdatePlan(ColumnUpdateServices());
 
-        // No planned column updates means the role-assignment write path was dropped from the plan.
         var none = ColumnUpdateServices();
-        none[0] = none[0] with { Tables = [none[0].Tables[0] with { UpdateColumns = [] }] };
+        none[0] = none[0] with
+        {
+            Tables = none[0].Tables.Select(table => table with { UpdateColumns = [] }).ToArray(),
+        };
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(none));
 
-        TablePlan[] rejectedTables =
+        (string Table, TablePlan Replacement)[] rejectedTables =
         [
-            ColumnUpdateServices()[0].Tables[0] with { UpdateColumns = ["state", "revision", "revoked_by"] },
-            ColumnUpdateServices()[0].Tables[0] with { UpdateColumns = ["state", "revision", "revoked_by", "tenant_id"] },
-            ColumnUpdateServices()[0].Tables[0] with { Privileges = ["SELECT", "INSERT", "UPDATE"] },
-            ColumnUpdateServices()[0].Tables[0] with { LockColumn = "state" },
-            ColumnUpdateServices()[0].Tables[0] with { MutationDenialRequired = true },
-            ColumnUpdateServices()[0].Tables[0] with { Table = "authority_audit" },
+            ("project_role_assignments",
+                ColumnUpdateServices()[0].Tables[0] with { UpdateColumns = ["state", "revision", "revoked_by"] }),
+            ("project_role_assignments",
+                ColumnUpdateServices()[0].Tables[0] with { UpdateColumns = ["state", "revision", "revoked_by", "tenant_id"] }),
+            ("project_role_assignments",
+                ColumnUpdateServices()[0].Tables[0] with { Privileges = ["SELECT", "INSERT", "UPDATE"] }),
+            ("project_role_assignments",
+                ColumnUpdateServices()[0].Tables[0] with { Privileges = ["SELECT", "INSERT", "DELETE"] }),
+            ("project_role_assignments",
+                ColumnUpdateServices()[0].Tables[0] with { LockColumn = "state" }),
+            ("project_role_assignments",
+                ColumnUpdateServices()[0].Tables[0] with { MutationDenialRequired = true }),
+            ("project_role_assignments",
+                ColumnUpdateServices()[0].Tables[0] with { Table = "authority_audit" }),
+            ("native_acs_policy_heads",
+                ColumnUpdateServices()[0].Tables[1] with { UpdateColumns = ["current_revision"] }),
+            ("native_acs_policy_heads",
+                ColumnUpdateServices()[0].Tables[1] with { UpdateColumns = ["current_revision", "updated_at", "policy_id"] }),
+            ("project_governance_decision_stream_heads",
+                ColumnUpdateServices()[0].Tables[2] with { UpdateColumns = ["sequence", "fence_generation", "head_hash"] }),
+            ("project_governance_decision_stream_heads",
+                ColumnUpdateServices()[0].Tables[2] with
+                {
+                    UpdateColumns = ["sequence", "fence_generation", "head_hash", "updated_at", "scope_id"],
+                }),
+            ("project_governance_decision_stream_heads",
+                ColumnUpdateServices()[0].Tables[2] with { Privileges = ["SELECT", "INSERT", "UPDATE"] }),
+            ("project_governance_decision_stream_heads",
+                ColumnUpdateServices()[0].Tables[2] with { MutationDenialRequired = false }),
+            ("project_governance_decision_stream_heads",
+                ColumnUpdateServices()[0].Tables[2] with { MutationDenialGuards = [] }),
         ];
-        foreach (var table in rejectedTables)
+        foreach (var (tableName, replacement) in rejectedTables)
         {
             var services = ColumnUpdateServices();
-            services[0] = services[0] with { Tables = [table] };
+            var index = Array.FindIndex(services[0].Tables, table => table.Table == tableName);
+            services[0] = services[0] with
+            {
+                Tables = [.. services[0].Tables[..index], replacement, .. services[0].Tables[(index + 1)..]],
+            };
             Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(services));
         }
 
-        // The same table in another schema, or a second column-scoped table, is outside the reviewed set.
         var otherSchema = ColumnUpdateServices();
         otherSchema[0] = otherSchema[0] with { Schema = "orchestrator" };
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(otherSchema));
         var second = ColumnUpdateServices();
-        second[1] = second[1] with { Tables = [second[0].Tables[0] with { Table = "other" }] };
+        second[1] = second[1] with
+        {
+            Tables =
+            [
+                new TablePlan("other", ["SELECT", "INSERT"], null, false, null)
+                {
+                    UpdateColumns = ["value"],
+                },
+            ],
+        };
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(second));
+    }
+
+    [Fact]
+    public async Task EmittedRuntimeGrantPlanPassesInitializerChecks()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var startInfo = new ProcessStartInfo("node")
+        {
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(Path.Combine("scripts", "azure", "lib", "p1-postgres-plan.mjs"));
+        startInfo.ArgumentList.Add("--json");
+        using var process = new Process { StartInfo = startInfo };
+        Assert.True(process.Start());
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+        Assert.True(process.ExitCode == 0, error);
+
+        var plan = JsonSerializer.Deserialize<PostgresPlan>(output,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.NotNull(plan);
+        InitializerChecks.AssertPrincipalObjectIds(plan.Services);
+        InitializerChecks.AssertMutationDenialPlan(plan.Services);
+        InitializerChecks.AssertColumnUpdatePlan(plan.Services);
+        InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);
     }
 
     [Fact]
@@ -728,6 +799,18 @@ public sealed class P1PostgresInitializerTests
         new ServicePlan($"service-{index}", $"schema_{index}", $"runtime_{index}",
             $"00000000-0000-0000-0000-{index + 1:000000000000}", [], [])).ToArray();
 
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "scripts", "azure", "lib", "p1-postgres-plan.mjs")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+        throw new DirectoryNotFoundException("The P1 PostgreSQL source plan was not found above the test output directory.");
+    }
+
     private static ServicePlan[] ColumnUpdateServices()
     {
         var services = Services();
@@ -740,6 +823,22 @@ public sealed class P1PostgresInitializerTests
                 new TablePlan("project_role_assignments", ["SELECT", "INSERT"], null, false, null)
                 {
                     UpdateColumns = ["state", "revision", "revoked_by", "revoked_at"],
+                },
+                new TablePlan("native_acs_policy_heads", ["SELECT", "INSERT"], null, false, null)
+                {
+                    UpdateColumns = ["current_revision", "updated_at"],
+                },
+                new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("project_governance_decision_heads_no_delete",
+                        "reject_governance_decision_head_removal()", 11,
+                        "governance decision stream heads cannot be removed", "55000"),
+                    new("project_governance_decision_heads_no_truncate",
+                        "reject_governance_decision_head_removal()", 34,
+                        "governance decision stream heads cannot be removed", "55000"),
+                ])
+                {
+                    UpdateColumns = ["sequence", "fence_generation", "head_hash", "updated_at"],
                 },
             ],
         };
@@ -809,7 +908,7 @@ public sealed class P1PostgresInitializerTests
                 AppendOnlyTable("native_acs_policy_idempotency"),
                 AppendOnlyTable("native_acs_policy_change_audit"),
                 AppendOnlyTable("native_acs_policy_outbox"),
-                new("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
+                new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
                 [
                     new("project_governance_decision_heads_no_delete",
                         "reject_governance_decision_head_removal()", 11,
@@ -817,7 +916,10 @@ public sealed class P1PostgresInitializerTests
                     new("project_governance_decision_heads_no_truncate",
                         "reject_governance_decision_head_removal()", 34,
                         "governance decision stream heads cannot be removed", "55000"),
-                ]),
+                ]) with
+                {
+                    UpdateColumns = ["sequence", "fence_generation", "head_hash", "updated_at"],
+                },
                 AppendOnlyTable("project_governance_decisions") with
                 {
                     MutationDenialGuards =
