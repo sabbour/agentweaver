@@ -26,6 +26,12 @@ public static class PlatformEgressAcsCompiler
             return Failed(candidateResult.Failure!.Code);
 
         var candidate = candidateResult.Candidate!;
+        var destinations = candidate.ApprovedDestinations
+            .Concat(candidate.SystemDestinations)
+            // Canonical ordering keeps the compiled snapshot stable when input order changes.
+            .OrderBy(destination => destination.Host, StringComparer.Ordinal)
+            .ThenBy(destination => destination.Port)
+            .ToImmutableArray();
         var snapshot = new PlatformEgressPolicySnapshot(
             candidate.SourceId,
             candidate.SourceRevision,
@@ -33,7 +39,7 @@ public static class PlatformEgressAcsCompiler
             candidate.CompilerVersion,
             admissionCheckpoint,
             candidate.Mode,
-            candidate.Destinations);
+            destinations);
         return snapshot.Validate() is null
             ? new PlatformEgressCompilationResult(snapshot, null)
             : Failed("compiled_snapshot_invalid");
@@ -52,21 +58,35 @@ public static class PlatformEgressAcsCompiler
         if (!result.IsValid || result.Policy is not { } policy)
             return CandidateFailed(result.Diagnostics.FirstOrDefault()?.Code ?? "network_profile_invalid");
 
-        var destinations = policy.ApprovedDestinations
-            .Concat(policy.SystemDestinations)
-            // Canonical ordering keeps the compiled snapshot stable when input order changes.
-            .OrderBy(destination => destination.Host, StringComparer.Ordinal)
-            .ThenBy(destination => destination.Port)
-            .ToImmutableArray();
         var candidate = new PlatformEgressCompilationCandidate(
             sourceId,
             sourceRevision,
             artifact.ContentSha256,
             CompilerVersion,
             policy.Mode,
-            destinations);
+            policy.ApprovedDestinations,
+            policy.SystemDestinations);
 
         return new PlatformEgressCandidateCompilationResult(candidate, null);
+    }
+
+    internal static PlatformEgressCandidateCompilationResult CompileSystemOnlyCandidate(
+        NativeAcsArtifact artifact,
+        string sourceId,
+        string sourceRevision)
+    {
+        var result = CompileCandidate(artifact, sourceId, sourceRevision);
+        if (!result.IsSuccess)
+            return result;
+
+        var candidate = result.Candidate!;
+        return new PlatformEgressCandidateCompilationResult(
+            candidate with
+            {
+                Mode = PlatformEgressMode.Allowlist,
+                ApprovedDestinations = []
+            },
+            null);
     }
 
     private static PlatformEgressCompilationResult Failed(string code) =>
@@ -84,7 +104,8 @@ internal sealed record PlatformEgressCompilationCandidate(
     string SourceHash,
     string CompilerVersion,
     PlatformEgressMode Mode,
-    ImmutableArray<PlatformEgressDestination> Destinations);
+    ImmutableArray<PlatformEgressDestination> ApprovedDestinations,
+    ImmutableArray<PlatformEgressDestination> SystemDestinations);
 
 internal sealed record PlatformEgressCandidateCompilationResult(
     PlatformEgressCompilationCandidate? Candidate,

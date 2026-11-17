@@ -174,9 +174,9 @@ public sealed partial class ProjectsConfigPostgresTests
             Assert.Equal(first.ContentSha256, candidate.SourceHash);
             Assert.Equal(Env.PlatformEgressAcsCompiler.CompilerVersion,
                 candidate.CompilerVersion);
-            Assert.Contains(candidate.Destinations,
+            Assert.Contains(candidate.ApprovedDestinations,
                 destination => destination.Host == "approved.example.com");
-            Assert.Contains(candidate.Destinations,
+            Assert.Contains(candidate.SystemDestinations,
                 destination => destination.Host == "api.github.com");
             var firstAdmission = Env.PlatformEgressAcsCompiler.Compile(
                 first.Artifact, first.SourceId, first.SourceRevision,
@@ -198,7 +198,7 @@ public sealed partial class ProjectsConfigPostgresTests
             var replacementCandidate = Env.PlatformEgressAcsCompiler.CompileCandidate(
                 replacement.Artifact, replacement.SourceId, replacement.SourceRevision);
             Assert.True(replacementCandidate.IsSuccess);
-            Assert.DoesNotContain(replacementCandidate.Candidate!.Destinations,
+            Assert.DoesNotContain(replacementCandidate.Candidate!.ApprovedDestinations,
                 destination => destination.Host == "approved.example.com");
             var replacementAdmission = Env.PlatformEgressAcsCompiler.Compile(
                 replacement.Artifact, replacement.SourceId, replacement.SourceRevision,

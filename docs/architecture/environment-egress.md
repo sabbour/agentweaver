@@ -15,10 +15,17 @@ The Environment source client reads the private Projects route only when code
 calls it. The client validates the pinned TLS peer, response bounds, pending
 admission, and complete artifact hash. `CompileCandidate` validates the fixed
 manifest, Rego module, and JSON data, then returns an unadmitted candidate.
+The candidate keeps approved destinations separate from protected System
+destinations. `CompileSystemOnlyCandidate` validates the complete original
+artifact, then returns an `Allowlist` candidate with no approved destinations
+and the validated System catalog. It preserves the source ID, revision, full
+artifact hash, and compiler version.
 The existing `Compile` method still requires a genuine admission checkpoint
 before it creates a `PlatformEgressPolicySnapshot`. The snapshot keeps approved
 and release-managed System destinations in both `Allowlist` and `PublicHttps`
-mode. Its source hash covers the manifest, module, and data.
+mode. It sorts their combined destinations before snapshot creation, so the
+public output stays stable when source order changes. Its source hash covers
+the manifest, module, and data.
 
 `Environment:PlatformEgress:Source:Enabled` defaults to `false`. Enabling it
 registers the client and its dedicated TLS identity; startup sends no source
@@ -43,9 +50,17 @@ sequenceDiagram
     Client-->>Caller: Pending observation
     Caller->>Compiler: CompileCandidate(artifact, source ID, revision)
     Compiler-->>Caller: Unadmitted candidate or coded failure
+    Caller->>Compiler: CompileSystemOnlyCandidate(artifact, source ID, revision)
+    Compiler->>Compiler: Validate the complete original artifact
+    Compiler-->>Caller: Allowlist candidate with System destinations or coded failure
     Note over Client,Compiler: Feature is off by default; enabling it sends no startup request
-    Note over Caller,Compiler: No admitted source, worker, projection store, provider, or apply path
+    Note over Caller,Compiler: Candidate compilation has no provider effect
 ```
+
+The later Platform Policy admission fence uses the System-only candidate as a
+barrier. It installs that barrier on every affected target before it commits
+the canonical policy head. A provider outage leaves the write uncommitted and
+retryable.
 
 The existing provider capability check still requires exact-host support for
 `Allowlist`, and private-range exclusions remain a separate provider safety
