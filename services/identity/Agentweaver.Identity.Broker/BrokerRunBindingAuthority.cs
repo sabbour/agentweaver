@@ -286,7 +286,7 @@ internal sealed class BrokerRunBindingAuthority(
             throw new InvalidOperationException("IdentityBroker run-binding settings are incomplete or invalid.");
     }
 
-    private static bool TryGetSettings(
+    internal static bool TryGetSettings(
         IdentityBrokerOptions brokerOptions, out Uri ownerAddress, out string privateAudience)
     {
         ownerAddress = null!;

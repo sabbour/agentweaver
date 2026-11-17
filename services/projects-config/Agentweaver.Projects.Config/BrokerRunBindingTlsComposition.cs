@@ -13,7 +13,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 namespace Agentweaver.Projects.Config;
 
 /// <summary>
-/// Holds the certificate used by the optional private Broker proof listener and disposes it with the host.
+/// Holds the certificate used by the private Broker listener and disposes it with the host.
 /// </summary>
 internal sealed class BrokerRunBindingTlsIdentity : IDisposable
 {
@@ -39,7 +39,7 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
         {
             if (hasTlsSettings)
                 throw new InvalidOperationException(
-                    "Projects TLS settings require the Broker run-binding audience.");
+                    "Projects TLS settings require the private Broker audience.");
             return;
         }
 

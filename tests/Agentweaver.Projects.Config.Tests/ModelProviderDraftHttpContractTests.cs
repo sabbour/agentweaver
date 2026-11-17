@@ -174,7 +174,7 @@ public sealed class ModelProviderDraftHttpContractTests
         var response = ModelProviderDraftEndpoints.Project(new ModelProviderDraft(ModelProviderDraftState.Draft, binding));
         var json = JsonSerializer.Serialize(response, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.Contains("\"has_api_key\":false", json);
-        Assert.Contains("\"hasCredential\":false", json);
+        Assert.Contains("\"hasCredential\":true", json);
         Assert.DoesNotContain("credential-version-secret", json);
         Assert.DoesNotContain("rate-card-secret", json);
         Assert.DoesNotContain("CreatedByActorId", json);

@@ -26,7 +26,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectConfiguration.cs` | Typed settings, validation, limits, and egress narrowing |
 | `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
 | `NativeAcsPolicyEndpoints.cs`, `PlatformPolicySourceEndpoints.cs`, `PlatformPolicySourceTls.cs`, and `NativeAcsPolicyStore.cs` | Public Platform ACS Policy API, private Environment source read, and immutable policy source |
-| `ModelProviderDraftService.cs` and `ModelProviderDraftRecords.cs` | Customer-provided model-provider metadata in Draft heads and immutable revisions |
+| `ModelProviderDraftService.cs`, `ModelProviderDraftRecords.cs`, and `ModelProviderCredentialPublicationEndpoints.cs` | Customer-provided provider Drafts, immutable revisions, and private credential publication |
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
 | `ProjectBlueprintCatalog.cs`, `AgentSuiteBlueprintConverter.cs`, and `BlueprintPackages/` | 0.x blueprints, their AgentSuite conversion, and the ported 0.x package validator |
@@ -143,17 +143,27 @@ appends a new revision and advances the head. If another writer wins first,
 your update conflicts instead of overwriting its change.
 
 Customer-provided model-provider metadata has a separate Draft-only store.
-Every read and write requires `api.read` and `projects.admin`. Platform requests
-must be unbound and made by a PlatformAdmin. Project requests must match the
-exact project binding, have no run binding, and be made by a project Owner or
-PlatformAdmin. Draft metadata does not change model eligibility or accepted run
-selections. Activation, credentials, and rate-card data remain separate.
-Public Gateway routes support list, read, create, and update for
-platform and project Drafts. They return a public metadata projection, not the
-full binding record. Lists use a bounded, provider-ID-ordered query over the
-current heads. Exact save retries return the immutable revision saved by the
-original operation. See
-[issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
+Public reads and writes require `api.read` and `projects.admin`. Platform
+requests must be unbound and made by a PlatformAdmin. Project requests must
+match the exact project binding, have no run binding, and be made by a project
+Owner or PlatformAdmin. Draft metadata and credential publication leave model
+eligibility and accepted run selections unchanged.
+
+The private Broker route
+`POST /internal/byok/credential-publications` appends an exact credential
+version to an existing provider Draft. It copies the current metadata,
+configuration hash, and rate-card references. The Broker caller must check
+current authority before publication. A short-lived token binds the actor and
+request; Projects checks the native TLS handshake and exact token-to-body
+match. An exact retry returns the saved receipt after later edits, and a
+metadata save preserves the credential version. This route does not activate or
+select a provider. Public Gateway routes still support only list, read, create,
+and update for platform and project Drafts. They return a public metadata
+projection, not the full binding record. `hasCredential` reports whether the
+current revision has a credential version, but does not expose it. Lists use a
+bounded, provider-ID-ordered query over current heads. Exact save retries
+return the immutable revision saved by the original operation. See the
+[credential publication contract](../reference/contracts.md#customer-provided-model-provider-draft-contract).
 
 ### Accept a run selection
 

@@ -59,7 +59,9 @@ List routes accept only `pageSize` and `afterProviderId`. Saves use an
 operation ID and expected revision; create uses revision `0`, while update
 requires a positive revision. Save retries return the revision committed by
 the original operation. Delete, activation, and credential routes are not
-mapped.
+available through Gateway. Identity Broker publishes exact credential versions
+through the private Projects route `POST /internal/byok/credential-publications`.
+See the [contract details](./contracts.md#customer-provided-model-provider-draft-contract).
 
 ## Periodic issue sync
 

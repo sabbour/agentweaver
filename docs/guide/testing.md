@@ -60,6 +60,24 @@ dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.
 The local database-free tests do not prove owner persistence or current
 authorization against PostgreSQL.
 
+## Test BYOK credential publication
+
+Run the request-binding and Broker transport tests after building the solution:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~ModelProviderCredentialPublicationContractTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerModelProviderCredentialPublicationClientTests
+```
+
+Run the Projects persistence test with the disposable PostgreSQL fixture:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~CredentialPublicationAppendsReplaysAfterRenameAndPreservesTheVersion
+```
+
+The client test uses a local HTTP handler. The persistence test uses a
+disposable database. These tests do not contact Key Vault or a deployed service.
+
 ## Run the standard test suites
 
 Run the following commands to restore, build, and test the main .NET and Node.js
