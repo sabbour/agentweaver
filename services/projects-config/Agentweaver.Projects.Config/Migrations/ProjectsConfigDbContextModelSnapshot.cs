@@ -183,7 +183,7 @@ namespace Agentweaver.Projects.Config.Migrations
 
                             t.HasCheckConstraint("ck_model_providers_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
 
-                            t.HasCheckConstraint("ck_model_providers_state", "state = 'Draft'");
+                            t.HasCheckConstraint("ck_model_providers_state", "state IN ('Draft', 'Available')");
                         });
                 });
 
@@ -266,8 +266,9 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("rate_card_id");
 
-                    b.Property<long?>("RateCardVersion")
-                        .HasColumnType("bigint")
+                    b.Property<string>("RateCardVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
                         .HasColumnName("rate_card_version");
 
                     b.PrimitiveCollection<string[]>("ReasoningEfforts")

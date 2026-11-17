@@ -202,7 +202,7 @@ public sealed class RuntimeModelBindingsResolver
         ValidateReasoningEffort(reasoningEffort);
         ValidateRuntimeProviderBinding(binding);
         return new RuntimeModelBindingPin(
-            ModelProviderBindingRevision.CurrentContractVersion,
+            RuntimeModelBindingPin.CurrentContractVersion,
             binding.ProviderId,
             binding.Deployment,
             ModelSourceMode.Byok,
@@ -217,7 +217,8 @@ public sealed class RuntimeModelBindingsResolver
 
     private RuntimeModelBindingPin CreatePin(
         string reference, RuntimeModelBinding model, string reasoningEffort = "high") =>
-        new(1, reference, model.ModelId, model.SourceMode, ConfigurationRevision, ConfigurationHash, reasoningEffort)
+        new(RuntimeModelBindingPin.CurrentContractVersion, reference, model.ModelId, model.SourceMode,
+            ConfigurationRevision, ConfigurationHash, reasoningEffort)
         {
             ProviderType = model.Provider?.Type
         };
@@ -225,7 +226,8 @@ public sealed class RuntimeModelBindingsResolver
     public static void ValidatePin(RuntimeModelBindingPin pin)
     {
         ArgumentNullException.ThrowIfNull(pin);
-        if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode) ||
+        if (pin.ContractVersion != RuntimeModelBindingPin.CurrentContractVersion ||
+            !Enum.IsDefined(pin.SourceMode) ||
             pin.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
             pin.SourceMode == ModelSourceMode.Byok && pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
             pin.ProviderId is not null && pin.SourceMode != ModelSourceMode.Byok ||

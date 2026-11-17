@@ -21,6 +21,7 @@ internal static class ModelProviderDraftLimits
 public enum ModelProviderDraftState
 {
     Draft,
+    Available,
 }
 
 public sealed class ModelProviderDraftHeadRecord
@@ -63,7 +64,7 @@ public sealed class ModelProviderDraftRevisionRecord
     public required string ConfigurationHash { get; set; }
     public string? CredentialVersion { get; set; }
     public string? RateCardId { get; set; }
-    public long? RateCardVersion { get; set; }
+    public string? RateCardVersion { get; set; }
     public required string CreatedByActorId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }

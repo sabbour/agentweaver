@@ -52,6 +52,18 @@ public sealed class ModelProviderCredentialPublicationEndpointTests
         Assert.Equal("no-store", duplicateResponse.Headers.CacheControl?.ToString());
         Assert.DoesNotContain("0123456789abcdef", await duplicateResponse.Content.ReadAsStringAsync());
 
+        var callerPricing =
+            $$$"""{"operationId":"{{{OperationId:D}}}","expectedProviderRevision":7,"scope":"project","projectId":"project-1","providerId":"provider-1","credentialVersion":"0123456789abcdef0123456789abcdef","rateCardId":"caller-card","rateCardVersion":"caller-version","rateCardPrices":{"gpt-4.1|input":0},"rateCardHash":"caller-hash","provenance":{"source":"manual"}}""";
+        using var callerPricingRequest = new HttpRequestMessage(
+            HttpMethod.Post, ModelProviderCredentialPublicationEndpoints.Route)
+        {
+            Content = new StringContent(callerPricing, Encoding.UTF8, "application/json"),
+        };
+        using var callerPricingResponse = await client.SendAsync(callerPricingRequest);
+        Assert.Equal(HttpStatusCode.BadRequest, callerPricingResponse.StatusCode);
+        Assert.Equal("no-store", callerPricingResponse.Headers.CacheControl?.ToString());
+        Assert.DoesNotContain("caller-card", await callerPricingResponse.Content.ReadAsStringAsync());
+
         var chunked = new HttpRequestMessage(HttpMethod.Post, ModelProviderCredentialPublicationEndpoints.Route)
         {
             Content = new UnknownLengthContent(Encoding.UTF8.GetBytes(

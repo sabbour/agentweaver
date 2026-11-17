@@ -24,10 +24,10 @@ public sealed record ModelProviderBindingRevision(
     long ProviderRevision,
     string? CredentialVersion,
     string? RateCardId,
-    long? RateCardVersion,
+    string? RateCardVersion,
     string ConfigurationHash)
 {
-    public const int CurrentContractVersion = 1;
+    public const int CurrentContractVersion = 2;
 
     public ModelCredentialIdentity? CredentialIdentity { get; init; }
 }

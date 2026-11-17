@@ -207,6 +207,17 @@ configured Azure Cost provider.
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-gateway-azure-retail-pricing.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-gateway-azure-retail-pricing.drawio'">Open editable draw.io source</a></p>
 
+The lookup does not save cards or fetch prices at startup. The configured Azure
+Cost provider and immutable card store remain separate.
+
+The private
+`GET /internal/runtime-rate-cards/{id}/{version}` route serves an exact stored
+card to Projects. It is mapped only when Events service-token authentication is
+configured. The shared policy requires the configured Projects workload
+subject. The response contains the canonical card and provenance, a strong
+ETag with the quoted lowercase SHA-256 of those exact bytes, and
+`Cache-Control: no-store`. The route reads the immutable store; it does not
+write cards or publish pricing through Gateway.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
 receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`

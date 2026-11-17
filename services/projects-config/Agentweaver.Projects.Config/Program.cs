@@ -174,7 +174,10 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
 // model choices are reported as unavailable.
 builder.Services.AddSingleton(ModelBindingCapabilities.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectsConfigService>();
-builder.Services.AddScoped<ModelProviderDraftService>();
+builder.Services.AddScoped<ModelProviderDraftService>(services => new(
+    services.GetRequiredService<ProjectsConfigDbContext>(),
+    services.GetRequiredService<TimeProvider>(),
+    services.GetRequiredService<IRuntimeRateCardOwnerClient>()));
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Projects.Config");
 builder.Services.AddScoped<NativeAcsPolicyStore>();
@@ -232,6 +235,11 @@ builder.Services.AddScoped<ISkillAssignmentService>(services => services.GetRequ
 builder.Services.AddSingleton(TimeProvider.System);
 // Platform component owners are optional; unconfigured owners are reported as unknown.
 builder.Services.AddPlatformComponentCollector(builder.Configuration);
+builder.Services.AddHttpClient<IRuntimeRateCardOwnerClient, RuntimeRateCardOwnerClient>(client =>
+        client.Timeout = Timeout.InfiniteTimeSpan)
+    .RedactLoggedHeaders(["Authorization"])
+    .ConfigurePrimaryHttpMessageHandler(
+        Agentweaver.Identity.RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
 

@@ -15,6 +15,8 @@ public sealed record RuntimeModelBindingPin(
     string ConfigurationHash,
     string ReasoningEffort = "high")
 {
+    public const int CurrentContractVersion = 1;
+
     /// <summary>Optional provider type for selections whose source is a named provider.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ProviderType { get; init; }

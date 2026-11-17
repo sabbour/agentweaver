@@ -1,8 +1,19 @@
 using System.Collections.Immutable;
+using System.Net;
+using System.Security.Claims;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
 using Agentweaver.EventsAndSessions.Cost;
+using Agentweaver.Providers;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Xunit;
@@ -44,6 +55,71 @@ public sealed class RuntimeRateCardStoreTests : IAsyncLifetime
         AssertRuntimeRateCard(manual, await restartedStore.GetAsync(manual.RateCard.Id, manual.RateCard.Version));
         AssertRuntimeRateCard(retail, await restartedStore.GetAsync(retail.RateCard.Id, retail.RateCard.Version));
         Assert.Null(await restartedStore.GetAsync("missing-card", "v1"));
+    }
+
+    [Fact]
+    public async Task OwnerReadRequiresProjectsIdentityAndReturnsCanonicalCardWithStrongEtag()
+    {
+        var card = ManualCard(id: "owner-read-card");
+        await _store.SaveAsync(card);
+        var authentication = new PlatformComponentServiceAuthenticationOptions(
+            new Uri("https://issuer.example/"),
+            new Uri("https://events-private.example/"),
+            "projects-workload");
+        using var host = await new HostBuilder()
+            .ConfigureWebHost(web =>
+            {
+                web.UseTestServer();
+                web.ConfigureServices(services =>
+                {
+                    services.AddRouting();
+                    services.AddAuthentication(OwnerReadAuthenticationHandler.SchemeName)
+                        .AddScheme<AuthenticationSchemeOptions, OwnerReadAuthenticationHandler>(
+                            OwnerReadAuthenticationHandler.SchemeName, _ => { });
+                    services.AddAuthorization(options => options.AddPolicy(
+                        PlatformComponentServiceAuthenticationOptions.PolicyName,
+                        policy => policy
+                            .AddAuthenticationSchemes(OwnerReadAuthenticationHandler.SchemeName)
+                            .RequireAuthenticatedUser()
+                            .RequireClaim("sub", authentication.CallerSubject)));
+                    services.AddSingleton(_store);
+                });
+                web.Configure(app =>
+                {
+                    app.UseRouting();
+                    app.UseAuthentication();
+                    app.UseAuthorization();
+                    app.UseEndpoints(endpoints => endpoints.MapRuntimeRateCardOwnerRead(authentication));
+                });
+            })
+            .StartAsync();
+        using var client = host.GetTestClient();
+        var path = $"{RuntimeRateCardOwnerReadEndpoint.Route.Replace("{id}/{version}", $"{card.RateCard.Id}/{card.RateCard.Version}", StringComparison.Ordinal)}";
+
+        using (var request = new HttpRequestMessage(HttpMethod.Get, path))
+        using (var response = await client.SendAsync(request))
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        using (var request = new HttpRequestMessage(HttpMethod.Get, path))
+        {
+            request.Headers.Add("X-Subject", "identity-broker");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        using (var request = new HttpRequestMessage(HttpMethod.Get, path))
+        {
+            request.Headers.Add("X-Subject", "projects-workload");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            Assert.Equal(
+                $"\"{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(RuntimeRateCardContract.SerializeCanonical(card))))
+                    .ToLowerInvariant()}\"",
+                response.Headers.ETag?.ToString());
+            Assert.Equal(RuntimeRateCardContract.SerializeCanonical(card), await response.Content.ReadAsStringAsync());
+        }
     }
 
     [Fact]
@@ -235,6 +311,26 @@ public sealed class RuntimeRateCardStoreTests : IAsyncLifetime
                 Assert.Equal(expectedRetail.Region, actualRetail.Region);
                 Assert.Equal(expectedRetail.MeterIds.ToArray(), actualRetail.MeterIds.ToArray());
                 break;
+        }
+    }
+
+    private sealed class OwnerReadAuthenticationHandler(
+        IOptionsMonitor<AuthenticationSchemeOptions> options,
+        ILoggerFactory logger,
+        System.Text.Encodings.Web.UrlEncoder encoder)
+        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    {
+        internal const string SchemeName = "RuntimeRateCardOwnerReadTest";
+
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            var subject = Request.Headers["X-Subject"].ToString();
+            if (string.IsNullOrEmpty(subject))
+                return Task.FromResult(AuthenticateResult.NoResult());
+            var principal = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", subject)], SchemeName));
+            return Task.FromResult(AuthenticateResult.Success(
+                new AuthenticationTicket(principal, SchemeName)));
         }
     }
 

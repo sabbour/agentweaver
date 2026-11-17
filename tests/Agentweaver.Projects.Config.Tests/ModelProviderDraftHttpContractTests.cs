@@ -169,7 +169,7 @@ public sealed class ModelProviderDraftHttpContractTests
         var binding = new ModelProviderBindingRevision(
             ModelProviderBindingRevision.CurrentContractVersion, "byok-provider", ModelProviderBindingScope.Project,
             "project-a", "Model", "openai", "https://api.openai.com/v1/Case", "deployment", "responses", null,
-            ImmutableArray.Create("high"), 1234, 3, "credential-version-secret", "rate-card-secret", 7,
+            ImmutableArray.Create("high"), 1234, 3, "credential-version-secret", "rate-card-secret", "7",
             "configuration-hash");
         var response = ModelProviderDraftEndpoints.Project(new ModelProviderDraft(ModelProviderDraftState.Draft, binding));
         var json = JsonSerializer.Serialize(response, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -178,6 +178,8 @@ public sealed class ModelProviderDraftHttpContractTests
         Assert.DoesNotContain("credential-version-secret", json);
         Assert.DoesNotContain("rate-card-secret", json);
         Assert.DoesNotContain("CreatedByActorId", json);
+        Assert.Equal("Available", ModelProviderDraftEndpoints.Project(
+            new ModelProviderDraft(ModelProviderDraftState.Available, binding)).State);
         Assert.Throws<ModelProviderDraftUnsafeMetadataException>(() =>
             ModelProviderDraftEndpoints.Project(new ModelProviderDraft(
                 ModelProviderDraftState.Draft,

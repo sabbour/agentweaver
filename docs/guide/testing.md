@@ -78,6 +78,21 @@ dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.
 The client test uses a local HTTP handler. The persistence test uses a
 disposable database. These tests do not contact Key Vault or a deployed service.
 
+Test Events-owned rate-card verification and the `Available` state from the
+repository root:
+
+```powershell
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeRateCardStoreTests
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~RuntimeRateCardOwnerClientTests|FullyQualifiedName~CredentialPublicationRequiresVerifiedRateCard|FullyQualifiedName~CredentialPublicationWithoutSavedRateCard"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter FullyQualifiedName~ModelProviderCredentialPublicationEndpointTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~GatewayModelProviderDraftTests
+```
+
+These tests check Projects-only Events authorization, exact card and provenance
+validation, strong ETags, outage recovery, caller cancellation, and the public
+`Draft` or `Available` response. PostgreSQL cases use disposable test
+containers. No test calls Azure or a deployed service.
+
 ## Run the standard test suites
 
 Run the following commands to restore, build, and test the main .NET and Node.js

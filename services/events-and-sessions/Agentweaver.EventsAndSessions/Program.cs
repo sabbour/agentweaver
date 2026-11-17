@@ -96,6 +96,8 @@ builder.Services.AddSingleton<NpgsqlDataSource>(services =>
     EventsAndSessionsPostgresDataSource.Create(
         runtimeConnection.ConnectionString, services.GetRequiredService<TokenCredential>()));
 builder.Services.AddSingleton(options);
+builder.Services.AddSingleton(services =>
+    new RuntimeRateCardStore(services.GetRequiredService<NpgsqlDataSource>(), options.Schema));
 builder.Services.AddSingleton(acceptedEffectOptions);
 builder.Services.AddSingleton(messagingOptions);
 builder.Services.AddSingleton(TimeProvider.System);
@@ -328,6 +330,7 @@ app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
         ],
         services.GetRequiredService<TimeProvider>(),
         ct));
+app.MapRuntimeRateCardOwnerRead(platformComponentAuthentication);
 app.MapEventsAndSessionsEndpoints();
 // Project usage reads are available even when native usage ingestion is disabled.
 app.MapProjectUsageEndpoints();

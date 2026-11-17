@@ -90,9 +90,42 @@ public sealed class GatewayModelProviderDraftTests
         Assert.DoesNotContain("credentialVersion",
             draftSchema.GetProperty("properties").EnumerateObject()
                 .Select(property => property.Name));
+        Assert.Equal(
+            ["Draft", "Available"],
+            draftSchema.GetProperty("properties").GetProperty("state")
+                .GetProperty("enum").EnumerateArray()
+                .Select(value => value.GetString()!).ToArray());
         Assert.False(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}/activate", out _));
         Assert.False(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}", out var item) &&
             item.TryGetProperty("delete", out _));
+    }
+
+    [Fact]
+    public async Task AvailableProviderStatePassesThroughGatewayDraftRead()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        const string body =
+            """{"id":"provider-a","name":"Customer model","type":"azure","base_url":"https://provider.example","model":"deployment-1","wire_api":null,"azure_api_version":null,"reasoning_efforts":["low"],"prompt_capacity_tokens":null,"scope":"platform","projectId":null,"state":"Available","revision":2,"configurationHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","has_api_key":false,"is_active":false,"hasCredential":true}""";
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key,
+            () => new DraftOwnerHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } },
+            })),
+            (_, _, _) => throw new InvalidOperationException("Draft metadata must call Projects."));
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, "/api/v1/platform/byok-providers/provider-a");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Available", result.RootElement.GetProperty("state").GetString());
     }
 
     [Theory]
