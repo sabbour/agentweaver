@@ -7230,6 +7230,7 @@ public sealed class SourceControlProviderCatalogFixtureTests
         ProjectsConfigBrokerAuthorizationTests.AddRuntimePlacementManagerServices(
             services, sandboxOptions, sandboxKubernetesClient, sandboxProvider,
             networkOptions, NoIoDependency<ICiliumPolicyResourceStore>());
+        services.RemoveAll<IEnvironmentEgressAuditStore>();
         services.AddScoped<IEnvironmentEgressAuditStore>(_ =>
             NoIoDependency<IEnvironmentEgressAuditStore>());
 
