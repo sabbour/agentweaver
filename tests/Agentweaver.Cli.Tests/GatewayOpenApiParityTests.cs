@@ -46,6 +46,9 @@ public sealed class GatewayOpenApiParityTests
         JsonObject discovered = await api.DiscoverAsync(CancellationToken.None);
 
         Assert.True(JsonNode.DeepEquals(emitted, discovered));
+        Assert.Equal(4096, CursorMaximum(FindOperation(discovered, "listProjectNativeAcsPolicies")));
+        Assert.Equal(2048, CursorMaximum(FindOperation(discovered, "listProjectNativeAcsPolicyRevisions")));
+        Assert.Equal(2048, CursorMaximum(FindOperation(discovered, "listPlatformNativeAcsPolicyRevisions")));
         JsonObject createProject = FindOperation(discovered, "createProject");
         Assert.Contains("503", Assert.IsType<JsonObject>(createProject["responses"]).Select(item => item.Key));
         Assert.Contains("role_assignment_unavailable",
@@ -148,6 +151,16 @@ public sealed class GatewayOpenApiParityTests
                 return operation;
         }
         throw new Xunit.Sdk.XunitException($"The emitted Gateway artifact has no {operationId} operation.");
+    }
+
+    private static int CursorMaximum(JsonObject operation)
+    {
+        JsonArray parameters = Assert.IsType<JsonArray>(operation["parameters"]);
+        JsonObject cursor = Assert.Single(
+            parameters.OfType<JsonObject>(),
+            parameter => parameter["name"]?.GetValue<string>() == "cursor");
+        return cursor["schema"]?["maxLength"]?.GetValue<int>()
+            ?? throw new Xunit.Sdk.XunitException("The cursor parameter has no maximum length.");
     }
 
     private static async Task<WebApplication> StartGatewayAsync()
