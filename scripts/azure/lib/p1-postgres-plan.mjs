@@ -67,7 +67,7 @@ const GROUPS = {
     SELECT: 'tenant_memberships __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -384,6 +384,52 @@ const APPEND_ONLY_GUARDS = {
         functionSource: 'BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END',
       },
     ],
+    project_governance_decision_checkpoints: [
+      {
+        trigger: 'project_governance_decision_checkpoints_anchor',
+        function: 'require_governance_checkpoint_anchor()', triggerType: 7,
+        message: 'governance checkpoint must reference a stream record', sqlState: '55000',
+        functionSource: `BEGIN
+          IF NOT EXISTS (
+              SELECT 1
+              FROM projects_config.project_governance_decision_stream_heads AS head
+              WHERE head.scope_type = NEW.scope_type
+                AND head.scope_id = NEW.scope_id
+                AND head.resource_type = NEW.resource_type
+                AND head.resource_id = NEW.resource_id
+                AND head.sequence >= NEW.sequence
+                AND (
+                    NEW.sequence = 0 AND head.sequence = 0
+                        AND NEW.head_hash = repeat('0', 64)
+                    OR NEW.sequence > 0 AND EXISTS (
+                        SELECT 1
+                        FROM projects_config.project_governance_decisions AS decision
+                        WHERE decision.scope_type = NEW.scope_type
+                          AND decision.scope_id = NEW.scope_id
+                          AND decision.resource_type = NEW.resource_type
+                          AND decision.resource_id = NEW.resource_id
+                          AND decision.sequence = NEW.sequence
+                          AND decision.record_hash = NEW.head_hash
+                    )
+                )
+          ) THEN
+              RAISE EXCEPTION 'governance checkpoint must reference a stream record'
+                  USING ERRCODE = '55000';
+          END IF;
+          RETURN NEW;
+        END;`,
+      },
+      {
+        trigger: 'project_governance_decision_checkpoints_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'project_governance_decision_checkpoints_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
   },
   environment: {
     platform_policy_apply_reservations: [
@@ -463,6 +509,7 @@ const FUNCTIONS = {
     'require_governance_decision_head_initialize()',
     'require_governance_decision_head_advance()',
     'reject_governance_decision_head_removal()',
+    'require_governance_checkpoint_anchor()',
     'stamp_governance_decision_transaction_id()',
     'reject_authority_audit_mutation()',
     'reject_project_setup_operation_mutation()',

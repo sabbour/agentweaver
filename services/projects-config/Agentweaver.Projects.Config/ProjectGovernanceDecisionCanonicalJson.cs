@@ -78,6 +78,31 @@ internal static class ProjectGovernanceDecisionCanonicalJson
         return Digest(input);
     }
 
+    internal static bool TryDeserializeRecord(
+        ReadOnlySpan<byte> bytes,
+        out ProjectGovernanceDecisionV1? record)
+    {
+        if (bytes.Length is 0 or > MaximumCanonicalBytes)
+        {
+            record = null;
+            return false;
+        }
+
+        try
+        {
+            record = JsonSerializer.Deserialize<ProjectGovernanceDecisionV1>(bytes, Options);
+            return record is not null &&
+                record.Decision is not null &&
+                !record.Decision.EffectiveRoleRevisions.IsDefault &&
+                Serialize(record).AsSpan().SequenceEqual(bytes);
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            record = null;
+            return false;
+        }
+    }
+
     internal static bool IsSha256(string? value) =>
         value is { Length: 64 } && value.All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');

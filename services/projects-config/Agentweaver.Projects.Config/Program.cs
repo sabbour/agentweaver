@@ -4,9 +4,7 @@ using Agentweaver.Providers;
 using Agentweaver.Policy.Acs;
 using Agentweaver.Projects.Config;
 using Agentweaver.Abstractions;
-using Agentweaver.ObjectStore.AzureBlob;
 using Azure.Core;
-using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -205,26 +203,23 @@ builder.Services.AddScoped<ProjectMarketplaceSourceService>();
 builder.Services.AddSingleton(SkillMarketplaceCatalog.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectMarketplaceSkillContentService>();
 builder.Services.AddHttpClient<SkillMarketplaceBrowseService>();
-var skillContentContainer = builder.Configuration["ProjectsConfig:SkillContent:ContainerUri"];
-if (skillContentContainer is not null)
+var (skillContentContainerUri, governanceCheckpointContainerUri) =
+    ProjectBlobObjectStoreFactory.ReadContainerUris(builder.Configuration);
+if (skillContentContainerUri is not null)
 {
-    // Skill blobs are optional, but when configured the store must target one explicit HTTPS container.
-    if (!Uri.TryCreate(skillContentContainer, UriKind.Absolute, out var skillContentContainerUri) ||
-        skillContentContainerUri.Scheme != Uri.UriSchemeHttps ||
-        !string.IsNullOrEmpty(skillContentContainerUri.UserInfo) ||
-        !string.IsNullOrEmpty(skillContentContainerUri.Query) ||
-        !string.IsNullOrEmpty(skillContentContainerUri.Fragment) ||
-        skillContentContainerUri.AbsolutePath.Trim('/').Contains('/') ||
-        string.IsNullOrWhiteSpace(skillContentContainerUri.AbsolutePath.Trim('/')))
-        throw new InvalidOperationException(
-            "Skill content requires an explicitly configured HTTPS Blob container.");
-
-    builder.Services.AddSingleton<IObjectStore>(services => new AzureBlobObjectStore(
-        new BlobContainerClient(
-            skillContentContainerUri,
-            services.GetRequiredService<TokenCredential>())));
+    builder.Services.AddSingleton<IObjectStore>(services =>
+        ProjectBlobObjectStoreFactory.Create(skillContentContainerUri, services.GetRequiredService<TokenCredential>()));
     builder.Services.AddScoped<SkillContentObjectStore>();
 }
+builder.Services.AddScoped<ProjectGovernanceCheckpointStore>(services =>
+    new ProjectGovernanceCheckpointStore(
+        services.GetRequiredService<IDbContextFactory<ProjectsConfigDbContext>>(),
+        governanceCheckpointContainerUri is null
+            ? null
+            : ProjectBlobObjectStoreFactory.Create(
+                governanceCheckpointContainerUri,
+                services.GetRequiredService<TokenCredential>()),
+        services.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<SkillContentService>(services => new SkillContentService(
     services.GetRequiredService<ProjectsConfigDbContext>(),
     services.GetService<SkillContentObjectStore>(),

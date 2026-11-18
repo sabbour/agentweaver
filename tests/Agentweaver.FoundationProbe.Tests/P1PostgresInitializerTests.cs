@@ -48,6 +48,37 @@ public sealed class P1PostgresInitializerTests
             RETURN NEW;
         END;
         """;
+    private const string GovernanceCheckpointAnchorFunctionSource = """
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM projects_config.project_governance_decision_stream_heads AS head
+                WHERE head.scope_type = NEW.scope_type
+                  AND head.scope_id = NEW.scope_id
+                  AND head.resource_type = NEW.resource_type
+                  AND head.resource_id = NEW.resource_id
+                  AND head.sequence >= NEW.sequence
+                  AND (
+                      NEW.sequence = 0 AND head.sequence = 0
+                          AND NEW.head_hash = repeat('0', 64)
+                      OR NEW.sequence > 0 AND EXISTS (
+                          SELECT 1
+                          FROM projects_config.project_governance_decisions AS decision
+                          WHERE decision.scope_type = NEW.scope_type
+                            AND decision.scope_id = NEW.scope_id
+                            AND decision.resource_type = NEW.resource_type
+                            AND decision.resource_id = NEW.resource_id
+                            AND decision.sequence = NEW.sequence
+                            AND decision.record_hash = NEW.head_hash
+                      )
+                  )
+            ) THEN
+                RAISE EXCEPTION 'governance checkpoint must reference a stream record'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
     private static readonly AclGrant OwnerConnect = new(Owner, Owner, "CONNECT", false);
     private static readonly AclGrant PublicConnect = new(Owner, 0, "CONNECT", false);
     private static readonly AclGrant RuntimeConnect = new(Owner, Runtime, "CONNECT", false);
@@ -144,6 +175,19 @@ public sealed class P1PostgresInitializerTests
                 .. missingGuard[3].Tables.Skip(1)],
         };
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(missingGuard));
+
+        var missingCheckpointAnchorGuard = MutationServices();
+        var projects = missingCheckpointAnchorGuard[0];
+        var checkpointIndex = Array.FindIndex(projects.Tables,
+            table => table.Table == "project_governance_decision_checkpoints");
+        projects.Tables[checkpointIndex] = projects.Tables[checkpointIndex] with
+        {
+            MutationDenialGuards = projects.Tables[checkpointIndex].MutationDenialGuards!
+                .Where(guard => guard.Trigger != "project_governance_decision_checkpoints_anchor")
+                .ToArray(),
+        };
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertMutationDenialPlan(missingCheckpointAnchorGuard));
 
         var missingLedgerGuard = MutationServices();
         var orchestrator = missingLedgerGuard[4];
@@ -982,6 +1026,7 @@ public sealed class P1PostgresInitializerTests
                             FunctionSource: "BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END"),
                     ],
                 },
+                GovernanceCheckpointTable(),
             ],
             Functions =
             [
@@ -991,6 +1036,7 @@ public sealed class P1PostgresInitializerTests
                 new("require_governance_decision_head_initialize()", false),
                 new("require_governance_decision_head_advance()", false),
                 new("reject_governance_decision_head_removal()", false),
+                new("require_governance_checkpoint_anchor()", false),
                 new("stamp_governance_decision_transaction_id()", false),
             ],
         };
@@ -1126,6 +1172,21 @@ public sealed class P1PostgresInitializerTests
                 27, "records in %.% are immutable", "55000"),
             new($"{table}_no_truncate", "reject_immutable_record_mutation()",
                 34, "records in %.% are immutable", "55000"),
+        ]);
+
+    private static TablePlan GovernanceCheckpointTable() =>
+        new("project_governance_decision_checkpoints", ["SELECT", "INSERT"], null, true, null,
+        [
+            new("project_governance_decision_checkpoints_anchor",
+                "require_governance_checkpoint_anchor()", 7,
+                "governance checkpoint must reference a stream record", "55000",
+                GovernanceCheckpointAnchorFunctionSource),
+            new("project_governance_decision_checkpoints_immutable",
+                "reject_immutable_record_mutation()", 27,
+                "records in %.% are immutable", "55000"),
+            new("project_governance_decision_checkpoints_no_truncate",
+                "reject_immutable_record_mutation()", 34,
+                "records in %.% are immutable", "55000"),
         ]);
 
     private const string PlatformPolicyApplyReservationIdentityFunctionSource =

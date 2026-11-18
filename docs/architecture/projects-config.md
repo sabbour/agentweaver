@@ -1068,6 +1068,44 @@ with its matching decision and outbox rows in the same transaction. The
 Projects runtime role has read/insert rights on those rows and column-scoped
 head updates. Platform and project owners use separate streams.
 
+### Checkpoint creation and export
+
+The checkpoint store captures a stream head with a required idempotency key.
+It writes the checkpoint row and canonical export bytes to PostgreSQL in one
+transaction. A retry with the same key returns the saved checkpoint, even when
+the stream has advanced. An export request can also select a saved checkpoint
+by ID. The store is internal to the Projects service. Projects exposes no
+HTTP route or background schedule for it.
+
+Version 1 exports contain the stream identity, sequence, head hash, creation
+time, and a SHA-256 checkpoint hash. The hash uses the
+`agentweaver-governance-checkpoint-v1` domain separator and covers the
+canonical fields except `checkpointHash`. It is an integrity checksum, not a
+signature.
+
+When `ProjectsConfig:GovernanceCheckpoints:ContainerUri` is set, Projects
+writes the exact export bytes to
+`governance-checkpoints/v1/<checkpointHash>.json` in a dedicated Blob
+container. The exporter creates blobs without overwriting them. A retry accepts
+an existing blob only when its bytes match. PostgreSQL commits the checkpoint
+before the Blob write, so a storage error leaves the checkpoint available for
+retry. Without the setting, Projects returns the export bytes but does not
+retain them or report a retained checkpoint.
+
+Verification reads the checkpoint from the configured container, checks its
+canonical bytes and hash, then verifies each decision from genesis through the
+checkpoint sequence. It compares each stored `decision_id` with the canonical
+record's `decisionId`. It also checks stream identity, sequence, previous hash,
+record hash, and checkpoint head hash. A missing retained export returns
+`Unknown`; a changed or incomplete chain returns a mismatch. Records after the
+checkpoint are outside this check. Projects does not inspect the container's
+immutability policy.
+
+The operator owns the Azure Storage account, container, and retention policy.
+Use a locked WORM retention policy and keep storage administration separate
+from database administration. The source does not provision this storage or
+set the retention period.
+
 ```mermaid
 sequenceDiagram
     participant Owner as Projects owner
@@ -1087,6 +1125,25 @@ sequenceDiagram
         Store->>DB: Commit all writes
         Store-->>Owner: Sequence, fence, and record hash
     end
+```
+
+```mermaid
+sequenceDiagram
+    participant Caller as Internal checkpoint caller
+    participant Store as Checkpoint store
+    participant DB as Projects PostgreSQL
+    participant Blob as Operator Blob container
+    Caller->>Store: Stream identity and idempotency key
+    Store->>DB: Save canonical checkpoint
+    DB-->>Store: Checkpoint ID and hash
+    opt Blob container configured
+        Store->>Blob: Create checkpoint export
+        Blob-->>Store: Write result
+    end
+    Caller->>Store: Verify retained checkpoint hash
+    Store->>Blob: Read retained export
+    Store->>DB: Verify decision prefix through checkpoint sequence
+    Store-->>Caller: Match, mismatch, or Unknown
 ```
 
 ## Validation

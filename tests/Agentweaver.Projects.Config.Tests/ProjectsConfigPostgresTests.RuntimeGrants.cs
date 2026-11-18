@@ -91,6 +91,26 @@ public sealed partial class ProjectsConfigPostgresTests
                AND has_column_privilege(
                  'agentweaver-id-projects-config',
                  'projects_config.project_governance_decision_stream_heads', 'head_hash', 'UPDATE')),
+              ('governance checkpoints SELECT and INSERT only',
+               has_table_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_checkpoints', 'SELECT')
+               AND has_table_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_checkpoints', 'INSERT')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_checkpoints', 'UPDATE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_checkpoints', 'DELETE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.project_governance_decision_checkpoints', 'TRUNCATE')),
+              ('governance checkpoint anchor trigger EXECUTE denied',
+               NOT has_function_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.require_governance_checkpoint_anchor()', 'EXECUTE')),
               ('native ACS revision UPDATE and DELETE denied',
                NOT has_table_privilege(
                  'agentweaver-id-projects-config', 'projects_config.native_acs_policy_revisions', 'UPDATE')

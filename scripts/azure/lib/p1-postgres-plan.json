@@ -447,6 +447,38 @@
               "functionSource": "BEGIN NEW.write_transaction_id := pg_catalog.pg_current_xact_id()::text; RETURN NEW; END"
             }
           ]
+        },
+        {
+          "table": "project_governance_decision_checkpoints",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_governance_decision_checkpoints_anchor",
+              "function": "require_governance_checkpoint_anchor()",
+              "triggerType": 7,
+              "message": "governance checkpoint must reference a stream record",
+              "sqlState": "55000",
+              "functionSource": "BEGIN\n          IF NOT EXISTS (\n              SELECT 1\n              FROM projects_config.project_governance_decision_stream_heads AS head\n              WHERE head.scope_type = NEW.scope_type\n                AND head.scope_id = NEW.scope_id\n                AND head.resource_type = NEW.resource_type\n                AND head.resource_id = NEW.resource_id\n                AND head.sequence >= NEW.sequence\n                AND (\n                    NEW.sequence = 0 AND head.sequence = 0\n                        AND NEW.head_hash = repeat('0', 64)\n                    OR NEW.sequence > 0 AND EXISTS (\n                        SELECT 1\n                        FROM projects_config.project_governance_decisions AS decision\n                        WHERE decision.scope_type = NEW.scope_type\n                          AND decision.scope_id = NEW.scope_id\n                          AND decision.resource_type = NEW.resource_type\n                          AND decision.resource_id = NEW.resource_id\n                          AND decision.sequence = NEW.sequence\n                          AND decision.record_hash = NEW.head_hash\n                    )\n                )\n          ) THEN\n              RAISE EXCEPTION 'governance checkpoint must reference a stream record'\n                  USING ERRCODE = '55000';\n          END IF;\n          RETURN NEW;\n        END;"
+            },
+            {
+              "trigger": "project_governance_decision_checkpoints_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_governance_decision_checkpoints_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
         }
       ],
       "functions": [
@@ -472,6 +504,10 @@
         },
         {
           "signature": "reject_governance_decision_head_removal()",
+          "execute": false
+        },
+        {
+          "signature": "require_governance_checkpoint_anchor()",
           "execute": false
         },
         {
