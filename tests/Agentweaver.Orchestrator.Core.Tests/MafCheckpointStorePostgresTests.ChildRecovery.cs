@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -88,6 +89,463 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(fixture.Source.Info.CheckpointId, manifest.SourceCheckpointId);
         Assert.Equal(recovered.OperationId, manifest.OperationId);
         Assert.Equal(recovered.ExecutionFence, manifest.HoldFence);
+
+        var currentCheckpoint = await new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = recovered.ExecutionFence })
+            .ReadLatestAsync(CancellationToken.None);
+        var lineage = Assert.IsType<MafCheckpointRecoveryLineage>(currentCheckpoint?.State.RecoveryLineage);
+        await using (var recoveryConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var recoveryQuery = new NpgsqlCommand($"""
+            SELECT result::text
+            FROM "{_schema}".coordination_execution_operations
+            WHERE project_id = @project AND run_id = @run AND operation_id = @operation
+            """, recoveryConnection))
+        {
+            recoveryQuery.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            recoveryQuery.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            recoveryQuery.Parameters.AddWithValue("operation", recovered.OperationId);
+            await using var resultReader = await recoveryQuery.ExecuteReaderAsync();
+            Assert.True(await resultReader.ReadAsync());
+            var storedOperation = JsonSerializer.Deserialize<RunExecutionTransitionResult>(
+                resultReader.GetString(0), ChildRecoveryJsonOptions)!;
+            var status = Assert.IsType<CheckpointRecoveryStatus>(storedOperation.CheckpointRecovery);
+            Assert.Equal(lineage.RecoveryOperationId, storedOperation.OperationId);
+            Assert.Equal(_binding.Identity, storedOperation.Session);
+            Assert.Equal(recovered.ExecutionFence, storedOperation.ExecutionFence);
+            Assert.Equal(lineage.SourceExecutionFence, storedOperation.PreviousExecutionFence);
+            Assert.Equal(recovered.ExecutionFence, status.ExecutionFence);
+            Assert.Equal(lineage.SourceCheckpointId, status.SourceCheckpointId);
+            Assert.Equal(lineage.SourceCheckpointRevision, status.SourceCheckpointRevision);
+            Assert.Equal(lineage.SourceCheckpointHash, status.SourceCheckpointHash);
+        }
+
+        var executionPlan = await fixture.Owner.ReadExecutionPlanAsync(
+            _actor,
+            _binding.Identity,
+            _selection,
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            CancellationToken.None);
+        Assert.Equal(recovered.OperationId, executionPlan.Recovery?.OperationId);
+        Assert.Equal(recovered.CheckpointRecovery.Phase, executionPlan.Recovery?.Phase);
+        var executionPlanJson = Encoding.UTF8.GetString(
+            CoordinationEndpoints.SerializeExecutionPlanResponse(executionPlan));
+        Assert.DoesNotContain(CompletedUnjoinedResult, executionPlanJson, StringComparison.Ordinal);
+
+        string recoveryResultJson;
+        string recoveryProgressJson;
+        await using (var recoveryConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var recoveryQuery = new NpgsqlCommand($"""
+            SELECT result::text, progress::text
+            FROM "{_schema}".coordination_execution_operations
+            WHERE project_id = @project AND run_id = @run AND operation_id = @operation
+            """, recoveryConnection))
+        {
+            recoveryQuery.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            recoveryQuery.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            recoveryQuery.Parameters.AddWithValue("operation", recovered.OperationId);
+            await using var recoveryReader = await recoveryQuery.ExecuteReaderAsync();
+            Assert.True(await recoveryReader.ReadAsync());
+            recoveryResultJson = recoveryReader.GetString(0);
+            recoveryProgressJson = recoveryReader.GetString(1);
+        }
+
+        var storedRecovery = JsonSerializer.Deserialize<RunExecutionTransitionResult>(
+            recoveryResultJson, ChildRecoveryJsonOptions)!;
+        using var recoveryProgress = JsonDocument.Parse(recoveryProgressJson);
+        var missingChildManifest = CoordinationOwnerStore.ReadCheckpointRecoveryManifest(
+            storedRecovery, recoveryProgress.RootElement);
+        var missingChildMember = Assert.Single(missingChildManifest.Members);
+        var changedManifest = missingChildManifest with
+        {
+            Members = missingChildManifest.Members.SetItem(
+                0,
+                missingChildMember with
+                {
+                    Session = missingChildMember.Session with
+                    {
+                        SessionId = "missing-" + Guid.NewGuid().ToString("N")
+                    }
+                })
+        };
+        var encodedManifest = ChildCheckpointRecoveryManifestCodec.Encode(changedManifest);
+        var updatedRecovery = storedRecovery with
+        {
+            CheckpointRecovery = storedRecovery.CheckpointRecovery! with
+            {
+                ChildManifestSha256 = encodedManifest.Sha256
+            }
+        };
+        var changedProgress = JsonNode.Parse(recoveryProgressJson)!.AsObject();
+        changedProgress["childManifest"] = encodedManifest.Json;
+        changedProgress["childManifestSha256"] = encodedManifest.Sha256;
+        await using (var updateConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var update = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_execution_operations
+            SET result = @result, progress = @progress
+            WHERE project_id = @project AND run_id = @run AND operation_id = @operation
+            """, updateConnection))
+        {
+            update.Parameters.AddWithValue(
+                "result", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(updatedRecovery, ChildRecoveryJsonOptions));
+            update.Parameters.AddWithValue(
+                "progress", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(changedProgress, ChildRecoveryJsonOptions));
+            update.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            update.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            update.Parameters.AddWithValue("operation", recovered.OperationId);
+            Assert.Equal(1, await update.ExecuteNonQueryAsync());
+        }
+
+        var missingRecoveryChild = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor,
+                _binding.Identity,
+                _selection,
+                new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+                CancellationToken.None));
+        Assert.Equal("execution_plan_unavailable", missingRecoveryChild.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, missingRecoveryChild.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExecutionPlanReadReturnsCompleteCurrentStateAndRejectsStaleBindingsWithoutWrites()
+    {
+        var fixture = await PrepareChildRecoveryAsync();
+        var checkpoints = new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null);
+        var before = await ReadExecutionPlanStateCountsAsync();
+
+        var snapshot = await fixture.Owner.ReadExecutionPlanAsync(
+            _actor, _binding.Identity, _selection, checkpoints, CancellationToken.None);
+
+        Assert.Equal(_binding.Identity, snapshot.Session);
+        Assert.Equal(CoordinationOwnerStore.HashSelection(_selection.Selection), snapshot.AcceptedSelectionHash);
+        Assert.Equal(fixture.Plan.Id, snapshot.WorkPlan.Plan.Id);
+        Assert.Equal(fixture.Source.Info.CheckpointId, snapshot.Checkpoint?.CheckpointId);
+        var child = Assert.Single(snapshot.Children);
+        Assert.Equal(fixture.Child.SessionId, child.SessionId);
+        Assert.Equal(fixture.Plan.Items.Single().Id, child.WorkPlanItemId);
+        Assert.Equal(fixture.Dispatch.MessageId, child.DispatchMessageId);
+        Assert.Single(snapshot.Checkpoint!.Progress.PendingDispatches);
+        Assert.Null(snapshot.Recovery);
+
+        var wrongActor = _actor with { Subject = Guid.NewGuid().ToString("D") };
+        var denied = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                wrongActor, _binding.Identity, _selection, checkpoints, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, denied.StatusCode);
+
+        var wrongRun = new SessionIdentity(
+            _binding.Identity.ProjectId, Guid.NewGuid().ToString("D"), _binding.Identity.SessionId);
+        var runMismatch = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor, wrongRun, _selection, checkpoints, CancellationToken.None));
+        Assert.Equal("execution_plan_unavailable", runMismatch.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, runMismatch.StatusCode);
+
+        var staleSelection = _selection with
+        {
+            Selection = _selection.Selection with
+            {
+                ContextRevision = _selection.Selection.ContextRevision + 1
+            }
+        };
+        var stale = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor, _binding.Identity, staleSelection, checkpoints, CancellationToken.None));
+        Assert.Equal("coordinator_sandbox_binding_stale", stale.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, stale.StatusCode);
+
+        Assert.Equal(before, await ReadExecutionPlanStateCountsAsync());
+    }
+
+    [Fact]
+    public async Task ExecutionPlanReadRejectsCheckpointChildReferenceWithoutRegisteredChild()
+    {
+        var fixture = await PrepareChildRecoveryAsync();
+        var currentDecision = await fixture.Decisions.ReadCurrentAsync(
+            _actor, _binding.Identity, _selection, CancellationToken.None);
+        var workflow = currentDecision.State.SelectedWorkflow!;
+        var secondItem = fixture.Plan.Items[0] with
+        {
+            Id = "second",
+            Title = "Second work item",
+            Task = "Implement the second work item.",
+            DeclaredOutputs = ["src/second.cs"]
+        };
+        var expandedPlan = fixture.Plan with
+        {
+            Items = fixture.Plan.Items.Add(secondItem)
+        };
+        var expandedPlanResult = WorkPlanValidator.ValidateAndSnapshot(
+            workflow,
+            expandedPlan,
+            _reviewSelectionContext);
+        Assert.True(expandedPlanResult.IsValid);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var addPlanItem = new NpgsqlCommand($"""
+            WITH latest AS (
+                SELECT *
+                FROM "{_schema}".coordinator_decisions
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                  AND decision -> 'envelope' -> 'confirmedWorkPlan' IS NOT NULL
+                ORDER BY state_version DESC
+                LIMIT 1
+            )
+            INSERT INTO "{_schema}".coordinator_decisions (
+                project_id, run_id, session_id, request_id, decision_id, actor_issuer,
+                actor_subject, execution_fence, state_version, action_kind, idempotency_key,
+                command_hash, decision_state, decision)
+            SELECT latest.project_id, latest.run_id, latest.session_id, @request_id, @decision_id,
+                latest.actor_issuer, latest.actor_subject, latest.execution_fence,
+                latest.state_version + 1, latest.action_kind, @idempotency_key,
+                @command_hash, latest.decision_state,
+                jsonb_set(
+                    latest.decision,
+                    ARRAY['envelope', 'confirmedWorkPlan', 'items']::text[],
+                    latest.decision->'envelope'->'confirmedWorkPlan'->'items' || @item)
+            FROM latest
+            """, connection))
+        {
+            addPlanItem.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            addPlanItem.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            addPlanItem.Parameters.AddWithValue("session", _binding.Identity.SessionId);
+            addPlanItem.Parameters.AddWithValue("request_id", "missing-child-plan");
+            addPlanItem.Parameters.AddWithValue("decision_id", Guid.NewGuid());
+            addPlanItem.Parameters.AddWithValue(
+                "idempotency_key", "missing-child-plan-" + Guid.NewGuid().ToString("N"));
+            addPlanItem.Parameters.AddWithValue("command_hash", new string('0', 64));
+            addPlanItem.Parameters.AddWithValue(
+                "item", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(secondItem, ChildRecoveryJsonOptions));
+            Assert.Equal(1, await addPlanItem.ExecuteNonQueryAsync());
+        }
+
+        var stateWithMissingResult = fixture.Source.State with
+        {
+            Results = fixture.Source.State.Results.Add("second", "Second work item is complete.")
+        };
+        var checkpointPayload = MafExecutionCheckpointContract.Serialize(stateWithMissingResult).GetRawText();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var replaceCheckpoint = new NpgsqlCommand($"""
+            WITH removed AS (
+                DELETE FROM "{_schema}".maf_workflow_checkpoints
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                  AND checkpoint_id = @checkpoint
+                RETURNING project_id, run_id, session_id, store_name, checkpoint_id,
+                    parent_checkpoint_id, has_parent_metadata, cache_object_key, cache_sdk_version,
+                    pinned_model_reference, accepted_selection_hash, execution_fence
+            )
+            INSERT INTO "{_schema}".maf_workflow_checkpoints (
+                project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                has_parent_metadata, payload, cache_object_key, cache_sdk_version,
+                pinned_model_reference, accepted_selection_hash, execution_fence)
+            SELECT project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                has_parent_metadata, @payload, cache_object_key, cache_sdk_version,
+                pinned_model_reference, accepted_selection_hash, execution_fence
+            FROM removed
+            """, connection))
+        {
+            replaceCheckpoint.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            replaceCheckpoint.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            replaceCheckpoint.Parameters.AddWithValue("session", _binding.Identity.SessionId);
+            replaceCheckpoint.Parameters.AddWithValue("checkpoint", fixture.Source.Info.CheckpointId);
+            replaceCheckpoint.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, checkpointPayload);
+            Assert.Equal(1, await replaceCheckpoint.ExecuteNonQueryAsync());
+        }
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor,
+                _binding.Identity,
+                _selection,
+                new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+                CancellationToken.None));
+
+        Assert.Equal("execution_plan_unavailable", error.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExecutionPlanReadRejectsCheckpointWithDifferentAcceptedSelectionHash()
+    {
+        var fixture = await PrepareChildRecoveryAsync();
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var invalidSelectionHash = new string('f', 64);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var corrupt = new NpgsqlCommand($"""
+            WITH removed AS (
+                DELETE FROM "{_schema}".maf_workflow_checkpoints
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                  AND checkpoint_id = @checkpoint
+                RETURNING project_id, run_id, session_id, store_name, checkpoint_id,
+                    parent_checkpoint_id, has_parent_metadata, payload, cache_object_key,
+                    cache_sdk_version, pinned_model_reference, execution_fence
+            )
+            INSERT INTO "{_schema}".maf_workflow_checkpoints (
+                project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                has_parent_metadata, payload, cache_object_key, cache_sdk_version,
+                pinned_model_reference, accepted_selection_hash, execution_fence)
+            SELECT project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                has_parent_metadata, payload, cache_object_key, cache_sdk_version,
+                pinned_model_reference, @invalid, execution_fence
+            FROM removed
+            """, connection))
+        {
+            corrupt.Parameters.AddWithValue("invalid", NpgsqlDbType.Char, invalidSelectionHash);
+            corrupt.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            corrupt.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            corrupt.Parameters.AddWithValue("session", _binding.Identity.SessionId);
+            corrupt.Parameters.AddWithValue("checkpoint", fixture.Source.Info.CheckpointId);
+            Assert.Equal(1, await corrupt.ExecuteNonQueryAsync());
+        }
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor,
+                _binding.Identity,
+                _selection,
+                new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+                CancellationToken.None));
+
+        Assert.Equal("execution_plan_unavailable", error.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, error.StatusCode);
+        Assert.NotEqual(selectionHash, invalidSelectionHash);
+    }
+
+    [Fact]
+    public async Task ExecutionPlanReadMapsInvalidCheckpointDataToUnavailable()
+    {
+        var fixture = await PrepareChildRecoveryAsync();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var corrupt = new NpgsqlCommand($"""
+            WITH removed AS (
+                DELETE FROM "{_schema}".maf_workflow_checkpoints
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                  AND checkpoint_id = @checkpoint
+                RETURNING project_id, run_id, session_id, store_name, checkpoint_id,
+                    parent_checkpoint_id, has_parent_metadata, cache_object_key, cache_sdk_version,
+                    pinned_model_reference, accepted_selection_hash, execution_fence
+            )
+            INSERT INTO "{_schema}".maf_workflow_checkpoints (
+                project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                has_parent_metadata, payload, cache_object_key, cache_sdk_version,
+                pinned_model_reference, accepted_selection_hash, execution_fence)
+            SELECT project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                has_parent_metadata, jsonb_build_object(), cache_object_key, cache_sdk_version,
+                pinned_model_reference, accepted_selection_hash, execution_fence
+            FROM removed
+            """, connection))
+        {
+            corrupt.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            corrupt.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            corrupt.Parameters.AddWithValue("session", _binding.Identity.SessionId);
+            corrupt.Parameters.AddWithValue("checkpoint", fixture.Source.Info.CheckpointId);
+            Assert.Equal(1, await corrupt.ExecuteNonQueryAsync());
+        }
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor,
+                _binding.Identity,
+                _selection,
+                new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+                CancellationToken.None));
+
+        Assert.Equal("execution_plan_unavailable", error.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExecutionPlanReadMapsOverLimitPersistedPlanToUnavailable()
+    {
+        var fixture = await PrepareChildRecoveryAsync();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var corrupt = new NpgsqlCommand($"""
+            WITH latest AS (
+                SELECT *
+                FROM "{_schema}".coordinator_decisions
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                  AND decision -> 'envelope' -> 'confirmedWorkPlan' IS NOT NULL
+                ORDER BY state_version DESC
+                LIMIT 1
+            ),
+            expanded AS (
+                SELECT jsonb_agg(
+                    latest.decision->'envelope'->'confirmedWorkPlan'->'items'->0) AS items
+                FROM latest CROSS JOIN generate_series(1, @item_count)
+            )
+            INSERT INTO "{_schema}".coordinator_decisions (
+                project_id, run_id, session_id, request_id, decision_id, actor_issuer,
+                actor_subject, execution_fence, state_version, action_kind, idempotency_key,
+                command_hash, decision_state, decision)
+            SELECT latest.project_id, latest.run_id, latest.session_id, @request_id, @decision_id,
+                latest.actor_issuer, latest.actor_subject, latest.execution_fence,
+                latest.state_version + 1, latest.action_kind, @idempotency_key,
+                @command_hash, latest.decision_state,
+                jsonb_set(
+                    latest.decision,
+                    ARRAY['envelope', 'confirmedWorkPlan', 'items']::text[],
+                    expanded.items)
+            FROM latest CROSS JOIN expanded
+            """, connection))
+        {
+            corrupt.Parameters.AddWithValue("request_id", "over-limit-plan");
+            corrupt.Parameters.AddWithValue("decision_id", Guid.NewGuid());
+            corrupt.Parameters.AddWithValue("idempotency_key", "over-limit-plan-" + Guid.NewGuid().ToString("N"));
+            corrupt.Parameters.AddWithValue("command_hash", new string('0', 64));
+            corrupt.Parameters.AddWithValue(
+                "item_count", WorkflowDomainLimits.MaximumWorkItems + 1);
+            corrupt.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            corrupt.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            corrupt.Parameters.AddWithValue("session", _binding.Identity.SessionId);
+            Assert.Equal(1, await corrupt.ExecuteNonQueryAsync());
+        }
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor,
+                _binding.Identity,
+                _selection,
+                new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+                CancellationToken.None));
+
+        Assert.Equal("execution_plan_unavailable", error.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExecutionPlanReadRejectsDuplicateChildAssociations()
+    {
+        var fixture = await PrepareChildRecoveryAsync();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_sessions
+                (project_id, run_id, session_id, parent_session_id, root_session_id,
+                 node_kind, writer_issuer, writer_subject, execution_fence, work_plan_item_id)
+            VALUES (@project, @run, 'zz-duplicate-association-child', @root, @root,
+                    'child_work', @issuer, @subject, @fence, @item)
+            """, connection))
+        {
+            insert.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+            insert.Parameters.AddWithValue("run", _binding.Identity.RunId);
+            insert.Parameters.AddWithValue("root", _binding.Identity.SessionId);
+            insert.Parameters.AddWithValue("issuer", _actor.Issuer);
+            insert.Parameters.AddWithValue("subject", _actor.Subject);
+            insert.Parameters.AddWithValue("fence", _binding.ExecutionFence);
+            insert.Parameters.AddWithValue("item", fixture.Plan.Items.Single().Id);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ReadExecutionPlanAsync(
+                _actor,
+                _binding.Identity,
+                _selection,
+                new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+                CancellationToken.None));
+
+        Assert.Equal("execution_plan_unavailable", error.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, error.StatusCode);
     }
 
     [Fact]
@@ -2713,6 +3171,25 @@ public sealed partial class MafCheckpointStorePostgresTests
         return new ChildRecoveryFixture(
             owner, decisions, spawned.Node.Identity, childIntent, plan.Plan, source, request,
             registration, dispatch, prompt, CompletedUnjoinedResult, nativeAdmission);
+    }
+
+    private async Task<(long Decisions, long Checkpoints, long Outbox, long RootVersion)>
+        ReadExecutionPlanStateCountsAsync()
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".coordinator_decisions),
+                   (SELECT count(*) FROM "{_schema}".maf_workflow_checkpoints),
+                   (SELECT count(*) FROM "{_schema}".outbox_events),
+                   (SELECT state_version FROM "{_schema}".coordination_sessions
+                    WHERE project_id = @project AND run_id = @run AND session_id = @root)
+            """, connection);
+        command.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+        command.Parameters.AddWithValue("run", _binding.Identity.RunId);
+        command.Parameters.AddWithValue("root", _binding.Identity.SessionId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
     }
 
     private async Task<NativeAdmissionFixture> PrepareChildNativeAsync(

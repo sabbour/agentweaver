@@ -95,7 +95,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     [Fact]
     public Task CopilotConnectionRotationPreservesAcceptedSelectionThroughNativeSdkAccounting() =>
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
-            false, null, false, OwnerRunFailureState.Indeterminate);
+            false, null, false, OwnerRunFailureState.Indeterminate,
+            executionPlanHttpRegressions: true);
 
     [Theory]
     [InlineData(true, null)]
@@ -263,7 +264,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         int? configuredMaxPromptTokens = null,
         decimal? copilotHardCreditLimit = null,
         bool enableHostedCopilotRunAdmission = false,
-        bool reserveObservedToolInvocation = false)
+        bool reserveObservedToolInvocation = false,
+        bool executionPlanHttpRegressions = false)
     {
         if (enableHostedCopilotRunAdmission && (azureByok || copilotHardCreditLimit is null))
             throw new ArgumentException(
@@ -2523,6 +2525,29 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Equal(13, restoredGateResult.StateVersion);
                 Assert.Null(restoredGateResult.PendingGate);
             }
+
+            var effectsBeforeExecutionPlanRead = await ReadOwnerEffectCountsAsync(
+                _connectionString, ownerSchema, project.ProjectId);
+            using (var executionPlanResponse = await SendAsync(
+                       restoredOrchestrator,
+                       HttpMethod.Get,
+                       $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/execution-plan",
+                       runToken,
+                       [TenantId]))
+            {
+                Assert.Equal(HttpStatusCode.OK, executionPlanResponse.StatusCode);
+                Assert.True(executionPlanResponse.Headers.CacheControl?.NoStore);
+                var executionPlan = await ReadJsonAsync<JsonElement>(executionPlanResponse);
+                Assert.Equal(
+                    acceptedPlan.Id,
+                    executionPlan.GetProperty("workPlan").GetProperty("plan").GetProperty("id").GetString());
+                Assert.Equal(13, executionPlan.GetProperty("decisionStateVersion").GetInt64());
+                Assert.Empty(executionPlan.GetProperty("children").EnumerateArray());
+                Assert.Equal(JsonValueKind.Null, executionPlan.GetProperty("checkpoint").ValueKind);
+            }
+            Assert.Equal(
+                effectsBeforeExecutionPlanRead,
+                await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
 
             using var assemblyRequest = await SendJsonAsync(
                 restoredOrchestrator,
@@ -5132,6 +5157,158 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runToken,
             [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, revokedReceiptRead.StatusCode);
+
+        if (executionPlanHttpRegressions)
+        {
+            var executionPlanPath =
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/execution-plan";
+            using (var roleDenied = await SendAsync(
+                       orchestrator, HttpMethod.Get, executionPlanPath, runToken, [TenantId]))
+                Assert.Equal(HttpStatusCode.Forbidden, roleDenied.StatusCode);
+
+            runnerRole = await AssignRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerMembership.MembershipId,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                ProjectAuthorityRole.Orchestrator);
+            using (var runDenied = await SendAsync(
+                       orchestrator,
+                       HttpMethod.Get,
+                       $"/api/projects/{project.ProjectId}/runs/{Guid.NewGuid():D}/coordination/sessions/root/execution-plan",
+                       runToken,
+                       [TenantId]))
+                Assert.Equal(HttpStatusCode.Forbidden, runDenied.StatusCode);
+
+            var staleSelectionPause = new RuntimeOwnerContextSelectionPause();
+            await using (var staleSelectionFactory = new OrchestratorIntegrationFactory(
+                             _connectionString,
+                             ownerSchema,
+                             signingKey,
+                             () => new RuntimeOwnerContextSelectionBarrierHandler(
+                                 projects.CreateHandler(), staleSelectionPause),
+                             () => eventsFactory.Server.CreateHandler(),
+                             cacheObjectStore,
+                             sandboxProvider,
+                             providerCatalog: CreateSourceControlProviderCatalog()))
+            using (var staleSelectionClient = staleSelectionFactory.CreateClient(
+                       new WebApplicationFactoryClientOptions
+                       {
+                           BaseAddress = new Uri("https://orchestrator.test")
+                       }))
+            {
+                var staleSelectionRequest = SendAsync(
+                    staleSelectionClient, HttpMethod.Get, executionPlanPath, runToken, [TenantId]);
+                try
+                {
+                    await staleSelectionPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                    await RevokeRoleAsync(
+                        projects.PrivilegedFixtureDataSource,
+                        runnerRole.AssignmentId,
+                        runnerRole.Revision);
+                    runnerRole = await AssignRoleAsync(
+                        projects.PrivilegedFixtureDataSource,
+                        runnerMembership.MembershipId,
+                        ProjectAuthorityResourceType.Project,
+                        project.ProjectId,
+                        ProjectAuthorityRole.Orchestrator);
+                }
+                finally
+                {
+                    staleSelectionPause.Release();
+                }
+
+                using var staleSelectionResponse = await staleSelectionRequest.WaitAsync(TimeSpan.FromSeconds(30));
+                Assert.Equal(HttpStatusCode.Conflict, staleSelectionResponse.StatusCode);
+                using var staleSelectionBody = JsonDocument.Parse(
+                    await staleSelectionResponse.Content.ReadAsStringAsync());
+                Assert.Equal(
+                    "execution_plan_unavailable",
+                    staleSelectionBody.RootElement.GetProperty("error").GetString());
+            }
+
+            var authorityLossPause = new RuntimeOwnerContextSelectionPause();
+            await using (var authorityLossFactory = new OrchestratorIntegrationFactory(
+                             _connectionString,
+                             ownerSchema,
+                             signingKey,
+                             () => new RuntimeOwnerContextSelectionBarrierHandler(
+                                 projects.CreateHandler(), authorityLossPause),
+                             () => eventsFactory.Server.CreateHandler(),
+                             cacheObjectStore,
+                             sandboxProvider,
+                             providerCatalog: CreateSourceControlProviderCatalog()))
+            using (var authorityLossClient = authorityLossFactory.CreateClient(
+                       new WebApplicationFactoryClientOptions
+                       {
+                           BaseAddress = new Uri("https://orchestrator.test")
+                       }))
+            {
+                var authorityLossRequest = SendAsync(
+                    authorityLossClient, HttpMethod.Get, executionPlanPath, runToken, [TenantId]);
+                var roleRevoked = false;
+                try
+                {
+                    await authorityLossPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                    await RevokeRoleAsync(
+                        projects.PrivilegedFixtureDataSource,
+                        runnerRole.AssignmentId,
+                        runnerRole.Revision);
+                    roleRevoked = true;
+                }
+                finally
+                {
+                    authorityLossPause.Release();
+                }
+
+                try
+                {
+                    using var authorityLostResponse =
+                        await authorityLossRequest.WaitAsync(TimeSpan.FromSeconds(30));
+                    Assert.Equal(HttpStatusCode.Forbidden, authorityLostResponse.StatusCode);
+                }
+                finally
+                {
+                    if (roleRevoked)
+                        runnerRole = await AssignRoleAsync(
+                            projects.PrivilegedFixtureDataSource,
+                            runnerMembership.MembershipId,
+                            ProjectAuthorityResourceType.Project,
+                            project.ProjectId,
+                            ProjectAuthorityRole.Orchestrator);
+                }
+            }
+
+            await using (var database = NpgsqlDataSource.Create(_connectionString))
+            await using (var connection = await database.OpenConnectionAsync())
+            await using (var insert = new NpgsqlCommand($"""
+                INSERT INTO "{ownerSchema}".coordination_sessions
+                    (project_id, run_id, session_id, parent_session_id, root_session_id,
+                     node_kind, writer_issuer, writer_subject, execution_fence, work_plan_item_id)
+                SELECT @project, @run, 'r1a-limit-child-' || child_number::text,
+                       'root', 'root', 'child_work', @issuer, @subject, accepted.execution_fence, NULL
+                FROM generate_series(1, 513) child_number
+                JOIN "{ownerSchema}".accepted_runs accepted
+                  ON accepted.project_id = @project AND accepted.run_id = @run
+                """, connection))
+            {
+                insert.Parameters.AddWithValue("project", project.ProjectId);
+                insert.Parameters.AddWithValue("run", RunId);
+                insert.Parameters.AddWithValue("issuer", SingleClaim(claims, "iss"));
+                insert.Parameters.AddWithValue("subject", currentRunnerSubject);
+                Assert.Equal(513, await insert.ExecuteNonQueryAsync());
+            }
+
+            using (var tooManyChildren = await SendAsync(
+                       orchestrator, HttpMethod.Get, executionPlanPath, runToken, [TenantId]))
+            {
+                Assert.Equal(HttpStatusCode.Conflict, tooManyChildren.StatusCode);
+                using var body = JsonDocument.Parse(await tooManyChildren.Content.ReadAsStringAsync());
+                Assert.Equal(
+                    "execution_plan_unavailable",
+                    body.RootElement.GetProperty("error").GetString());
+            }
+        }
     }
 
     private static AgtPolicyProviderOptions ReceiptPolicyOptions() =>

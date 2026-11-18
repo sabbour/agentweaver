@@ -22,6 +22,24 @@ public sealed class GatewayWorkspaceReadRegressionTests
     private const string SelectionCode = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     [Fact]
+    public void ExecutionPlanRouteForwardsNoStoreAndUsesTheOwnerResponseLimit()
+    {
+        var route = Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "readExecutionPlan");
+
+        Assert.Equal("GET", route.Method);
+        Assert.Equal(
+            "/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/execution-plan",
+            route.PublicPath);
+        Assert.Equal(
+            "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/execution-plan",
+            route.OwnerPath);
+        Assert.Equal(GatewayOwner.Orchestrator, route.Owner);
+        Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
+        Assert.Equal(8 * 1024 * 1024, route.MaximumResponseBytes);
+    }
+
+    [Fact]
     public void PlatformPolicyRoutesAreBoundedAndExcludedFromMcp()
     {
         var routes = new[]

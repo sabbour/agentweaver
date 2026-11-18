@@ -381,13 +381,27 @@ internal sealed class CoordinatorDecisionOwnerStore
         AuthorizedRunSelection selection,
         CancellationToken cancellationToken)
     {
-        ValidateInput(actor, identity, selection);
-        var currentSelectionHash = HashSelection(selection.Selection);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return await ReadCurrentInTransactionAsync(
+            connection, null, actor, identity, selection, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<CoordinatorDecisionCurrentState> ReadCurrentInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        CancellationToken cancellationToken)
+    {
+        ValidateInput(actor, identity, selection);
+        if (transaction is not null && !ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        var currentSelectionHash = HashSelection(selection.Selection);
         OwnerBinding binding;
         await using (var command = CreateOwnerBindingCommand(
                          connection,
-                         transaction: null,
+                         transaction,
                          actor,
                          identity,
                          selection.Authorization.TenantId,
@@ -401,13 +415,14 @@ internal sealed class CoordinatorDecisionOwnerStore
                 reader, currentSelectionHash, selection.Authorization.TenantId);
         }
         var latest = await ReadLatestDecisionAsync(
-            connection, transaction: null, identity, cancellationToken).ConfigureAwait(false);
+            connection, transaction, identity, cancellationToken).ConfigureAwait(false);
         var expectedBinding = CoordinatorDecisionBinding.Create(
             actor, identity, selection, binding.RunFence);
         var current = await RehydrateCurrentAsync(
-            expectedBinding, latest, selection.Selection, cancellationToken).ConfigureAwait(false);
+            expectedBinding, latest, selection.Selection, cancellationToken,
+            connection, transaction).ConfigureAwait(false);
         await ValidatePendingGateRowsAsync(
-            connection, identity, actor, current, cancellationToken).ConfigureAwait(false);
+            connection, transaction, identity, actor, current, cancellationToken).ConfigureAwait(false);
         return current;
     }
 
@@ -1564,6 +1579,7 @@ internal sealed class CoordinatorDecisionOwnerStore
     /// </summary>
     private async Task ValidatePendingGateRowsAsync(
         NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
         SessionIdentity identity,
         CoordinationActor actor,
         CoordinatorDecisionCurrentState current,
@@ -1575,7 +1591,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             FROM {_gates}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
               AND gate_state = 'pending'
-            """, connection);
+            """, connection, transaction);
         AddIdentity(command, identity);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         CoordinatorGateRequest? persistedGate = null;
@@ -1644,7 +1660,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         CoordinatorDecisionBinding expectedBinding,
         CoordinatorDecisionPersistedRecord? latest,
         EffectiveRunSelection selection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction)
     {
         if (latest is null)
             return new CoordinatorDecisionCurrentState(
@@ -1652,7 +1670,9 @@ internal sealed class CoordinatorDecisionOwnerStore
                 0,
                 expectedBinding.AcceptedSelectionHash);
         var restored = await RestoreEnvelopeAsync(
-            latest.Envelope, expectedBinding, selection, cancellationToken).ConfigureAwait(false);
+            latest.Envelope, expectedBinding, selection, cancellationToken,
+            selectionContextConnection: connection,
+            selectionContextTransaction: transaction).ConfigureAwait(false);
         if (!restored.IsValid ||
             restored.State!.Fence != expectedBinding.Fence ||
             latest.StateVersion < 1)
@@ -1671,16 +1691,25 @@ internal sealed class CoordinatorDecisionOwnerStore
         CoordinatorDecisionBinding expectedBinding,
         EffectiveRunSelection selection,
         CancellationToken cancellationToken,
-        WorkPlanRunSelectionContext? preparedSelectionContext = null)
+        WorkPlanRunSelectionContext? preparedSelectionContext = null,
+        NpgsqlConnection? selectionContextConnection = null,
+        NpgsqlTransaction? selectionContextTransaction = null)
     {
         var requiresBinding = envelope.ConfirmedSelectionContext?.IsolationProviderBinding is not null ||
                               envelope.CandidateSelectionContext?.IsolationProviderBinding is not null;
         if (!requiresBinding)
             return envelope.Restore(expectedBinding);
 
-        var trustedContext = preparedSelectionContext ??
-                             await _runSelectionContexts.ReadAsync(
-                                 selection, expectedBinding.Fence, cancellationToken).ConfigureAwait(false);
+        var trustedContext = preparedSelectionContext;
+        if (trustedContext is null)
+        {
+            trustedContext = selectionContextConnection is null
+                ? await _runSelectionContexts.ReadAsync(
+                    selection, expectedBinding.Fence, cancellationToken).ConfigureAwait(false)
+                : await _runSelectionContexts.ReadInTransactionAsync(
+                    selectionContextConnection, selectionContextTransaction,
+                    selection, expectedBinding.Fence, cancellationToken).ConfigureAwait(false);
+        }
         var trustedBinding = trustedContext?.IsolationProviderBinding;
         if (trustedContext is null || trustedBinding is null ||
             !MatchesSelectionContext(envelope.ConfirmedSelectionContext, trustedContext, expectedBinding.RunId) ||

@@ -644,6 +644,16 @@ receipt, or failed join does not produce task-completion evidence. See
 [dispatch completion and startup readback](../reference/api.md#dispatch-completion-and-startup-readback)
 for response fields and limits.
 
+The read-only `GET /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/execution-plan`
+route returns the current confirmed plan, latest checkpoint progress, direct
+child bindings, and selected recovery state. Orchestrator reads these records
+in one repeatable-read transaction and rechecks the owner root and execution
+fence before it commits that read. It then rechecks current Projects authority
+before it returns the response. The response uses `Cache-Control: no-store`,
+has an 8 MiB limit, and contains hashes and identifiers rather than child
+result text, credentials, or bootstrap material. The owner returns
+`409 execution_plan_unavailable` when it cannot provide the complete projection.
+
 ### Promote a plan into backlog tasks
 
 Instead of dispatching a confirmed plan, the run owner can promote it into

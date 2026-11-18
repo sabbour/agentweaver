@@ -1259,6 +1259,7 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/actions/dispatch` | Dispatch an accepted MAF checkpoint through configured owner integrations. | Yes |
 | POST | `/sessions/{sessionId}/actions/request_assembly` | Request assembly. | Yes |
 | GET | `/sessions/{sessionId}/decisions` | Read current decision state. | Yes |
+| GET | `/sessions/{sessionId}/execution-plan` | Read the saved plan, checkpoint progress, direct child bindings, and selected recovery state. | Yes |
 | GET | `/sessions/{sessionId}/tree` | Read session tree. | Yes |
 | GET | `/sessions/{sessionId}/status` | Read activity, lifecycle, and blockers. | Yes |
 | GET | `/sessions/{sessionId}/runtime-observation/v1` | Read current runtime evidence; native registration is conditional. | Yes |
@@ -1291,6 +1292,19 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}/workspace-capture/verify` | Verify produced Workspace capture. | No |
 | POST | `/sessions/{sessionId}/suspend` | Request fenced suspend. | No |
 | POST | `/sessions/{sessionId}/resume` | Request retained-Workspace resume. | No |
+
+`GET /sessions/{sessionId}/execution-plan` requires the current coordinator
+root, a confirmed plan, and current Projects authority for the accepted run
+selection. It returns the full saved plan and bounded owner projections of the
+latest checkpoint, direct child startup bindings, and selected child-join
+recovery state. The response includes hashes and identifiers, not child result
+text, credentials, or bootstrap material. Orchestrator rechecks the owner root
+and execution fence in its repeatable-read transaction, then rechecks Projects
+authority before it returns the response. The owner returns
+`Cache-Control: no-store`; responses are limited to 8 MiB and are never
+truncated. A missing confirmed plan returns `404`. Invalid or over-limit plan,
+checkpoint, child, or recovery data returns `409 execution_plan_unavailable`.
+Stale selection keeps its existing `409` response.
 
 `GET /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v2`
 requires current Coordination authority and rechecks the accepted selection,
