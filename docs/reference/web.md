@@ -20,16 +20,17 @@ Paths in this table are relative to `apps/web`.
 | `src/main.tsx` | React mount, Strict Mode, and top-level render error boundary. |
 | `src/App.tsx` | Stable entry that exports `src/v1/App.tsx`. |
 | `src/v1/App.tsx` | Authentication gates, shell, routes, project/configuration/Knowledge pages, Platform Policies, and run tabs. |
-| `src/v1/AuthContext.tsx` | In-memory sessions, exact-run authorization, isolated unbound Platform Policy reads, refresh, and current tenant context. |
-| `src/v1/authProtocol.ts` | PKCE, state and callback validation, consent, and Broker token requests. |
+| `src/v1/AuthContext.tsx` | In-memory sessions, exact project and run authorization, isolated unbound Platform Policy reads, refresh, and current tenant context. |
+| `src/v1/authProtocol.ts` | PKCE, state and callback validation, consent, project/run selectors, and Broker scope selection. |
 | `src/v1/config.ts` | Runtime and build-time configuration. |
-| `src/v1/api.ts` | Gateway HTTP client, structured errors, explicit-tenant Platform Policy reads with response bounds, header forwarding, and server-sent events (SSE) parsing. |
-| `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including the project issue and pull request list pages used by the Priority picker. |
+| `src/v1/api.ts` | Gateway HTTP client, structured errors, project BYOK Draft operations, explicit-tenant Platform Policy reads with response bounds, header forwarding, and server-sent events (SSE) parsing. |
+| `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including project BYOK Draft contracts and the project issue and pull request list pages used by the Priority picker. |
 | `src/v1/platformPolicyContracts.ts` | Bounds and validates Platform Policy history, revision metadata, UTF-8 manifest bytes, and source files. |
 | `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only saved history and source. |
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client, callback messages, and the actionable setup message for `github_repo_app_not_configured`. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
+| `src/v1/ProjectModelProviderDrafts.tsx` | Project Settings > Connections provider Draft list, detail, and metadata editor. |
 | `src/v1/SkillsMarketplacePanel.tsx` | Suggested marketplaces, marketplace sources, **Add skill**, folder, file, and ZIP upload through the package route, preview, import, inventory with **Remove skill** (revision revoke), and assignment. |
 | `src/v1/OperationsPages.tsx` | Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster pages built from project reads, each with a note for the missing parts. |
 | `src/v1/RunOutputCaptures.tsx` | **Produced files** on the run Changes tab: saved file sets and their patches. |
@@ -151,8 +152,10 @@ The checked-in runtime snapshot uses the public Broker client
 `openid profile email api.read offline_access projects.admin projects.orchestrator`.
 `IdentityBroker__WebOrigin` configures the exact Portal
 origin for credentialed OAuth CORS; `Gateway__WebOrigin` is a separate setting.
-For project/run-bound requests, Web omits `projects.admin`, which the Broker
-does not permit with its run-bound `projects.orchestrator` authority. The
+For run-bound requests, Web omits `projects.admin`, which the Broker does not
+permit with `projects.orchestrator`. For project-only BYOK Draft requests, Web
+keeps `projects.admin`, omits `projects.orchestrator`, and sends the exact
+`project_id` without `run_id`. The
 `/auth/callback` redirect is registered on the Identity Broker client. The
 upstream Entra application remains the Broker's server-side provider and keeps
 its `/signin-oidc` callback; the Web callback is not added to that Entra
@@ -222,10 +225,24 @@ in a row. See [events](./events.md).
 7. API calls use a matching session. A recoverable `401` triggers one refresh
    attempt.
 8. `AuthContext` keeps one session per binding. `ensureSession(binding)`
-   activates a held session or requests a run-bound token with `prompt=none`.
-   It returns `false` when the Broker needs user input, and the run page then
-   shows **Sign in for this project and run**. Leaving the run page calls
-   `ensureSession(null)` to switch back to the project session.
+   activates a held session or requests a token for that exact binding with
+   `prompt=none`. It returns `false` when the Broker needs user input, and the
+   caller shows the matching sign-in action. Leaving the run page calls
+   `ensureSession(null)` to switch back to the unbound session.
+
+### Project BYOK Drafts
+
+Project Settings > Connections lists project provider Drafts and lets you read,
+create, and update their metadata. The page asks for a session bound to the
+exact project. The Broker request includes `project_id` and `projects.admin`
+without `run_id`; a run-bound or unbound session is not used for these calls.
+Projects checks current membership and the Owner or PlatformAdmin role for
+every Draft request. The binding selects a project and does not grant a role.
+
+The editor uses the returned provider `id` for later reads and updates. You can
+change the provider `name`. Create and update requests send provider metadata,
+not API keys or credential versions. The editor displays the provider state but
+does not publish credentials or activate a provider.
 
 ### Platform Policy reads
 

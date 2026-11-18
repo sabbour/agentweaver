@@ -75,6 +75,9 @@ import type {
   KnowledgeRecordPage,
   ProjectKnowledgeRecordPage,
   ProjectAgentHistoryResponse,
+  ProjectModelProviderDraft,
+  ProjectModelProviderDraftPage,
+  ProjectModelProviderDraftSaveRequest,
   KnowledgeRecordRevisionPage,
   KnowledgeRecordTransferBundle,
   KnowledgeRecordUpdateInput,
@@ -626,6 +629,74 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
       {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Lists one page of project provider Draft metadata. */
+  listProjectByokProviderDrafts(
+    token: string,
+    projectId: string,
+    pageSize = 50,
+    afterProviderId?: string | null,
+    tenantSelector?: string | null,
+  ): Promise<ProjectModelProviderDraftPage> {
+    const query = new URLSearchParams({ pageSize: String(pageSize) });
+    if (afterProviderId) query.set('afterProviderId', afterProviderId);
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers')}?${query}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads project provider Draft metadata by its stable provider ID. */
+  getProjectByokProviderDraft(
+    token: string,
+    projectId: string,
+    providerId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectModelProviderDraft> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers', providerId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Creates a project provider Draft from metadata only. */
+  createProjectByokProviderDraft(
+    token: string,
+    projectId: string,
+    request: ProjectModelProviderDraftSaveRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectModelProviderDraft> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Updates project provider Draft metadata by its stable provider ID. */
+  updateProjectByokProviderDraft(
+    token: string,
+    projectId: string,
+    providerId: string,
+    request: ProjectModelProviderDraftSaveRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectModelProviderDraft> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers', providerId)}`,
+      { method: 'PUT', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );

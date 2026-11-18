@@ -28,8 +28,8 @@ import {
 } from './authProtocol';
 import type {
   AuthorizationCallbackMessage,
+  AuthorizationBinding,
   AuthorizationTransaction,
-  RunBinding,
 } from './authProtocol';
 import { missingAuthConfiguration } from './config';
 import type {
@@ -46,12 +46,12 @@ import type {
   PlatformPolicyValidationResult,
 } from './platformPolicyContracts';
 
-/** In-memory bearer session bound to the project/run that initiated authorization. */
+/** In-memory bearer session bound to the project scope that initiated authorization. */
 interface AuthSession {
   accessToken: string;
   refreshToken?: string;
   expiresAt: number;
-  binding: RunBinding | null;
+  binding: AuthorizationBinding | null;
   /** Display name from the ID token, or null when the Broker sent none. Shown in the persona menu. */
   displayName: string | null;
 }
@@ -87,20 +87,20 @@ interface AuthContextValue {
   consent: BrokerConsentPrompt | null;
   error: string | null;
   configurationError: string | null;
-  /** `activate` defaults to true; false stores a run session without changing the active session. */
-  authorize: (binding?: RunBinding | null, popupOverride?: Window | null, activate?: boolean) => Promise<void>;
+  /** `activate` defaults to true; false stores a project session without changing the active session. */
+  authorize: (binding?: AuthorizationBinding | null, popupOverride?: Window | null, activate?: boolean) => Promise<void>;
   /**
    * Makes a session for `binding` available without a prompt. It reuses a held session or
    * asks the Broker once with `prompt=none`. Returns false when the Broker needs the user;
    * the current session is kept in that case. `activate` makes it the page's active session.
    */
-  ensureSession: (binding: RunBinding | null, activate?: boolean) => Promise<boolean>;
+  ensureSession: (binding: AuthorizationBinding | null, activate?: boolean) => Promise<boolean>;
   resolveAuthorizationContext: (tenantSelector?: string) => Promise<ConfirmedAuthorizationContext | null>;
   decideConsent: (approve: boolean) => Promise<void>;
   signOut: () => void;
   apiCall: <T>(
     operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
-    binding?: RunBinding | null,
+    binding?: AuthorizationBinding | null,
   ) => Promise<T>;
   establishPlatformPolicyAccess: (
     tenantSelector: string,
@@ -158,30 +158,31 @@ function hasIdentityCallback(): boolean {
 }
 
 /** Map key for the session held for one binding; the unbound session uses the empty key. */
-function bindingKey(binding: RunBinding | null): string {
-  return binding ? JSON.stringify([binding.projectId, binding.runId]) : '';
+function bindingKey(binding: AuthorizationBinding | null): string {
+  return binding ? JSON.stringify([binding.projectId, binding.runId ?? null]) : '';
 }
 
 /** How a sign-in result is stored: replace all sessions, or add one and optionally activate it. */
 type SessionMode = 'replace' | 'activate' | 'store';
 
 /** True when two optional authorization requests target the same project and run. */
-function sameBinding(left: RunBinding | null, right: RunBinding | null): boolean {
+function sameBinding(left: AuthorizationBinding | null, right: AuthorizationBinding | null): boolean {
   return left?.projectId === right?.projectId && left?.runId === right?.runId;
 }
 
-/** Ensures owner-returned context is bound to exactly the requested run scope. */
+/** Ensures owner-returned context matches the requested project or project/run scope. */
 function contextMatchesBinding(
   context: ProjectAuthorizationContextResponse,
-  binding: RunBinding | null,
+  binding: AuthorizationBinding | null,
 ): boolean {
-  return binding
-    ? context.boundProjectId === binding.projectId && context.boundRunId === binding.runId
-    : context.boundProjectId === null && context.boundRunId === null;
+  if (!binding)
+    return context.boundProjectId === null && context.boundRunId === null;
+  return context.boundProjectId === binding.projectId &&
+    context.boundRunId === (binding.runId ?? null);
 }
 
 /** Starts a new PKCE transaction with fresh state and verifier for the requested scope. */
-function transactionFor(binding: RunBinding | null): AuthorizationTransaction {
+function transactionFor(binding: AuthorizationBinding | null): AuthorizationTransaction {
   return {
     state: randomState(),
     verifier: randomVerifier(),
@@ -191,7 +192,7 @@ function transactionFor(binding: RunBinding | null): AuthorizationTransaction {
 }
 
 /** Converts a Broker token response into the session state held only in memory. */
-function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null): AuthSession {
+function sessionFromToken(token: BrokerTokenResponse, binding: AuthorizationBinding | null): AuthSession {
   return {
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
@@ -220,8 +221,8 @@ interface PlatformPolicySilentAttempt {
  * Owns the v1 Broker sessions, PKCE sign-in, one-time silent restoration, consent,
  * refresh, and tenant context.
  * Access tokens stay in memory. The provider holds at most one session per binding
- * (the unbound session plus run-bound sessions); `session` is the active one. Each
- * Gateway call uses the session held for its exact project/run binding and may retry
+ * (the unbound session plus project-bound sessions); `session` is the active one. Each
+ * Gateway call uses the session held for its exact binding and may retry
  * once after a 401 using token refresh.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -246,7 +247,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const sessionRef = useRef<AuthSession | null>(null);
   // Every session the page holds, keyed by bindingKey(). The unbound session and each
-  // run-bound session live side by side, so opening a run does not sign out the user.
+  // project binding live side by side.
   const sessionsRef = useRef(new Map<string, AuthSession>());
   // Silent sign-ins in flight, keyed by binding. Callers asking for the same binding
   // share one attempt instead of opening several hidden frames.
@@ -254,10 +255,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const sessionGenerationRef = useRef(0);
   const unboundSessionGenerationRef = useRef(0);
   const authorizationContextRequestRef = useRef(0);
+  const contextBootstrapRequestGenerationRef = useRef(0);
   const authorizationContextRef = useRef<{
     value: ConfirmedAuthorizationContext;
     accessToken: string;
-    binding: RunBinding | null;
+    binding: AuthorizationBinding | null;
     sessionGeneration: number;
   } | null>(null);
   // One token refresh in flight per binding, so parallel calls do not spend the same
@@ -274,7 +276,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const policyAccessRef = useRef<PlatformPolicyAccessSnapshot | null>(null);
   const policyCandidateRef = useRef<{
     identity: PlatformPolicyIdentity;
-    binding: RunBinding | null;
+    binding: AuthorizationBinding | null;
   } | null>(null);
   const policySilentAttemptRef = useRef<PlatformPolicySilentAttempt | null>(null);
   const policySilentPromiseRef = useRef<Promise<boolean> | null>(null);
@@ -315,6 +317,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionGenerationRef.current += 1;
       setAuthSessionGeneration(sessionGenerationRef.current);
       authorizationContextRequestRef.current += 1;
+      contextBootstrapRequestGenerationRef.current = authorizationContextRequestRef.current;
       authorizationContextRef.current = null;
       policyAccessRef.current = null;
       setAuthorizationContextState(null);
@@ -350,7 +353,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(stored);
       return;
     }
-    // Sessions kept side by side belong to the same signed-in person. A run-bound token
+    // Sessions kept side by side belong to the same signed-in person. A bound token
     // without an ID token keeps the name the active session already shows.
     const next = !stored.displayName && sessionRef.current?.displayName
       ? { ...stored, displayName: sessionRef.current.displayName }
@@ -433,17 +436,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /**
    * Runs one Broker authorization. `silent` uses a hidden frame with `prompt=none`.
-   * `rebind` adds a run-bound session next to the held ones; it keeps the current
+   * `rebind` adds a bound session next to the held ones; it keeps the current
    * session and the sign-in marker when the Broker needs the user. Returns true when
    * a session was stored.
    */
   const runAuthorization = useCallback(async (
-    requestedBinding: RunBinding | null,
+    requestedBinding: AuthorizationBinding | null,
     popupOverride: Window | null | undefined,
     silent: boolean,
     rebind: SessionMode | null = null,
   ): Promise<boolean> => {
-    // Without a valid client configuration no sign-in can work. A background run-bound
+    // Without a valid client configuration no sign-in can work. A background bound
     // attempt fails quietly; a user-started attempt shows the configuration error.
     if (configurationError) {
       if (rebind) return false;
@@ -455,10 +458,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return false;
     }
     const config = defaultAuthorizationConfig();
-    // A run-bound sign-in while already signed in keeps the other sessions. A sign-in with
+    // A bound sign-in while already signed in keeps the other sessions. A sign-in with
     // no binding, or with no session yet, replaces everything.
     const mode: SessionMode = rebind ?? (requestedBinding && sessionRef.current ? 'activate' : 'replace');
-    // Background run-bound attempts do not touch the page's error, consent, or busy state,
+    // Background bound attempts do not touch the page's error, consent, or busy state,
     // so they never interrupt what the user is looking at.
     if (!rebind) {
       setError(null);
@@ -779,9 +782,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return waitForCaller(promise, attempt);
   }, [configurationError, storeSession]);
 
-  /** Interactive sign-in for the unbound session or a project/run binding. */
+  /** Interactive sign-in for the unbound session or an exact project binding. */
   const authorize = useCallback(async (
-    requestedBinding: RunBinding | null = null,
+    requestedBinding: AuthorizationBinding | null = null,
     popupOverride?: Window | null,
     activate = true,
   ) => {
@@ -789,7 +792,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [runAuthorization]);
 
   /** Returns a session for `binding`, reusing a held one or trying one silent sign-in. */
-  const ensureSession = useCallback((binding: RunBinding | null, activate = true): Promise<boolean> => {
+  const ensureSession = useCallback((binding: AuthorizationBinding | null, activate = true): Promise<boolean> => {
     const key = bindingKey(binding);
     const held = sessionsRef.current.get(key);
     // Already held: no network call. Switch to it if the caller wants it active.
@@ -834,7 +837,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
         : null;
       const response = await submitBrokerConsent(defaultAuthorizationConfig(), consent, approve);
-      // Same rule as runAuthorization: a run-bound consent keeps the sessions already held.
+      // A bound consent keeps the sessions already held.
       const mode = consentSessionModeRef.current
         ?? (transaction.binding && sessionRef.current ? 'activate' : 'replace');
       if (await consumeAuthorizationResponse(response.url, transaction, mode)) {
@@ -869,7 +872,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setError(message);
       return;
     }
-    // Losing a run-bound session only removes that run. Fall back to the unbound session
+    // Losing a bound session only removes that binding. Fall back to the unbound session
     // if the dropped one was active, and show an error only if nothing is left.
     sessionsRef.current.delete(bindingKey(current.binding));
     if (sessionRef.current === current) setActiveSession(sessionsRef.current.get('') ?? null);
@@ -957,17 +960,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const apiCall = useCallback(async <T,>(
     operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
-    requestedBinding: RunBinding | null = null,
+    requestedBinding: AuthorizationBinding | null = null,
   ): Promise<T> => {
-    // Use the session held for this exact binding, never a different one. A run-bound call
-    // must not fall back to the unbound token, and the reverse.
+    // Use the session held for this exact binding, never a different one.
     let current = sessionsRef.current.get(bindingKey(requestedBinding)) ?? null;
     if (!current) {
       throw new GatewayError(
         401,
         { code: 'unauthorized' },
         requestedBinding
-          ? 'Sign in for this exact project and run before continuing.'
+          ? requestedBinding.runId
+            ? 'Sign in for this exact project and run before continuing.'
+            : 'Sign in for this exact project before continuing.'
           : 'Sign in to continue.',
       );
     }
@@ -1015,7 +1019,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const requestIdentity: { current: {
       accessToken: string;
-      binding: RunBinding | null;
+      binding: AuthorizationBinding | null;
       sessionGeneration: number;
     } | null } = { current: null };
     try {
@@ -1291,8 +1295,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!session) return;
+    const requestGeneration = contextBootstrapRequestGenerationRef.current;
     const bootstrap = window.setTimeout(() => {
-      void resolveAuthorizationContext();
+      // A page's explicit tenant selection takes priority over this default lookup.
+      if (requestGeneration === authorizationContextRequestRef.current)
+        void resolveAuthorizationContext();
     }, 0);
     return () => window.clearTimeout(bootstrap);
   }, [resolveAuthorizationContext, session]);

@@ -20,7 +20,7 @@ understand its access boundaries.
 | Change project settings or membership | [Project configuration](./configuration.md) |
 | Read source and validate a Platform Policy draft | [Read and validate Platform Policies](../guide/read-platform-policies.md) |
 | Import or assign a Skill | [Skills and marketplace](./skills.md) |
-| Connect GitHub or Copilot | [Account connections](./connections.md) |
+| Connect GitHub or Copilot | [Project connections](./connections.md) |
 | Start or inspect a run | [Runs and sessions](./runs-sessions.md) |
 | Search or manage Memories | [Knowledge](./knowledge.md) |
 

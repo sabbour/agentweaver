@@ -63,6 +63,7 @@ import {
 import { gatewayClient, GatewayError } from './api';
 import { CopilotPopupCallbackPage, CopilotUserConnectionPanel } from './CopilotUserConnectionPanel';
 import { SkillsMarketplacePanel } from './SkillsMarketplacePanel';
+import { ProjectModelProviderDrafts } from './ProjectModelProviderDrafts';
 import { COPILOT_CALLBACK_PATH } from './copilotCallback';
 import { RemoteMcpOAuthPopupCallbackPage } from './RemoteMcpOAuthCallbackPage';
 import {
@@ -96,7 +97,7 @@ import type {
   VersionedProjectConfiguration,
   OwnerRunStatus,
 } from './contracts';
-import type { RunBinding } from './authProtocol';
+import type { AuthorizationBinding, RunBinding } from './authProtocol';
 import { useRunJournal } from './useRunJournal';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading, Panel, ProjectRoleBadge } from './pageParts';
@@ -145,7 +146,7 @@ import { AccessSection, DangerZoneSection, GeneralSection, RepositoryFields, Run
 
 /** Checks that a callback or response still refers to the selected project/run pair. */
 function isSameBinding(
-  actual: RunBinding | null | undefined,
+  actual: AuthorizationBinding | null | undefined,
   expected: RunBinding | null,
 ): boolean {
   return actual?.projectId === expected?.projectId && actual?.runId === expected?.runId;
@@ -697,7 +698,7 @@ function ProjectRepoAppConnectionPanel({
  */
 function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | 'skills' | 'agents' }) {
   const { projectId = '' } = useParams();
-  const { session, apiCall } = useAuth();
+  const { session, apiCall, authorizationContext } = useAuth();
   const [searchParams] = useSearchParams();
   // The selected settings section lives in the URL (`?section=`), so links and
   // reloads open the same section. Unknown values fall back to a default.
@@ -1060,9 +1061,14 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
             : project.error != null ? <ErrorNotice code={errorCode(project.error)}>{errorMessage(project.error)}</ErrorNotice> : <Loading />)}
           {section === 'connections' && (
             <>
-              <PageSection title="Connections" description="Connect the accounts and tools this project needs." />
+              <PageSection title="Connections" description="Connect project accounts and tools, and manage provider metadata." />
               <ProjectRepoAppConnectionPanel />
               <CopilotUserConnectionPanel projectId={projectId} />
+              <ProjectModelProviderDrafts
+                key={projectId}
+                projectId={projectId}
+                tenantSelector={authorizationContext?.tenantId}
+              />
               <RemoteMcpConnectionPanel key={requestScope} projectId={projectId} configurationRevision={currentConfiguration?.revision ?? null} />
             </>
           )}

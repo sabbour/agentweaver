@@ -37,7 +37,12 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _signingCertificate = TestSigningCertificate.Create();
         _factory = new IdentityBrokerWebApplicationFactory(connectionString, _fakeIdp,
-            signingCertificate: _signingCertificate);
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                settings["IdentityBroker__Clients__0__Scopes__5"] = "projects.admin";
+                settings["IdentityBroker__Clients__0__Scopes__6"] = "projects.orchestrator";
+            });
         _broker = _factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
@@ -99,6 +104,87 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, whoami.StatusCode);
         var body = await whoami.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("subject").GetString()));
+    }
+
+    [Fact]
+    public async Task ProjectOnlyAuthorizationIssuesExactRunlessBindingAndRefreshKeepsIt()
+    {
+        const string projectId = "project-2638";
+        const string requestedScopes = "openid profile email api.read offline_access projects.admin";
+        var (verifier, challenge) = Pkce.Create();
+        var code = await BrokerFlowDriver.AuthorizeWithConsentAsync(
+            _broker,
+            _fakeIdpClient,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            requestedScopes,
+            challenge,
+            projectId: projectId);
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            code,
+            verifier);
+
+        static void AssertProjectOnlyToken(string token, string expectedProjectId)
+        {
+            var claims = new JwtSecurityTokenHandler().ReadJwtToken(token).Claims.ToArray();
+            Assert.Equal(expectedProjectId,
+                Assert.Single(claims, claim => claim.Type == "project_id").Value);
+            Assert.DoesNotContain(claims, claim => claim.Type == "run_id");
+            var scopes = claims.Where(claim => claim.Type == "scope")
+                .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            Assert.Contains("projects.admin", scopes);
+            Assert.DoesNotContain("projects.orchestrator", scopes);
+        }
+
+        AssertProjectOnlyToken(tokens.GetProperty("access_token").GetString()!, projectId);
+        var refresh = await BrokerFlowDriver.RefreshAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            tokens.GetProperty("refresh_token").GetString()!);
+        Assert.Equal(HttpStatusCode.OK, refresh.StatusCode);
+        var refreshedTokens = await refresh.Content.ReadFromJsonAsync<JsonElement>();
+        AssertProjectOnlyToken(refreshedTokens.GetProperty("access_token").GetString()!, projectId);
+    }
+
+    [Fact]
+    public async Task ProjectOnlyAuthorizationRequiresAdminScopeAndProjectSelector()
+    {
+        var (_, challenge) = Pkce.Create();
+        var missingAdmin = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid profile email api.read offline_access",
+            challenge,
+            "S256",
+            projectId: "project-2638");
+        Assert.Equal(HttpStatusCode.BadRequest, missingAdmin.StatusCode);
+        Assert.Contains("access_denied", await missingAdmin.Content.ReadAsStringAsync());
+
+        var mixedProjectScopes = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid profile email api.read offline_access projects.admin projects.orchestrator",
+            challenge,
+            "S256",
+            projectId: "project-2638");
+        Assert.Equal(HttpStatusCode.BadRequest, mixedProjectScopes.StatusCode);
+        Assert.Contains("access_denied", await mixedProjectScopes.Content.ReadAsStringAsync());
+
+        var runWithoutProject = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid profile email api.read offline_access projects.admin",
+            challenge,
+            "S256",
+            runId: "run-2638");
+        Assert.Equal(HttpStatusCode.BadRequest, runWithoutProject.StatusCode);
+        Assert.Contains("invalid_request", await runWithoutProject.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -879,7 +965,12 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         await _factory.DisposeAsync();
 
         _factory = new IdentityBrokerWebApplicationFactory(connectionString, _fakeIdp,
-            signingCertificate: _signingCertificate);
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                settings["IdentityBroker__Clients__0__Scopes__5"] = "projects.admin";
+                settings["IdentityBroker__Clients__0__Scopes__6"] = "projects.orchestrator";
+            });
         _broker = _factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,

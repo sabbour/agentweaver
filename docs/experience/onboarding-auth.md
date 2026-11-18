@@ -42,10 +42,13 @@ does not check your current provider status.
 GitHub Copilot connects to a project. Open a project, then open **Settings** >
 **Connections** to connect Copilot or check its status. The app uses the
 project connection panel to confirm the result. See
-[Account connections](./connections.md) for the full steps.
+[project connections](./connections.md) for the full steps.
 
-The v1 web app does not provide BYOK setup yet. The guide does not claim that a
-BYOK connection exists.
+To manage project BYOK provider drafts, open **Project settings** >
+**Connections**. The page requests a session bound to that project and no run.
+Projects checks your current Owner or PlatformAdmin role on every request.
+The page saves provider metadata; it has no credential fields. See
+[Manage project BYOK provider drafts](./connections.md#manage-project-byok-provider-drafts).
 
 The app keeps dismissal state in this browser for the signed-in identity. If
 the guide does not open, select **Projects** and follow the project settings

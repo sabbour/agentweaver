@@ -63,6 +63,7 @@ vi.mock('./config', () => ({
 }));
 
 import { AuthProvider, useAuth } from './AuthContext';
+import { ProjectModelProviderDrafts } from './ProjectModelProviderDrafts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -145,6 +146,7 @@ function Harness() {
   // so tests can check that a run-bound session does not replace the unbound one.
   const [ensured, setEnsured] = useState('not-ensured');
   const [unboundToken, setUnboundToken] = useState('none');
+  const [projectToken, setProjectToken] = useState('none');
   const [policyRead, setPolicyRead] = useState('not-read');
   const [concurrentPolicyResult, setConcurrentPolicyResult] = useState('not-started');
   const firstPolicyAbortRef = useRef<AbortController | null>(null);
@@ -173,6 +175,12 @@ function Harness() {
       </button>
       <button type="button" onClick={() => { void auth.authorize({ projectId: 'project-1', runId: 'run-1' }); }}>
         Sign in for run
+      </button>
+      <button
+        type="button"
+        onClick={() => { void auth.authorize({ projectId: 'project-1' }, undefined, false); }}
+      >
+        Sign in for project
       </button>
       <button
         type="button"
@@ -264,8 +272,18 @@ function Harness() {
       >
         Use unbound session
       </button>
+      <button type="button" onClick={() => {
+        void auth.apiCall(async (accessToken) => {
+          if (accessToken === 'project-access')
+            throw new GatewayError(401, { code: 'unauthorized' }, 'expired');
+          setProjectToken(accessToken);
+        }, { projectId: 'project-1' }).catch(() => setProjectToken('failed'));
+      }}>
+        Use project session
+      </button>
       <output>ensure:{ensured}</output>
       <output>unbound:{unboundToken}</output>
+      <output>project:{projectToken}</output>
       <output>{auth.session?.accessToken ?? 'signed-out'}</output>
       <output>name:{auth.session?.displayName ?? 'none'}</output>
       <output>{auth.restoringSession ? 'restoring' : 'not-restoring'}</output>
@@ -424,6 +442,78 @@ describe('Broker refresh coordination', () => {
     // Unbound calls still use the first token, and only the first sign-in opened a popup.
     await screen.findByText('unbound:access-1');
     expect(window.open).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a project-only session separate and refreshes that exact binding', async () => {
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('project-access', 'project-refresh'));
+    const exchangesBeforeProjectSignIn = mocks.exchangeAuthorizationCode.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for project' }));
+    await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ binding: { projectId: 'project-1' } }),
+      'challenge',
+    ));
+    await completePopupSignIn('project-code');
+    await waitFor(() => expect(mocks.exchangeAuthorizationCode)
+      .toHaveBeenCalledTimes(exchangesBeforeProjectSignIn + 1));
+    await act(async () => { await Promise.resolve(); });
+    await screen.findByText('access-1');
+
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('project-access-refreshed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Use project session' }));
+    await screen.findByText('project:project-access-refreshed');
+    expect(screen.getByText('access-1')).toBeTruthy();
+
+    expect(mocks.refreshBrokerToken).toHaveBeenCalledWith(
+      expect.anything(),
+      'project-refresh',
+    );
+    expect(mocks.refreshBrokerToken).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'refresh-1',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Use unbound session' }));
+    await screen.findByText('unbound:access-1');
+  });
+
+  it('loads project drafts after first authorization while context bootstrap runs', async () => {
+    const contextTenants: (string | null)[] = [];
+    vi.mocked(gatewayClient.getAuthorizationContext).mockImplementation(
+      async (_accessToken, tenantSelector) => {
+        contextTenants.push(tenantSelector ?? null);
+        await new Promise((resolve) => window.setTimeout(resolve, 80));
+        return {
+          contractVersion: 1,
+          issuer: 'projects-config',
+          actorId: 'actor-1',
+          tenantId: tenantSelector ?? 'tenant-1',
+          membershipRevision: 1,
+          boundProjectId: 'project-1',
+          boundRunId: null,
+          effectiveAuthority: [],
+        };
+      },
+    );
+    const listDrafts = vi.spyOn(gatewayClient, 'listProjectByokProviderDrafts')
+      .mockResolvedValue({ providers: [], nextAfterProviderId: null });
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('project-access', 'project-refresh'));
+
+    render(
+      <AuthProvider>
+        <ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />
+      </AuthProvider>,
+    );
+    await completeSilentSignIn({ code: 'project-code' });
+
+    expect(await screen.findByText('No provider drafts are set up for this project.'))
+      .toBeTruthy();
+    expect(listDrafts).toHaveBeenCalledOnce();
+    expect(contextTenants).toContain('tenant-1');
   });
 
   it('gets an independent unbound session for policy reads without replacing the active run session', async () => {

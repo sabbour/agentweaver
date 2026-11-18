@@ -87,6 +87,25 @@ describe('Identity Broker authorization', () => {
     expect(unboundUrl.searchParams.get('scope')).toBe(scopedConfig.scopes.join(' '));
   });
 
+  it('keeps projects.admin and omits the run selector for a project-only request', () => {
+    const scopedConfig: AuthorizationConfig = {
+      ...config,
+      scopes: ['openid', 'profile', 'email', 'api.read', 'offline_access', 'projects.admin', 'projects.orchestrator'],
+    };
+    const transaction: AuthorizationTransaction = {
+      state: 'state-value',
+      verifier: 'verifier-value',
+      redirectUri: config.redirectUri,
+      binding: { projectId: 'project-1' },
+    };
+
+    const url = new URL(buildAuthorizeUrl(scopedConfig, transaction, 'challenge'));
+    expect(url.searchParams.get('scope'))
+      .toBe('openid profile email api.read offline_access projects.admin');
+    expect(url.searchParams.get('project_id')).toBe('project-1');
+    expect(url.searchParams.has('run_id')).toBe(false);
+  });
+
   it('rejects a callback whose OAuth state does not match the stored transaction', () => {
     expect(() => parseAuthorizationResult(
       'https://app.example.test/auth/callback?code=one&state=wrong',
