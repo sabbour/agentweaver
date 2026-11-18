@@ -555,6 +555,60 @@ A selection is good for one read only. Each new command opens a new approval.
 
 Exit codes are `0` for success, `1` for a failure, and `130` for cancellation.
 
+## Manage platform BYOK provider drafts
+
+Use `platform byok` to list and edit platform model-provider metadata through
+the public Draft API. Sign in with `projects.admin` and use an account with
+current PlatformAdmin authority. The API checks that authority on each request.
+These commands use an unbound identity. They ignore
+`AGENTWEAVER_PROJECT_ID` and `AGENTWEAVER_RUN_ID` and reject `--project-id` and
+`--run-id`.
+
+```text
+agentweaver platform byok list [target options]
+agentweaver platform byok show <providerId> [target options]
+agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
+    --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
+agentweaver platform byok update <providerId> --expected-revision <revision>
+    --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <deployment>
+    [metadata options] [--operation-id <guid>]
+```
+
+The optional metadata options are `--wire-api`, `--azure-api-version`,
+`--reasoning-effort` (repeat it to set more than one value), and
+`--prompt-capacity-tokens`. The API accepts `completions` or `responses` for
+`--wire-api`, and `none`, `minimal`, `low`, `medium`, `high`, or `xhigh` for
+`--reasoning-effort`. The provider type must be `openai`, `azure`, or
+`anthropic`. The base URL must use HTTPS. An Azure base URL must name the
+resource host without an API path.
+
+`list` reads every cursor page. Its JSON output contains a `providers` array.
+Each provider has a stable `providerId`, a mutable display `name`, provider
+metadata, and a `revision`. Use the `providerId` from `list` or from the `add`
+response for `show` and `update`. A display name does not identify a provider.
+
+`add` creates a Draft at revision 1. `update` writes a complete metadata
+revision and requires the current `--expected-revision`. Omitted optional
+metadata values clear those values. Read the current metadata with `show`
+before you update it. A stale revision returns an error; the CLI does not retry
+the update. Read the provider again and review its current metadata before
+starting a new update.
+
+Each write uses an operation ID. The CLI creates one when you omit
+`--operation-id`. Give an explicit GUID when you need to replay a write. If the
+write result is uncertain, repeat the same command with the same operation ID
+and the same fields. The API replays that write. Use a new operation ID for a
+new write. If you cancel a write, the CLI reports that its result is unknown
+and prints the operation ID for replay.
+
+If a request returns `model_provider_draft_metadata_requires_update`, the
+message gives the provider ID and revision. Use them with `update` and supply
+complete corrected metadata. The API does not return the rejected metadata.
+
+These commands send and display provider metadata only. They do not send
+credentials or key bytes, set a key, or activate a provider. For the task
+procedure, see [Manage platform BYOK provider metadata](./manage-model-providers.md).
+
 ## Configure a BYOK model binding
 
 `models byok` plans an Azure OpenAI BYOK model binding. It does not need a

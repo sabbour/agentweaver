@@ -23,6 +23,7 @@
     "docs/index.md",
     "docs/guide/quickstart.md",
     "docs/guide/cli.md",
+    "docs/guide/manage-model-providers.md",
     "docs/guide/configure-providers.md",
     "docs/guide/configure-knowledge.md",
     "docs/guide/deploy-to-azure.md",
@@ -129,9 +130,12 @@
       ],
       "sourceExclusions": [
         "tools/Agentweaver.Cli/Api/GatewayClient.cs",
+        "tools/Agentweaver.Cli/Commands/CliApplication.cs",
+        "tools/Agentweaver.Cli/Commands/PlatformByokCommands.cs",
         "tools/Agentweaver.Cli/Program.cs",
         "tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj",
-        "tests/Agentweaver.Cli.Tests/GatewayClientTests.cs"
+        "tests/Agentweaver.Cli.Tests/GatewayClientTests.cs",
+        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs"
       ],
       "required": [
         "docs/specs/native-cli-api-acceptance.md",
@@ -143,6 +147,19 @@
         "docs/reference/releases.md",
         "docs/guide/quickstart.md",
         "docs/index.md",
+        "docs/guide/index.md"
+      ]
+    },
+    {
+      "name": "Platform BYOK metadata CLI",
+      "sourcePrefixes": [
+        "tools/Agentweaver.Cli/Commands/CliApplication.cs",
+        "tools/Agentweaver.Cli/Commands/PlatformByokCommands.cs",
+        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs"
+      ],
+      "required": [
+        "docs/guide/cli.md",
+        "docs/guide/manage-model-providers.md",
         "docs/guide/index.md"
       ]
     },
@@ -1079,7 +1096,8 @@
         "tests/Agentweaver.FoundationProbe.Tests/P1PostgresInitializerTests.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RuntimeGrants.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.GovernanceCheckpoints.cs",
-        "tests/Agentweaver.Projects.Config.Tests/GovernanceCheckpointStorageTests.cs"
+        "tests/Agentweaver.Projects.Config.Tests/GovernanceCheckpointStorageTests.cs",
+        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs"
       ],
       "required": [
         "docs/deep-dive/testing-strategy.md"

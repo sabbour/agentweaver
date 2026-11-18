@@ -53,6 +53,13 @@ public static class CliApplication
             if (args[0] == "models")
                 return await ByokModelCommands.RunAsync(
                     args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
+            if (args[0] == "platform")
+            {
+                var actualRuntime = runtime ?? new CliRuntimeOptions();
+                using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                return await PlatformByokCommands.RunAsync(
+                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, error, ct).ConfigureAwait(false);
+            }
             if (args[0] == "policy")
             {
                 var actualRuntime = runtime ?? new CliRuntimeOptions();
@@ -503,6 +510,13 @@ public static class CliApplication
           agentweaver policy validate --scope platform --input <export-file> [target options]
           agentweaver policy apply --scope platform --input <export-file> --expected-revision <revision|none> --reason <text> [target options]
           agentweaver policy history --scope platform [--page-size <1-100>] [--cursor <token>] [target options]
+          agentweaver platform byok list [target options]
+          agentweaver platform byok show <providerId> [target options]
+          agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
+              --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
+          agentweaver platform byok update <providerId> --expected-revision <revision>
+              --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <model>
+              [metadata options] [--operation-id <guid>]
           agentweaver workspace refs --project <project-id> --interactive [--cursor <2-10000>] [target options]
           agentweaver workspace tree --project <project-id> --ref <commit-sha> --interactive [target options]
           agentweaver workspace file --project <project-id> --ref <commit-sha> --path <repository-path>
