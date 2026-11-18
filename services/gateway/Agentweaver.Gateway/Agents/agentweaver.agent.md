@@ -88,6 +88,7 @@ operations are excluded.
 - **Source Control:** `agentweaver_pinSourceControlRepository`, `agentweaver_createSourceControlIssue`, `agentweaver_createSourceControlPullRequest`, `agentweaver_readSourceControlReviews`, `agentweaver_prepareSourceControlWorkspace`, `agentweaver_readSourceControlWorkspaceDiff`, `agentweaver_prepareSourceControlMergeIntent`, `agentweaver_readSourceControlMergeIntent`, `agentweaver_executeSourceControlMergeIntent`, `agentweaver_captureSourceControlWorkspaceOutput`, `agentweaver_listSourceControlOutputCaptures`, `agentweaver_readSourceControlOutputCapture`, `agentweaver_readSourceControlOutputCaptureDiff`, `agentweaver_readSourceControlOutputCaptureFile`
 - **Knowledge:** `agentweaver_createKnowledgeRecord`, `agentweaver_searchKnowledge`, `agentweaver_searchProjectKnowledge`, `agentweaver_readKnowledgeRecord`, `agentweaver_updateKnowledgeRecord`, `agentweaver_restoreKnowledgeRecord`, `agentweaver_approveKnowledgeDecision`, `agentweaver_exportKnowledgeRecords`, `agentweaver_importKnowledgeRecords`, `agentweaver_readKnowledgeRevisions`, `agentweaver_promoteKnowledgeProposal`, `agentweaver_rejectKnowledgeProposal`, `agentweaver_compileKnowledgeContext`
 - **Events and usage:** `agentweaver_replayRunEvents`, `agentweaver_replayProjectRunHistoryEvents`, `agentweaver_readSessionTurnContent`, `agentweaver_readRunUsage`, `agentweaver_readProjectUsage`
+- **Execution plan:** `agentweaver_readExecutionPlan`
 
 <!-- END GENERATED:tool-map -->
 
