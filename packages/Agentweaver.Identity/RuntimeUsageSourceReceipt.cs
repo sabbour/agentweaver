@@ -938,13 +938,23 @@ public static class RuntimeUsageSourceReceiptContract
         _ => false
     };
 
-    public static string Hash(RuntimeRegistration registration, UsageSubmission usage) =>
-        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
-            new CanonicalSourceUsage(registration, usage), JsonOptions));
+    public static string Hash(RuntimeRegistration registration, UsageSubmission usage)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new CanonicalSourceUsage(registration, usage), JsonOptions);
+        return registration.Binding?.RuntimeRateCardAdmission is null
+            ? RuntimeContractValidation.Hash(payload)
+            : RuntimeContractValidation.HashCanonicalJson(payload);
+    }
 
-    public static string HashSource(RuntimeRegistration registration, SdkSessionFacts source) =>
-        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
-            new { Registration = registration, Source = source }, JsonOptions));
+    public static string HashSource(RuntimeRegistration registration, SdkSessionFacts source)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new { Registration = registration, Source = source }, JsonOptions);
+        return registration.Binding?.RuntimeRateCardAdmission is null
+            ? RuntimeContractValidation.Hash(payload)
+            : RuntimeContractValidation.HashCanonicalJson(payload);
+    }
 
     /// <summary>Maps an SDK observation into a scoped usage submission and validates the result.</summary>
     public static UsageSubmission CreateUsage(

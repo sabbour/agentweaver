@@ -183,7 +183,80 @@ public static class RuntimeContractValidation
 
     /// <summary>Hashes the serialized registration for exact receipt binding.</summary>
     public static string RegistrationHash(RuntimeRegistration registration) =>
-        Hash(JsonSerializer.SerializeToUtf8Bytes(registration));
+        HashJsonContract(registration, canonical: registration.Binding?.RuntimeRateCardAdmission is not null);
+
+    /// <summary>Returns true when registrations have the same exact content across JSON boundaries.</summary>
+    public static bool SameRegistration(RuntimeRegistration? left, RuntimeRegistration? right) =>
+        left is null || right is null
+            ? left is null && right is null
+            : string.Equals(RegistrationHash(left), RegistrationHash(right), StringComparison.Ordinal);
+
+    /// <summary>Hashes a runtime binding, keeping legacy hashes unchanged when it has no rate-card admission.</summary>
+    public static string BindingHash(RuntimeBinding binding, JsonSerializerOptions? options = null) =>
+        HashJsonContract(binding, options, binding.RuntimeRateCardAdmission is not null);
+
+    /// <summary>Returns true when bindings have the same exact content across JSON boundaries.</summary>
+    public static bool SameBinding(RuntimeBinding left, RuntimeBinding right) =>
+        string.Equals(BindingHash(left), BindingHash(right), StringComparison.Ordinal);
+
+    /// <summary>Returns true when owner contexts have the same exact content across JSON boundaries.</summary>
+    public static bool SameOwnerContext(RuntimeOwnerContext left, RuntimeOwnerContext right)
+    {
+        var canonical = left.RuntimeRateCardAdmission is not null || right.RuntimeRateCardAdmission is not null;
+        return string.Equals(
+            HashJsonContract(left, canonical: canonical),
+            HashJsonContract(right, canonical: canonical),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>Hashes a runtime contract, with optional canonical JSON ordering.</summary>
+    public static string HashJsonContract<T>(
+        T value, JsonSerializerOptions? options = null, bool canonical = false)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(value, options);
+        return canonical ? HashCanonicalJson(payload) : Hash(payload);
+    }
+
+    /// <summary>Hashes JSON with stable object and set ordering while preserving array order.</summary>
+    public static string HashCanonicalJson(ReadOnlyMemory<byte> payload)
+    {
+        using var document = JsonDocument.Parse(payload);
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+            WriteCanonicalJson(document.RootElement, writer);
+        return Hash(stream.ToArray());
+    }
+
+    private static void WriteCanonicalJson(JsonElement value, Utf8JsonWriter writer, string? propertyName = null)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            writer.WriteStartObject();
+            foreach (var property in value.EnumerateObject().OrderBy(
+                         item => item.Name, StringComparer.Ordinal))
+            {
+                writer.WritePropertyName(property.Name);
+                WriteCanonicalJson(property.Value, writer, property.Name);
+            }
+            writer.WriteEndObject();
+            return;
+        }
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            writer.WriteStartArray();
+            var items = value.EnumerateArray().ToArray();
+            if (string.Equals(propertyName, "NegotiatedCapabilities", StringComparison.OrdinalIgnoreCase))
+                Array.Sort(items, (left, right) =>
+                    StringComparer.Ordinal.Compare(left.GetString(), right.GetString()));
+            foreach (var item in items)
+                WriteCanonicalJson(item, writer);
+            writer.WriteEndArray();
+            return;
+        }
+
+        value.WriteTo(writer);
+    }
 
     /// <summary>
     /// Returns true only for an absolute HTTPS URI with no user info, query, or fragment; false otherwise.

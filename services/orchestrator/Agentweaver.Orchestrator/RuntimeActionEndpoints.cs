@@ -247,7 +247,7 @@ internal sealed class RuntimeActionOwner(
             (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                 context, registration.RuntimeInstanceId, async (current, currentToken) =>
                 {
-                    if (current != registration)
+                    if (!RuntimeContractValidation.SameRegistration(current, registration))
                         throw new RuntimeAuthorizationException("runtime_registration_changed");
                     var result = await store.ReadFixedCreditGuardResultWithinTransactionAsync(
                         connection, transaction, current, request, includeEvidence: false,
@@ -444,7 +444,7 @@ internal sealed class RuntimeActionOwner(
                 (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                     context, registration.RuntimeInstanceId, async (current, currentToken) =>
                     {
-                        if (current != registration)
+                        if (!RuntimeContractValidation.SameRegistration(current, registration))
                             throw new RuntimeAuthorizationException("runtime_registration_changed");
                         _ = await store.RecordFixedCreditGuardWithinTransactionAsync(
                             connection, transaction, current, receipt, grant: null,

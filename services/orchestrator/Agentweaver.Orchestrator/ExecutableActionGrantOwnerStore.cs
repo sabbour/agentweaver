@@ -210,7 +210,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         ArgumentNullException.ThrowIfNull(registration);
         ArgumentNullException.ThrowIfNull(completion);
         completion.Validate();
-        if (registration != completion.Registration)
+        if (!RuntimeContractValidation.SameRegistration(registration, completion.Registration))
             throw new RuntimeAuthorizationException("runtime_root_turn_completion_conflict");
 
         var binding = registration.Binding;
@@ -386,7 +386,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
         ArgumentNullException.ThrowIfNull(replay);
         completion.Validate();
         replay.ValidateFor(completion.Completion.ToEvidence(), previous, current);
-        if (completion.Completion.Registration != previous || current.Binding.SessionId != previous.Binding.SessionId)
+        if (!RuntimeContractValidation.SameRegistration(completion.Completion.Registration, previous) ||
+            current.Binding.SessionId != previous.Binding.SessionId)
             throw new RuntimeAuthorizationException("runtime_root_turn_replay_invalid");
 
         var storedCompletion = await ReadRootTurnCompletionAsync(
@@ -456,7 +457,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             if (completion is null ||
                 completion.Completion.SuccessfulToolCount != 0 ||
                 completion.Completion.FailedToolCount != 0 ||
-                completion.Completion.Registration != registration &&
+                !RuntimeContractValidation.SameRegistration(
+                    completion.Completion.Registration, registration) &&
                 !await HasVerifiedLineageAsync(completion.Completion.Registration).ConfigureAwait(false))
                 throw new RuntimeAuthorizationException("runtime_replacement_root_work_pending");
             if (latest is null)

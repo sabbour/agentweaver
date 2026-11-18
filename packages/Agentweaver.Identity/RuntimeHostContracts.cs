@@ -874,7 +874,8 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             childDispatch.WorkPlanId != workPlanId ||
             childDispatch.AssociationId != associationId ||
             childDispatch.WorkItemBindingSha256 != WorkItemBindingSha256 ||
-            message.Metadata.Runtime.Registration != registration ||
+            RuntimeContractValidation.RegistrationHash(message.Metadata.Runtime.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
             binding.WorkflowStepId is null ||
             PromptSha256 != RuntimeContractValidation.Hash(
                 System.Text.Encoding.UTF8.GetBytes(prompt)) ||
@@ -975,7 +976,8 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             evidence.AccountingStatus != "priced" ||
             evidence.SourceSha256 != RuntimeUsageSourceReceiptContract.HashSource(registration, source) ||
             evidence.AccountingOwnerRevision <= recorded.OwnerRevision ||
-            admission.Registration != registration ||
+            RuntimeContractValidation.RegistrationHash(admission.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
             WorkItemBindingSha256 != request.Message.Metadata.ChildDispatch?.WorkItemBindingSha256 ||
             ChildSessionId != binding.SessionId ||
             SdkSessionId != request.Message.ContextId ||
@@ -1053,7 +1055,8 @@ public sealed record RuntimeChildTurnCompletionReceipt(
         var recorded = evidence.Recorded;
         var admission = recorded.Admission;
         RuntimeNativeTurnContract.ValidateRecorded(recorded);
-        if (admission.Registration != registration ||
+        if (RuntimeContractValidation.RegistrationHash(admission.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
             admission.MessageId != requestId ||
             admission.Source.SdkSessionId != contextId ||
             admission.PromptHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) ||

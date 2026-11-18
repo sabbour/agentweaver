@@ -236,7 +236,8 @@ public sealed record RuntimeHostResumeCacheReceipt(
         RuntimeUsageSourceReceiptContract.ValidateSource(request.Registration, Source);
         if (ContractVersion != 1 || OperationId != request.Resume.OperationId ||
             SourceManifestId != request.Resume.SourceManifest.ManifestId ||
-            Registration != request.Registration ||
+            RuntimeContractValidation.RegistrationHash(Registration) !=
+                RuntimeContractValidation.RegistrationHash(request.Registration) ||
             !RuntimeWorkspaceResumeHttpClient.SameJson(CacheAcknowledgment, saved))
             throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
         if (RecoveryMode == "native-cache")
@@ -277,7 +278,9 @@ public sealed record RuntimeResumeBootstrapReceipt(
         var hash = RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(
             request.Resume.SourceRelease.HostReceipt).Reference.Material!.Sha256;
         if (ContractVersion != 1 || OperationId != request.Resume.OperationId ||
-            SourceManifestId != request.Resume.SourceManifest.ManifestId || Registration != registration ||
+            SourceManifestId != request.Resume.SourceManifest.ManifestId ||
+            RuntimeContractValidation.RegistrationHash(Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
             Delivery is null || HostReceipt?.SourceGrant is not { } grant ||
             HostReceipt.ResumeCache is null ||
             Delivery.OperationId != request.BootstrapOperationId || Delivery.GrantId == Guid.Empty ||

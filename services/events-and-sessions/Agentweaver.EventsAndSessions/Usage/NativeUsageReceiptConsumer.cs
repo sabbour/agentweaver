@@ -261,7 +261,12 @@ internal sealed class NativeUsageReceiptConsumer(
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw new InvalidOperationException("An admitted native usage inbox has no accounting receipt.");
             var stored = Deserialize<RuntimeUsageSourceReceipt>(reader.GetString(0));
-            if (stored != receipt || reader.GetString(1) != receipt.CanonicalPayloadHash)
+            RuntimeUsageSourceReceiptContract.Validate(stored);
+            if (stored.ContractVersion != receipt.ContractVersion ||
+                stored.ReceiptId != receipt.ReceiptId ||
+                stored.RecordedAt != receipt.RecordedAt ||
+                stored.CanonicalPayloadHash != receipt.CanonicalPayloadHash ||
+                reader.GetString(1) != receipt.CanonicalPayloadHash)
                 throw new UsageLedgerConflictException("The source receipt identity has a different immutable payload.");
             acknowledgment = new(receipt.ReceiptId, Deserialize<UsageAccountingReceipt>(reader.GetString(2)), true);
         }
@@ -371,8 +376,10 @@ internal sealed class NativeUsageReceiptConsumer(
             var accounting = Deserialize<UsageAccountingReceipt>(reader.GetString(2));
             var usage = Deserialize<UsageSubmission>(reader.GetString(4));
             var ledgerBinding = reader.IsDBNull(12) ? null : Deserialize<CostBinding>(reader.GetString(12));
-            if (source.ReceiptId != reference.SourceReceiptId || source.Registration != request.Registration ||
-                source.Usage.SdkSource != request.Source ||
+            if (source.ReceiptId != reference.SourceReceiptId ||
+                source.Usage.SdkSource is not { } sourceFacts ||
+                RuntimeUsageSourceReceiptContract.HashSource(source.Registration, sourceFacts) !=
+                    RuntimeUsageSourceReceiptContract.HashSource(request.Registration, request.Source) ||
                 (source.Usage.A2AMessageId != request.DispatchId &&
                     (verifiedNativeTurn is null || source.Usage.A2AMessageId is not null)) ||
                 verifiedNativeTurn is not null &&

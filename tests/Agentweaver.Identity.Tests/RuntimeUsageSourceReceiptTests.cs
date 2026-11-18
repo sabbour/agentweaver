@@ -950,6 +950,133 @@ public sealed class RuntimeUsageSourceReceiptTests
     }
 
     [Fact]
+    public void RevisionBackedNativeAdmissionAcceptsEquivalentJsonCopies()
+    {
+        var receipt = ProjectByokReceipt();
+        var registration = receipt.Registration;
+        var source = receipt.Usage.SdkSource!;
+        var message = new RuntimeA2ASendRequest(new(
+            "message", Guid.NewGuid(), source.SdkSessionId, "user", [new("text", "BYOK request.")],
+            new(new(1, registration, Guid.NewGuid(), 1, RuntimeCredentialPurpose.Observe),
+            AddressedMessageDeliveryMode.Immediate)));
+        var admission = new RuntimeNativeTurnAdmissionReceipt(
+            registration, source, message.Message.MessageId,
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes("BYOK request.")),
+            RuntimeNativeTurnContract.RequestHash(message), 2);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var registrationCopy = JsonSerializer.Deserialize<RuntimeRegistration>(
+            JsonSerializer.Serialize(registration, options), options)!;
+        var sourceCopy = JsonSerializer.Deserialize<SdkSessionFacts>(
+            JsonSerializer.Serialize(source, options), options)!;
+        var messageCopy = JsonSerializer.Deserialize<RuntimeA2ASendRequest>(
+            JsonSerializer.Serialize(message, options), options)!;
+        var admissionCopy = JsonSerializer.Deserialize<RuntimeNativeTurnAdmissionReceipt>(
+            JsonSerializer.Serialize(admission, options), options)!;
+
+        RuntimeNativeTurnContract.ValidateAdmission(admissionCopy, registrationCopy, sourceCopy, messageCopy);
+        Assert.True(RuntimeNativeTurnContract.SameAdmission(
+            admissionCopy,
+            JsonSerializer.Deserialize<RuntimeNativeTurnAdmissionReceipt>(
+            JsonSerializer.Serialize(admission, options), options)!));
+
+        var observation = new RuntimeNativeTurnObservation(
+            source, Guid.NewGuid().ToString("D"), "byok-native-turn", Guid.NewGuid(),
+            Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, "native-cursor",
+            new string('c', 64), null);
+        var recorded = new RuntimeNativeTurnRecordedReceipt(
+            admission, observation, RuntimeNativeTurnContract.ObservationHash(observation), 3);
+        var request = RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, []);
+        var copiedRequest = JsonSerializer.Deserialize<RuntimeUsageCostSnapshotRequest>(
+            JsonSerializer.Serialize(request, options), options)!;
+        var copiedRecorded = JsonSerializer.Deserialize<RuntimeNativeTurnRecordedReceipt>(
+            JsonSerializer.Serialize(recorded, options), options)!;
+        RuntimeNativeTurnContract.ValidateAccountingSnapshot(copiedRequest, copiedRecorded);
+    }
+
+    [Fact]
+    public void CanonicalRuntimeHashesIgnoreMapAndCapabilityOrder()
+    {
+        var left = Encoding.UTF8.GetBytes(
+            """{"card":{"z":2,"a":1},"NegotiatedCapabilities":["usage.read","usage.price"],"ReasoningEfforts":["low","high"]}""");
+        var right = Encoding.UTF8.GetBytes(
+            """{"NegotiatedCapabilities":["usage.price","usage.read"],"card":{"a":1,"z":2},"ReasoningEfforts":["low","high"]}""");
+        var reorderedList = Encoding.UTF8.GetBytes(
+            """{"NegotiatedCapabilities":["usage.price","usage.read"],"card":{"a":1,"z":2},"ReasoningEfforts":["high","low"]}""");
+
+        Assert.Equal(RuntimeContractValidation.HashCanonicalJson(left),
+            RuntimeContractValidation.HashCanonicalJson(right));
+        Assert.NotEqual(RuntimeContractValidation.HashCanonicalJson(left),
+            RuntimeContractValidation.HashCanonicalJson(reorderedList));
+    }
+
+    [Fact]
+    public void RevisionBackedRegistrationAndReceiptHashesUseCanonicalJson()
+    {
+        var receipt = ProjectByokReceipt();
+        var registrationPayload = JsonSerializer.SerializeToUtf8Bytes(receipt.Registration);
+        var source = receipt.Usage.SdkSource!;
+        var webOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var receiptPayload = JsonSerializer.SerializeToUtf8Bytes(
+            new { Registration = receipt.Registration, Usage = receipt.Usage }, webOptions);
+        var sourcePayload = JsonSerializer.SerializeToUtf8Bytes(
+            new { Registration = receipt.Registration, Source = source }, webOptions);
+        var message = new RuntimeA2ASendRequest(new(
+            "message", Guid.NewGuid(), source.SdkSessionId, "user", [new("text", "BYOK request.")],
+            new(new(1, receipt.Registration, Guid.NewGuid(), 1, RuntimeCredentialPurpose.Observe),
+            AddressedMessageDeliveryMode.Immediate)));
+        var messagePayload = JsonSerializer.SerializeToUtf8Bytes(message);
+
+        Assert.Equal(RuntimeContractValidation.HashCanonicalJson(registrationPayload),
+            RuntimeContractValidation.RegistrationHash(receipt.Registration));
+        Assert.Equal(RuntimeContractValidation.HashCanonicalJson(receiptPayload),
+            RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, receipt.Usage));
+        Assert.Equal(RuntimeContractValidation.HashCanonicalJson(sourcePayload),
+            RuntimeUsageSourceReceiptContract.HashSource(receipt.Registration, source));
+        Assert.Equal(RuntimeContractValidation.HashCanonicalJson(messagePayload),
+            RuntimeNativeTurnContract.RequestHash(message));
+        Assert.Equal(receipt.CanonicalPayloadHash,
+            RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, receipt.Usage));
+        Assert.Equal(
+            RuntimeUsageSourceReceiptContract.HashSource(receipt.Registration, source),
+            RuntimeUsageSourceReceiptContract.HashSource(
+                JsonSerializer.Deserialize<RuntimeRegistration>(
+                    JsonSerializer.Serialize(receipt.Registration))!,
+                JsonSerializer.Deserialize<SdkSessionFacts>(
+                    JsonSerializer.Serialize(source))!));
+
+        var registrationCopy = JsonSerializer.Deserialize<RuntimeRegistration>(
+            JsonSerializer.Serialize(receipt.Registration, webOptions), webOptions)!;
+        Assert.True(RuntimeContractValidation.SameRegistration(receipt.Registration, registrationCopy));
+        Assert.True(RuntimeContractValidation.SameBinding(
+            receipt.Registration.Binding, registrationCopy.Binding));
+        Assert.Equal(RuntimeContractValidation.BindingHash(receipt.Registration.Binding),
+            RuntimeContractValidation.BindingHash(registrationCopy.Binding));
+
+        var binding = receipt.Registration.Binding;
+        var ownerContext = new RuntimeOwnerContext(
+            1, binding.ActorIssuer, binding.ActorId, binding.TenantId, binding.ProjectId,
+            binding.RunId, binding.SessionId, binding.AgentId, binding.ModelSelectionReference!,
+            binding.TurnId, binding.ProjectRevision, binding.ProjectConfigurationRevision,
+            binding.PlatformRuntimeRevision, binding.ContextRevision, binding.AcceptedSelectionHash,
+            binding.ExecutionFence, 1, 2, 2)
+        {
+            ModelCredentialReference = binding.ModelCredentialReference,
+            ModelCredentialIdentity = binding.ModelCredentialIdentity,
+            ModelSourceMode = binding.ModelSourceMode,
+            ReasoningEffort = binding.ReasoningEffort,
+            ModelBindingPin = binding.ModelBindingPin,
+            ProviderBindingRevision = binding.ProviderBindingRevision,
+            RuntimeRateCardAdmission = binding.RuntimeRateCardAdmission
+        };
+        var ownerContextCopy = JsonSerializer.Deserialize<RuntimeOwnerContext>(
+            JsonSerializer.Serialize(ownerContext, webOptions), webOptions)!;
+        Assert.True(RuntimeContractValidation.SameOwnerContext(ownerContext, ownerContextCopy));
+    }
+
+    [Fact]
     public void NativeObservationCarriesActualRangeAndOnlyAnObservedAccountingFloor()
     {
         var (admission, _, observation) = NativeTurn();
@@ -1595,7 +1722,9 @@ public sealed class RuntimeUsageSourceReceiptTests
             SdkMeterSources.ByokTokens,
             "USD",
             1_000_000m,
-            ImmutableDictionary<string, decimal>.Empty);
+            ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal)
+                .Add("deployment-1", 1.25m)
+                .Add("other-deployment", 2m));
         var provenance = new ManualRuntimeRateCardReadProvenance(
             "https://pricing.example/rate-card", new DateOnly(2026, 1, 1));
         var rateCardPin = RuntimeRateCardReadContract.CreatePin(

@@ -276,7 +276,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
                     OwnerStateVersion = current.OwnerStateVersion,
                     DecisionStateVersion = current.DecisionStateVersion
                 };
-            if (current != expected)
+            if (!RuntimeContractValidation.SameOwnerContext(current, expected))
                 throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
             var selection = await egress.GetAuthorizedRunEnvironmentSelectionAsync(
                 caller, fence.Owner, token).ConfigureAwait(false);
@@ -572,7 +572,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
                     OwnerStateVersion = current.OwnerStateVersion,
                     DecisionStateVersion = current.DecisionStateVersion
                 };
-            if (current != expected)
+            if (!RuntimeContractValidation.SameOwnerContext(current, expected))
                 throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
         }
 

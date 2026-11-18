@@ -114,7 +114,8 @@ internal sealed class SessionMaterialApplicationService(
                             request.RuntimeInstanceId, currentOperationId, actor, token).ConfigureAwait(false)
                         : await runtime.ReadCurrentAsync(request.RuntimeInstanceId, actor, token)
                             .ConfigureAwait(false);
-                    if (currentRegistration != registration || !bearer.IsUsable())
+                    if (!RuntimeContractValidation.SameRegistration(currentRegistration, registration) ||
+                        !bearer.IsUsable())
                         throw new RuntimeAuthorizationException("runtime_material_authority_changed");
                 }, cancellationToken).ConfigureAwait(false);
         }
@@ -181,8 +182,10 @@ internal sealed class SessionMaterialApplicationService(
                 RequireScope(current, registration.Binding.TenantId,
                     registration.Binding.ProjectId, registration.Binding.RunId);
                 await bindings.VerifyPinnedAsync(context.User, pinned, token).ConfigureAwait(false);
-                if (await runtime.ReadCurrentAsync(registration.RuntimeInstanceId, actor, token).ConfigureAwait(false)
-                    != registration)
+                if (!RuntimeContractValidation.SameRegistration(
+                        await runtime.ReadCurrentAsync(registration.RuntimeInstanceId, actor, token)
+                            .ConfigureAwait(false),
+                        registration))
                     throw new RuntimeAuthorizationException("runtime_resume_bootstrap_registration_changed");
                 await runtime.RequireResumeBootstrapCurrentAsync(request, actor, token).ConfigureAwait(false);
             }

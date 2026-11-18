@@ -160,7 +160,7 @@ internal static class MafRubberduckReviewContract
         }
 
         if (completion.RequestId != intent.OperationId ||
-            completion.Registration != registration ||
+            !RuntimeContractValidation.SameRegistration(completion.Registration, registration) ||
             expectedObserveGrant is not null && completion.ObserveGrant != expectedObserveGrant ||
             completion.PromptHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) ||
             output is not null &&

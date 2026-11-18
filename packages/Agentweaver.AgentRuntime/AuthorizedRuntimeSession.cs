@@ -484,7 +484,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             ?? throw new RuntimeAuthorizationException("runtime_a2a_message_invalid");
         var requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(request);
         if (message.MessageId == Guid.Empty ||
-            expectedProof.ContractVersion != 1 || expectedProof.Registration != Registration ||
+            expectedProof.ContractVersion != 1 ||
+            !RuntimeContractValidation.SameRegistration(expectedProof.Registration, Registration) ||
             expectedProof.Purpose != RuntimeCredentialPurpose.Observe ||
             Registration.Binding.ModelSourceMode != ModelSourceMode.HostedCopilot ||
             Registration.Binding.CopilotHardCreditLimit is not 0m)
@@ -692,7 +693,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             : await _owner.ReadCurrentAsync(
                 Registration.RuntimeInstanceId, _actor, cancellationToken).ConfigureAwait(false);
         RuntimeSessionBootstrap.RequireCurrent(current, _actor, _timeProvider);
-        if (current != Registration || !Proof().Credential.IsUsable() || !_modelCredential.IsUsable() ||
+        if (!RuntimeContractValidation.SameRegistration(current, Registration) ||
+            !Proof().Credential.IsUsable() || !_modelCredential.IsUsable() ||
             Volatile.Read(ref _disposed) != 0)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         await _broker.VerifySourceAsync(Proof(), cancellationToken).ConfigureAwait(false);
@@ -922,7 +924,9 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             var native = _lastNativeTurn
                 ?? throw new RuntimeAuthorizationException("runtime_native_suspend_receipt_unavailable");
             RuntimeNativeTurnContract.ValidateRecorded(native);
-            if (native.Admission.Registration != Registration || native.Admission.Source != Facts)
+            if (RuntimeContractValidation.RegistrationHash(native.Admission.Registration) !=
+                    RuntimeContractValidation.RegistrationHash(Registration) ||
+                native.Admission.Source != Facts)
                 throw new RuntimeAuthorizationException("runtime_native_suspend_receipt_invalid");
             var cache = await CommitNativeCacheCoreAsync(
                 material, request.ManifestId, cancellationToken, requireCurrentSuspend).ConfigureAwait(false);
@@ -948,7 +952,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     private void RequireExpectedSourceGrant(RuntimeHostSessionProof proof)
     {
         var grant = SourceGrant;
-        if (proof.Registration != Registration || proof.Purpose != RuntimeCredentialPurpose.Observe ||
+        if (!RuntimeContractValidation.SameRegistration(proof.Registration, Registration) ||
+            proof.Purpose != RuntimeCredentialPurpose.Observe ||
             proof.SourceGrantId != grant.GrantId || proof.SourceGrantRevision != grant.Revision)
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
     }

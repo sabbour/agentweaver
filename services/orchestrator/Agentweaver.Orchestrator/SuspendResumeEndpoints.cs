@@ -108,7 +108,7 @@ public static partial class CoordinationEndpoints
                 throw new CoordinationException(
                     exception.Code, StatusCodes.Status403Forbidden, exception);
             }
-            if (currentRegistration != registration)
+            if (!RuntimeContractValidation.SameRegistration(currentRegistration, registration))
                 throw new CoordinationException(
                     "runtime_registration_stale", StatusCodes.Status409Conflict);
 
@@ -122,7 +122,7 @@ public static partial class CoordinationEndpoints
             {
                 var finalRegistration = await registrations.ReadCurrentAsync(
                     context, registration.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
-                if (finalRegistration != currentRegistration)
+                if (!RuntimeContractValidation.SameRegistration(finalRegistration, currentRegistration))
                     throw new CoordinationException(
                         "runtime_registration_stale", StatusCodes.Status409Conflict);
             }
@@ -255,7 +255,7 @@ public static partial class CoordinationEndpoints
                 throw new CoordinationException(
                     exception.Code, StatusCodes.Status403Forbidden, exception);
             }
-            if (currentRegistration != request.Registration)
+            if (!RuntimeContractValidation.SameRegistration(currentRegistration, request.Registration))
                 throw new CoordinationException(
                     "runtime_registration_stale", StatusCodes.Status409Conflict);
 
@@ -269,7 +269,7 @@ public static partial class CoordinationEndpoints
             {
                 var finalRegistration = await registrations.ReadCurrentAsync(
                     context, request.Registration.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
-                if (finalRegistration != currentRegistration)
+                if (!RuntimeContractValidation.SameRegistration(finalRegistration, currentRegistration))
                     throw new CoordinationException(
                         "runtime_registration_stale", StatusCodes.Status409Conflict);
             }

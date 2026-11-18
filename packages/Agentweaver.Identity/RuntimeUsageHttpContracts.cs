@@ -177,9 +177,10 @@ public static class RuntimeNativeTurnContract
     {
         ValidateRecorded(recorded);
         var admission = recorded.Admission;
-        if (request.Registration != admission.Registration || request.Source != admission.Source ||
+        if (RuntimeUsageSourceReceiptContract.HashSource(request.Registration, request.Source) !=
+                RuntimeUsageSourceReceiptContract.HashSource(admission.Registration, admission.Source) ||
             request.DispatchId != admission.MessageId || request.RequiredReceipts.IsDefault ||
-            request.NativeTurn is not { } expected || expected.Admission != admission ||
+            request.NativeTurn is not { } expected || !SameAdmission(expected.Admission, admission) ||
             expected.OwnerRevision != recorded.OwnerRevision ||
             expected.CanonicalPayloadHash != recorded.CanonicalPayloadHash)
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
@@ -200,7 +201,7 @@ public static class RuntimeNativeTurnContract
         ArgumentNullException.ThrowIfNull(receipt);
         var request = AccountingSnapshotRequest(recorded, references);
         ValidateRecorded(receipt.Recorded);
-        if (receipt.Recorded.Admission != recorded.Admission ||
+        if (!SameAdmission(receipt.Recorded.Admission, recorded.Admission) ||
             receipt.Recorded.CanonicalPayloadHash != recorded.CanonicalPayloadHash ||
             receipt.Recorded.OwnerRevision != recorded.OwnerRevision ||
             receipt.OwnerRevision <= recorded.OwnerRevision)
@@ -208,9 +209,24 @@ public static class RuntimeNativeTurnContract
         RuntimeUsageCostSnapshotContract.ValidateObservedReceipt(receipt.Snapshot, request);
     }
 
-    /// <summary>Hashes the exact serialized A2A request used for admission.</summary>
-    public static string RequestHash(RuntimeA2ASendRequest message) =>
-        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(message));
+    /// <summary>Hashes the serialized A2A request used for admission.</summary>
+    public static string RequestHash(RuntimeA2ASendRequest message)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(message);
+        return message.Message?.Metadata?.Runtime?.Registration?.Binding?.RuntimeRateCardAdmission is null
+            ? RuntimeContractValidation.Hash(payload)
+            : RuntimeContractValidation.HashCanonicalJson(payload);
+    }
+
+    /// <summary>Compares admissions across JSON boundaries, including their revision-backed registration.</summary>
+    public static bool SameAdmission(
+        RuntimeNativeTurnAdmissionReceipt left, RuntimeNativeTurnAdmissionReceipt right) =>
+        RuntimeUsageSourceReceiptContract.HashSource(left.Registration, left.Source) ==
+            RuntimeUsageSourceReceiptContract.HashSource(right.Registration, right.Source) &&
+        left.MessageId == right.MessageId &&
+        left.PromptHash == right.PromptHash &&
+        left.RequestHash == right.RequestHash &&
+        left.OwnerRevision == right.OwnerRevision;
 
     public static void ValidateAdmission(
         RuntimeNativeTurnAdmissionReceipt admission, RuntimeRegistration registration,
@@ -225,11 +241,16 @@ public static class RuntimeNativeTurnContract
             text.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t')) ||
             message.Message is not { Kind: "message", Role: "user", Metadata: { } metadata } ||
             message.Message.Parts[0].Kind != "text" ||
-            metadata.Runtime?.Registration != registration || !Enum.IsDefined(metadata.DeliveryMode) ||
+            metadata.Runtime?.Registration is not { } messageRegistration ||
+            RuntimeContractValidation.RegistrationHash(messageRegistration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
+            !Enum.IsDefined(metadata.DeliveryMode) ||
             metadata.Runtime.ContractVersion != 1 || metadata.Runtime.Purpose != RuntimeCredentialPurpose.Observe ||
             metadata.Runtime.SourceGrantId == Guid.Empty || metadata.Runtime.SourceGrantRevision < 1 ||
             message.Message.ContextId != source.SdkSessionId ||
-            admission.Registration != registration || admission.Source != source ||
+            RuntimeContractValidation.RegistrationHash(admission.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
+            admission.Source != source ||
             admission.MessageId == Guid.Empty || admission.MessageId != message.Message!.MessageId ||
             admission.PromptHash != RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(text)) ||
             admission.RequestHash != RequestHash(message) || admission.OwnerRevision < 2)

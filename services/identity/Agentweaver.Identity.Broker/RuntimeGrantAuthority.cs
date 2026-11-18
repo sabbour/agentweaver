@@ -895,7 +895,7 @@ public sealed class RuntimeGrantAuthority(
     {
         var current = await RequireCurrentAsync(
             expected.RuntimeInstanceId, cancellationToken, checkpointRecoveryOperationId);
-        if (current != expected)
+        if (!RuntimeContractValidation.SameRegistration(current, expected))
             throw Denied("runtime_registration_stale");
     }
 

@@ -376,8 +376,8 @@ public static partial class CoordinationEndpoints
                 currentDecision.SelectionHash != decision.SelectionHash ||
                 currentDecision.State.Fence != decision.State.Fence ||
                 currentDecision.State.ConfirmedWorkPlan?.Plan.Id != checkpoint.State.WorkPlanId ||
-                currentOwnerContext != ownerContext ||
-                currentRegistration != registration)
+                !RuntimeContractValidation.SameOwnerContext(currentOwnerContext, ownerContext) ||
+                !RuntimeContractValidation.SameRegistration(currentRegistration, registration))
                 throw new CoordinationException(
                     "runtime_owner_context_stale", StatusCodes.Status409Conflict);
             return observation;

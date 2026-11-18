@@ -548,7 +548,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         {
             resumeBootstrap.Validate();
             if (request.Configuration.ValueKind != JsonValueKind.Null ||
-                request.Registration != resumeBootstrap.Registration ||
+                RuntimeContractValidation.RegistrationHash(request.Registration) !=
+                    RuntimeContractValidation.RegistrationHash(resumeBootstrap.Registration) ||
                 request.ConsumeOperationId != resumeBootstrap.ConsumeOperationId ||
                 request.ExchangeOperationId != resumeBootstrap.ExchangeOperationId)
                 throw new RuntimeAuthorizationException("runtime_resume_bootstrap_request_invalid");
@@ -1055,14 +1056,17 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var current = await _owner.ReadCurrentAsync(
             request.Registration.RuntimeInstanceId, actor, token).ConfigureAwait(false);
         RequireRegistration(current, actor);
-        if (current != request.Registration)
+        if (RuntimeContractValidation.RegistrationHash(current) !=
+            RuntimeContractValidation.RegistrationHash(request.Registration))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
     /// <summary>Classifies local bootstrap state and rejects inconsistent partially initialized state.</summary>
     private RuntimeResumeHostState ReadResumeBootstrapState(RuntimeResumeBootstrapRequest request)
     {
-        if (_registration is null || _registration != request.Registration)
+        if (_registration is null ||
+            RuntimeContractValidation.RegistrationHash(_registration) !=
+                RuntimeContractValidation.RegistrationHash(request.Registration))
             return RuntimeResumeHostState.Missing;
         if (_receiver is null)
         {
@@ -1082,11 +1086,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 return RuntimeResumeHostState.BootstrapPresent;
             case RuntimeBootstrapReceiverState.Ready:
                 if (_session is { } session &&
-                    session.Registration == request.Registration &&
+                    RuntimeContractValidation.SameRegistration(session.Registration, request.Registration) &&
                     _resumeCacheReceipt is { } cache &&
                     cache.OperationId == request.Resume.OperationId &&
                     cache.SourceManifestId == request.Resume.SourceManifest.ManifestId &&
-                    cache.Registration == request.Registration)
+                    RuntimeContractValidation.SameRegistration(cache.Registration, request.Registration))
                 {
                     cache.ValidateFor(request);
                     return RuntimeResumeHostState.Activated;
@@ -1330,7 +1334,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         RequireAvailable();
         if (proof is null || proof.ContractVersion != 1 || proof.Purpose != RuntimeCredentialPurpose.Observe ||
             _readyAt is null || _session is not { } session ||
-            proof.Registration != session.Registration ||
+            RuntimeContractValidation.RegistrationHash(proof.Registration) !=
+                RuntimeContractValidation.RegistrationHash(session.Registration) ||
             proof.SourceGrantId != session.SourceGrant.GrantId ||
             proof.SourceGrantRevision != session.SourceGrant.Revision &&
                 !(allowRefreshReplay && proof.SourceGrantRevision == session.SourceGrant.Revision - 1))
@@ -1346,7 +1351,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         Guid? checkpointRecoveryOperationId = null)
     {
         RequireRegistration(expected, actor);
-        if (expected != _registration)
+        if (!RuntimeContractValidation.SameRegistration(expected, _registration))
             throw new RuntimeAuthorizationException("runtime_configuration_conflict");
         checkpointRecoveryOperationId ??= _checkpointRecoveryOperationId;
         var current = checkpointRecoveryOperationId is { } operationId
@@ -1354,7 +1359,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 expected.RuntimeInstanceId, operationId, actor, token).ConfigureAwait(false)
             : await _owner.ReadCurrentAsync(expected.RuntimeInstanceId, actor, token).ConfigureAwait(false);
         RequireRegistration(current, actor);
-        if (current != expected)
+        if (!RuntimeContractValidation.SameRegistration(current, expected))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 

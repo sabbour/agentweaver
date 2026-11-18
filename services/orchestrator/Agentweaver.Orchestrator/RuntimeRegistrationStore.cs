@@ -66,8 +66,7 @@ internal sealed class RuntimeRegistrationStore
         RuntimeContractValidation.Validate(candidate);
         RequireAvailable(candidate);
         var bindingJson = JsonSerializer.Serialize(serverDerivedBinding, JsonOptions);
-        var bindingHash = RuntimeContractValidation.Hash(
-            JsonSerializer.SerializeToUtf8Bytes(serverDerivedBinding, JsonOptions));
+        var bindingHash = RuntimeContractValidation.BindingHash(serverDerivedBinding, JsonOptions);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         int inserted;
@@ -96,7 +95,8 @@ internal sealed class RuntimeRegistrationStore
         if (registeredCurrent is null)
             throw new InvalidOperationException("A runtime registration head has no current revision.");
         var registered = registeredCurrent.Value.Registration;
-        if (registered.Binding != serverDerivedBinding || registered.ExpiresAt != expiresAt)
+        if (!RuntimeContractValidation.SameBinding(registered.Binding, serverDerivedBinding) ||
+            registered.ExpiresAt != expiresAt)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
         RequireAvailable(registered);
         if (revalidateCurrentAuthority is not null)
@@ -132,10 +132,8 @@ internal sealed class RuntimeRegistrationStore
         RuntimeContractValidation.Validate(candidate);
         RequireAvailable(candidate);
         var bindingJson = JsonSerializer.Serialize(serverDerivedBinding, JsonOptions);
-        var bindingHash = RuntimeContractValidation.Hash(
-            JsonSerializer.SerializeToUtf8Bytes(serverDerivedBinding, JsonOptions));
-        var expectedHash = RuntimeContractValidation.Hash(
-            JsonSerializer.SerializeToUtf8Bytes(expected.Binding, JsonOptions));
+        var bindingHash = RuntimeContractValidation.BindingHash(serverDerivedBinding, JsonOptions);
+        var expectedHash = RuntimeContractValidation.BindingHash(expected.Binding, JsonOptions);
         if (bindingHash == expectedHash)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
 
@@ -163,9 +161,9 @@ internal sealed class RuntimeRegistrationStore
         var replayedRevocation =
             current.Revision == expected.Revision + 1 &&
             current.State == RuntimeRegistrationState.Revoked &&
-            current.Binding == expected.Binding &&
+            RuntimeContractValidation.SameBinding(current.Binding, expected.Binding) &&
             current.ExpiresAt == expected.ExpiresAt;
-        if (!replayedRevocation && current != expected)
+        if (!replayedRevocation && !RuntimeContractValidation.SameRegistration(current, expected))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
 
         if (!replayedRevocation)
@@ -219,7 +217,8 @@ internal sealed class RuntimeRegistrationStore
         if (replacementCurrent is null)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
         var replacement = replacementCurrent.Value.Registration;
-        if (replacement.Binding != serverDerivedBinding || replacement.ExpiresAt != expiresAt ||
+        if (!RuntimeContractValidation.SameBinding(replacement.Binding, serverDerivedBinding) ||
+            replacement.ExpiresAt != expiresAt ||
             replacement.State != RuntimeRegistrationState.Active)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
         RequireAvailable(replacement);
@@ -470,8 +469,7 @@ internal sealed class RuntimeRegistrationStore
     {
         var binding = JsonSerializer.Deserialize<RuntimeBinding>(reader.GetString(2), JsonOptions)
             ?? throw new InvalidOperationException("A stored runtime binding is invalid.");
-        if (RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(binding, JsonOptions)) !=
-            reader.GetString(3))
+        if (RuntimeContractValidation.BindingHash(binding, JsonOptions) != reader.GetString(3))
             throw new InvalidOperationException("A stored runtime binding hash does not match.");
         var registration = new RuntimeRegistration(
             reader.GetGuid(0), reader.GetInt64(1), binding,

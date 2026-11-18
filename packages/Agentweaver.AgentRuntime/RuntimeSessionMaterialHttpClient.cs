@@ -262,7 +262,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
         CancellationToken cancellationToken)
     {
         request.Validate();
-        if (registration != request.Registration)
+        if (RuntimeContractValidation.RegistrationHash(registration) !=
+            RuntimeContractValidation.RegistrationHash(request.Registration))
             throw new RuntimeAuthorizationException("runtime_resume_registration_stale");
         var binding = registration.Binding;
         var identity = request.Resume.SourceManifest.Identity;
@@ -295,7 +296,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
         CancellationToken cancellationToken)
     {
         request.Validate();
-        if (registration != request.Registration)
+        if (RuntimeContractValidation.RegistrationHash(registration) !=
+            RuntimeContractValidation.RegistrationHash(request.Registration))
             throw new RuntimeAuthorizationException("runtime_resume_registration_stale");
         var binding = registration.Binding;
         var source = request.Resume.SourceManifest;

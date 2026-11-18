@@ -168,7 +168,8 @@ internal sealed class RuntimeUsageSourceOwner(
         return ExecuteWriteAsync(context, request.Authorization,
             async (connection, transaction, registration, grant, actor, token) =>
             {
-                if (request.Receipt.Registration != registration)
+                if (RuntimeContractValidation.RegistrationHash(request.Receipt.Registration) !=
+                    RuntimeContractValidation.RegistrationHash(registration))
                     throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
                 var source = await store.ReadCurrentSourceForGrantAsync(
                     connection, transaction, registration, grant, token).ConfigureAwait(false);
@@ -391,7 +392,7 @@ internal sealed class RuntimeUsageSourceOwner(
                 context, expected.RuntimeInstanceId, async (registration, currentToken) =>
                 {
                     // The registration must not have changed since the caller read it.
-                    if (registration != expected)
+                    if (!RuntimeContractValidation.SameRegistration(registration, expected))
                         throw new RuntimeAuthorizationException("runtime_registration_stale");
                     // First owner authority check: the caller must still be the current coordination owner.
                     await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
@@ -435,7 +436,7 @@ internal sealed class RuntimeUsageSourceOwner(
                     (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                         context, expected.RuntimeInstanceId, async (registration, currentToken) =>
                         {
-                            if (registration != expected)
+                            if (!RuntimeContractValidation.SameRegistration(registration, expected))
                                 throw new RuntimeAuthorizationException("runtime_registration_stale");
                             await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
                             if (!bearer.IsUsable() || registration.ExpiresAt <= timeProvider.GetUtcNow())
@@ -474,7 +475,7 @@ internal sealed class RuntimeUsageSourceOwner(
             (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                 context, expected.RuntimeInstanceId, async (registration, currentToken) =>
                 {
-                    if (registration != expected)
+                    if (!RuntimeContractValidation.SameRegistration(registration, expected))
                         throw new RuntimeAuthorizationException("runtime_registration_stale");
                     await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
                     return await store.RequireNativeTurnAccountedWithinTransactionAsync(
@@ -558,7 +559,8 @@ internal sealed class RuntimeUsageSourceOwner(
             cancellationToken).ConfigureAwait(false);
         var current = await registrations.ReadCurrentAsync(context, runtimeInstanceId, cancellationToken)
             .ConfigureAwait(false);
-        if (recorded.Admission.Registration != current)
+        if (RuntimeContractValidation.RegistrationHash(recorded.Admission.Registration) !=
+            RuntimeContractValidation.RegistrationHash(current))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         return recorded;
     }

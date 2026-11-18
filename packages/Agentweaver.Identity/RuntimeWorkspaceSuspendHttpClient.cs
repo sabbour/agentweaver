@@ -234,7 +234,9 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
             throw new RuntimeAuthorizationException("runtime_workspace_flush_receipt_missing");
         receipt.ValidateFor(flush);
         if (host.OperationId != request.Suspend.OperationId || host.ManifestId != request.Suspend.ManifestId ||
-            host.Registration != request.Suspend.Proof.Registration || host.WorkspaceFlush != receipt)
+            RuntimeContractValidation.RegistrationHash(host.Registration) !=
+                RuntimeContractValidation.RegistrationHash(request.Suspend.Proof.Registration) ||
+            host.WorkspaceFlush != receipt)
             throw new RuntimeAuthorizationException("runtime_suspend_receipt_binding_invalid");
         ValidateHostReceipt(host, request.Suspend, _time.GetUtcNow());
         return result;
@@ -250,7 +252,8 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         var registration = request.Proof.Registration;
         var grant = receipt.SourceGrant;
         if (receipt.OperationId != request.OperationId || receipt.ManifestId != request.ManifestId ||
-            receipt.Registration != registration ||
+            RuntimeContractValidation.RegistrationHash(receipt.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
             grant.GrantId != request.Proof.SourceGrantId || grant.Revision != request.Proof.SourceGrantRevision ||
             request.Proof.Purpose != RuntimeCredentialPurpose.Observe || grant.ExpiresAt <= now)
             throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
@@ -285,7 +288,8 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
             throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
         SessionMaterialValidation.Validate(cache.Reference!);
         RuntimeNativeTurnContract.ValidateRecorded(receipt.NativeTurn);
-        if (receipt.NativeTurn.Admission.Registration != registration)
+        if (RuntimeContractValidation.RegistrationHash(receipt.NativeTurn.Admission.Registration) !=
+            RuntimeContractValidation.RegistrationHash(registration))
             throw new RuntimeAuthorizationException("runtime_suspend_native_turn_binding_invalid");
         receipt.WorkspaceFlush.Validate();
     }

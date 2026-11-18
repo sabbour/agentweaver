@@ -127,7 +127,7 @@ internal sealed class ReviewedRemoteToolResultMaterialService(
                 await bindings.VerifyPinnedAsync(context.User, pinned, currentToken).ConfigureAwait(false);
                 var currentRegistration = await runtime.ReadCurrentAsync(
                     proof.RuntimeInstanceId, actor, currentToken).ConfigureAwait(false);
-                if (currentRegistration != registration)
+                if (!RuntimeContractValidation.SameRegistration(currentRegistration, registration))
                     throw new RuntimeAuthorizationException("runtime_remote_tool_result_registration_changed");
                 var currentSource = await runtime.ReadSourceAsync(
                     currentRegistration, actor, currentToken).ConfigureAwait(false);
