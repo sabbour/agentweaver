@@ -682,8 +682,9 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
         try
         {
-            var refused = await Assert.ThrowsAsync<PostgresException>(
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => migrator.MigrateAsync("20261118062007_AddProjectSkillTrustEvidence"));
+            var refused = Assert.IsType<PostgresException>(failure.InnerException);
 
             Assert.Equal("55000", refused.SqlState);
             Assert.Contains(
