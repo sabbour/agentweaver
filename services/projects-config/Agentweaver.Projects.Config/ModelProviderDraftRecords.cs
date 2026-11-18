@@ -63,8 +63,11 @@ public sealed class ModelProviderDraftRevisionRecord
     public int? PromptCapacityTokens { get; set; }
     public required string ConfigurationHash { get; set; }
     public string? CredentialVersion { get; set; }
+    public Guid? CredentialSlotId { get; set; }
+    public string? CredentialSecretId { get; set; }
     public string? RateCardId { get; set; }
     public string? RateCardVersion { get; set; }
+    public string? RateCardPinJson { get; set; }
     public required string CreatedByActorId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
@@ -79,7 +82,9 @@ public sealed record SaveModelProviderDraftRequest(
     string? WireApi = null,
     string? AzureApiVersion = null,
     ImmutableArray<string> ReasoningEfforts = default,
-    int? PromptCapacityTokens = null);
+    int? PromptCapacityTokens = null,
+    string? RateCardId = null,
+    string? RateCardVersion = null);
 
 public sealed record ModelProviderDraft(
     ModelProviderDraftState State,

@@ -301,19 +301,17 @@ public sealed partial class ProjectsConfigPostgresTests
             providerId,
             DraftRequest(Guid.NewGuid(), 0),
             CancellationToken.None);
-        var publication = new ModelProviderCredentialPublicationRequest(
-            Guid.NewGuid(),
-            initial.Binding.ProviderRevision,
-            ModelProviderBindingScope.Platform,
-            null,
-            providerId,
-            "0123456789abcdef0123456789abcdef");
+        var publication = PublicationRequest(
+            Guid.NewGuid(), initial.Binding.ProviderRevision, ModelProviderBindingScope.Platform,
+            null, providerId, "0123456789abcdef0123456789abcdef");
 
         var receipt = await service.PublishCredentialAsync(publication, admin.ActorId, CancellationToken.None);
 
         Assert.Equal(publication.OperationId, receipt.OperationId);
         Assert.Equal(2, receipt.ProviderRevision);
         Assert.Equal(publication.CredentialVersion, receipt.CredentialVersion);
+        Assert.Equal(publication.CredentialIdentity, receipt.CredentialIdentity);
+        Assert.Equal(publication.CredentialReference, receipt.CredentialReference);
         Assert.Equal(initial.Binding.ConfigurationHash, receipt.ConfigurationHash);
 
         var renamed = await service.SaveAsync(
@@ -325,6 +323,8 @@ public sealed partial class ProjectsConfigPostgresTests
             CancellationToken.None);
         Assert.Equal(3, renamed.Binding.ProviderRevision);
         Assert.Equal(publication.CredentialVersion, renamed.Binding.CredentialVersion);
+        Assert.Equal(publication.CredentialIdentity, renamed.Binding.CredentialIdentity);
+        Assert.Equal(publication.CredentialReference, renamed.Binding.CredentialReference);
         Assert.True(ModelProviderDraftEndpoints.Project(renamed).HasCredential);
 
         var replay = await service.PublishCredentialAsync(publication, admin.ActorId, CancellationToken.None);
@@ -333,7 +333,12 @@ public sealed partial class ProjectsConfigPostgresTests
 
         var changedReplay = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             service.PublishCredentialAsync(
-                publication with { CredentialVersion = "fedcba9876543210fedcba9876543210" },
+                publication with
+                {
+                    CredentialVersion = "fedcba9876543210fedcba9876543210",
+                    CredentialReference = new(
+                        publication.CredentialReference.Id, "fedcba9876543210fedcba9876543210")
+                },
                 admin.ActorId,
                 CancellationToken.None));
         Assert.Equal("model_provider_draft_conflict", changedReplay.Code);
@@ -357,13 +362,8 @@ public sealed partial class ProjectsConfigPostgresTests
         await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
         var owner = new RuntimeRateCardTestClient(false, true, true);
         var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
-        var firstRequest = new ModelProviderCredentialPublicationRequest(
-            Guid.NewGuid(),
-            1,
-            ModelProviderBindingScope.Platform,
-            null,
-            providerId,
-            "0123456789abcdef0123456789abcdef");
+        var firstRequest = PublicationRequest(Guid.NewGuid(), 1, ModelProviderBindingScope.Platform,
+            null, providerId, "0123456789abcdef0123456789abcdef");
 
         var firstReceipt = await service.PublishCredentialAsync(firstRequest, actorId, CancellationToken.None);
         Assert.Equal(2, firstReceipt.ProviderRevision);
@@ -401,6 +401,8 @@ public sealed partial class ProjectsConfigPostgresTests
                 OperationId = Guid.NewGuid(),
                 ExpectedProviderRevision = retryReceipt.ProviderRevision,
                 CredentialVersion = "fedcba9876543210fedcba9876543210",
+                CredentialReference = new(
+                    retryRequest.CredentialReference.Id, "fedcba9876543210fedcba9876543210"),
             },
             actorId,
             CancellationToken.None);
@@ -426,13 +428,8 @@ public sealed partial class ProjectsConfigPostgresTests
         await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
         var owner = new RuntimeRateCardTestClient(true, false);
         var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
-        var initialRequest = new ModelProviderCredentialPublicationRequest(
-            Guid.NewGuid(),
-            1,
-            ModelProviderBindingScope.Platform,
-            null,
-            providerId,
-            "0123456789abcdef0123456789abcdef");
+        var initialRequest = PublicationRequest(Guid.NewGuid(), 1, ModelProviderBindingScope.Platform,
+            null, providerId, "0123456789abcdef0123456789abcdef");
 
         var initialReceipt = await service.PublishCredentialAsync(initialRequest, actorId, CancellationToken.None);
         Assert.Equal(2, initialReceipt.ProviderRevision);
@@ -448,6 +445,8 @@ public sealed partial class ProjectsConfigPostgresTests
             OperationId = Guid.NewGuid(),
             ExpectedProviderRevision = initialReceipt.ProviderRevision,
             CredentialVersion = "fedcba9876543210fedcba9876543210",
+            CredentialReference = new(
+                initialRequest.CredentialReference.Id, "fedcba9876543210fedcba9876543210"),
         };
         var rotationReceipt = await service.PublishCredentialAsync(rotationRequest, actorId, CancellationToken.None);
 
@@ -483,13 +482,8 @@ public sealed partial class ProjectsConfigPostgresTests
         var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
 
         var receipt = await service.PublishCredentialAsync(
-            new ModelProviderCredentialPublicationRequest(
-                Guid.NewGuid(),
-                1,
-                ModelProviderBindingScope.Platform,
-                null,
-                providerId,
-                "0123456789abcdef0123456789abcdef"),
+            PublicationRequest(Guid.NewGuid(), 1, ModelProviderBindingScope.Platform,
+                null, providerId, "0123456789abcdef0123456789abcdef"),
             actorId,
             CancellationToken.None);
 
@@ -694,11 +688,31 @@ public sealed partial class ProjectsConfigPostgresTests
 
         public List<(string Id, string Version)> Requests { get; } = [];
 
-        public Task<bool> VerifyAsync(string id, string version, CancellationToken cancellationToken)
+        public async Task<bool> VerifyAsync(string id, string version, CancellationToken cancellationToken) =>
+            await ReadPinAsync(id, version, cancellationToken) is not null;
+
+        public Task<RuntimeRateCardPin?> ReadPinAsync(
+            string id, string version, CancellationToken cancellationToken)
         {
             Requests.Add((id, version));
-            return Task.FromResult(results[_nextResult++]);
+            var available = results[_nextResult++];
+            RuntimeRateCardPin? pin = available
+                ? new RuntimeRateCardPin(id, version, new string('c', 64),
+                    new ManualRuntimeRateCardReadProvenance(
+                        "https://pricing.example/rate-card", new DateOnly(2026, 1, 1)))
+                : null;
+            return Task.FromResult(pin);
         }
+    }
+
+    private static ModelProviderCredentialPublicationRequest PublicationRequest(
+        Guid operationId, long expectedRevision, ModelProviderBindingScope scope,
+        string? projectId, string providerId, string credentialVersion)
+    {
+        var identity = new ModelCredentialIdentity(Guid.NewGuid(), scope, projectId, providerId);
+        return new ModelProviderCredentialPublicationRequest(
+            operationId, expectedRevision, scope, projectId, providerId, credentialVersion,
+            identity, new SecretRef($"secret:{providerId}", credentialVersion));
     }
 
     private static SaveModelProviderDraftRequest DraftRequest(Guid operationId, long expectedRevision) =>

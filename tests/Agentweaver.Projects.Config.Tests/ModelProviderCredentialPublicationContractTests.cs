@@ -58,7 +58,10 @@ public sealed class ModelProviderCredentialPublicationContractTests
             ModelProviderBindingScope.Project,
             "project-1",
             "provider-1",
-            "0123456789abcdef0123456789abcdef");
+            "0123456789abcdef0123456789abcdef",
+            new(Guid.Parse("0ef1ea5e-d94b-41d0-9380-900b1c532bf2"),
+                ModelProviderBindingScope.Project, "project-1", "provider-1"),
+            new("credential-secret", "0123456789abcdef0123456789abcdef"));
 
     private static ClaimsPrincipal Principal(
         ModelProviderCredentialPublicationRequest request,
@@ -74,5 +77,7 @@ public sealed class ModelProviderCredentialPublicationContractTests
             new Claim("project_id", request.ProjectId ?? string.Empty),
             new Claim("provider_id", request.ProviderId),
             new Claim("credential_version", request.CredentialVersion),
+            new Claim("credential_slot_id", request.CredentialIdentity.CredentialSlotId.ToString("D")),
+            new Claim("credential_secret_id", request.CredentialReference.Id),
         ], "test"));
 }

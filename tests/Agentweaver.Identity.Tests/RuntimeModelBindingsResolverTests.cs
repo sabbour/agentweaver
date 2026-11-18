@@ -286,7 +286,8 @@ public sealed class RuntimeModelBindingsResolverTests
             credentialReference = new SecretRef("runtime-key", binding.CredentialVersion!),
             credentialIdentity = identity,
             reasoningEffort = "low",
-            modelBindingPin = pin
+            modelBindingPin = pin,
+            providerBindingRevision = binding
         };
         var snapshot = JsonSerializer.SerializeToElement(new { modelSelection = model }, options);
 
@@ -586,8 +587,15 @@ public sealed class RuntimeModelBindingsResolverTests
             ["accepted-reference"] = new("concrete-model", ModelSourceMode.HostedCopilot)
         });
 
-    private static ModelProviderBindingRevision RuntimeProviderBinding(string configurationHash) =>
-        new(ModelProviderBindingRevision.CurrentContractVersion,
+    private static ModelProviderBindingRevision RuntimeProviderBinding(string configurationHash)
+    {
+        var card = new CostRateCard("rate-card-v1", "1", SdkMeterSources.ByokTokens,
+            "USD", 1_000_000m, ImmutableDictionary<string, decimal>.Empty);
+        var provenance = new ManualRuntimeRateCardReadProvenance(
+            "https://pricing.example/rate-card", new DateOnly(2026, 1, 1));
+        var rateCardPin = RuntimeRateCardReadContract.CreatePin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, provenance));
+        return new(ModelProviderBindingRevision.CurrentContractVersion,
             "runtime-provider",
             ModelProviderBindingScope.Project,
             "project-1",
@@ -603,7 +611,14 @@ public sealed class RuntimeModelBindingsResolverTests
             "fedcba9876543210fedcba9876543210",
             "rate-card-v1",
             "1",
-            configurationHash);
+            configurationHash)
+        {
+            CredentialIdentity = new(Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                ModelProviderBindingScope.Project, "project-1", "runtime-provider"),
+            CredentialReference = new("runtime-key", "fedcba9876543210fedcba9876543210"),
+            RateCardPin = rateCardPin
+        };
+    }
 
     private static RuntimeAcceptedModelSelection RuntimeProviderSelection(
         ModelProviderBindingRevision binding) =>

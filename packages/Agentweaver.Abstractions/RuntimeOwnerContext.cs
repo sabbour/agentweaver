@@ -46,6 +46,12 @@ public sealed record RuntimeOwnerContext(
     /// <summary>Full immutable model binding used to detect a changed runtime configuration.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
+    /// <summary>Exact provider, credential, and Events rate-card revision accepted for project BYOK.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelProviderBindingRevision? ProviderBindingRevision { get; init; }
+    /// <summary>Events-verified rate-card pin for this exact BYOK model selection.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeRateCardAdmission? RuntimeRateCardAdmission { get; init; }
     /// <summary>Identity of the configured model connection, when selection uses one.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? ModelConnectionId { get; init; }

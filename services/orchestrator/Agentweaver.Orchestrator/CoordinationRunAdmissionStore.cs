@@ -24,21 +24,48 @@ internal sealed partial class CoordinationOwnerStore
         if (selection.ValueKind != JsonValueKind.Object)
             throw new CoordinationException(
                 "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        var requiresRateCardAdmission = false;
+        var hasProviderRevision = selection.TryGetProperty("modelSelection", out var primaryModel) &&
+            primaryModel.ValueKind == JsonValueKind.Object &&
+            primaryModel.TryGetProperty("providerBindingRevision", out var primaryProviderBinding) &&
+            primaryProviderBinding.ValueKind != JsonValueKind.Null;
+        if (hasProviderRevision || selection.TryGetProperty("modelSelections", out _))
+        {
+            try
+            {
+                requiresRateCardAdmission = RuntimeAcceptedModelSelection.ReadAll(selection)
+                    .Any(model => model.SourceMode == ModelSourceMode.Byok &&
+                        model.ProviderBindingRevision is not null);
+            }
+            catch (RuntimeAuthorizationException exception)
+            {
+                throw new CoordinationException(
+                    "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway, exception);
+            }
+        }
         if (!selection.TryGetProperty("runLimits", out _))
-            return false;
+            return requiresRateCardAdmission;
         var limits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection);
         if (limits.CopilotSoftCreditLimit is null && limits.CopilotHardCreditLimit is null)
-            return false;
+            return requiresRateCardAdmission;
+        RuntimeAcceptedModelSelection model;
         try
         {
-            var model = RuntimeAcceptedModelSelection.Read(selection);
-            // A BYOK run is not billed in Copilot credits. It is admitted without the Copilot receipt
-            // only when a hard USD run budget on BYOK tokens limits it instead.
+            model = RuntimeAcceptedModelSelection.Read(selection);
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            throw new CoordinationException(
+                "runtime_cost_budget_model_unavailable", StatusCodes.Status409Conflict, exception);
+        }
+        try
+        {
+            // BYOK USD budgets are enforced by the BYOK meter, not by the hosted-Copilot quote.
             if (model.SourceMode == ModelSourceMode.Byok &&
                 CoordinatorWorkflowCatalog.ReadSpendBudgets(selection).Any(budget =>
                     budget is { Scope: SpendBudgetScopes.Run, MeterSource: SdkMeterSources.ByokTokens,
                         Unit: "USD", HardLimit: not null }))
-                return false;
+                return requiresRateCardAdmission;
             if (model.SourceMode != ModelSourceMode.HostedCopilot ||
                 model.ConnectionId is null || model.CredentialReference is not null)
                 throw new CoordinationException(
@@ -84,7 +111,8 @@ internal sealed partial class CoordinationOwnerStore
             var observed = ValidateRunAdmission(admission, selection);
             var hard = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(scope.Snapshot).CopilotHardCreditLimit;
             // Admission may complete at the exact cap; the next model dispatch is denied at its owner boundary.
-            if (hard is { } limit && observed > limit)
+            if (admission.ModelSelection.SourceMode == ModelSourceMode.HostedCopilot &&
+                hard is { } limit && observed > limit)
                 throw new CoordinationException(
                     "runtime_cost_budget_exhausted", StatusCodes.Status409Conflict);
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -175,7 +203,8 @@ internal sealed partial class CoordinationOwnerStore
             var hardCreditLimit = CoordinatorWorkflowCatalog
                 .ReadRuntimeBudgetLimits(scope.Snapshot).CopilotHardCreditLimit;
             // A hard cap cannot treat unknown pricing or prior unpriced usage as free at run start.
-            if (hardCreditLimit is not null &&
+            if (admission.ModelSelection.SourceMode == ModelSourceMode.HostedCopilot &&
+                hardCreditLimit is not null &&
                 (admission.Quote.Disposition == CostDisposition.Unpriced ||
                  !admission.CopilotTotals.IsFullyPriced))
                 throw new CoordinationException(

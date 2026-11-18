@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
@@ -46,14 +47,42 @@ internal sealed class RuntimeRunAdmissionService(
             }
             var selection = await ReadSelection(cancellationToken).ConfigureAwait(false);
             var model = RuntimeAcceptedModelSelection.Read(selection);
-            if (model.SourceMode != ModelSourceMode.HostedCopilot || model.ConnectionId is null ||
-                model.CredentialReference is not null)
+            var rateCardModels = RuntimeAcceptedModelSelection.ReadAll(selection)
+                .Where(candidate => candidate.SourceMode == ModelSourceMode.Byok &&
+                    candidate.ProviderBindingRevision is not null)
+                .ToImmutableArray();
+            RuntimeModelBindingPin pin;
+            if (model.SourceMode == ModelSourceMode.HostedCopilot &&
+                model.ConnectionId is not null && model.CredentialReference is null)
+            {
+                _ = models.Resolve(model.Reference, model.SourceMode, model.ModelBindingPin);
+                pin = models.Pin(model.Reference, ModelSourceMode.HostedCopilot, model.ReasoningEffort);
+            }
+            else if (model.SourceMode == ModelSourceMode.Byok)
+            {
+                if (model.ProviderBindingRevision is { } providerBinding)
+                {
+                    _ = models.ResolveAcceptedRuntimeBinding(model, providerBinding);
+                    pin = model.ModelBindingPin
+                        ?? throw new RuntimeAuthorizationException("runtime_model_binding_pin_required");
+                }
+                else
+                {
+                    _ = models.Resolve(model.Reference, model.SourceMode, model.ModelBindingPin);
+                    pin = model.ModelBindingPin
+                        ?? models.Pin(model.Reference, ModelSourceMode.Byok, model.ReasoningEffort);
+                }
+            }
+            else
                 throw new RuntimeAuthorizationException("runtime_run_admission_model_mode_invalid");
-            _ = models.Resolve(model.Reference, model.SourceMode, model.ModelBindingPin);
-            var pin = models.Pin(
-                model.Reference, ModelSourceMode.HostedCopilot, model.ReasoningEffort);
+            foreach (var rateCardModel in rateCardModels)
+            {
+                if (rateCardModel.ProviderBindingRevision is not { } providerBinding)
+                    throw new RuntimeAuthorizationException("runtime_run_admission_model_mode_invalid");
+                _ = models.ResolveAcceptedRuntimeBinding(rateCardModel, providerBinding);
+            }
             return await consumer.ReadRunAdmissionAsync(
-                first.TenantId, projectId, runId, request, selection, model, pin, async token =>
+                first.TenantId, projectId, runId, request, selection, model, pin, rateCardModels, async token =>
                 {
                     _ = await ReadSelection(token).ConfigureAwait(false);
                     var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);

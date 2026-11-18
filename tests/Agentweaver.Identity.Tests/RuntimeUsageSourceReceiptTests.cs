@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 using Xunit;
 
 namespace Agentweaver.Identity.Tests;
@@ -1585,6 +1587,101 @@ public sealed class RuntimeUsageSourceReceiptTests
             RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
     }
 
+    private static RuntimeUsageSourceReceipt ProjectByokReceipt()
+    {
+        var card = new CostRateCard(
+            "manual-provider-card",
+            "v1",
+            SdkMeterSources.ByokTokens,
+            "USD",
+            1_000_000m,
+            ImmutableDictionary<string, decimal>.Empty);
+        var provenance = new ManualRuntimeRateCardReadProvenance(
+            "https://pricing.example/rate-card", new DateOnly(2026, 1, 1));
+        var rateCardPin = RuntimeRateCardReadContract.CreatePin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, provenance));
+        var identity = new ModelCredentialIdentity(
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            ModelProviderBindingScope.Project,
+            "project",
+            "provider");
+        var provider = new ModelProviderBindingRevision(
+            ModelProviderBindingRevision.CurrentContractVersion,
+            "provider",
+            ModelProviderBindingScope.Project,
+            "project",
+            "Customer provider",
+            "azure",
+            "https://provider.example",
+            "deployment-1",
+            "responses",
+            null,
+            ["high"],
+            null,
+            3,
+            "credential-v1",
+            rateCardPin.RateCardId,
+            rateCardPin.RateCardVersion,
+            new string('d', 64))
+        {
+            CredentialIdentity = identity,
+            CredentialReference = new("provider-credential", "credential-v1"),
+            RateCardPin = rateCardPin
+        };
+        var modelPin = RuntimeModelBindingsResolver.Pin(provider);
+        var admissionBinding = new CostBinding(
+            SdkMeterSources.ByokTokens,
+            "events.runtime-rate-card",
+            "1.0.0",
+            1,
+            provider.ConfigurationHash,
+            rateCardPin.RateCardId,
+            provider.ProviderRevision,
+            ImmutableHashSet.Create(StringComparer.Ordinal, "cost.usage.price"),
+            card)
+        {
+            RuntimeRateCardPin = rateCardPin,
+            RuntimeByokIdentity = RuntimeByokCostBindingIdentity.From(modelPin, provider)
+        };
+        var hosted = Receipt();
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSelectionReference = provider.ProviderId,
+                ModelSourceMode = ModelSourceMode.Byok,
+                ReasoningEffort = "high",
+                ModelCredentialReference = new("provider-credential", "credential-v1"),
+                ModelCredentialIdentity = identity,
+                ModelBindingPin = modelPin,
+                ProviderBindingRevision = provider,
+                RuntimeRateCardAdmission = new(modelPin, provider, admissionBinding)
+            }
+        };
+        var source = hosted.Usage.SdkSource! with
+        {
+            ModelSelectionReference = provider.ProviderId,
+            ModelId = provider.Deployment,
+            SourceMode = "byok",
+            MeterSource = SdkMeterSources.ByokTokens,
+            ModelMultiplier = null,
+            ByokProvider = new(provider.ProviderType, provider.Deployment, provider.ConfigurationHash),
+            ModelBindingPin = modelPin,
+            ResolvedModelBindingPin = modelPin
+        };
+        var sdkEventId = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEventId),
+            sdkEventId, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, 0, 0, 3, null, 12.5m)
+        {
+            A2AMessageId = Guid.NewGuid()
+        };
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
+        return new(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+    }
+
     // Recomputes the payload hash after a test edits a field. The receipt then passes the hash check, so
     // the Azure-specific rule is what rejects it, not the hash.
     private static RuntimeUsageSourceReceipt Reseal(RuntimeUsageSourceReceipt receipt) =>
@@ -1650,6 +1747,57 @@ public sealed class RuntimeUsageSourceReceiptTests
             Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(
                 Reseal(uncorrelated with { Usage = uncorrelated.Usage with { SdkSource = tampered } })));
         }
+    }
+
+    [Fact]
+    public void TrustedProjectByokUsageRequiresTheAcceptedProviderAndCredentialRevision()
+    {
+        var receipt = ProjectByokReceipt();
+
+        RuntimeUsageSourceReceiptContract.RequireTrustedRuntimeByok(receipt);
+        var wireOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var roundTripped = JsonSerializer.Deserialize<RuntimeUsageSourceReceipt>(
+            JsonSerializer.Serialize(receipt, wireOptions), wireOptions)!;
+        RuntimeUsageSourceReceiptContract.RequireTrustedRuntimeByok(roundTripped);
+
+        var source = receipt.Usage.SdkSource!;
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedRuntimeByok(Reseal(receipt with
+            {
+                Usage = receipt.Usage with
+                {
+                    SdkSource = source with
+                    {
+                        ByokProvider = source.ByokProvider! with { DeploymentId = "other-deployment" }
+                    }
+                }
+            })));
+
+        var staleCredential = receipt with
+        {
+            Registration = receipt.Registration with
+            {
+                Binding = receipt.Registration.Binding with
+                {
+                    ModelCredentialReference = new("provider-credential", "credential-v2")
+                }
+            }
+        };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedRuntimeByok(Reseal(staleCredential)));
+
+        var missingRevision = receipt with
+        {
+            Registration = receipt.Registration with
+            {
+                Binding = receipt.Registration.Binding with { ProviderBindingRevision = null }
+            }
+        };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedRuntimeByok(Reseal(missingRevision)));
     }
 
     [Fact]

@@ -300,15 +300,17 @@ server-owned pin for the exact selected reference, source mode, and effort; it k
 distinct from any accepted pin. A supplied accepted pin must agree with the selected effort, and
 BYOK still requires that accepted pin. AgentHost rejects a changed accepted pin before it starts
 the SDK client.
-The resolver also has a per-run path for a trusted `ModelProviderBindingRevision` carried with
-an accepted BYOK selection. It requires the provider revision and configuration hash, provider
-type, deployment/model ID, and reasoning effort to match the run pin. It also requires the
-provider's credential version to match the exact `SecretRef` in the selection. This path builds
-the provider binding from that revision and does not fall back to the deployment map or redeem a
-credential. A mismatch fails closed. The path uses the supplied selection for each call, so it
-does not require a host restart. The active selection writer does not yet supply runtime provider
-revisions; this consumer does not enable runtime provider selection by itself. Existing
-deploy-time bindings remain supported.
+An accepted revision-backed BYOK selection carries the complete
+`ModelProviderBindingRevision`, including the exact credential slot identity,
+`SecretRef`, and immutable Events rate-card pin. Before first dispatch,
+Orchestrator obtains a verified rate-card admission for every effective
+selection, including task overrides, and sends the matching admission with the
+provider revision to AgentHost. AgentHost checks the model, effort, revision,
+credential, and card identity before it resolves the exact credential and
+starts the SDK. It never falls back to the deployment map for a
+revision-backed selection. A selection without a provider revision keeps the
+existing deploy-time binding path; a missing revision on a revision-backed
+selection fails closed.
 Disabled bindings and source-mode mismatches deny; BYOK cannot become hosted through a fallback.
 Before session creation or resume, the host verifies the selected effort against the exact hosted
 catalog capability and supported-effort list. BYOK requires an explicit supported-effort list in
@@ -394,15 +396,25 @@ sequenceDiagram
     participant Projects
     participant Events
     participant Host as AgentHost
+    participant Identity
     Core->>Events: Accepted-selection hash only
     Events->>Projects: Read current selection and authority
-    Events->>Events: Resolve shared model map and real Cost quote
+    alt Hosted Copilot selection
+        Events->>Events: Resolve model pin and hosted credit quote
+    else Revision-backed BYOK selections
+        loop Primary and every effective task selection
+            Events->>Events: Verify exact provider/model and Events card pin
+            Events->>Events: Pin provider/model-specific cost binding
+        end
+    end
     Events->>Projects: Recheck selection and authority before Cost commit
-    Events-->>Core: Concrete model, connection, configuration, and Cost pin
+    Events-->>Core: Hosted quote or verified BYOK admissions
     Core->>Projects: Recheck after waits and before root commit
     Core->>Core: Commit root and typed admission outbox receipt together
-    Core-->>Host: Current registration with accepted model pin
-    Host->>Host: Match shared map before native SDK startup
+    Core-->>Host: Registration with accepted revision and matching admissions
+    Host->>Host: Match selected model, effort, revision, credential, and card
+    Host->>Identity: Redeem exact accepted credential reference
+    Identity-->>Host: Authorized credential version for the selected provider
 ```
 
 ## Turns, tools, and durability
@@ -423,6 +435,9 @@ A soft-only limit can retain an `Unpriced` quote; its unknown amount remains vis
 A fully priced run may start at the exact hard limit, but the owner denies the next model dispatch at the turn boundary.
 A zero hard limit permits startup only after run admission confirms a priceable source and fully priced existing usage; it then denies model-turn dispatch. Before returning the budget error, the host must record a complete-empty-range no-send proof; it never calls the SDK's native Send. A positive hard limit uses workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
 BYOK remains token-metered and does not use the Copilot nano-AIU price preflight.
+A valid revision-backed BYOK card admission does not depend on a hosted Copilot
+quote. The existing hard USD `byok.tokens` budget still blocks the next
+dispatch when BYOK usage is unpriced.
 An exact message replay shares the original completion; changed content under the same ID denies.
 Completed responses remain available for the configured host lifetime, independent of the pending-turn limit.
 The configured pending-turn limit rejects excess work explicitly.

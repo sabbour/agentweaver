@@ -149,14 +149,17 @@ the Key Vault outcome before another write can use the slot.
 The store does not authenticate users or check Projects authority. A future
 management caller must obtain fresh Projects authority before a mutation.
 For BYOK runtime use, the accepted binding carries the credential slot
-identity. The Broker checks that identity against the pinned provider, then
-reads the exact secret name and version from enabled history. The recorded
-vault source selects the redemption backend, and the recorded vault URI must
-match the configured root. The Broker never substitutes the current head or a
-newer secret version. A pin to an enabled historical version remains usable
-after the slot is disabled. Disabling a slot changes ledger state; it does not
-disable or delete the Key Vault secret. Runtime use checks the exact run and
-purpose grant before and after redemption.
+identity and exact `SecretRef`. Projects compares both with the provider
+revision when it accepts the run. Orchestrator sends the accepted values with
+the matching rate-card admission to AgentHost. The Broker checks the slot
+identity against the pinned provider, then reads the exact secret name and
+version from enabled history. The recorded vault source selects the redemption
+backend, and the recorded vault URI must match the configured root. The Broker
+never substitutes the current head or a newer secret version. A pin to an
+enabled historical version remains usable after the slot is disabled.
+Disabling a slot changes ledger state; it does not disable or delete the Key
+Vault secret. Runtime use checks the exact run and purpose grant before and
+after redemption.
 
 The Broker has a private Projects client for credential publication. It sends
 the operation ID, expected provider revision, scope, project ID, provider ID,

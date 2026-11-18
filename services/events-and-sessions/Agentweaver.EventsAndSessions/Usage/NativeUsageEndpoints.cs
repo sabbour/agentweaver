@@ -150,7 +150,8 @@ internal sealed class NativeUsageApplicationService(
                         request.CheckpointRecoveryOperationId).ConfigureAwait(false);
                     if (currentSource != sourceSnapshot)
                         throw new RuntimeAuthorizationException("runtime_cost_preflight_source_changed");
-                }, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken, binding.ProviderBindingRevision, binding.ModelBindingPin)
+                .ConfigureAwait(false);
 
             var receipt = new RuntimeUsageCostPreflightReceipt(
                 1,

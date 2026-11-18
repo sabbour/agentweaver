@@ -587,6 +587,135 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProjectByokUsageUsesTheExactEventsRateCardForPricingAndSnapshot()
+    {
+        var receipt = ProjectByokReceipt(out var card);
+        var rateCards = new RuntimeRateCardStore(_fixture.DataSource, _schema);
+        Assert.True(await rateCards.SaveAsync(card));
+        var consumer = new NativeUsageReceiptConsumer(
+            _fixture.DataSource,
+            new("native-postgres", "test", 1, _schema, "native-options", 1),
+            _ledger,
+            runtimeRateCards: rateCards);
+
+        var acknowledgment = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
+
+        Assert.Equal(CostDisposition.Estimate, acknowledgment.Accounting.Disposition);
+        Assert.Equal(0.0001m, acknowledgment.Accounting.Amount);
+        Assert.Equal("USD", acknowledgment.Accounting.Unit);
+        Assert.Equal(card.RateCard.Id, acknowledgment.Accounting.RateCardId);
+        Assert.Equal(card.RateCard.Version, acknowledgment.Accounting.RateCardVersion);
+        Assert.Equal(receipt.Registration.Binding.ProviderBindingRevision!.RateCardPin!.ContentHash,
+            acknowledgment.Accounting.RateCardContentHash);
+
+        var request = new RuntimeUsageCostSnapshotRequest(1, receipt.Registration, receipt.Usage.SdkSource!)
+        {
+            DispatchId = receipt.Usage.A2AMessageId,
+            RequiredReceipts = [new(acknowledgment.SourceReceiptId, acknowledgment.Accounting)]
+        };
+        var snapshot = await consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default);
+
+        Assert.Equal(card.RateCard.Id, snapshot.Binding!.RuntimeRateCardPin!.RateCardId);
+        Assert.Equal(card.RateCard.Version, snapshot.Binding.RuntimeRateCardPin.RateCardVersion);
+        Assert.Equal(receipt.Registration.Binding.ProviderBindingRevision.RateCardPin.ContentHash,
+            snapshot.RateCardContentHash);
+        Assert.Equal(CostDisposition.Unpriced, snapshot.Quote.Disposition);
+        Assert.Equal("byok-token-quotes-unsupported", snapshot.Quote.UnpricedReason);
+        RuntimeUsageCostSnapshotContract.ValidateObservedReceipt(snapshot, request);
+    }
+
+    [Fact]
+    public async Task ProvidersWithTheSameEventsCardKeepSeparatePinsAndOneAggregateBudgetMeter()
+    {
+        var first = ProjectByokReceipt(out var card, "provider-one");
+        var second = ProjectByokReceipt(out _, "provider-two");
+        var firstAdmission = first.Registration.Binding.RuntimeRateCardAdmission!;
+        var secondAdmission = second.Registration.Binding.RuntimeRateCardAdmission!;
+        Assert.Equal(firstAdmission.ProviderBindingRevision.RateCardPin,
+            secondAdmission.ProviderBindingRevision.RateCardPin);
+        Assert.NotEqual(firstAdmission.CostBinding.RuntimeByokIdentity,
+            secondAdmission.CostBinding.RuntimeByokIdentity);
+
+        var rateCards = new RuntimeRateCardStore(_fixture.DataSource, _schema);
+        Assert.True(await rateCards.SaveAsync(card));
+        var consumer = new NativeUsageReceiptConsumer(
+            _fixture.DataSource,
+            new("native-postgres", "test", 1, _schema, "native-options", 1),
+            _ledger,
+            runtimeRateCards: rateCards);
+        var firstAck = await consumer.AppendAsync(first, _ => Task.CompletedTask, default);
+        var secondAck = await consumer.AppendAsync(second, _ => Task.CompletedTask, default);
+
+        Assert.Equal(CostDisposition.Estimate, firstAck.Accounting.Disposition);
+        Assert.Equal(CostDisposition.Estimate, secondAck.Accounting.Disposition);
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        Assert.Equal(2, totals.Events);
+        Assert.Equal(2, Assert.Single(totals.Amounts).PricedEvents);
+        Assert.Equal(firstAck.Accounting.Amount + secondAck.Accounting.Amount,
+            Assert.Single(totals.Amounts).Amount);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var bindings = new NpgsqlCommand($"""
+            SELECT count(*), count(DISTINCT binding_identity_hash)
+            FROM "{_schema}".usage_run_cost_bindings
+            WHERE tenant_id = 'tenant-1' AND project_id = 'project-1' AND run_id = 'run-1'
+              AND meter_source = @meter
+            """, connection);
+        bindings.Parameters.AddWithValue("meter", NpgsqlDbType.Varchar, SdkMeterSources.ByokTokens);
+        await using var reader = await bindings.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(2L, reader.GetInt64(0));
+        Assert.Equal(2L, reader.GetInt64(1));
+    }
+
+    [Fact]
+    public async Task ProjectByokWithMissingEventsCardDoesNotFallBackToAzurePricing()
+    {
+        var receipt = ProjectByokReceipt(out _);
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            consumer.AppendAsync(receipt, _ => Task.CompletedTask, default));
+
+        Assert.Equal("runtime_run_admission_rate_card_unavailable", failure.Code);
+        Assert.Equal(0, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+        Assert.Equal(0, await RateCardCountAsync(
+            receipt.Registration.Binding.ProviderBindingRevision!.RateCardId!,
+            receipt.Registration.Binding.ProviderBindingRevision.RateCardVersion!));
+    }
+
+    [Fact]
+    public async Task ProjectByokRejectsAnEventsCardThatDoesNotMatchTheAcceptedHash()
+    {
+        var receipt = ProjectByokReceipt(out var card);
+        var rateCards = new RuntimeRateCardStore(_fixture.DataSource, _schema);
+        await rateCards.SaveAsync(card);
+        var provider = receipt.Registration.Binding.ProviderBindingRevision!;
+        var changedPin = provider.RateCardPin! with { ContentHash = new string('b', 64) };
+        var changedProvider = provider with { RateCardPin = changedPin };
+        var changedRegistration = receipt.Registration with
+        {
+            Binding = receipt.Registration.Binding with { ProviderBindingRevision = changedProvider }
+        };
+        var changedReceipt = receipt with
+        {
+            Registration = changedRegistration,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(changedRegistration, receipt.Usage)
+        };
+        var consumer = new NativeUsageReceiptConsumer(
+            _fixture.DataSource,
+            new("native-postgres", "test", 1, _schema, "native-options", 1),
+            _ledger,
+            runtimeRateCards: rateCards);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            consumer.AppendAsync(changedReceipt, _ => Task.CompletedTask, default));
+
+        Assert.Equal("runtime_run_admission_rate_card_mismatch", failure.Code);
+        Assert.Equal(0, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    [Fact]
     public async Task SpendEvidenceReportsAgentTotalsAndWitnessesDispatchesFromOtherRuns()
     {
         // Store one priced receipt for run-1, then ask for run, project, and agent totals plus its dispatch witness.
@@ -2018,6 +2147,109 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             17, 11, 0, 0, 3, null, 12.5m)
         {
             A2AMessageId = withoutA2AMessageId ? null : Guid.NewGuid()
+        };
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
+        return new(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+    }
+
+    private static RuntimeUsageSourceReceipt ProjectByokReceipt(
+        out RuntimeRateCard runtimeRateCard, string providerId = "provider")
+    {
+        var card = new CostRateCard(
+            "manual-provider-card",
+            "v1",
+            SdkMeterSources.ByokTokens,
+            "USD",
+            AzureCostProviderOptions.TokensPerRateUnit,
+            ImmutableDictionary.CreateRange(StringComparer.Ordinal, new[]
+            {
+                KeyValuePair.Create(AzureCostProviderOptions.InputRateKey("deployment-1"), 2m),
+                KeyValuePair.Create(AzureCostProviderOptions.OutputRateKey("deployment-1"), 6m)
+            }));
+        var provenance = new ManualRuntimeRateCardReadProvenance(
+            "https://pricing.example/rate-card", new DateOnly(2026, 1, 1));
+        var rateCardPin = RuntimeRateCardReadContract.CreatePin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, provenance));
+        runtimeRateCard = new(
+            card,
+            new ManualRateCardProvenance(provenance.SourceUrl, provenance.RetrievedOn));
+        var identity = new ModelCredentialIdentity(
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            ModelProviderBindingScope.Project,
+            "project-1",
+            providerId);
+        var provider = new ModelProviderBindingRevision(
+            ModelProviderBindingRevision.CurrentContractVersion,
+            providerId,
+            ModelProviderBindingScope.Project,
+            "project-1",
+            "Customer provider",
+            "azure",
+            "https://provider.example",
+            "deployment-1",
+            "responses",
+            null,
+            ["high"],
+            null,
+            3,
+            "credential-v1",
+            card.Id,
+            card.Version,
+            new string('d', 64))
+        {
+            CredentialIdentity = identity,
+            CredentialReference = new(providerId + "-credential", "credential-v1"),
+            RateCardPin = rateCardPin
+        };
+        var modelPin = RuntimeModelBindingsResolver.Pin(provider);
+        var admissionBinding = new CostBinding(
+            SdkMeterSources.ByokTokens,
+            "events.runtime-rate-card",
+            "1.0.0",
+            1,
+            provider.ConfigurationHash,
+            rateCardPin.RateCardId,
+            provider.ProviderRevision,
+            ImmutableHashSet.Create(StringComparer.Ordinal, AzureCostCapabilities.PriceUsage),
+            card)
+        {
+            RuntimeRateCardPin = rateCardPin,
+            RuntimeByokIdentity = RuntimeByokCostBindingIdentity.From(modelPin, provider)
+        };
+        var hosted = NativeReceipt();
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSelectionReference = provider.ProviderId,
+                ModelSourceMode = ModelSourceMode.Byok,
+                ReasoningEffort = "high",
+                ModelCredentialReference = provider.CredentialReference,
+                ModelCredentialIdentity = identity,
+                ModelBindingPin = modelPin,
+                ProviderBindingRevision = provider,
+                RuntimeRateCardAdmission = new(modelPin, provider, admissionBinding)
+            }
+        };
+        var source = hosted.Usage.SdkSource! with
+        {
+            ModelSelectionReference = provider.ProviderId,
+            ModelId = provider.Deployment,
+            SourceMode = "byok",
+            MeterSource = SdkMeterSources.ByokTokens,
+            ModelMultiplier = null,
+            ByokProvider = new(provider.ProviderType, provider.Deployment, provider.ConfigurationHash),
+            ModelBindingPin = modelPin,
+            ResolvedModelBindingPin = modelPin
+        };
+        var sdkEventId = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEventId),
+            sdkEventId, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, 0, 0, 3, null, 12.5m)
+        {
+            A2AMessageId = Guid.NewGuid()
         };
         var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
         return new(1, Guid.NewGuid(), registration, usage,

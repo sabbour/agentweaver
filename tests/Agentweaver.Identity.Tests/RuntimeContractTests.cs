@@ -118,7 +118,7 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
-    public void SlotBackedCredentialIdentityMustMatchThePinnedProviderAndRuntimeProject()
+    public void SlotBackedCredentialIdentityRequiresAnAcceptedProviderRevision()
     {
         var registration = CreateRegistration();
         var identity = new ModelCredentialIdentity(
@@ -142,20 +142,8 @@ public sealed class RuntimeContractTests
             }
         };
 
-        RuntimeContractValidation.Validate(bound);
-        Assert.NotEqual(
-            RuntimeContractValidation.RegistrationHash(registration),
-            RuntimeContractValidation.RegistrationHash(bound));
-        foreach (var invalid in new[]
-        {
-            bound with { Binding = bound.Binding with { ModelCredentialIdentity = null } },
-            bound with { Binding = bound.Binding with { ModelBindingPin = pin with { ProviderId = null } } },
-            bound with { Binding = bound.Binding with
-                { ModelCredentialIdentity = identity with { ProjectId = "other-project" } } },
-            bound with { Binding = bound.Binding with
-                { ModelCredentialIdentity = identity with { ProviderId = "other-provider" } } }
-        })
-            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeContractValidation.Validate(invalid));
+        Assert.Equal("runtime_model_binding_revision_required",
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeContractValidation.Validate(bound)).Code);
     }
 
     [Fact]

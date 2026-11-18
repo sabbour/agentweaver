@@ -445,13 +445,14 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes('(applied.Contains(37) && !applied.Contains(21))'));
       assert.ok(plan.coreVersions.includes(32));
     } else {
-      assert.deepEqual(plan.eventsVersions, Array.from({ length: 11 }, (_, index) => index + 1));
-      assert.ok(source.includes('private const int CurrentSchemaVersion = 11;'));
+      assert.deepEqual(plan.eventsVersions, Array.from({ length: 12 }, (_, index) => index + 1));
+      assert.ok(source.includes('private const int CurrentSchemaVersion = 12;'));
       assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));
       assert.ok(source.includes('(applied.Contains(10) && !applied.Contains(9))'));
       assert.ok(source.includes('(applied.Contains(11) && !applied.Contains(10))'));
       assert.ok(source.includes('10 => "Agentweaver.EventsAndSessions.Migrations.010_session_object_inventory.sql"'));
       assert.ok(source.includes('11 => "Agentweaver.EventsAndSessions.Migrations.011_messaging_binding_row_lock.sql"'));
+      assert.ok(source.includes('12 => "Agentweaver.EventsAndSessions.Migrations.012_provider_model_cost_bindings.sql"'));
       assert.ok(source.includes('3 when legacyProjectFactsV2 => "Agentweaver.EventsAndSessions.Migrations.002_addressed_messages.sql"'));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 4);
     }

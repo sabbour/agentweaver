@@ -142,6 +142,7 @@ public sealed class RuntimeModelBindingsResolver
             selection.ConnectionId is not null || selection.ConnectionScope is not null ||
             selection.Reference != providerBinding.ProviderId ||
             credential.Version != providerBinding.CredentialVersion ||
+            credential != providerBinding.CredentialReference ||
             (pin.ProviderId is null) != (selection.CredentialIdentity is null) ||
             (pin.ProviderId is null) != (providerBinding.CredentialIdentity is null) ||
             selection.CredentialIdentity is { } credentialIdentity &&
@@ -268,15 +269,88 @@ public sealed class RuntimeModelBindingsResolver
                 credentialIdentity.ProjectId != binding.ProjectId)
                 throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
         }
+        if (binding.CredentialVersion is { } credentialVersion)
+        {
+            if (binding.CredentialIdentity is null ||
+                binding.CredentialReference is not { } credentialReference ||
+                credentialReference.Version != credentialVersion)
+                throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
+        }
+        else if (binding.CredentialIdentity is not null || binding.CredentialReference is not null)
+            throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
         if (binding.ProjectId is { } projectId)
             RuntimeContractValidation.ValidateIdentifier(projectId);
         RuntimeContractValidation.ValidateHash(binding.ConfigurationHash);
+        if (binding.RateCardId is null ||
+            binding.RateCardVersion is null ||
+            binding.RateCardPin is not { } rateCardPin ||
+            rateCardPin.RateCardId != binding.RateCardId ||
+            rateCardPin.RateCardVersion != binding.RateCardVersion)
+            throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
+        try
+        {
+            RuntimeRateCardReadContract.ValidatePin(rateCardPin);
+        }
+        catch (ArgumentException)
+        {
+            throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
+        }
         if (!Uri.TryCreate(binding.BaseUrl, UriKind.Absolute, out var baseUrl) ||
             !RuntimeContractValidation.IsHttpsEndpoint(baseUrl) ||
             binding.ProviderType == "azure" &&
                 (!string.IsNullOrEmpty(baseUrl.PathAndQuery.Trim('/')) ||
                  !string.IsNullOrEmpty(baseUrl.Fragment)))
             throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
+    }
+
+    public static void ValidateProviderBinding(ModelProviderBindingRevision binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ValidateRuntimeProviderBinding(binding);
+    }
+
+    public static bool ProviderBindingsEqual(
+        ModelProviderBindingRevision? left, ModelProviderBindingRevision? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+        return left.ContractVersion == right.ContractVersion &&
+            left.ProviderId == right.ProviderId &&
+            left.Scope == right.Scope &&
+            left.ProjectId == right.ProjectId &&
+            left.DisplayName == right.DisplayName &&
+            left.ProviderType == right.ProviderType &&
+            left.BaseUrl == right.BaseUrl &&
+            left.Deployment == right.Deployment &&
+            left.WireApi == right.WireApi &&
+            left.AzureApiVersion == right.AzureApiVersion &&
+            left.ReasoningEfforts.SequenceEqual(right.ReasoningEfforts) &&
+            left.PromptCapacityTokens == right.PromptCapacityTokens &&
+            left.ProviderRevision == right.ProviderRevision &&
+            left.CredentialVersion == right.CredentialVersion &&
+            left.RateCardId == right.RateCardId &&
+            left.RateCardVersion == right.RateCardVersion &&
+            left.ConfigurationHash == right.ConfigurationHash &&
+            left.CredentialIdentity == right.CredentialIdentity &&
+            left.CredentialReference == right.CredentialReference &&
+            RateCardPinsEqual(left.RateCardPin, right.RateCardPin);
+    }
+
+    private static bool RateCardPinsEqual(RuntimeRateCardPin? left, RuntimeRateCardPin? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+        return left.RateCardId == right.RateCardId &&
+            left.RateCardVersion == right.RateCardVersion &&
+            left.ContentHash == right.ContentHash &&
+            (left.Provenance, right.Provenance) switch
+            {
+                (ManualRuntimeRateCardReadProvenance a, ManualRuntimeRateCardReadProvenance b) =>
+                    a.SourceUrl == b.SourceUrl && a.RetrievedOn == b.RetrievedOn,
+                (AzureRetailRuntimeRateCardReadProvenance a, AzureRetailRuntimeRateCardReadProvenance b) =>
+                    a.Region == b.Region && a.MeterIds.SequenceEqual(b.MeterIds, StringComparer.Ordinal),
+                _ => false
+            };
     }
 
     private static void ValidateReasoningEffort(string reasoningEffort)

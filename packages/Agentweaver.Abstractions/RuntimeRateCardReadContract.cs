@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -26,6 +27,19 @@ public sealed record RuntimeRateCardReadResponse(
     int RuntimeRateCardSchemaVersion,
     CostRateCard RateCard,
     RuntimeRateCardReadProvenance Provenance);
+
+/// <summary>Exact immutable Events rate-card identity carried by a BYOK model binding.</summary>
+public sealed record RuntimeRateCardPin(
+    string RateCardId,
+    string RateCardVersion,
+    string ContentHash,
+    RuntimeRateCardReadProvenance Provenance);
+
+/// <summary>Events-verified rate-card admission for one accepted provider model selection.</summary>
+public sealed record RuntimeRateCardAdmission(
+    RuntimeModelBindingPin ModelBindingPin,
+    ModelProviderBindingRevision ProviderBindingRevision,
+    CostBinding CostBinding);
 
 /// <summary>Validates and serializes the private Events runtime rate-card read contract.</summary>
 public static class RuntimeRateCardReadContract
@@ -143,6 +157,62 @@ public static class RuntimeRateCardReadContract
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>Builds the pin from the exact canonical card and provenance returned by Events.</summary>
+    public static RuntimeRateCardPin CreatePin(RuntimeRateCardReadResponse response)
+    {
+        Validate(response);
+        var payload = Encoding.UTF8.GetBytes(SerializeCanonical(response));
+        return new RuntimeRateCardPin(
+            response.RateCard.Id,
+            response.RateCard.Version,
+            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant(),
+            response.Provenance);
+    }
+
+    /// <summary>Validates the stable fields carried without the full rate-card body.</summary>
+    public static void ValidatePin(RuntimeRateCardPin pin)
+    {
+        ArgumentNullException.ThrowIfNull(pin);
+        ValidateIdentity(pin.RateCardId, pin.RateCardVersion);
+        if (string.IsNullOrEmpty(pin.ContentHash) ||
+            pin.ContentHash.Length != 64 ||
+            pin.ContentHash.Any(character =>
+                character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+            throw new ArgumentException("A runtime rate-card pin requires a lowercase SHA-256 hash.");
+
+        switch (pin.Provenance)
+        {
+            case ManualRuntimeRateCardReadProvenance manual when
+                Uri.TryCreate(manual.SourceUrl, UriKind.Absolute, out var source) &&
+                source.Scheme == Uri.UriSchemeHttps &&
+                !string.IsNullOrEmpty(source.Host) &&
+                string.IsNullOrEmpty(source.UserInfo) &&
+                manual.RetrievedOn != default:
+                break;
+            case AzureRetailRuntimeRateCardReadProvenance retail when
+                IsRegion(retail.Region) &&
+                pin.RateCardId == $"azure-retail-prices.standard.{retail.Region}" &&
+                !retail.MeterIds.IsDefaultOrEmpty &&
+                retail.MeterIds.All(IsIdentifier) &&
+                retail.MeterIds.Distinct(StringComparer.OrdinalIgnoreCase).Count() == retail.MeterIds.Length:
+                break;
+            default:
+                throw new ArgumentException("Runtime rate-card provenance is invalid.");
+        }
+    }
+
+    /// <summary>Checks that a pin matches the exact canonical card and provenance.</summary>
+    public static bool MatchesPin(RuntimeRateCardReadResponse response, RuntimeRateCardPin pin)
+    {
+        ValidatePin(pin);
+        var actual = CreatePin(response);
+        var carried = CreatePin(response with { Provenance = pin.Provenance });
+        return actual.RateCardId == pin.RateCardId &&
+            actual.RateCardVersion == pin.RateCardVersion &&
+            actual.ContentHash == pin.ContentHash &&
+            carried.ContentHash == pin.ContentHash;
     }
 
     /// <summary>Reads the canonical owner response. A missing schema field means legacy content.</summary>

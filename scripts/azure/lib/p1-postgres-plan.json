@@ -1871,7 +1871,8 @@
     8,
     9,
     10,
-    11
+    11,
+    12
   ],
   "executionRequirements": [
     "Exact reviewed source and actual Core merge are present in the current base.",

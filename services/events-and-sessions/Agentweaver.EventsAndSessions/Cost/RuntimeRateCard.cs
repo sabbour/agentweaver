@@ -60,7 +60,7 @@ public static class RuntimeRateCardContract
         }
     }
 
-    private static RuntimeRateCardReadResponse ToReadResponse(RuntimeRateCard runtimeRateCard)
+    internal static RuntimeRateCardReadResponse ToReadResponse(RuntimeRateCard runtimeRateCard)
     {
         ArgumentNullException.ThrowIfNull(runtimeRateCard);
         RuntimeRateCardReadProvenance provenance = runtimeRateCard.Provenance switch

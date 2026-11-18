@@ -151,13 +151,37 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
             throw new RuntimeAuthorizationException("runtime_mcp_tool_interception_unavailable");
         if (acceptedModelSelectionReference != registration.Binding.ModelSelectionReference)
             throw new RuntimeAuthorizationException("runtime_model_reference_unavailable");
-        var model = _modelBindings.Resolve(acceptedModelSelectionReference,
-            registration.Binding.ModelSourceMode, registration.Binding.ModelBindingPin);
-        if (model.SourceMode == ModelSourceMode.Byok && registration.Binding.ModelBindingPin is null)
-            throw new RuntimeAuthorizationException("runtime_byok_binding_pin_required");
         var reasoningEffort = registration.Binding.ReasoningEffort;
-        var resolvedModelBindingPin = _modelBindings.Pin(
-            acceptedModelSelectionReference, model.SourceMode, reasoningEffort);
+        RuntimeModelBinding model;
+        RuntimeModelBindingPin resolvedModelBindingPin;
+        if (registration.Binding.ProviderBindingRevision is { } providerBinding)
+        {
+            var acceptedSelection = new RuntimeAcceptedModelSelection(
+                acceptedModelSelectionReference,
+                registration.Binding.ModelSourceMode,
+                registration.Binding.ModelCredentialReference,
+                registration.Binding.ModelConnectionId,
+                registration.Binding.ModelConnectionScope)
+            {
+                ReasoningEffort = reasoningEffort,
+                CredentialIdentity = registration.Binding.ModelCredentialIdentity,
+                ModelBindingPin = registration.Binding.ModelBindingPin
+            };
+            model = _modelBindings.ResolveAcceptedRuntimeBinding(acceptedSelection, providerBinding);
+            resolvedModelBindingPin = RuntimeModelBindingsResolver.Pin(providerBinding, reasoningEffort);
+        }
+        else
+        {
+            if (registration.Binding.ModelCredentialIdentity is not null ||
+                registration.Binding.ModelBindingPin?.ProviderId is not null)
+                throw new RuntimeAuthorizationException("runtime_model_binding_revision_required");
+            model = _modelBindings.Resolve(acceptedModelSelectionReference,
+                registration.Binding.ModelSourceMode, registration.Binding.ModelBindingPin);
+            if (model.SourceMode == ModelSourceMode.Byok && registration.Binding.ModelBindingPin is null)
+                throw new RuntimeAuthorizationException("runtime_byok_binding_pin_required");
+            resolvedModelBindingPin = _modelBindings.Pin(
+                acceptedModelSelectionReference, model.SourceMode, reasoningEffort);
+        }
         if (!sdkCredential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
         var token = sdkCredential.GetValue();
@@ -416,7 +440,7 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
                 ModelBindingPin = registration.Binding.ModelBindingPin,
                 ResolvedModelBindingPin = resolvedModelBindingPin,
                 ByokProvider = model.Provider is { } actualProvider
-                    ? new(actualProvider.Type, currentModel.ModelId, _modelBindings.ConfigurationHash)
+                    ? new(actualProvider.Type, currentModel.ModelId, resolvedModelBindingPin.ConfigurationHash)
                     : null
             };
             var consumedNativeCacheAcknowledgment = recoveryMode == RuntimeSessionRecoveryMode.NativeCache

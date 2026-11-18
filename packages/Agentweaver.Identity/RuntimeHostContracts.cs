@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 
 namespace Agentweaver.Identity;
 
@@ -117,6 +118,10 @@ public sealed record RuntimeHostReplacementRecovery(
             evidence.AcceptedSelectionHash != oldBinding.AcceptedSelectionHash ||
             evidence.ModelSelectionReference != newBinding.ModelSelectionReference ||
             evidence.ModelSelectionReference != oldBinding.ModelSelectionReference ||
+            !RuntimeModelBindingsResolver.ProviderBindingsEqual(
+                newBinding.ProviderBindingRevision, oldBinding.ProviderBindingRevision) ||
+            !RuntimeRateCardAdmissionsEqual(
+                newBinding.RuntimeRateCardAdmission, oldBinding.RuntimeRateCardAdmission) ||
             evidence.Image != newBinding.Image || evidence.Image != oldBinding.Image ||
             oldBinding.TenantId != newBinding.TenantId ||
             oldBinding.ProjectId != newBinding.ProjectId ||
@@ -161,6 +166,22 @@ public sealed record RuntimeHostReplacementRecovery(
                 throw new RuntimeAuthorizationException("runtime_replacement_lineage_invalid");
         }
         return this;
+    }
+
+    private static bool RuntimeRateCardAdmissionsEqual(
+        RuntimeRateCardAdmission? left, RuntimeRateCardAdmission? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+        var leftPin = left.CostBinding.RuntimeRateCardPin;
+        var rightPin = right.CostBinding.RuntimeRateCardPin;
+        return left.ModelBindingPin == right.ModelBindingPin &&
+            RuntimeModelBindingsResolver.ProviderBindingsEqual(
+                left.ProviderBindingRevision, right.ProviderBindingRevision) &&
+            left.CostBinding.RuntimeByokIdentity == right.CostBinding.RuntimeByokIdentity &&
+            leftPin?.RateCardId == rightPin?.RateCardId &&
+            leftPin?.RateCardVersion == rightPin?.RateCardVersion &&
+            leftPin?.ContentHash == rightPin?.ContentHash;
     }
 }
 

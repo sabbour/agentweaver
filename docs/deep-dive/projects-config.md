@@ -216,6 +216,9 @@ context.
    reference is available in the supplied context.
 4. `ProviderResolver` resolves candidates from the enabled platform catalog.
    Project-supplied provider override fields do not participate in resolution.
+   For a slot-backed BYOK selection, Projects reads the exact current provider
+   revision and checks its credential identity, `SecretRef`, model pin, and
+   rate-card pin. A changed slot or secret reference stops acceptance.
 5. Egress requirements must fit the platform baseline and project narrowing.
    Project run limits cannot widen platform limits.
 6. The service writes the immutable effective selection and request fingerprint,
@@ -223,10 +226,14 @@ context.
 
 An exact retry returns the saved snapshot without reopening mutable settings. A
 different request for the same run ID conflicts. Archiving blocks new
-acceptance; it does not erase an accepted snapshot.
+acceptance; it does not erase an accepted snapshot. The snapshot keeps the
+selected provider revision, exact credential reference, and Events card pin.
+Orchestrator admits every revision-backed BYOK model and effort, including task
+overrides, before first dispatch.
 
-The result contains provider candidates, not provisioned resource pins. Each
-resource owner negotiates its actual backend and persists the consumer binding.
+The result contains provider candidates, selected BYOK provider revisions, and
+their card pins, not provisioned infrastructure resource pins. Each resource
+owner negotiates its actual backend and persists the consumer binding.
 See [Providers and models](./providers-models.md).
 
 For supported setting names and project setup, see the

@@ -162,6 +162,9 @@ internal static class ModelProviderCredentialPublicationEndpoints
             ReadSingle(principal, "project_id") is null ||
             ReadSingle(principal, "provider_id") is not { Length: > 0 and <= 128 } ||
             ReadSingle(principal, "credential_version") is not { Length: 32 } ||
+            ReadSingle(principal, "credential_slot_id") is not { } slotId ||
+            !Guid.TryParseExact(slotId, "D", out var credentialSlotId) || credentialSlotId == Guid.Empty ||
+            ReadSingle(principal, "credential_secret_id") is not { Length: > 0 and <= 256 } ||
             ReadSingle(principal, "actor_id") is not { Length: > 0 and <= ModelProviderDraftLimits.ActorId } actor ||
             actor.Any(character =>
                 !char.IsAsciiLetterOrDigit(character) && character is not ('.' or '_' or '-' or ':')))
@@ -181,7 +184,10 @@ internal static class ModelProviderCredentialPublicationEndpoints
             JsonNamingPolicy.CamelCase.ConvertName(request.Scope.ToString()) &&
         ReadSingle(principal, "project_id") == (request.ProjectId ?? string.Empty) &&
         ReadSingle(principal, "provider_id") == request.ProviderId &&
-        ReadSingle(principal, "credential_version") == request.CredentialVersion;
+        ReadSingle(principal, "credential_version") == request.CredentialVersion &&
+        ReadSingle(principal, "credential_slot_id") ==
+            request.CredentialIdentity.CredentialSlotId.ToString("D") &&
+        ReadSingle(principal, "credential_secret_id") == request.CredentialReference.Id;
 
     private static string? ReadSingle(System.Security.Claims.ClaimsPrincipal principal, string claimType)
     {

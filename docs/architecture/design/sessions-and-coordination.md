@@ -312,6 +312,13 @@ The auth-first library hook consumes the delivered configure nonce before bindin
 It reads the model reference from the current registration, not the configure body.
 The immutable platform or project selection also fixes the hosted Copilot or BYOK mode.
 BYOK uses explicit SDK provider configuration without Copilot authentication, refresh, or catalog lookup.
+For revision-backed BYOK, the accepted selection also pins the complete
+provider revision, credential slot identity, exact `SecretRef`, model, and
+Events rate card. Orchestrator obtains a card admission for every effective
+model and effort before first dispatch, including task overrides. It sends the
+matching admission with the selected provider revision to AgentHost. A valid
+BYOK card admission does not depend on a hosted Copilot quote; the existing
+hard USD `byok.tokens` budget still blocks dispatch when usage is unpriced.
 Hosted envelope parsing alone does not prove connection ownership or entitlement.
 The Identity-owned typed connection lifecycle supplies current owner, revision, exact-version, kind, and freshness proof.
 It exchanges the consumed nonce for a source credential and checks current authority

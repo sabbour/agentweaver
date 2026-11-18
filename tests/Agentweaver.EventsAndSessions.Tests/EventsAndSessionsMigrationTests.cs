@@ -36,7 +36,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var command = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".sessions_schema_migrations
             """, connection);
-        Assert.Equal(11, Convert.ToInt32(await command.ExecuteScalarAsync()));
+        Assert.Equal(12, Convert.ToInt32(await command.ExecuteScalarAsync()));
         await using var index = new NpgsqlCommand("""
             SELECT indexdef FROM pg_indexes WHERE schemaname = @schema
                 AND indexname = 'ix_usage_ledger_project_occurred'
@@ -51,12 +51,34 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         Assert.Contains("(object_key)", (string)(await inventoryIndex.ExecuteScalarAsync())!);
     }
 
-    /// <summary>Reapplies migrations 009 through 011 without rebuilding an existing project usage index.</summary>
+    /// <summary>Applies migrations 009 through 012 without rebuilding an existing project usage index.</summary>
     [Fact]
     public async Task ProjectUsageMigrationToleratesPrebuiltIndex()
     {
-        await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
+        foreach (var migration in new[]
+                 {
+                     "001_sessions_journal.sql",
+                     "002_addressed_messages.sql",
+                     "003_project_facts.sql",
+                     "004_explicit_session_forks.sql",
+                     "005_copilot_usage.sql",
+                     "006_native_sdk_usage.sql",
+                     "007_native_usage_receipts.sql",
+                     "008_row_lock_record_updates.sql",
+                 })
+            await ApplyMigrationAsync($"Agentweaver.EventsAndSessions.Migrations.{migration}");
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using (var seed = new NpgsqlCommand($"""
+            CREATE TABLE "{_schema}".sessions_schema_migrations (
+                version integer PRIMARY KEY,
+                applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+            );
+            INSERT INTO "{_schema}".sessions_schema_migrations (version)
+                SELECT generate_series(1, 8);
+            CREATE INDEX ix_usage_ledger_project_occurred
+                ON "{_schema}".usage_ledger (tenant_id, project_id, occurred_at)
+            """, connection))
+            await seed.ExecuteNonQueryAsync();
         await using var index = new NpgsqlCommand("""
             SELECT oid FROM pg_class WHERE relnamespace = @schema::regnamespace
                 AND relname = 'ix_usage_ledger_project_occurred'
@@ -64,13 +86,6 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         index.Parameters.AddWithValue("schema", _schema);
         var originalIndex = await index.ExecuteScalarAsync();
         Assert.NotNull(originalIndex);
-        await using (var reset = new NpgsqlCommand($"""
-            DELETE FROM "{_schema}".sessions_schema_migrations WHERE version IN (9, 10, 11);
-            DROP TRIGGER messaging_provider_bindings_no_update ON "{_schema}".messaging_provider_bindings;
-            DROP TABLE "{_schema}".session_object_inventory;
-            DROP INDEX "{_schema}".ix_session_object_references_object_key
-            """, connection))
-            await reset.ExecuteNonQueryAsync();
 
         await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
         await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
@@ -108,7 +123,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(7L, reader.GetInt64(0));
-        Assert.Equal(11L, reader.GetInt64(1));
+        Assert.Equal(12L, reader.GetInt64(1));
     }
 
     /// <summary>Preserves admitted owner records and migration history while upgrading to project reporting.</summary>
@@ -163,7 +178,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(9L, reader.GetInt64(0));
-        Assert.Equal(11L, reader.GetInt64(1));
+        Assert.Equal(12L, reader.GetInt64(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
         Assert.True(reader.GetBoolean(4));
@@ -180,6 +195,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
     [InlineData(9)]
     [InlineData(10)]
     [InlineData(11)]
+    [InlineData(12)]
     public async Task MigrationRejectsVersionGaps(int lastVersion)
     {
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())

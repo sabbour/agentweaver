@@ -665,7 +665,7 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 14 }, (_, index) => index + 1),
-    eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),
+    eventsVersions: Array.from({ length: 12 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',

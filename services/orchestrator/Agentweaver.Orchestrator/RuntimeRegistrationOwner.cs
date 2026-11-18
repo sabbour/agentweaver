@@ -1,4 +1,5 @@
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authentication;
 using OpenIddict.Abstractions;
@@ -642,6 +643,8 @@ internal sealed class RuntimeRegistrationOwner(
             ModelSourceMode = owner.ModelSourceMode,
             ReasoningEffort = owner.ReasoningEffort,
             ModelBindingPin = owner.ModelBindingPin,
+            ProviderBindingRevision = owner.ProviderBindingRevision,
+            RuntimeRateCardAdmission = owner.RuntimeRateCardAdmission,
             ModelConnectionId = owner.ModelConnectionId,
             ModelConnectionScope = owner.ModelConnectionScope,
             MaxModelTurns = owner.MaxModelTurns,
@@ -785,6 +788,8 @@ internal sealed class RuntimeRegistrationOwner(
             previous.ModelSelectionReference != owner.ModelSelectionReference ||
             previous.ModelCredentialReference != owner.ModelCredentialReference ||
             previous.ModelCredentialIdentity != owner.ModelCredentialIdentity ||
+            !RuntimeModelBindingsResolver.ProviderBindingsEqual(
+                previous.ProviderBindingRevision, owner.ProviderBindingRevision) ||
             previous.ModelSourceMode != owner.ModelSourceMode ||
             previous.ModelConnectionId != owner.ModelConnectionId ||
             previous.ModelConnectionScope != owner.ModelConnectionScope ||
@@ -804,6 +809,8 @@ internal sealed class RuntimeRegistrationOwner(
             current.ModelSelectionReference != previous.ModelSelectionReference ||
             current.ModelCredentialReference != previous.ModelCredentialReference ||
             current.ModelCredentialIdentity != previous.ModelCredentialIdentity ||
+            !RuntimeModelBindingsResolver.ProviderBindingsEqual(
+                current.ProviderBindingRevision, previous.ProviderBindingRevision) ||
             current.ModelSourceMode != previous.ModelSourceMode ||
             current.ModelConnectionId != previous.ModelConnectionId ||
             current.ModelConnectionScope != previous.ModelConnectionScope ||

@@ -22,6 +22,9 @@ public sealed record ModelSelectionSettings(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ModelCredentialIdentity? CredentialIdentity { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelProviderBindingRevision? ProviderBindingRevision { get; init; }
 }
 
 /// <summary>Optional model-reference and reasoning-effort changes at one configuration layer.</summary>
@@ -620,6 +623,8 @@ public static class ProjectConfigurationValidator
 
     internal static void ValidateResolvedCredentialSlotBinding(ModelSelectionSettings model, string path)
     {
+        if (model.ProviderBindingRevision is not null)
+            throw Invalid($"'{path}.providerBindingRevision' is owner-set.");
         if (model.CredentialIdentity is { } identity)
         {
             ValidateCredentialIdentityShape(identity, path + ".credentialIdentity");

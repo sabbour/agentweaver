@@ -1502,7 +1502,11 @@ internal sealed class CoordinationRuntimeRunStartStore
                 intent.ExecutionFence,
                 0,
                 1,
-                1),
+                1)
+            {
+                ProviderBindingRevision = registration.Binding.ProviderBindingRevision,
+                RuntimeRateCardAdmission = registration.Binding.RuntimeRateCardAdmission
+            },
             intent.BootstrapOperationId,
             registration.RuntimeInstanceId,
             registration.Revision,

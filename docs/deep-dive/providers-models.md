@@ -146,25 +146,41 @@ admission threshold.
 
 Projects & Config also stores customer-provided model-provider metadata in
 immutable revisions. New providers start in `Draft`; credential publication
-sets `Available` only after Projects verifies the exact Events-owned card and
-provenance. This state does not change model eligibility or accepted run
-selection. The private
-`POST /internal/byok/credential-publications` route appends an exact credential
-version to a Draft or Available provider and returns a replayable receipt. These revisions
-stay separate from the deployment-owned model eligibility snapshot and accepted run
-selection. A separate Identity credential ledger stores exact Key Vault
-references. A slot-backed BYOK selection carries the slot identity and exact
-`SecretRef`; Identity matches both against enabled history and uses the
-recorded vault. An enabled historical version remains usable after slot
-disable. The ledger stores no credential value or rate-card data. The
-publication route does not expose credential values, activate or select a
-provider, or accept rate-card data from its caller. Public Gateway responses
-expose only whether the current revision has a credential. See the
+sets `Available` only after Projects verifies the exact Events-owned card,
+content hash, and provenance. An `Available` revision can enter a project BYOK
+selection. Run acceptance snapshots the complete provider revision, its
+credential slot identity and exact `SecretRef`, the model pin, and the card pin.
+Later configuration changes do not replace the accepted revision. Task routes
+can select another accepted model and effort, so each effective selection has
+its own admission.
+
+The private `POST /internal/byok/credential-publications` route appends an
+exact credential version to a Draft or Available provider and returns a
+replayable receipt. Identity stores the exact Key Vault reference in its
+credential ledger. Identity matches the accepted slot identity and `SecretRef`
+against enabled history and uses the recorded vault. An enabled historical
+version remains usable after slot disable. The ledger stores no credential
+value or rate-card data. The publication route does not expose credential
+values, activate or select a provider, or accept rate-card data from its
+caller. Public Gateway responses expose only whether the current revision has
+a credential. See the
 [credential publication contract](../reference/contracts.md#customer-provided-model-provider-draft-contract)
 and [Identity and secrets](./identity-secrets.md#understand-runtime-and-connection-credentials)
 for the redemption path. See the
 [Projects & Config deep dive](./projects-config.md) for rate-card verification
 and recovery.
+
+Before first dispatch, Orchestrator requests an Events admission for every
+revision-backed BYOK selection, including task overrides. Events verifies the
+exact card ID, version, content hash, and provenance in each accepted revision.
+The admission keeps the provider revision, model pin, and cost binding together.
+Orchestrator sends the matching admission to the runtime for that model and
+effort. A missing or mismatched card blocks dispatch; Events does not fall back
+to the startup model map or another rate card. A legacy deploy-time BYOK
+selection with no provider revision keeps its existing pinned startup-map
+path. That path can coexist with revision-backed task selections, which still
+require separate admissions. A revision-backed selection with a missing
+revision fails closed.
 
 ### Diagnose resolution failures
 

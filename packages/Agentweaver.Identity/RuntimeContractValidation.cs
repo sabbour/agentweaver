@@ -75,6 +75,37 @@ public static class RuntimeContractValidation
         }
         else if (binding.ModelBindingPin?.ProviderId is not null)
             throw new RuntimeAuthorizationException("runtime_model_credential_identity_invalid");
+        if (binding.ProviderBindingRevision is { } providerBinding)
+        {
+            Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ValidateProviderBinding(providerBinding);
+            if (binding.ModelSourceMode != ModelSourceMode.Byok ||
+                binding.ModelCredentialReference?.Version != providerBinding.CredentialVersion ||
+                binding.ModelCredentialReference != providerBinding.CredentialReference ||
+                binding.ModelCredentialIdentity != providerBinding.CredentialIdentity ||
+                binding.RuntimeRateCardAdmission is not { } rateCardAdmission ||
+                !Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ProviderBindingsEqual(
+                    rateCardAdmission.ProviderBindingRevision, providerBinding) ||
+                rateCardAdmission.ModelBindingPin != binding.ModelBindingPin ||
+                rateCardAdmission.CostBinding.RuntimeByokIdentity !=
+                    RuntimeByokCostBindingIdentity.From(binding.ModelBindingPin!, providerBinding) ||
+                rateCardAdmission.CostBinding.MeterSource != SdkMeterSources.ByokTokens ||
+                providerBinding.RateCardPin is not { } providerRateCardPin ||
+                rateCardAdmission.CostBinding.RuntimeRateCardPin is not { } admittedRateCardPin ||
+                admittedRateCardPin.RateCardId != providerRateCardPin.RateCardId ||
+                admittedRateCardPin.RateCardVersion != providerRateCardPin.RateCardVersion ||
+                admittedRateCardPin.ContentHash != providerRateCardPin.ContentHash ||
+                !RuntimeRateCardReadContract.MatchesPin(
+                    new(RuntimeRateCardReadContract.CurrentSchemaVersion,
+                        rateCardAdmission.CostBinding.RateCard, admittedRateCardPin.Provenance),
+                    providerRateCardPin) ||
+                binding.ModelSelectionReference != providerBinding.ProviderId ||
+                binding.ModelBindingPin != Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.Pin(
+                    providerBinding, binding.ReasoningEffort))
+                throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
+        }
+        else if (binding.ModelCredentialIdentity is not null || binding.ModelBindingPin?.ProviderId is not null ||
+                 binding.RuntimeRateCardAdmission is not null)
+            throw new RuntimeAuthorizationException("runtime_model_binding_revision_required");
         if (binding.ModelConnectionId is { } connectionId &&
             (connectionId == Guid.Empty || binding.ModelSourceMode != Agentweaver.Abstractions.ModelSourceMode.HostedCopilot ||
                 binding.ModelCredentialReference is not null ||

@@ -189,6 +189,12 @@ Environment to activate the Host. Each stage records its intent and receipt
 before the next stage. Current owner, selection, registration, image, model,
 and placement checks must pass before dispatch sends a task message.
 
+For revision-backed BYOK, run admission verifies every effective
+provider/model/effort selection before dispatch, including WorkPlan overrides.
+The runtime owner context returns the admission that matches the selected
+model and effort. A missing or duplicate match stops the send; the child never
+uses the primary model's card by default.
+
 `childRuntimeStartup` reports the bounded startup state for each association.
 `pending` or `blocked` does not mean that a model turn was sent. A missing or
 stale readiness receipt stops the send. Retrying requires fresh run authority
