@@ -87,7 +87,7 @@ test('fixed-credit no-send owner read contract is exact and fails closed on miss
   assert.match(sourceClient,
     /fixed-credit-denials\/select-current[\s\S]*?ValidateSelectionResult\(/);
   assert.match(sourceContracts,
-    /if \(receipt\.Registration != registration \|\|[\s\S]*?receipt\.Registration\.Revision != request\.RegistrationRevision \|\|[\s\S]*?receipt\.Registration\.Binding\.ExecutionFence != request\.ExecutionFence \|\|[\s\S]*?receipt\.RequestId != request\.RequestId \|\|[\s\S]*?receipt\.RequestHash != request\.RequestHash\)[\s\S]*?runtime_fixed_credit_guard_conflict/);
+    /public static void ValidateReadResult\([\s\S]*?if \(!RuntimeContractValidation\.SameRegistration\(receipt\.Registration, registration\) \|\|[\s\S]*?receipt\.Registration\.RuntimeInstanceId != request\.RuntimeInstanceId \|\|[\s\S]*?receipt\.Registration\.Revision != request\.RegistrationRevision \|\|[\s\S]*?receipt\.Registration\.Binding\.ExecutionFence != request\.ExecutionFence \|\|[\s\S]*?receipt\.RequestId != request\.RequestId \|\|[\s\S]*?receipt\.RequestHash != request\.RequestHash\)[\s\S]*?runtime_fixed_credit_guard_conflict/);
 });
 
 // Controlled owner responses exercise the real wire shapes; they are not live receipts.
