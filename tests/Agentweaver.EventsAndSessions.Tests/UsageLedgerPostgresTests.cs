@@ -687,15 +687,38 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     [Fact]
     public async Task ProjectByokRejectsAnEventsCardThatDoesNotMatchTheAcceptedHash()
     {
-        var receipt = ProjectByokReceipt(out var card);
+        var receipt = ProjectByokReceipt(out var runtimeRateCard);
         var rateCards = new RuntimeRateCardStore(_fixture.DataSource, _schema);
-        await rateCards.SaveAsync(card);
+        await rateCards.SaveAsync(runtimeRateCard);
         var provider = receipt.Registration.Binding.ProviderBindingRevision!;
-        var changedPin = provider.RateCardPin! with { ContentHash = new string('b', 64) };
+        var admission = receipt.Registration.Binding.RuntimeRateCardAdmission!;
+        var card = admission.CostBinding.RateCard;
+        var changedCard = card with
+        {
+            ModelMultipliers = card.ModelMultipliers.SetItem(
+                AzureCostProviderOptions.InputRateKey("deployment-1"), 3m)
+        };
+        var changedPin = RuntimeRateCardReadContract.CreatePin(new(
+            RuntimeRateCardReadContract.CurrentSchemaVersion,
+            changedCard,
+            provider.RateCardPin!.Provenance));
         var changedProvider = provider with { RateCardPin = changedPin };
+        var changedAdmission = admission with
+        {
+            ProviderBindingRevision = changedProvider,
+            CostBinding = admission.CostBinding with
+            {
+                RateCard = changedCard,
+                RuntimeRateCardPin = changedPin
+            }
+        };
         var changedRegistration = receipt.Registration with
         {
-            Binding = receipt.Registration.Binding with { ProviderBindingRevision = changedProvider }
+            Binding = receipt.Registration.Binding with
+            {
+                ProviderBindingRevision = changedProvider,
+                RuntimeRateCardAdmission = changedAdmission
+            }
         };
         var changedReceipt = receipt with
         {

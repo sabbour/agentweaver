@@ -337,7 +337,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
         var providerId = "provider-" + suffix;
         const string rateCardId = "manual-provider-card";
-        const string rateCardVersion = "v1";
+        const string rateCardVersion = "20261118";
         var drafts = new ModelProviderDraftService(
             db, TimeProvider.System, new RuntimeRateCardTestClient(true));
         var saved = await drafts.SaveAsync(
