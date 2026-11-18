@@ -47,12 +47,17 @@ namespace Agentweaver.Projects.Config.Migrations
                         WHERE rate_card_version IS NOT NULL
                           AND CASE
                                 WHEN rate_card_version ~ '^-?[0-9]+$'
-                                THEN rate_card_version::numeric < -9223372036854775808::numeric
-                                  OR rate_card_version::numeric > 9223372036854775807::numeric
+                                THEN CASE
+                                       WHEN rate_card_version::numeric
+                                            BETWEEN -9223372036854775808::numeric
+                                                AND 9223372036854775807::numeric
+                                       THEN rate_card_version::numeric::bigint::text <> rate_card_version
+                                       ELSE TRUE
+                                     END
                                 ELSE TRUE
                               END
                     ) THEN
-                        RAISE EXCEPTION 'cannot downgrade provider revisions with rate-card versions that are not signed 64-bit integers'
+                        RAISE EXCEPTION 'cannot downgrade provider revisions with rate-card versions that are not losslessly representable as signed 64-bit integers'
                             USING ERRCODE = '55000';
                     END IF;
                 END;

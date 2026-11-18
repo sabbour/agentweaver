@@ -625,8 +625,11 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         }
     }
 
-    [Fact]
-    public async Task DowngradeRefusesUnrepresentableRateCardVersionsWithoutChangingSchema()
+    [Theory]
+    [InlineData("v1")]
+    [InlineData("01")]
+    [InlineData("9223372036854775808")]
+    public async Task DowngradeRefusesUnrepresentableRateCardVersionsWithoutChangingSchema(string cardVersion)
     {
         await using var db = CreateDbContext();
         await using var migrationDb = CreateMigrationDbContext();
@@ -635,7 +638,6 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var providerId = "rollback-version-provider-" + Guid.NewGuid().ToString("N");
         var operationId = Guid.NewGuid();
         const string cardId = "manual:runtime-card";
-        const string cardVersion = "v1";
 
         await using (var connection = await fixture.MigrationDataSource.OpenConnectionAsync())
         {
@@ -684,7 +686,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 () => migrator.MigrateAsync("20261118062007_AddProjectSkillTrustEvidence"));
 
             Assert.Equal("55000", refused.SqlState);
-            Assert.Contains("cannot downgrade provider revisions", refused.MessageText, StringComparison.Ordinal);
+            Assert.Contains(
+                "cannot downgrade provider revisions with rate-card versions that are not losslessly representable",
+                refused.MessageText,
+                StringComparison.Ordinal);
             Assert.Contains(latestMigration, await db.Database.GetAppliedMigrationsAsync());
             await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
             await using var read = new NpgsqlCommand(
