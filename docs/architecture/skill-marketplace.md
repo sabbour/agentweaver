@@ -251,6 +251,25 @@ inferring runtime use from an assignment or accepted run configuration. These
 routes are present in source; deployment and live availability
 are not established by this client integration.
 
+## Skill trust evidence
+
+The internal Projects & Config trust-evidence service scans one exact,
+non-revoked revision from immutable storage. It reads the canonical `SKILL.md`
+and validated resource bytes, checks current project write authority, and stores
+the reports without storing Skill text.
+
+The evidence record copies the revision's source fields as stored. It does not
+verify a Git ref or commit, so scan reports use `authored` provenance. The
+fingerprint binds the project, actor, idempotency key, content digest, stored
+source fields, and complete scan report except `EvaluatedAt`. Exact retries
+return the original report set. A changed report with the same key returns
+`409`. The stored report set includes `EvaluatedAt`.
+
+A new report set appends a pending `skill.trust.evidence.v1`
+project-governance decision whose owner receipt is the report-set SHA-256.
+Exact retries reuse that decision. The record supplies evidence; it does not
+admit a Skill or a run. The service has no public HTTP route.
+
 ## Validation
 
 Run the controlled source/browse tests and Projects & Config suite from the

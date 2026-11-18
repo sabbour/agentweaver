@@ -136,6 +136,30 @@
           ]
         },
         {
+          "table": "project_skill_trust_evidence",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_skill_trust_evidence_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_skill_trust_evidence_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
           "table": "project_role_assignments",
           "privileges": [
             "SELECT",

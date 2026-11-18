@@ -32,6 +32,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
         Set<ProjectSkillImportIdempotencyRecord>();
     public DbSet<ProjectSkillContentRevocationRecord> SkillContentRevocations =>
         Set<ProjectSkillContentRevocationRecord>();
+    public DbSet<ProjectSkillTrustEvidenceRecord> SkillTrustEvidence => Set<ProjectSkillTrustEvidenceRecord>();
     public DbSet<HostedModelReasoningCatalogRecord> HostedModelReasoningCatalog =>
         Set<HostedModelReasoningCatalogRecord>();
     public DbSet<NativeAcsPolicyHeadRecord> NativeAcsPolicyHeads => Set<NativeAcsPolicyHeadRecord>();
@@ -714,6 +715,52 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                     revocation.SkillId,
                     revocation.Revision,
                 })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ProjectSkillTrustEvidenceRecord>(entity =>
+        {
+            entity.ToTable("project_skill_trust_evidence", table =>
+            {
+                table.HasCheckConstraint("ck_project_skill_trust_evidence_revision", "revision > 0");
+                table.HasCheckConstraint(
+                    "ck_project_skill_trust_evidence_hashes",
+                    "request_fingerprint ~ '^[0-9a-f]{64}$' AND content_digest ~ '^[0-9a-f]{64}$' " +
+                    "AND report_set_sha256 ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_project_skill_trust_evidence_report_size",
+                    "octet_length(report_set) BETWEEN 1 AND 1048576");
+            });
+            entity.HasKey(record => record.EvidenceId);
+            entity.Property(record => record.EvidenceId).HasColumnName("evidence_id");
+            entity.Property(record => record.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(record => record.SkillId).HasColumnName("skill_id").HasMaxLength(256);
+            entity.Property(record => record.Revision).HasColumnName("revision");
+            entity.Property(record => record.ActorIssuer).HasColumnName("actor_issuer").HasMaxLength(512);
+            entity.Property(record => record.ActorId).HasColumnName("actor_id").HasMaxLength(256);
+            entity.Property(record => record.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
+            entity.Property(record => record.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
+            entity.Property(record => record.ContentDigest).HasColumnName("content_digest").HasMaxLength(64);
+            entity.Property(record => record.SourceId).HasColumnName("source_id").HasMaxLength(256);
+            entity.Property(record => record.SourceRevision).HasColumnName("source_revision").HasMaxLength(256);
+            entity.Property(record => record.RequestedRef).HasColumnName("requested_ref").HasMaxLength(256);
+            entity.Property(record => record.ResolvedCommitSha).HasColumnName("resolved_commit_sha").HasMaxLength(64);
+            entity.Property(record => record.SelectedPath).HasColumnName("selected_path").HasMaxLength(1024);
+            entity.Property(record => record.ReportSetJson).HasColumnName("report_set").HasColumnType("bytea");
+            entity.Property(record => record.ReportSetSha256).HasColumnName("report_set_sha256").HasMaxLength(64);
+            entity.Property(record => record.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(record => new
+                {
+                    record.ProjectId,
+                    record.ActorIssuer,
+                    record.ActorId,
+                    record.IdempotencyKey,
+                })
+                .IsUnique()
+                .HasDatabaseName("ux_project_skill_trust_evidence_idempotency");
+            entity.HasOne<ProjectSkillContentRevisionRecord>()
+                .WithMany()
+                .HasForeignKey(record => new { record.ProjectId, record.SkillId, record.Revision })
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
