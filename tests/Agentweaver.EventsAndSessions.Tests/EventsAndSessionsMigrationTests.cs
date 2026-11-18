@@ -69,10 +69,6 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
             await ApplyMigrationAsync($"Agentweaver.EventsAndSessions.Migrations.{migration}");
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using (var seed = new NpgsqlCommand($"""
-            CREATE TABLE "{_schema}".sessions_schema_migrations (
-                version integer PRIMARY KEY,
-                applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
-            );
             INSERT INTO "{_schema}".sessions_schema_migrations (version)
                 SELECT generate_series(1, 8);
             CREATE INDEX ix_usage_ledger_project_occurred
