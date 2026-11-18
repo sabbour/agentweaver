@@ -220,8 +220,8 @@ through 33, and 35-51), with version 17 excluded and reserved version 34
 skipped, 11 Events versions, and 13 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`2609601d3db9b41087c0af2df57417d7559452b7d6be06114d4689a7eed156c4`.
-It contains 139 tables, 14 row-lock columns, and 50 exact function signatures.
+`5bc5d3157fdc75187820546193254d8a5a17275a4a8b65207c4b2ae3e5ba3fa8`.
+It contains 140 tables, 14 row-lock columns, and 51 exact function signatures.
 The Projects & Config plan grants `SELECT, INSERT` and column-scoped
 `UPDATE (sequence, fence_generation, head_hash, updated_at)` on
 `project_governance_decision_stream_heads`. The initializer reads back its
