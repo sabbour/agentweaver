@@ -129,6 +129,78 @@ public sealed class EnvironmentEgressAuditPostgresTests(EnvironmentPostgresFixtu
     }
 
     [Fact]
+    public async Task FailedFlowWriteLeavesNoRecordAndCanRetryTheSameFlow()
+    {
+        var audit = new EnvironmentEgressAuditStore(database.DataSource);
+        var flow = Flow("unregistered-workload", "retry-after-failure.example");
+        await using (var setup = await database.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            """
+            CREATE OR REPLACE FUNCTION environment.fail_test_egress_flow_insert()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+                RAISE EXCEPTION 'injected egress audit failure';
+            END
+            $function$;
+            CREATE TRIGGER fail_test_egress_flow_insert
+            BEFORE INSERT ON environment.sandbox_egress_flows_unattributed
+            FOR EACH ROW EXECUTE FUNCTION environment.fail_test_egress_flow_insert()
+            """,
+            setup))
+        {
+            await command.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var failure = await Assert.ThrowsAsync<PostgresException>(() =>
+                audit.AppendFlowAsync(flow, CancellationToken.None));
+            Assert.Contains("injected egress audit failure", failure.MessageText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await using var cleanup = await database.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand(
+                """
+                DROP TRIGGER IF EXISTS fail_test_egress_flow_insert
+                    ON environment.sandbox_egress_flows_unattributed;
+                DROP FUNCTION IF EXISTS environment.fail_test_egress_flow_insert()
+                """,
+                cleanup);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await using (var verifyFailure = await database.DataSource.OpenConnectionAsync())
+        await using (var verifyFailureCommand = new NpgsqlCommand(
+            """
+            SELECT count(*)
+            FROM environment.sandbox_egress_flows_unattributed
+            WHERE host = @host
+            """,
+            verifyFailure))
+        {
+            verifyFailureCommand.Parameters.AddWithValue("host", flow.Host!);
+            Assert.Equal(0L, (long)(await verifyFailureCommand.ExecuteScalarAsync())!);
+        }
+
+        var retry = await audit.AppendFlowAsync(flow, CancellationToken.None);
+        Assert.False(retry.Attributed);
+
+        await using var verify = await database.DataSource.OpenConnectionAsync();
+        await using var verifyCommand = new NpgsqlCommand(
+            """
+            SELECT count(*)
+            FROM environment.sandbox_egress_flows_unattributed
+            WHERE flow_id = @flow_id
+            """,
+            verify);
+        verifyCommand.Parameters.AddWithValue("flow_id", retry.FlowId);
+        Assert.Equal(1L, (long)(await verifyCommand.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
     public async Task AuditMigrationRollsBackAndReappliesOnPostgres()
     {
         var options = new DbContextOptionsBuilder<EnvironmentDbContext>()
