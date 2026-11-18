@@ -91,6 +91,108 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExecutionPlanReadAndWorkflowRequestKeepTheirDistinctContracts()
+    {
+        await InitializeProtocolAsync();
+
+        var list = await PostRpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 2,
+            method = "tools/list",
+            @params = new { },
+        });
+        var tools = list.GetProperty("result").GetProperty("tools");
+        var executionPlanTool = Assert.Single(tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_readExecutionPlan");
+        var executionPlanSchema = executionPlanTool.GetProperty("inputSchema");
+        Assert.False(executionPlanSchema.GetProperty("properties").TryGetProperty("body", out _));
+        Assert.Equal(
+            new[] { "projectId", "runId", "sessionId" },
+            executionPlanSchema.GetProperty("required").EnumerateArray()
+                .Select(value => value.GetString()).ToArray());
+
+        _gatewayFactory.EnqueueOrchestratorResponse(HttpStatusCode.OK, "{}");
+        var executionPlanRead = await PostRpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 3,
+            method = "tools/call",
+            @params = new
+            {
+                name = "agentweaver_readExecutionPlan",
+                arguments = new { projectId = "project-a", runId = "run-a", sessionId = "root" },
+            },
+        });
+        Assert.False(executionPlanRead.GetProperty("result").GetProperty("isError").GetBoolean());
+
+        _gatewayFactory.EnqueueOrchestratorResponse(HttpStatusCode.OK, "{}");
+        var workflowSelection = await PostRpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 4,
+            method = "tools/call",
+            @params = new
+            {
+                name = "agentweaver_selectWorkflow",
+                arguments = new
+                {
+                    projectId = "project-a",
+                    runId = "run-a",
+                    sessionId = "root",
+                    body = new
+                    {
+                        expectedStateVersion = 1,
+                        idempotencyKey = "workflow-selection",
+                        requestId = "workflow-request",
+                        workflowId = "workflow-a",
+                        proposedDefinition = new
+                        {
+                            id = "workflow-a",
+                            revision = "revision-1",
+                            catalogVersion = "catalog-1",
+                            origin = "builtIn",
+                            maximumWorkItems = 1,
+                            steps = new[]
+                            {
+                                new
+                                {
+                                    id = "build",
+                                    purpose = "Build and test",
+                                    mode = "platform",
+                                    order = 0,
+                                    cardinality = new { minimum = 1, maximum = 1 },
+                                    dependsOn = Array.Empty<string>(),
+                                    allowedRoles = Array.Empty<string>(),
+                                    allowedPhases = Array.Empty<string>(),
+                                    allowedIsolationChoices = Array.Empty<string>(),
+                                    requiredProviderCapabilities = Array.Empty<string>(),
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        Assert.False(workflowSelection.GetProperty("result").GetProperty("isError").GetBoolean());
+
+        var requests = _gatewayFactory.OrchestratorRequests.ToArray();
+        Assert.Equal(2, requests.Length);
+        Assert.Equal("GET", requests[0].Method);
+        Assert.Equal(
+            "/api/projects/project-a/runs/run-a/coordination/sessions/root/execution-plan",
+            requests[0].PathAndQuery);
+        Assert.Null(requests[0].Body);
+        Assert.Equal("POST", requests[1].Method);
+        Assert.Equal(
+            "/api/projects/project-a/runs/run-a/coordination/sessions/root/actions/select_workflow",
+            requests[1].PathAndQuery);
+        using var requestBody = JsonDocument.Parse(requests[1].Body!);
+        Assert.False(requestBody.RootElement.GetProperty("proposedDefinition").GetProperty("steps")[0]
+            .TryGetProperty("buildTestCommand", out _));
+    }
+
+    [Fact]
     public async Task NativeToolsListAndCallsPreserveGatewayContracts()
     {
         await InitializeProtocolAsync();

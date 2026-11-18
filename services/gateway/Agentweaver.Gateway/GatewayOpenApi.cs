@@ -158,6 +158,7 @@ internal static partial class GatewayOpenApi
             ["reviseWorkPlan"] = C("ReviseCoordinatorWorkPlanRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["requestAssembly"] = C("RequestCoordinatorAssemblyRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readDecisions"] = C(null, "CoordinatorDecisionStateView", "200"),
+            ["readExecutionPlan"] = C(null, "CoordinationExecutionPlanSnapshot", "200"),
             ["readSessionTree"] = C(null, "SessionTreeSnapshot", "200"),
             ["readSessionStatus"] = C(null, "SessionStatusSnapshot", "200", "503"),
             ["dispatchCoordinatorExecution"] = C(
@@ -441,6 +442,7 @@ internal static partial class GatewayOpenApi
                             : "Owner response; returned by the owning service.",
                         (route.Owner == GatewayOwner.Environment && status is ("200" or "202")) ||
                         ((route.OperationId is "readRuntimeObservationV1" or "readRuntimeObservationV2" or
+                         "readExecutionPlan" or
                          "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
@@ -460,6 +462,8 @@ internal static partial class GatewayOpenApi
                                         ? "Environment recovery responses are not cacheable."
                                         : route.OperationId switch
                                         {
+                                            "readExecutionPlan" =>
+                                                "Execution-plan responses are not cacheable.",
                                             "getProjectAgentHistory" =>
                                                 "Private project agent history responses are not cacheable.",
                                             "getProjectConfigurationChoices" =>
@@ -2592,6 +2596,130 @@ else if (route.OperationId is
         ["WorkflowDefinition"] = Obj(["id", "revision", "catalogVersion", "origin", "maximumWorkItems", "steps"],
             ("id", Str()), ("revision", Str()), ("catalogVersion", Str()), ("origin", Enum("builtIn", "generated")),
             ("maximumWorkItems", Int()), ("steps", Arr(Ref("WorkflowStepDefinition")))),
+        ["CoordinationExecutionPlanSnapshot"] = Obj(
+            ["session", "acceptedSelectionHash", "executionFence", "decisionStateVersion",
+                "workPlan", "checkpoint", "children", "recovery"],
+            ("session", Ref("SessionIdentity")), ("acceptedSelectionHash", Str()),
+            ("executionFence", Int()), ("decisionStateVersion", Int()),
+            ("workPlan", Ref("WorkPlanSnapshot")),
+            ("checkpoint", NullableRef("CoordinationExecutionCheckpointSnapshot")),
+            ("children", BoundedArray(Ref("CoordinationExecutionChildSnapshot"), 0, 512)),
+            ("recovery", NullableRef("CoordinationExecutionRecoverySnapshot"))),
+        ["WorkPlanSnapshot"] = Obj(
+            ["workflow", "plan", "isolationProviderBinding"],
+            ("workflow", Ref("ExecutionPlanWorkflowDefinitionSnapshot")), ("plan", Ref("WorkPlan")),
+            ("isolationProviderBinding", NullableRef("PinnedProviderBinding"))),
+        ["ExecutionPlanWorkflowDefinitionSnapshot"] = Obj(
+            ["definition", "requiresFirstUseConfirmation"],
+            ("definition", Ref("ExecutionPlanWorkflowDefinition")), ("requiresFirstUseConfirmation", Bool())),
+        ["ExecutionPlanWorkflowDefinition"] = Obj(
+            ["id", "revision", "catalogVersion", "origin", "maximumWorkItems", "steps"],
+            ("id", Str()), ("revision", Str()), ("catalogVersion", Str()),
+            ("origin", Enum("builtIn", "generated")), ("maximumWorkItems", Int()),
+            ("steps", Arr(Ref("ExecutionPlanWorkflowStepDefinition")))),
+        ["ExecutionPlanWorkflowStepDefinition"] = Obj(
+            ["id", "purpose", "mode", "order", "cardinality", "dependsOn", "allowedRoles",
+                "allowedPhases", "allowedIsolationChoices", "requiredProviderCapabilities",
+                "fixedWork", "platformGate", "buildTestCommand"],
+            ("id", Str()), ("purpose", Str()), ("mode", Enum("fixed", "open", "platform")),
+            ("order", Int()),
+            ("cardinality", Obj(["minimum", "maximum"], ("minimum", Int()), ("maximum", Int()))),
+            ("dependsOn", Arr(Str())), ("allowedRoles", Arr(Str())), ("allowedPhases", Arr(Str())),
+            ("allowedIsolationChoices", Arr(Str())), ("requiredProviderCapabilities", Arr(Str())),
+            ("modelTaskKind", Nullable(Enum("planning", "review", "design", "security", "creativeWriting",
+                "complex", "codeWriting", "straightforward"))),
+            ("fixedWork", Nullable(Obj(["title", "task", "roleId", "phase", "isolationChoice", "declaredOutputs"],
+                ("title", Str()), ("task", Str()), ("roleId", Str()), ("phase", Str()),
+                ("isolationChoice", Str()), ("declaredOutputs", Arr(Str()))))),
+            ("platformGate", Nullable(Enum("buildTest", "preview", "responsibleAi", "rubberDuck",
+                "independentReview", "openPullRequest", "merge", "scribe", "publish"))),
+            ("buildTestCommand", NullableRef("ExecutionPlanWorkflowBuildTestCommand"))),
+        ["ExecutionPlanWorkflowBuildTestCommand"] = Obj(
+            ["executionProfileReference", "executableReference", "arguments", "workingDirectory", "outputs"],
+            ("executionProfileReference", Str()), ("executableReference", Str()),
+            ("arguments", Arr(Str())), ("workingDirectory", Str()),
+            ("outputs", Arr(Ref("ExecutionPlanWorkflowBuildTestOutput"))),
+            ("workspaceSource", Ref("SandboxBuildTestWorkspaceSource"))),
+        ["ExecutionPlanWorkflowBuildTestOutput"] = Obj(
+            ["name", "relativePath", "required", "maximumBytes"],
+            ("name", Str()), ("relativePath", Str()), ("required", Bool()), ("maximumBytes", Int())),
+        ["SandboxBuildTestWorkspaceSource"] = StrictObj(
+            ["contractVersion", "identity", "tenantId", "actorIssuer", "actorSubject",
+                "sourceControlPinId", "acceptedSelectionHash", "sourceControlResource", "workspaceId",
+                "workspaceIncarnationId", "branchName", "baseSha", "baselineTreeSha", "seedReference",
+                "seedSha256", "seedByteLength", "bundleSha256", "bundleByteLength",
+                "baselineManifestSha256", "baselineManifestByteLength"],
+            ("contractVersion", Int()), ("identity", Ref("SessionIdentity")), ("tenantId", Str()),
+            ("actorIssuer", Str()), ("actorSubject", Str()), ("sourceControlPinId", Str()),
+            ("acceptedSelectionHash", Str()), ("sourceControlResource", Ref("ProviderResourceRef")),
+            ("workspaceId", Str()), ("workspaceIncarnationId", Uuid()), ("branchName", Str()),
+            ("baseSha", Str()), ("baselineTreeSha", Str()), ("seedReference", Str()),
+            ("seedSha256", Str()), ("seedByteLength", Int()), ("bundleSha256", Str()),
+            ("bundleByteLength", Int()), ("baselineManifestSha256", Str()),
+            ("baselineManifestByteLength", Int())),
+        ["CoordinationExecutionCheckpointSnapshot"] = Obj(
+            ["checkpointId", "revision", "payloadHash", "parentCheckpointId", "hasParentMetadata",
+                "workPlanId", "decisionStateVersion", "progress"],
+            ("checkpointId", Str()), ("revision", Int()), ("payloadHash", Str()),
+            ("parentCheckpointId", NullableStr()), ("hasParentMetadata", Bool()),
+            ("workPlanId", Str()), ("decisionStateVersion", Int()),
+            ("progress", Ref("CoordinationExecutionProgressSnapshot"))),
+        ["CoordinationExecutionProgressSnapshot"] = Obj(
+            ["workItems", "nonModelSteps", "fixedWorkItems", "pendingDispatches"],
+            ("workItems", Arr(Ref("CoordinationExecutionProgressEntry"))),
+            ("nonModelSteps", Arr(Ref("CoordinationExecutionProgressEntry"))),
+            ("fixedWorkItems", Arr(Ref("CoordinationExecutionProgressEntry"))),
+            ("pendingDispatches", Arr(Ref("CoordinationExecutionPendingDispatchSnapshot")))),
+        ["CoordinationExecutionProgressEntry"] = Obj(
+            ["id", "state"], ("id", Str()), ("state", Str())),
+        ["CoordinationExecutionPendingDispatchSnapshot"] = Obj(
+            ["associationId", "childSessionId", "messageId", "promptHash"],
+            ("associationId", Str()), ("childSessionId", Str()),
+            ("messageId", Uuid()), ("promptHash", Str())),
+        ["CoordinationExecutionChildSnapshot"] = Obj(
+            ["sessionId", "parentSessionId", "workPlanItemId", "associationId", "lifecycle",
+                "executionFence", "detached", "dispatchMessageId", "promptHash",
+                "startupBindingHash", "resultHash", "turnReceiptHash"],
+            ("sessionId", Str()), ("parentSessionId", NullableStr()),
+            ("workPlanItemId", NullableStr()), ("associationId", Str()), ("lifecycle", Str()),
+            ("executionFence", Int()), ("detached", Bool()), ("dispatchMessageId", Uuid()),
+            ("promptHash", Str()), ("startupBindingHash", Str()),
+            ("resultHash", NullableStr()), ("turnReceiptHash", NullableStr())),
+        ["CoordinationExecutionRecoverySnapshot"] = Obj(
+            ["operationId", "selectionHash", "workPlanId", "workPlanHash", "workflowHash",
+                "sourceCheckpointId", "sourceCheckpointRevision", "sourceCheckpointHash",
+                "sourceExecutionFence", "sourceDecisionStateVersion", "holdFence", "manifestHash",
+                "members", "phase", "currentStep", "dispatchHeld"],
+            ("operationId", Uuid()), ("selectionHash", Str()), ("workPlanId", Str()),
+            ("workPlanHash", Str()), ("workflowHash", Str()), ("sourceCheckpointId", Str()),
+            ("sourceCheckpointRevision", Int()), ("sourceCheckpointHash", Str()),
+            ("sourceExecutionFence", Int()), ("sourceDecisionStateVersion", Int()),
+            ("holdFence", Int()), ("manifestHash", Str()),
+            ("members", BoundedArray(Ref("CoordinationExecutionRecoveryMemberSnapshot"), 0, 512)),
+            ("phase", Str()), ("currentStep", Str()), ("dispatchHeld", NullableBool())),
+        ["CoordinationExecutionRecoveryMemberSnapshot"] = Obj(
+            ["associationId", "sessionId", "workPlanItemId", "workflowStepId", "agentId",
+                "modelSelectionReference", "isolationProviderId", "messageId", "promptHash",
+                "startupBindingHash", "spawnCommandHash", "messageStatus", "messageRequestHash",
+                "progress", "disposition", "resultHash", "turnReceiptHash", "memberHash"],
+            ("associationId", Str()), ("sessionId", Str()), ("workPlanItemId", NullableStr()),
+            ("workflowStepId", Str()), ("agentId", Str()), ("modelSelectionReference", Str()),
+            ("isolationProviderId", Str()), ("messageId", Uuid()), ("promptHash", Str()),
+            ("startupBindingHash", Str()), ("spawnCommandHash", Str()),
+            ("messageStatus", NullableStr()), ("messageRequestHash", NullableStr()),
+            ("progress", Str()), ("disposition", Str()), ("resultHash", NullableStr()),
+            ("turnReceiptHash", NullableStr()), ("memberHash", Str())),
+        ["PinnedProviderBinding"] = Obj(
+            ["runId", "seam", "providerId", "adapterVersion", "optionsSchemaVersion",
+                "optionsRevision", "hosting", "resource", "negotiatedCapabilities"],
+            ("runId", Str()), ("seam", ProviderSeamSchema()), ("providerId", Str()),
+            ("adapterVersion", Str()), ("optionsSchemaVersion", Int()), ("optionsRevision", Str()),
+            ("hosting", Enum("inProcess", "sidecar", "remoteService", "kubernetesController", "managedRuntime")),
+            ("resource", Ref("ProviderResourceRef")), ("negotiatedCapabilities", Arr(Str()))),
+        ["ProviderResourceRef"] = Obj(
+            ["seam", "providerId", "resourceId", "generation"],
+            ("seam", ProviderSeamSchema()), ("providerId", Str()), ("resourceId", Str()),
+            ("generation", Int())),
         ["WorkflowStepDefinition"] = Obj(["id", "purpose", "mode", "order", "cardinality", "dependsOn", "allowedRoles", "allowedPhases", "allowedIsolationChoices", "requiredProviderCapabilities"],
             ("id", Str()), ("purpose", Str()), ("mode", Enum("fixed", "open", "platform")), ("order", Int()),
             ("cardinality", Obj(["minimum", "maximum"], ("minimum", Int()), ("maximum", Int()))),
