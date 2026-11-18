@@ -1306,6 +1306,15 @@ truncated. A missing confirmed plan returns `404`. Invalid or over-limit plan,
 checkpoint, child, or recovery data returns `409 execution_plan_unavailable`.
 Stale selection keeps its existing `409` response.
 
+In this response, each workflow step has a required `buildTestCommand` field.
+Its value is `null` when the step has no platform-owned BuildTest command. A
+non-null command has `executionProfileReference`, `executableReference`,
+`arguments`, `workingDirectory`, and `outputs`. It includes `workspaceSource`
+when the command carries an accepted repository seed. That object contains the
+accepted run, actor, source-control, workspace, seed, bundle, and baseline
+manifest identities, hashes, and byte lengths. The `selectWorkflow` request
+keeps its existing workflow schema and does not include `buildTestCommand`.
+
 `GET /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v2`
 requires current Coordination authority and rechecks the accepted selection,
 owner state, decision, session mapping, and execution fence before it returns.

@@ -80,6 +80,83 @@ public sealed class GatewayOpenApiParityTests
             .Select(item => item.Key));
         Assert.Contains("503", Assert.IsType<JsonObject>(FindOperation(discovered, "readSessionStatus")["responses"])
             .Select(item => item.Key));
+
+        const string executionPlanPath =
+            "/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/execution-plan";
+        JsonObject executionPlanPathItem = Assert.IsType<JsonObject>(discovered["paths"]?[executionPlanPath]);
+        JsonObject executionPlanRoute = Assert.IsType<JsonObject>(executionPlanPathItem["get"]);
+        JsonObject executionPlan = FindOperation(discovered, "readExecutionPlan");
+        Assert.True(JsonNode.DeepEquals(executionPlanRoute, executionPlan));
+        Assert.Equal("#/components/schemas/CoordinationExecutionPlanSnapshot",
+            executionPlan["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?.GetValue<string>());
+        JsonObject executionPlanHeaders = Assert.IsType<JsonObject>(executionPlan["responses"]?["200"]?["headers"]);
+        Assert.Contains("Cache-Control", executionPlanHeaders.Select(item => item.Key));
+        Assert.Contains("not cacheable",
+            executionPlanHeaders["Cache-Control"]?["description"]?.GetValue<string>());
+
+        JsonObject executionPlanSchema =
+            Assert.IsType<JsonObject>(schemas["CoordinationExecutionPlanSnapshot"]);
+        Assert.Equal(
+            "#/components/schemas/WorkPlanSnapshot",
+            executionPlanSchema["properties"]?["workPlan"]?["$ref"]?.GetValue<string>());
+        Assert.Equal(
+            "#/components/schemas/CoordinationExecutionCheckpointSnapshot",
+            executionPlanSchema["properties"]?["checkpoint"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());
+        Assert.Equal(
+            "#/components/schemas/CoordinationExecutionRecoverySnapshot",
+            executionPlanSchema["properties"]?["recovery"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());
+
+        JsonObject selectWorkflow = FindOperation(discovered, "selectWorkflow");
+        Assert.Equal("#/components/schemas/SelectCoordinatorWorkflowRequest",
+            selectWorkflow["requestBody"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                .GetValue<string>());
+        Assert.Equal("#/components/schemas/WorkflowDefinition",
+            schemas["SelectCoordinatorWorkflowRequest"]?["properties"]?["proposedDefinition"]?
+                ["anyOf"]?[0]?["$ref"]?.GetValue<string>());
+        JsonArray workflowRequestStepRequired = Assert.IsType<JsonArray>(
+            schemas["WorkflowStepDefinition"]?["required"]);
+        Assert.DoesNotContain("buildTestCommand",
+            workflowRequestStepRequired.Select(value => value!.GetValue<string>()));
+        Assert.False(Assert.IsType<JsonObject>(schemas["WorkflowStepDefinition"]?["properties"])
+            .ContainsKey("buildTestCommand"));
+
+        JsonObject executionPlanWorkflowSchema =
+            Assert.IsType<JsonObject>(schemas["ExecutionPlanWorkflowDefinition"]);
+        Assert.Equal("#/components/schemas/ExecutionPlanWorkflowStepDefinition",
+            executionPlanWorkflowSchema["properties"]?["steps"]?["items"]?["$ref"]?.GetValue<string>());
+        JsonObject executionPlanWorkflowStepSchema =
+            Assert.IsType<JsonObject>(schemas["ExecutionPlanWorkflowStepDefinition"]);
+        Assert.Contains("buildTestCommand",
+            Assert.IsType<JsonArray>(executionPlanWorkflowStepSchema["required"])
+                .Select(value => value!.GetValue<string>()));
+        JsonArray buildTestCommandSchema = Assert.IsType<JsonArray>(
+            executionPlanWorkflowStepSchema["properties"]?["buildTestCommand"]?["anyOf"]);
+        Assert.Equal("#/components/schemas/ExecutionPlanWorkflowBuildTestCommand",
+            buildTestCommandSchema[0]?["$ref"]?.GetValue<string>());
+        Assert.Equal("null", buildTestCommandSchema[1]?["type"]?.GetValue<string>());
+        Assert.Equal("#/components/schemas/SandboxBuildTestWorkspaceSource",
+            schemas["ExecutionPlanWorkflowBuildTestCommand"]?["properties"]?["workspaceSource"]?["$ref"]?
+                .GetValue<string>());
+        Assert.Equal(
+            "#/components/schemas/ExecutionPlanWorkflowDefinition",
+            schemas["ExecutionPlanWorkflowDefinitionSnapshot"]?["properties"]?["definition"]?["$ref"]?
+                .GetValue<string>());
+
+        JsonObject workspaceSourceSchema =
+            Assert.IsType<JsonObject>(schemas["SandboxBuildTestWorkspaceSource"]);
+        Assert.Equal(
+            new[]
+            {
+                "contractVersion", "identity", "tenantId", "actorIssuer", "actorSubject",
+                "sourceControlPinId", "acceptedSelectionHash", "sourceControlResource", "workspaceId",
+                "workspaceIncarnationId", "branchName", "baseSha", "baselineTreeSha", "seedReference",
+                "seedSha256", "seedByteLength", "bundleSha256", "bundleByteLength",
+                "baselineManifestSha256", "baselineManifestByteLength",
+            },
+            Assert.IsType<JsonArray>(workspaceSourceSchema["required"])
+                .Select(value => value!.GetValue<string>()));
+        Assert.False(Assert.IsType<JsonObject>(workspaceSourceSchema["properties"])
+            .ContainsKey("preparedRepositoryRelativePath"));
     }
 
     [Fact]
