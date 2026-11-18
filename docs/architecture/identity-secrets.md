@@ -132,6 +132,20 @@ historical reads return references from history rows recorded while the slot
 was Enabled. A historical read returns reference metadata only. Key Vault must
 still contain the exact version for redemption.
 
+The Broker store defines an internal write-claim API for Key Vault writes; no
+management route calls it. The caller first persists a claim that binds the
+operation ID, expected revision, credential slot, vault source and URI, secret
+name, request fingerprint, and actor. Only the request that acquires the claim
+may write to Key Vault. An exact replay of an unresolved claim returns no write
+permission. A process crash can leave the row in `Claimed`; replay treats that
+claim as quarantined. When a timeout leaves the outcome uncertain, the caller
+can move the claim to `Quarantined`. Neither state permits a retry, a reference
+write, or reuse of the provider slot. Completion stores the exact version
+returned by Key Vault, advances the head, appends the history row, and marks the
+claim `Completed` in one PostgreSQL transaction. A quarantined claim rejects
+late completion. No API resolves a quarantined claim; an operator must resolve
+the Key Vault outcome before another write can use the slot.
+
 The store does not authenticate users or check Projects authority. A future
 management caller must obtain fresh Projects authority before a mutation.
 For BYOK runtime use, the accepted binding carries the credential slot
@@ -157,11 +171,24 @@ currently exposes publication. A retry sends the same operation ID and body.
 ```mermaid
 sequenceDiagram
     participant Owner as Trusted owner
+    participant Vault as Key Vault
     participant Ledger as Identity Broker credential ledger
-    Note over Owner,Ledger: Owner-local reference lookup
-    Owner->>Ledger: Record exact reference
-    Ledger->>Ledger: Commit head and immutable history atomically
-    Ledger-->>Owner: Return reference metadata
+    Owner->>Ledger: Claim provider slot and expected revision
+    Ledger->>Ledger: Persist durable write claim
+    Ledger-->>Owner: Acquired
+    Owner->>Vault: Write secret
+    alt Exact version returned
+        Vault-->>Owner: Exact version
+        Owner->>Ledger: Complete claim with exact version
+        Ledger->>Ledger: Commit head, history, and claim completion atomically
+        Ledger-->>Owner: Return reference metadata
+    else Timeout
+        Owner->>Ledger: Mark outcome uncertain
+        Ledger->>Ledger: Quarantine claim
+    else Process stops
+        Note over Ledger: Persisted Claimed row also blocks replay and reuse
+    end
+    Note over Owner,Ledger: Operator resolves the Key Vault outcome before another write
     Owner->>Ledger: Read current reference
     Ledger-->>Owner: Deny current use when Disabled
     Owner->>Ledger: Read exact historical reference

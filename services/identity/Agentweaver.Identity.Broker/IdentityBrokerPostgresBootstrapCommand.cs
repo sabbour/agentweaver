@@ -69,7 +69,8 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         "repo_app_authorization_transactions",
         "repo_app_connections", "repo_app_installations", "repo_app_repository_selections",
         "issue_sync_grants", "issue_sync_mint_audit",
-        "model_provider_credentials", "model_provider_credential_revisions"
+        "model_provider_credentials", "model_provider_credential_revisions",
+        "model_provider_credential_write_claims"
     ];
 
     public static bool IsRequested(string[] args) => args.Length == 1 && args[0] == Argument;
@@ -216,7 +217,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         var grantsApplied = await ApplyRuntimeGrantsIfMigratedAsync(databaseConnection,
             options.RuntimeRole, options.MigrationRole, cancellationToken).ConfigureAwait(false);
         Console.WriteLine(grantsApplied
-            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=23 runtimeGrantDelete=FALSE repoAppDelete=FALSE copilotAuditUpdate=FALSE runtimeAuditUpdate=FALSE credentialSlotDelete=FALSE credentialHistoryUpdate=FALSE credentialHistoryDelete=FALSE credentialHistoryTruncate=FALSE historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
+            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=24 runtimeGrantDelete=FALSE repoAppDelete=FALSE copilotAuditUpdate=FALSE runtimeAuditUpdate=FALSE credentialSlotDelete=FALSE credentialHistoryUpdate=FALSE credentialHistoryDelete=FALSE credentialHistoryTruncate=FALSE historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
             : "IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING migrationHistory=absent");
         Console.WriteLine($"IDENTITY_POSTGRES_BOOTSTRAP_OK database={options.DatabaseName} schema=identity_broker");
     }
@@ -250,7 +251,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         var statements = Regex.Matches(definition, @"SELECT format\([\s\S]*?\) \\gexec")
             .Select(match => match.Value.Replace(" \\gexec", "", StringComparison.Ordinal)).ToArray();
         if (!tables.ToHashSet(StringComparer.Ordinal).SetEquals(RuntimeTables) ||
-            statements.Length != 29)
+            statements.Length != 30)
             throw new InvalidOperationException("The canonical Identity runtime grant contract is malformed.");
 
         await VerifyTableOwnershipAsync(connection, transaction, migrationRole, cancellationToken).ConfigureAwait(false);
@@ -331,6 +332,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             var repoAppTable = table.StartsWith("repo_app_", StringComparison.Ordinal);
             var credentialHead = table == "model_provider_credentials";
             var credentialHistory = table == "model_provider_credential_revisions";
+            var credentialWriteClaims = table == "model_provider_credential_write_claims";
             await using var readback = new NpgsqlCommand("""
                 SELECT has_table_privilege(@runtimeRole, @relation, 'SELECT')
                   AND has_table_privilege(@runtimeRole, @relation, 'INSERT') = @insert
@@ -348,7 +350,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
                 (!credentialHistory || credentialHead));
             readback.Parameters.AddWithValue("delete",
                 !history && !runtimeGrant && !copilotConnection && !repoAppTable &&
-                !credentialHead && !credentialHistory &&
+                !credentialHead && !credentialHistory && !credentialWriteClaims &&
                 table is not ("issue_sync_grants" or "issue_sync_mint_audit"));
             if (await readback.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
                 throw new InvalidOperationException(

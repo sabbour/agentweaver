@@ -182,6 +182,14 @@ enabled historical version remains usable for its accepted runtime binding.
 Disabling a slot changes ledger state; it does not disable or delete the Key
 Vault secret.
 
+The Broker's internal credential store requires a durable claim before a
+Key Vault write. An unresolved claim blocks retries and reuse; a quarantined
+claim rejects late completion. Completion records the exact returned version
+with the new head and immutable history in one transaction. No management route
+calls this API, and no API resolves a quarantined claim. See
+[model-provider credential references](../architecture/identity-secrets.md#model-provider-credential-references)
+for the write and recovery sequence.
+
 GitHub Copilot, GitHub Repo App, and remote MCP OAuth connections are separate
 integrations. None grants a platform or project role. The credential-less
 sandbox gateway flow described in the architecture is a proposal, not a

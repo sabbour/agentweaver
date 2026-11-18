@@ -31,6 +31,8 @@ public sealed class IdentityBrokerDbContext : DbContext
     public DbSet<ModelProviderCredentialHead> ModelProviderCredentialHeads => Set<ModelProviderCredentialHead>();
     public DbSet<ModelProviderCredentialRevision> ModelProviderCredentialRevisions =>
         Set<ModelProviderCredentialRevision>();
+    public DbSet<ModelProviderCredentialWriteClaim> ModelProviderCredentialWriteClaims =>
+        Set<ModelProviderCredentialWriteClaim>();
 
     public DbSet<RuntimeGrantHead> RuntimeGrantHeads => Set<RuntimeGrantHead>();
     public DbSet<RuntimeGrantRevision> RuntimeGrantRevisions => Set<RuntimeGrantRevision>();
@@ -57,6 +59,7 @@ public sealed class IdentityBrokerDbContext : DbContext
         modelBuilder.ApplyConfiguration(new IssueSyncMintAuditModel());
         RuntimeGrantModel.Configure(modelBuilder);
         ConfigureModelProviderCredentials(modelBuilder);
+        ConfigureModelProviderCredentialWriteClaims(modelBuilder);
         CopilotConnectionModel.Configure(modelBuilder);
         RemoteMcpOAuthModel.Configure(modelBuilder);
 
@@ -283,6 +286,71 @@ public sealed class IdentityBrokerDbContext : DbContext
         // Registers OpenIddict's application/authorization/scope/token entity types;
         // they share this context's default schema set above.
         modelBuilder.UseOpenIddict();
+    }
+
+    private static void ConfigureModelProviderCredentialWriteClaims(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ModelProviderCredentialWriteClaim>(entity =>
+        {
+            entity.ToTable("model_provider_credential_write_claims", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR " +
+                    "(scope = 'Project' AND project_id IS NOT NULL AND length(project_id) > 0)");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_vault_source",
+                    "vault_source IN ('Existing', 'Byok')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_state",
+                    "state IN ('Claimed', 'Quarantined', 'Completed')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_revision",
+                    "expected_revision >= 0");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_secret_name",
+                    "secret_name ~ '^[A-Za-z0-9-]{1,127}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_fingerprint",
+                    "request_fingerprint ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_byok_name",
+                    "vault_source <> 'Byok' OR secret_name = 'byok-' || lower(scope) || '-' || provider_id");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_outcome",
+                    "(state = 'Claimed' AND quarantined_at IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR " +
+                    "(state = 'Quarantined' AND quarantined_at IS NOT NULL AND completed_revision IS NULL AND completed_at IS NULL) OR " +
+                    "(state = 'Completed' AND quarantined_at IS NULL AND completed_revision IS NOT NULL AND completed_at IS NOT NULL)");
+            });
+            entity.HasKey(claim => claim.OperationId);
+            entity.Property(claim => claim.OperationId).HasColumnName("operation_id");
+            entity.Property(claim => claim.CredentialSlotId).HasColumnName("credential_slot_id");
+            entity.Property(claim => claim.Scope).HasColumnName("scope").HasConversion<string>().HasMaxLength(16);
+            entity.Property(claim => claim.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(claim => claim.ProviderId).HasColumnName("provider_id").HasMaxLength(128).IsRequired();
+            entity.Property(claim => claim.VaultSource).HasColumnName("vault_source")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(claim => claim.VaultUri).HasColumnName("vault_uri").HasMaxLength(256).IsRequired();
+            entity.Property(claim => claim.SecretName).HasColumnName("secret_name").HasMaxLength(127).IsRequired();
+            entity.Property(claim => claim.ExpectedRevision).HasColumnName("expected_revision");
+            entity.Property(claim => claim.RequestFingerprint).HasColumnName("request_fingerprint")
+                .HasMaxLength(64).IsRequired();
+            entity.Property(claim => claim.ActorId).HasColumnName("actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(claim => claim.State).HasColumnName("state")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(claim => claim.ClaimedAt).HasColumnName("claimed_at");
+            entity.Property(claim => claim.QuarantinedAt).HasColumnName("quarantined_at");
+            entity.Property(claim => claim.CompletedRevision).HasColumnName("completed_revision");
+            entity.Property(claim => claim.CompletedAt).HasColumnName("completed_at");
+            entity.HasIndex(claim => claim.CredentialSlotId).IsUnique()
+                .HasFilter("state IN ('Claimed', 'Quarantined')");
+            entity.HasIndex(claim => claim.ProviderId).IsUnique()
+                .HasFilter("state IN ('Claimed', 'Quarantined')");
+            entity.HasOne<ModelProviderCredentialRevision>()
+                .WithMany()
+                .HasForeignKey(claim => new { claim.CredentialSlotId, claim.CompletedRevision })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 
     private static void ConfigureModelProviderCredentials(ModelBuilder modelBuilder)
