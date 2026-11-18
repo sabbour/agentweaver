@@ -539,7 +539,8 @@ internal sealed class WorkflowGenerationExecutor(
             {
                 if (job.ExecutionPhase != "send-admitted" ||
                     stored.Completion.RequestId != job.NativeRequestId ||
-                    stored.Completion.Registration != current.Registration ||
+                    !RuntimeContractValidation.SameRegistration(
+                        stored.Completion.Registration, current.Registration) ||
                     stored.Completion.PromptHash != job.PromptSha256)
                     throw new CoordinationException(
                         "workflow_generation_completion_receipt_invalid",
@@ -582,7 +583,7 @@ internal sealed class WorkflowGenerationExecutor(
                 var priorRegistration = current.Registration;
                 current = await ReadCurrentAsync(context, work, job, cancellationToken).ConfigureAwait(false);
                 CoordinationEndpoints.RequirePrePlanState(current.Decision, job.ExpectedDecisionStateVersion);
-                if (current.Registration != priorRegistration ||
+                if (!RuntimeContractValidation.SameRegistration(current.Registration, priorRegistration) ||
                     current.SelectionHash != job.AcceptedSelectionHash)
                     throw new CoordinationException(
                         "workflow_generation_binding_stale", StatusCodes.Status409Conflict);
@@ -610,7 +611,8 @@ internal sealed class WorkflowGenerationExecutor(
                 completion.Validate();
                 if (hostResponse.RootReplay is not null ||
                     completion.RequestId != job.NativeRequestId ||
-                    completion.Registration != current.Registration ||
+                    !RuntimeContractValidation.SameRegistration(
+                        completion.Registration, current.Registration) ||
                     completion.PromptHash != job.PromptSha256 ||
                     completion.NativeTurn.OutputHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(output)))
                     throw new CoordinationException(
@@ -757,7 +759,7 @@ internal sealed class WorkflowGenerationExecutor(
     {
         var completion = stored.Completion.Validate();
         if (completion.RequestId != job.NativeRequestId ||
-            completion.Registration != registration ||
+            !RuntimeContractValidation.SameRegistration(completion.Registration, registration) ||
             completion.PromptHash != job.PromptSha256)
             throw new CoordinationException(
                 "workflow_generation_completion_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
@@ -809,7 +811,7 @@ internal sealed class WorkflowGenerationExecutor(
             !user.Bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(job.Prompt)) ||
             !assistant.Bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(output)) ||
             completion.ObserveGrant != readiness.SourceGrant ||
-            completion.Registration != registration)
+            !RuntimeContractValidation.SameRegistration(completion.Registration, registration))
             throw new CoordinationException(
                 "workflow_generation_material_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
     }

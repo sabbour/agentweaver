@@ -571,7 +571,7 @@ public static partial class CoordinationEndpoints
                     // Re-read the owner after remote I/O: an old receipt cannot authorize a replaced registration.
                     var current = await registrationOwner.ReadCurrentForSessionAsync(
                         context, projectId, runId, targetSessionId, token).ConfigureAwait(false);
-                    if (current != registration)
+                    if (!RuntimeContractValidation.SameRegistration(current, registration))
                         throw new CoordinationException(
                             "maf_execution_egress_stale", StatusCodes.Status409Conflict);
                     await RevalidateDispatchAsync(token).ConfigureAwait(false);
@@ -743,7 +743,7 @@ public static partial class CoordinationEndpoints
                 var current = await ReadDispatchRegistrationAsync(intent, token).ConfigureAwait(false);
                 if (current is null)
                     return null;
-                if (current != registration)
+                if (!RuntimeContractValidation.SameRegistration(current, registration))
                     throw new CoordinationException(
                         "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
                 _ = await VerifyEgressForRegistrationAsync(
@@ -771,7 +771,7 @@ public static partial class CoordinationEndpoints
                 if (current is null)
                     return null;
                 await RevalidateDispatchAsync(token).ConfigureAwait(false);
-                if (current != registration)
+                if (!RuntimeContractValidation.SameRegistration(current, registration))
                     throw new CoordinationException(
                         "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
                 // Build the message for the host. Its message ID is the dispatch ID used for the

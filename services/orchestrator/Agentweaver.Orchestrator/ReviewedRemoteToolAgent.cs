@@ -312,7 +312,7 @@ internal sealed class ReviewedRemoteToolAgent(
     {
         var currentRegistration = await authority.ReadCurrentRegistrationAsync(
             context, expectedRegistration.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
-        if (currentRegistration != expectedRegistration ||
+        if (!RuntimeContractValidation.SameRegistration(currentRegistration, expectedRegistration) ||
             currentRegistration.State != RuntimeRegistrationState.Active)
             throw new RuntimeAuthorizationException("runtime_remote_tool_registration_changed");
 

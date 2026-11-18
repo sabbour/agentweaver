@@ -49,7 +49,8 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         if (request.ResumeBootstrap is { } resume)
         {
             resume.Validate();
-            if (resume.Registration != request.Registration ||
+            if (RuntimeContractValidation.RegistrationHash(resume.Registration) !=
+                    RuntimeContractValidation.RegistrationHash(request.Registration) ||
                 request.Configuration.ValueKind is not (System.Text.Json.JsonValueKind.Null or
                     System.Text.Json.JsonValueKind.Undefined))
                 throw new RuntimeAuthorizationException("runtime_resume_configuration_caller_input_denied");
@@ -59,7 +60,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
             request.Registration.RuntimeInstanceId, actor, cancellationToken,
             request.CheckpointRecoveryOperationId)
             .ConfigureAwait(false);
-        if (registration != request.Registration)
+        if (!RuntimeContractValidation.SameRegistration(registration, request.Registration))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var placement = await ReadPlacementAsync(
             registration, actor, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
@@ -84,7 +85,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var current = await ReadCurrentAsync(
             registration.RuntimeInstanceId, actor, cancellationToken, request.CheckpointRecoveryOperationId)
             .ConfigureAwait(false);
-        if (current != registration || placement != currentPlacement ||
+        if (!RuntimeContractValidation.SameRegistration(current, registration) || placement != currentPlacement ||
             receipt.ContractVersion != 1 || receipt.RuntimeInstanceId != registration.RuntimeInstanceId ||
             receipt.RegistrationRevision != registration.Revision ||
             receipt.ExecutionFence != registration.Binding.ExecutionFence || receipt.Image != registration.Binding.Image ||
@@ -138,7 +139,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var before = await ReadCurrentAsync(
             request.RuntimeInstanceId, actor, cancellationToken, request.CheckpointRecoveryOperationId)
             .ConfigureAwait(false);
-        if (before != registration)
+        if (!RuntimeContractValidation.SameRegistration(before, registration))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var endpoint = placement.ConfigureEndpoint;
         var receipt = await SendToHostAsync<RuntimeBootstrapDeliveryReceipt>(
@@ -152,7 +153,8 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var after = await ReadCurrentAsync(
             request.RuntimeInstanceId, actor, cancellationToken, request.CheckpointRecoveryOperationId)
             .ConfigureAwait(false);
-        if (after != registration || currentPlacement != placement || !lifetime.Credential.IsUsable())
+        if (!RuntimeContractValidation.SameRegistration(after, registration) ||
+            currentPlacement != placement || !lifetime.Credential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_delivery_stale");
         var binding = registration.Binding;
         if (receipt.OperationId != request.OperationId || receipt.GrantId != request.GrantId ||

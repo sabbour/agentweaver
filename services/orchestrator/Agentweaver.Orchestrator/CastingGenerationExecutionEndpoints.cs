@@ -109,7 +109,8 @@ public static partial class CoordinationEndpoints
             // This request and prompt already completed on the current registration. Return the stored
             // Events material and do not call the host again. Authority and registration are checked again first.
             if (storedCompletion is not null &&
-                storedCompletion.Completion.Registration == registration)
+                RuntimeContractValidation.SameRegistration(
+                    storedCompletion.Completion.Registration, registration))
             {
                 var replayActor = await CreateRuntimeActorAsync(context, actor, timeProvider)
                     .ConfigureAwait(false);
@@ -201,7 +202,7 @@ public static partial class CoordinationEndpoints
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             var currentRegistration = await registrations.ReadCurrentForSessionAsync(
                 context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
-            if (currentRegistration != registration)
+            if (!RuntimeContractValidation.SameRegistration(currentRegistration, registration))
                 throw new CoordinationException(
                     "casting_generation_registration_stale", StatusCodes.Status409Conflict);
             CastingGenerationExecutionContract.RequireCurrentRegistration(
@@ -234,7 +235,7 @@ public static partial class CoordinationEndpoints
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             currentRegistration = await registrations.ReadCurrentForSessionAsync(
                 context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
-            if (currentRegistration != registration)
+            if (!RuntimeContractValidation.SameRegistration(currentRegistration, registration))
                 throw new CoordinationException(
                     "casting_generation_registration_stale", StatusCodes.Status409Conflict);
             CastingGenerationExecutionContract.RequireCurrentRegistration(
@@ -353,7 +354,7 @@ public static partial class CoordinationEndpoints
                     StatusCodes.Status503ServiceUnavailable);
             completion.Validate();
             if (completion.RequestId != request.RequestId ||
-                completion.Registration != registration ||
+                !RuntimeContractValidation.SameRegistration(completion.Registration, registration) ||
                 completion.ObserveGrant != readiness.SourceGrant ||
                 completion.PromptHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(request.Prompt)) ||
                 completion.NativeTurn.OutputHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(output)))

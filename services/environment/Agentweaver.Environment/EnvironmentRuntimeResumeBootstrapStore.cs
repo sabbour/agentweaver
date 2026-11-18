@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -50,7 +49,8 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         var json = JsonSerializer.Serialize(request, JsonOptions);
         if (Encoding.UTF8.GetByteCount(json) > SessionMaterialValidation.MaximumBytes)
             throw new RuntimeAuthorizationException("runtime_resume_bootstrap_request_too_large");
-        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+        var canonical = request.Registration.Binding.RuntimeRateCardAdmission is not null;
+        var fingerprint = RuntimeContractValidation.HashJsonContract(request, JsonOptions, canonical);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         var lockName = $"environment:runtime-resume-bootstrap:{request.Resume.OperationId:N}";
         await using (var acquire = new NpgsqlCommand(
@@ -202,12 +202,18 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return (false, null);
         var binding = request.Registration.Binding;
+        var canonical = binding.RuntimeRateCardAdmission is not null;
+        var storedJson = reader.IsDBNull(7) ? null : reader.GetString(7);
+        var specificationMatches = storedJson is not null && (canonical
+            ? RuntimeContractValidation.HashCanonicalJson(Encoding.UTF8.GetBytes(storedJson)) == fingerprint
+            : JsonElement.DeepEquals(
+                JsonSerializer.Deserialize<JsonElement>(storedJson),
+                JsonSerializer.Deserialize<JsonElement>(json)));
         if (reader.GetString(0) != binding.TenantId || reader.GetString(1) != binding.ProjectId ||
             reader.GetString(2) != binding.RunId || reader.GetString(3) != binding.EnvironmentId ||
             reader.GetInt64(4) != binding.EnvironmentLifecycleGeneration ||
             reader.GetString(5) != "RuntimeResumeBootstrap" || reader.GetString(6) != fingerprint ||
-            reader.IsDBNull(7) || !JsonElement.DeepEquals(
-                JsonSerializer.Deserialize<JsonElement>(reader.GetString(7)), JsonSerializer.Deserialize<JsonElement>(json)))
+            !specificationMatches)
             throw new RuntimeAuthorizationException("runtime_resume_bootstrap_operation_conflict");
         var state = reader.GetString(8);
         if (state is not ("Reserved" or "Completed") ||

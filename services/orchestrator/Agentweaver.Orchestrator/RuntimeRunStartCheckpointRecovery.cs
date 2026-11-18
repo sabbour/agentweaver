@@ -78,7 +78,7 @@ internal sealed partial class RuntimeRunStartContinuation
                 previousRegistration.RuntimeInstanceId,
                 cancellationToken)
                 .ConfigureAwait(false);
-            if (currentRegistration != previousRegistration)
+            if (!RuntimeContractValidation.SameRegistration(currentRegistration, previousRegistration))
                 throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
         }
         var previousBootstrapId = hasPreviousEvidence &&

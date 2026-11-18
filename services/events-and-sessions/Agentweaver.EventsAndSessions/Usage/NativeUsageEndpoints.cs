@@ -285,7 +285,8 @@ internal sealed class NativeUsageApplicationService(
             if (nativeTurn is not null)
             {
                 var final = await source.ReadNativeTurnAsync(actor, request, cancellationToken).ConfigureAwait(false);
-                if (final.Admission != nativeTurn.Admission || final.OwnerRevision != nativeTurn.OwnerRevision ||
+                if (!RuntimeNativeTurnContract.SameAdmission(final.Admission, nativeTurn.Admission) ||
+                    final.OwnerRevision != nativeTurn.OwnerRevision ||
                     final.CanonicalPayloadHash != nativeTurn.CanonicalPayloadHash ||
                     !final.Observation.UsageEventIds.SequenceEqual(nativeTurn.Observation.UsageEventIds))
                     throw new RuntimeAuthorizationException("runtime_native_turn_evidence_changed");

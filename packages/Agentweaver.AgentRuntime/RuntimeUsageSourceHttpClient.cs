@@ -45,7 +45,9 @@ public sealed class RuntimeUsageSourceHttpClient(
         RuntimeUsageSourceReceiptContract.Validate(receipt);
         var expected = RuntimeUsageSourceReceiptContract.CreateUsage(
             session.Registration, session.Facts, observation);
-        if (receipt.Registration != session.Registration || receipt.Usage != expected)
+        if (RuntimeContractValidation.RegistrationHash(receipt.Registration) !=
+                RuntimeContractValidation.RegistrationHash(session.Registration) ||
+            receipt.Usage != expected)
             throw new RuntimeAuthorizationException("runtime_usage_receipt_mismatch");
         return receipt;
     }
@@ -197,7 +199,8 @@ public sealed class RuntimeUsageSourceHttpClient(
             new RuntimeFixedCreditGuardRecordRequest(Request(proof), receipt), cancellationToken)
             .ConfigureAwait(false);
         RuntimeFixedCreditGuardContract.ValidateReceipt(stored);
-        if (stored.Registration != receipt.Registration || stored.Stage != receipt.Stage ||
+        if (!RuntimeContractValidation.SameRegistration(stored.Registration, receipt.Registration) ||
+            stored.Stage != receipt.Stage ||
             stored.RequestId != receipt.RequestId || stored.RequestHash != receipt.RequestHash)
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
         RuntimeFixedCreditGuardContract.ValidateSourceTuple(
@@ -288,7 +291,7 @@ public sealed class RuntimeUsageSourceHttpClient(
             new RuntimeNativeTurnObservationRequest(Request(session.Proof()), admission, observation), cancellationToken)
             .ConfigureAwait(false);
         RuntimeNativeTurnContract.ValidateRecorded(receipt);
-        if (receipt.Admission != admission ||
+        if (!RuntimeNativeTurnContract.SameAdmission(receipt.Admission, admission) ||
             receipt.CanonicalPayloadHash != RuntimeNativeTurnContract.ObservationHash(observation))
             throw new RuntimeAuthorizationException("runtime_native_turn_receipt_invalid");
         return receipt;
@@ -337,7 +340,8 @@ public sealed class RuntimeUsageSourceHttpClient(
         AuthorizedRuntimeSession session, RuntimeHostSessionProof expected,
         RuntimeCredentialProof proof, RuntimeGrantReceipt grant)
     {
-        if (expected.ContractVersion != 1 || expected.Registration != session.Registration ||
+        if (expected.ContractVersion != 1 ||
+            !RuntimeContractValidation.SameRegistration(expected.Registration, session.Registration) ||
             expected.Purpose != RuntimeCredentialPurpose.Observe ||
             expected.SourceGrantId != proof.GrantId || expected.SourceGrantRevision != proof.Revision ||
             proof.Purpose != RuntimeCredentialPurpose.Observe ||

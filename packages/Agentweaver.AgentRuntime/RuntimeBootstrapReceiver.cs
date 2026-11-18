@@ -162,13 +162,16 @@ public sealed class RuntimeBootstrapReceiver(
     {
         resumeBootstrap?.Validate();
         if (resumeBootstrap is not null &&
-            (resumeBootstrap.Registration != registration ||
+            (RuntimeContractValidation.RegistrationHash(resumeBootstrap.Registration) !=
+                 RuntimeContractValidation.RegistrationHash(registration) ||
              resumeBootstrap.ConsumeOperationId != consumeOperationId ||
              resumeBootstrap.ExchangeOperationId != exchangeOperationId))
             throw new RuntimeAuthorizationException("runtime_resume_bootstrap_request_invalid");
         var resumeBootstrapHash = resumeBootstrap is null
             ? null
-            : RuntimeContractValidation.Hash(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(resumeBootstrap));
+            : RuntimeContractValidation.HashJsonContract(
+                resumeBootstrap,
+                canonical: resumeBootstrap.Registration.Binding.RuntimeRateCardAdmission is not null);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -228,7 +231,9 @@ public sealed class RuntimeBootstrapReceiver(
             : await owner.ReadCurrentAsync(
                 registration.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
         RuntimeSessionBootstrap.RequireCurrent(current, actor, timeProvider);
-        if (current != registration || !credential.IsUsable())
+        if (RuntimeContractValidation.RegistrationHash(current) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
+            !credential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 

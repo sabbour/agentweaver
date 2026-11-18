@@ -61,7 +61,9 @@ public sealed class RuntimeSessionBootstrap(
         var registration = await ReadCurrentAsync(bootstrap.RuntimeInstanceId, cancellationToken);
         RequireCurrent(registration, actor, timeProvider);
         replacementRecovery?.ValidateFor(registration);
-        if (resumeBootstrap is not null && resumeBootstrap.Registration != registration)
+        if (resumeBootstrap is not null &&
+            RuntimeContractValidation.RegistrationHash(resumeBootstrap.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration))
             throw new RuntimeAuthorizationException("runtime_resume_registration_stale");
         if (expectedImage is { } image)
         {
@@ -258,7 +260,7 @@ public sealed class RuntimeSessionBootstrap(
     {
         var current = await ReadCurrentAsync(expected.RuntimeInstanceId, cancellationToken);
         RequireCurrent(current, actor, timeProvider);
-        if (current != expected)
+        if (!RuntimeContractValidation.SameRegistration(current, expected))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 

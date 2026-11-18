@@ -27,7 +27,9 @@ public sealed record RuntimeResumeHostStateReceipt(
         request.Validate();
         if (ContractVersion != 1 || OperationId != request.Resume.OperationId ||
             SourceManifestId != request.Resume.SourceManifest.ManifestId ||
-            Registration != request.Registration || ResumeAttemptId != request.ResumeAttemptId ||
+            RuntimeContractValidation.RegistrationHash(Registration) !=
+                RuntimeContractValidation.RegistrationHash(request.Registration) ||
+            ResumeAttemptId != request.ResumeAttemptId ||
             State == RuntimeResumeHostState.Unspecified || !Enum.IsDefined(State))
             throw new RuntimeAuthorizationException("runtime_resume_host_state_invalid");
         return this;

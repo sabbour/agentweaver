@@ -488,7 +488,7 @@ internal sealed class SessionSuspendResumeCoordinator
                 throw new CoordinationException(
                     "suspend_resume_operation_invalid", StatusCodes.Status503ServiceUnavailable);
             var saved = DeserializeProgress(operation.Progress);
-            if (saved.Registration != registration ||
+            if (!RuntimeContractValidation.SameRegistration(saved.Registration, registration) ||
                 saved.Checkpoint != checkpointReference ||
                 saved.ResolvedRequest is null ||
                 saved.EnvironmentFence is null ||
@@ -523,7 +523,7 @@ internal sealed class SessionSuspendResumeCoordinator
                         "events_session_material_invalid", StatusCodes.Status503ServiceUnavailable);
                 var latestRegistration = await registrations.ReadCurrentAsync(
                     context, registration.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
-                if (latestRegistration != registration)
+                if (!RuntimeContractValidation.SameRegistration(latestRegistration, registration))
                     throw new CoordinationException(
                         "runtime_registration_stale", StatusCodes.Status409Conflict);
                 var latestReadiness = await ReadEnvironmentReadinessAsync(
@@ -568,7 +568,7 @@ internal sealed class SessionSuspendResumeCoordinator
                         "runtime_workspace_flush_receipt_missing", StatusCodes.Status503ServiceUnavailable);
                 var currentRegistration = await registrations.ReadCurrentAsync(
                     context, registration.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
-                if (currentRegistration != registration)
+                if (!RuntimeContractValidation.SameRegistration(currentRegistration, registration))
                     throw new CoordinationException(
                         "runtime_registration_stale", StatusCodes.Status409Conflict);
                 var currentReadiness = await ReadEnvironmentReadinessAsync(
@@ -1131,7 +1131,7 @@ internal sealed class SessionSuspendResumeCoordinator
             saved.NetworkIntentGeneration is not > 0 || saved.FlushedJournalPosition is not > 0 ||
             saved.FlushTransitionRevision is null ||
             resolved.Suspend.WorkspaceFlush is not { } flushRequest ||
-            registration != host.Registration ||
+            !RuntimeContractValidation.SameRegistration(registration, host.Registration) ||
             registration.Binding.ExecutionFence != operation.OwnerExecutionFence ||
             resolved.Suspend.OperationId != operation.OperationId ||
             resolved.Suspend.ManifestId != operation.ManifestId ||

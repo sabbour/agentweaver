@@ -653,7 +653,7 @@ internal sealed partial class CoordinationOwnerStore
             current = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
                 ? RuntimeRegistrationStore.ReadRegistration(reader)
                 : null;
-        if (current is null || current != expected ||
+        if (current is null || !RuntimeContractValidation.SameRegistration(current, expected) ||
             current.State != RuntimeRegistrationState.Active ||
             current.ExpiresAt <= _timeProvider.GetUtcNow())
             throw new CoordinationException(

@@ -520,7 +520,7 @@ public static class RuntimeFixedCreditGuardContract
             sourceReceipt.CanonicalPayloadHash != sourceHash ||
             grant.RuntimeInstanceId != registration.RuntimeInstanceId ||
             grant.RegistrationRevision != registration.Revision ||
-            receipt.Registration != registration ||
+            !RuntimeContractValidation.SameRegistration(receipt.Registration, registration) ||
             receipt.SourceHash != sourceHash ||
             receipt.SourceGrantId != grant.GrantId ||
             receipt.SourceGrantRevision != grant.Revision)
@@ -575,7 +575,7 @@ public static class RuntimeFixedCreditGuardContract
             return;
         if (result.Receipt is not { } receipt || result.Evidence is not { } evidence ||
             receipt.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
-            receipt.Registration != registration ||
+            !RuntimeContractValidation.SameRegistration(receipt.Registration, registration) ||
             receipt.RegistrationHash != RuntimeContractValidation.RegistrationHash(registration))
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_read_invalid");
         ValidateSourceTuple(receipt, registration, grant, sourceReceipt);
@@ -600,7 +600,7 @@ public static class RuntimeFixedCreditGuardContract
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_read_invalid");
         }
         ValidateReceipt(receipt);
-        if (receipt.Registration != registration ||
+        if (!RuntimeContractValidation.SameRegistration(receipt.Registration, registration) ||
             receipt.Registration.RuntimeInstanceId != request.RuntimeInstanceId ||
             receipt.Registration.Revision != request.RegistrationRevision ||
             receipt.Registration.Binding.ExecutionFence != request.ExecutionFence ||

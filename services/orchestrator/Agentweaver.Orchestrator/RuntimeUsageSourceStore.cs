@@ -515,7 +515,10 @@ internal sealed class RuntimeUsageSourceStore(
             .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
         RequireSource(source, registration, grant);
         if (source.Receipt.Source != request.Source || request.Message?.Message is not { } message ||
-            message.Metadata?.Runtime?.Registration != registration || message.ContextId != request.Source.SdkSessionId ||
+            message.Metadata?.Runtime?.Registration is not { } messageRegistration ||
+            RuntimeContractValidation.RegistrationHash(messageRegistration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
+            message.ContextId != request.Source.SdkSessionId ||
             message.Metadata.Runtime.SourceGrantId != grant.GrantId ||
             message.Metadata.Runtime.SourceGrantRevision != grant.Revision ||
             message.MessageId == Guid.Empty || message.Parts.IsDefault || message.Parts.Length != 1 ||
@@ -1381,7 +1384,9 @@ internal sealed class RuntimeUsageSourceStore(
         var source = await ReadSourceAsync(connection, transaction, registration.RuntimeInstanceId, cancellationToken)
             .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
         RequireSource(source, registration, grant);
-        if (request.Admission.Registration != registration || request.Admission.Source != source.Receipt.Source)
+        if (RuntimeContractValidation.RegistrationHash(request.Admission.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
+            request.Admission.Source != source.Receipt.Source)
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_invalid");
         RuntimeNativeTurnContract.ValidateObservation(request.Admission, request.Observation);
         var dispatch = await ReadNativeDispatchAsync(
@@ -1662,7 +1667,9 @@ internal sealed class RuntimeUsageSourceStore(
         RuntimeSdkSourceReceipt? sourceReceipt, CancellationToken cancellationToken)
     {
         RuntimeFixedCreditGuardContract.ValidateReceipt(receipt);
-        if (receipt.Registration != registration || (grant is null) != (sourceReceipt is null))
+        if (RuntimeContractValidation.RegistrationHash(receipt.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
+            (grant is null) != (sourceReceipt is null))
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
         if (receipt.SourceGrantId is not null)
         {
@@ -1881,7 +1888,8 @@ internal sealed class RuntimeUsageSourceStore(
             return null;
         var receipt = Deserialize<RuntimeFixedCreditGuardReceipt>(payload);
         RuntimeFixedCreditGuardContract.ValidateReceipt(receipt);
-        if (receipt.Registration != registration)
+        if (RuntimeContractValidation.RegistrationHash(receipt.Registration) !=
+            RuntimeContractValidation.RegistrationHash(registration))
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
         return receipt;
     }
@@ -1981,8 +1989,7 @@ internal sealed class RuntimeUsageSourceStore(
     private static void RequireFixedCreditGuardReplay(
         RuntimeFixedCreditGuardReceipt existing, RuntimeFixedCreditGuardReceipt requested)
     {
-        if (existing.Registration != requested.Registration ||
-            existing.RegistrationHash != requested.RegistrationHash ||
+        if (existing.RegistrationHash != requested.RegistrationHash ||
             existing.RequestHash != requested.RequestHash ||
             existing.SourceHash != requested.SourceHash ||
             existing.SourceGrantId != requested.SourceGrantId ||
@@ -2010,7 +2017,9 @@ internal sealed class RuntimeUsageSourceStore(
         var admission = expected.Admission;
         var source = await ReadCurrentSourceAsync(connection, transaction, registration, cancellationToken)
             .ConfigureAwait(false);
-        if (admission.Registration != registration || admission.Source != source.Source)
+        if (RuntimeContractValidation.RegistrationHash(admission.Registration) !=
+                RuntimeContractValidation.RegistrationHash(registration) ||
+            admission.Source != source.Source)
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
         var dispatch = await ReadNativeDispatchAsync(
             connection, transaction, registration, admission.MessageId, cancellationToken).ConfigureAwait(false);

@@ -19,7 +19,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         ArgumentNullException.ThrowIfNull(request.Proof.Registration);
         var registration = await ReadCurrentAsync(
             request.Proof.Registration.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
-        if (registration != request.Proof.Registration)
+        if (!RuntimeContractValidation.SameRegistration(registration, request.Proof.Registration))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var placement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
         var binding = registration.Binding;
@@ -49,7 +49,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             throw new RuntimeAuthorizationException("runtime_suspend_request_invalid");
         var registration = await ReadCurrentAsync(
             request.Proof.Registration.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
-        if (registration != request.Proof.Registration)
+        if (!RuntimeContractValidation.SameRegistration(registration, request.Proof.Registration))
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var confirmed = await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostSuspendRequest>(
             client, options.OrchestratorOwnerAddress, "/internal/runtime/suspend/require-current",

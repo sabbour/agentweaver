@@ -499,8 +499,10 @@ internal sealed class RuntimeRegistrationOwner(
             }
         }
 
-        if (await ReadOwnerAsync(context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false)
-            != authorizedOwner)
+        if (!RuntimeContractValidation.SameOwnerContext(
+                await ReadOwnerAsync(context, projectId, runId, sessionId, cancellationToken)
+                    .ConfigureAwait(false),
+                authorizedOwner))
             throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         if (currentMatches.Count == 0)
             throw new CoordinationException(
@@ -517,8 +519,10 @@ internal sealed class RuntimeRegistrationOwner(
                 currentMatches[0].RuntimeInstanceId,
                 (current, _) => Task.FromResult(current),
                 cancellationToken).ConfigureAwait(false);
-            if (await ReadOwnerAsync(context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false)
-                != authorizedOwner)
+            if (!RuntimeContractValidation.SameOwnerContext(
+                    await ReadOwnerAsync(context, projectId, runId, sessionId, cancellationToken)
+                        .ConfigureAwait(false),
+                    authorizedOwner))
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
             return selected;
         }
@@ -593,7 +597,8 @@ internal sealed class RuntimeRegistrationOwner(
             if (owner.ActorIssuer != actorIdentity.Issuer || owner.ActorId != actorIdentity.Subject ||
                 owner.ProjectId != projectId || owner.RunId != runId || owner.SessionId != sessionId)
                 throw new RuntimeAuthorizationException("runtime_owner_context_stale");
-            if ((firstOwner is not null && owner != firstOwner) || !credential.IsUsable())
+            if ((firstOwner is not null && !RuntimeContractValidation.SameOwnerContext(owner, firstOwner)) ||
+                !credential.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_owner_context_stale");
             ValidatePlacement(owner, request, placement);
             return CreateDerivedBinding(owner, placement);
@@ -619,7 +624,8 @@ internal sealed class RuntimeRegistrationOwner(
             request.EnvironmentId, request.ProfileId, cancellationToken).ConfigureAwait(false);
         var owner = placement.RuntimeOwnerContext
             ?? throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
-        if (owner != expectedOwner || !actor.Bearer.IsUsable())
+        if (!RuntimeContractValidation.SameOwnerContext(owner, expectedOwner) ||
+            !actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
         ValidatePlacement(owner, request, placement);
         return CreateDerivedBinding(owner, placement);
@@ -745,7 +751,8 @@ internal sealed class RuntimeRegistrationOwner(
     /// </summary>
     private static void RequireSame(DerivedBinding expected, DerivedBinding current)
     {
-        if (current != expected)
+        if (!RuntimeContractValidation.SameBinding(current.Binding, expected.Binding) ||
+            current.ExpiresAt != expected.ExpiresAt)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
@@ -830,7 +837,8 @@ internal sealed class RuntimeRegistrationOwner(
     private void RequireRegistrationMatches(RuntimeRegistration registration, DerivedBinding derived)
     {
         RequireActive(registration);
-        if (registration.Binding != derived.Binding || registration.ExpiresAt != derived.ExpiresAt)
+        if (!RuntimeContractValidation.SameBinding(registration.Binding, derived.Binding) ||
+            registration.ExpiresAt != derived.ExpiresAt)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
