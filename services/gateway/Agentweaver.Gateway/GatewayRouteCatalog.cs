@@ -617,7 +617,9 @@ public static class GatewayRouteCatalog
             string summary,
             bool body = false,
             bool acceptsOnly = false,
-            string[]? query = null) =>
+            string[]? query = null,
+            string[]? exposedResponseHeaders = null,
+            long? maximumResponseBytes = null) =>
             Add(
                 method,
                 GatewayOwner.Orchestrator,
@@ -628,6 +630,8 @@ public static class GatewayRouteCatalog
                 query: query,
                 body: body,
                 acceptsOnly: acceptsOnly,
+                exposedResponseHeaders: exposedResponseHeaders,
+                maximumResponseBytes: maximumResponseBytes,
                 forwardTenantSelector: true);
 
         Coordination("POST", "/root", "acceptRunRoot", "Accept the run root", body: true);
@@ -646,6 +650,13 @@ public static class GatewayRouteCatalog
             "/sessions/{sessionId}/runtime-replacements/{operationId}",
             "readRuntimeReplacement",
             "Read runtime replacement status");
+        Coordination(
+            "GET",
+            "/sessions/{sessionId}/execution-plan",
+            "readExecutionPlan",
+            "Read the saved execution plan",
+            exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: 8 * 1024 * 1024);
         Coordination("POST", "/sessions/{sessionId}/actions/propose_outcome_spec",
             "proposeOutcomeSpec", "Propose an outcome specification", body: true);
         Coordination("POST", "/sessions/{sessionId}/actions/select_workflow",

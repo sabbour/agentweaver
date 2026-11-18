@@ -360,8 +360,23 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         MafCheckpointBinding binding,
         CancellationToken cancellationToken) =>
         await ReadLatestCheckpointInTransactionCoreAsync(
-            connection, transaction, binding, requireCompletedRootEvidence: false, cancellationToken)
+            connection, transaction, binding, requireCompletedRootEvidence: false,
+            lockRows: true, cancellationToken)
             .ConfigureAwait(false);
+
+    internal Task<(
+        CheckpointInfo Info,
+        JsonElement Value,
+        string? ParentCheckpointId,
+        bool HasParentMetadata)?> ReadLatestCheckpointReadOnlyInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken) =>
+        ReadLatestCheckpointInTransactionCoreAsync(
+            connection, transaction, binding, requireCompletedRootEvidence: false,
+            lockRows: false, cancellationToken, acceptedSelectionHash);
 
     /// <summary>
     /// Reads the latest root checkpoint only when completed-root evidence is allowed by current owner state.
@@ -376,7 +391,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         MafCheckpointBinding binding,
         CancellationToken cancellationToken) =>
         ReadLatestCheckpointInTransactionCoreAsync(
-            connection, transaction, binding, requireCompletedRootEvidence: true, cancellationToken);
+            connection, transaction, binding, requireCompletedRootEvidence: true,
+            lockRows: true, cancellationToken);
 
     /// <summary>
     /// Reads the unique leaf checkpoint and validates its run binding and optional completed-root evidence.
@@ -391,7 +407,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
         bool requireCompletedRootEvidence,
-        CancellationToken cancellationToken)
+        bool lockRows,
+        CancellationToken cancellationToken,
+        string? expectedSelectionHash = null)
     {
         var validatedBinding = ValidateBinding(binding);
         if (requireCompletedRootEvidence &&
@@ -400,15 +418,20 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             throw new CoordinationException(
                 "checkpoint_session_unavailable", StatusCodes.Status409Conflict);
         var currentBinding = await ReadCurrentBindingAsync(
-            connection, transaction, validatedBinding, lockRows: true,
+            connection, transaction, validatedBinding, lockRows,
             requireCompletedRootEvidence, cancellationToken).ConfigureAwait(false);
+        if (expectedSelectionHash is not null &&
+            !string.Equals(
+                currentBinding.SelectionHash, expectedSelectionHash, StringComparison.OrdinalIgnoreCase))
+            throw new CoordinationException(
+                "checkpoint_run_selection_changed", StatusCodes.Status409Conflict);
         var selectionHashPredicate = requireCompletedRootEvidence
             ? "AND checkpoint.accepted_selection_hash = @selectionHash"
             : string.Empty;
         // Read two leaves so a fork is rejected instead of choosing one checkpoint arbitrarily.
         await using var command = new NpgsqlCommand($"""
             SELECT checkpoint.checkpoint_id, checkpoint.parent_checkpoint_id,
-                   checkpoint.has_parent_metadata, checkpoint.payload
+                   checkpoint.has_parent_metadata, checkpoint.accepted_selection_hash, checkpoint.payload
             FROM {_schema}.maf_workflow_checkpoints checkpoint
             WHERE checkpoint.project_id = @project AND checkpoint.run_id = @run
                 AND checkpoint.session_id = @session AND checkpoint.store_name = @store
@@ -437,7 +460,13 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         var checkpointId = reader.GetString(0);
         var parentCheckpointId = reader.IsDBNull(1) ? null : reader.GetString(1);
         var hasParentMetadata = reader.GetBoolean(2);
-        using var document = JsonDocument.Parse(reader.GetString(3));
+        var checkpointSelectionHash = reader.GetString(3).TrimEnd();
+        if ((requireCompletedRootEvidence || expectedSelectionHash is not null) &&
+            !string.Equals(
+                checkpointSelectionHash, currentBinding.SelectionHash, StringComparison.OrdinalIgnoreCase))
+            throw new CoordinationException(
+                "checkpoint_run_selection_changed", StatusCodes.Status409Conflict);
+        using var document = JsonDocument.Parse(reader.GetString(4));
         var value = document.RootElement.Clone();
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw new CoordinationException(

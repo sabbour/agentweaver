@@ -187,8 +187,26 @@ internal sealed class CoordinatorRunSelectionContextStore
         if (executionFence <= 0)
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
 
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return await ReadInTransactionAsync(
+            connection, null, selection, executionFence, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<WorkPlanRunSelectionContext?> ReadInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        EffectiveRunSelection selection,
+        long executionFence,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(selection);
+        if (transaction is not null && !ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        if (executionFence <= 0)
+            throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
+
         PersistedBinding? persisted;
-        await using (var connection = await _dataSource.OpenConnectionAsync(cancellationToken))
         await using (var command = new NpgsqlCommand($"""
             SELECT accepted_selection_hash, project_revision, project_configuration_revision,
                    platform_runtime_revision, context_revision, execution_fence, role_context,
@@ -197,7 +215,7 @@ internal sealed class CoordinatorRunSelectionContextStore
                    required_capabilities, negotiated_capabilities, isolation_choices
             FROM {_bindings}
             WHERE project_id = @project AND run_id = @run AND execution_fence = @fence
-            """, connection))
+            """, connection, transaction))
         {
             command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, selection.ProjectId);
             command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, selection.RunId);

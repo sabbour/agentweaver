@@ -141,7 +141,23 @@ internal sealed class MafExecutionCheckpointStore
     {
         var latest = await _checkpoints.ReadLatestCheckpointInTransactionAsync(
             connection, transaction, _binding, cancellationToken).ConfigureAwait(false);
-        return latest is null
+        return ToSnapshot(latest);
+    }
+
+    internal async Task<MafExecutionCheckpointSnapshot?> ReadLatestReadOnlyInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        var latest = await _checkpoints.ReadLatestCheckpointReadOnlyInTransactionAsync(
+            connection, transaction, _binding, acceptedSelectionHash, cancellationToken).ConfigureAwait(false);
+        return ToSnapshot(latest);
+    }
+
+    private static MafExecutionCheckpointSnapshot? ToSnapshot(
+        (CheckpointInfo Info, JsonElement Value, string? ParentCheckpointId, bool HasParentMetadata)? latest) =>
+        latest is null
             ? null
             : new MafExecutionCheckpointSnapshot(
                 latest.Value.Info,
@@ -151,7 +167,6 @@ internal sealed class MafExecutionCheckpointStore
                 ParentCheckpointId = latest.Value.ParentCheckpointId,
                 HasParentMetadata = latest.Value.HasParentMetadata
             };
-    }
 
     internal async Task<MafExecutionCheckpointSnapshot> AppendRecoveryCheckpointInTransactionAsync(
         NpgsqlConnection connection,
