@@ -43,17 +43,20 @@ executable by path. No download URL is listed until a release is published.
 `api operations` and `api describe` use only `AGENTWEAVER_GATEWAY_URL`;
 authentication settings are ignored by these discovery commands.
 `api invoke`, `rest`, and all `auth` commands require the Gateway URL, Broker
-issuer, API audience, and tenant. The optional project and run selectors for
-those commands must be supplied together. These settings identify the target;
-never pass access or refresh tokens as command-line arguments.
+issuer, API audience, and tenant. A run selector requires a project selector.
+A project selector without a run is valid for project administration with
+`projects.admin`; run-bound calls use `projects.orchestrator`. These settings
+identify the target; never pass access or refresh tokens as command-line
+arguments.
 
 For `auth` and API commands, the nonsecret target options override their
 matching environment variables: `--gateway-url`, `--broker-issuer`,
 `--client-id`, `--api-audience`, `--tenant-id`, `--project-id`, and `--run-id`.
 Discovery still uses only the Gateway URL, whether supplied by environment or
-`--gateway-url`. Keep project/run overrides paired. The read-only API case
-script supplies its target as CLI options from its case input; it does not use
-inherited target environment values.
+`--gateway-url`. Set both project and run for a run-bound request. Set only
+project for a project-admin request. The read-only API case script supplies
+its target as CLI options from its case input; it does not use inherited target
+environment values.
 
 ```powershell
 $env:AGENTWEAVER_GATEWAY_URL = "https://gateway.example"
@@ -62,7 +65,7 @@ $env:AGENTWEAVER_API_AUDIENCE = "https://gateway.example"
 $env:AGENTWEAVER_TENANT_ID = "TENANT_ID"
 # Optional; defaults to agentweaver-cli.
 $env:AGENTWEAVER_CLIENT_ID = "agentweaver-cli"
-# Optional for auth/API calls; set both when selecting a project and run.
+# Optional. Run-bound requests need both values; project administration needs only the project.
 $env:AGENTWEAVER_PROJECT_ID = "PROJECT_ID"
 $env:AGENTWEAVER_RUN_ID = "RUN_ID"
 ```
@@ -461,7 +464,9 @@ agentweaver rest --method GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS --url <root-rel
 
 The target options are `--gateway-url`, `--broker-issuer`, `--client-id`,
 `--api-audience`, `--tenant-id`, `--project-id`, and `--run-id`; each overrides
-its matching environment variable, and project/run selectors stay paired.
+its matching environment variable. Run-bound calls need both project and run.
+Project administration uses `--project-id` without `--run-id` and requests
+`projects.admin`.
 Authentication uses the selected primary bearer and validates current issuer,
 tenant, project, and run binding with the fixed
 `/api/v1/authorization/context` preflight before sending the request. The
@@ -608,6 +613,41 @@ complete corrected metadata. The API does not return the rejected metadata.
 These commands send and display provider metadata only. They do not send
 credentials or key bytes, set a key, or activate a provider. For the task
 procedure, see [Manage platform BYOK provider metadata](./manage-model-providers.md).
+
+## Manage project BYOK provider drafts
+
+Use `project byok` to list and edit one Project's model-provider metadata
+through the public Draft API. Sign in with `projects.admin`, bind the identity
+to the exact project, and leave the run selector unset. The API checks current
+Owner or PlatformAdmin authority on each request. The OAuth scope does not
+grant either role.
+
+```text
+agentweaver auth login --scope projects.admin --project-id <projectId>
+agentweaver project byok list --project-id <projectId> [other target options]
+agentweaver project byok show <providerId> --project-id <projectId> [other target options]
+agentweaver project byok add --project-id <projectId> --name <name> --type <openai|azure|anthropic>
+    --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
+agentweaver project byok update <providerId> --project-id <projectId>
+    --expected-revision <revision> --name <name> --type <openai|azure|anthropic>
+    --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
+```
+
+The project ID selects the token binding and the Project route. The CLI sends
+that ID as `project_id` with no `run_id`. Do not set `AGENTWEAVER_RUN_ID` or
+pass `--run-id`. Each request also checks current project authority, so a
+removed or changed role is denied.
+
+`list` reads every cursor page. Its JSON output contains one `providers` array.
+Use the stable `providerId` field from `list` or `add` with `show` and
+`update`; the provider name is display text and can change. `add` creates a
+Draft. `update` writes a complete metadata revision and requires the current
+`--expected-revision`. The metadata options and write recovery rules match
+[platform BYOK](#manage-platform-byok-provider-drafts).
+
+These commands send and display provider metadata only. They do not send key
+bytes or credentials, set a key, or activate a provider. For the procedure,
+see [Manage project BYOK provider metadata](./manage-project-byok-provider-metadata.md).
 
 ## Configure a BYOK model binding
 

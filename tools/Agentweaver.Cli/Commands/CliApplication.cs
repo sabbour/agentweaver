@@ -57,8 +57,17 @@ public static class CliApplication
             {
                 var actualRuntime = runtime ?? new CliRuntimeOptions();
                 using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
-                return await PlatformByokCommands.RunAsync(
-                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, error, ct).ConfigureAwait(false);
+                return await ByokDraftCommands.RunAsync(
+                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, error,
+                    projectScope: false, ct).ConfigureAwait(false);
+            }
+            if (args[0] == "project")
+            {
+                var actualRuntime = runtime ?? new CliRuntimeOptions();
+                using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                return await ByokDraftCommands.RunAsync(
+                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, error,
+                    projectScope: true, ct).ConfigureAwait(false);
             }
             if (args[0] == "policy")
             {
@@ -515,6 +524,13 @@ public static class CliApplication
           agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
               --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
           agentweaver platform byok update <providerId> --expected-revision <revision>
+              --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <model>
+              [metadata options] [--operation-id <guid>]
+          agentweaver project byok list [--project-id <id>] [other target options]
+          agentweaver project byok show <providerId> --project-id <id> [other target options]
+          agentweaver project byok add --project-id <id> --name <name> --type <openai|azure|anthropic>
+              --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
+          agentweaver project byok update <providerId> --project-id <id> --expected-revision <revision>
               --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <model>
               [metadata options] [--operation-id <guid>]
           agentweaver workspace refs --project <project-id> --interactive [--cursor <2-10000>] [target options]

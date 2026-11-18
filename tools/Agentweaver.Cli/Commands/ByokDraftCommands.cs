@@ -5,12 +5,13 @@ using Agentweaver.Cli.Api;
 
 namespace Agentweaver.Cli;
 
-internal static class PlatformByokCommands
+internal static class ByokDraftCommands
 {
     private const int PageSize = 100;
     private const int MaximumSaveBodyBytes = 32 * 1024;
     private const int MaximumPageBytes = 4 * 1024 * 1024;
     private const string PlatformPath = "/api/v1/platform/byok-providers";
+    private const string ProjectPath = "/api/v1/projects/{projectId}/byok-providers";
     private static readonly JsonSerializerOptions OutputJson = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -22,14 +23,16 @@ internal static class PlatformByokCommands
         HttpClient httpClient,
         TextWriter output,
         TextWriter error,
+        bool projectScope,
         CancellationToken ct)
     {
+        var scopeName = projectScope ? "project" : "platform";
         if (args.Length < 2 || args[0] != "byok")
-            throw new CliUsageException("Choose `agentweaver platform byok list|show|add|update`.");
+            throw new CliUsageException($"Choose `agentweaver {scopeName} byok list|show|add|update`.");
 
         var command = args[1];
         if (command is not ("list" or "show" or "add" or "update"))
-            throw new CliUsageException("Choose `list`, `show`, `add`, or `update` for `platform byok`.");
+            throw new CliUsageException($"Choose `list`, `show`, `add`, or `update` for `{scopeName} byok`.");
 
         var hasProviderId = command is "show" or "update";
         var optionStart = hasProviderId ? 3 : 2;
@@ -37,12 +40,13 @@ internal static class PlatformByokCommands
             hasProviderId &&
             (string.IsNullOrWhiteSpace(args[2]) || args[2].StartsWith("--", StringComparison.Ordinal)))
         {
+            var projectOption = projectScope ? " --project-id <projectId>" : string.Empty;
             throw new CliUsageException(command switch
             {
-                "show" => "Usage: agentweaver platform byok show <providerId> [target options]",
-                "update" => "Usage: agentweaver platform byok update <providerId> --expected-revision <revision> --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
-                "add" => "Usage: agentweaver platform byok add --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
-                _ => "Usage: agentweaver platform byok list [target options]",
+                "show" => $"Usage: agentweaver {scopeName} byok show <providerId> [target options]",
+                "update" => $"Usage: agentweaver {scopeName} byok update <providerId>{projectOption} --expected-revision <revision> --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
+                "add" => $"Usage: agentweaver {scopeName} byok add{projectOption} --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
+                _ => $"Usage: agentweaver {scopeName} byok list [target options]",
             });
         }
 
@@ -53,57 +57,68 @@ internal static class PlatformByokCommands
             "add" => SaveOptions,
             _ => SaveOptions.Concat(["expected-revision"]).ToArray(),
         };
-        options.RequireOnly(commandOptions.Concat(
-            CliConfiguration.TargetOptionNames.Where(name => name is not ("project-id" or "run-id"))).ToArray());
+        var targetOptions = CliConfiguration.TargetOptionNames.Where(name =>
+            projectScope ? name != "run-id" : name is not ("project-id" or "run-id"));
+        options.RequireOnly(commandOptions.Concat(targetOptions).ToArray());
 
         var providerId = hasProviderId ? args[2] : null;
         var identity = CliConfiguration.ReadIdentity(
             ["projects.admin"],
             options: options,
-            unbound: true);
+            unbound: !projectScope);
+        var projectId = projectScope
+            ? identity.ProjectId
+                ?? throw new CliUsageException("Set --project-id or AGENTWEAVER_PROJECT_ID for project BYOK.")
+            : null;
+        var path = projectScope ? ProjectPath : PlatformPath;
+        var expectedScope = projectScope ? "project" : "platform";
+        var operationPrefix = projectScope ? "Project" : "Platform";
         var gateway = (runtime.GatewayClientFactory ?? new GatewayClientFactory(httpClient, runtime.Authentication))
             .Create(identity);
         var operations = GatewayContract.Parse(await gateway.DiscoverAsync(ct).ConfigureAwait(false));
 
         if (command == "list")
         {
-            var result = await ListAsync(gateway, operations, ct).ConfigureAwait(false);
+            var result = await ListAsync(
+                gateway, operations, path, expectedScope, projectId, scopeName, ct).ConfigureAwait(false);
             await WriteJsonAsync(output, result).ConfigureAwait(false);
             return 0;
         }
 
         var operation = command switch
         {
-            "show" => ("readPlatformByokProviderDraft", "GET", PlatformPath + "/{providerId}", false),
-            "add" => ("createPlatformByokProviderDraft", "POST", PlatformPath, true),
-            "update" => ("updatePlatformByokProviderDraft", "PUT", PlatformPath + "/{providerId}", true),
-            _ => throw new CliUsageException("Choose `list`, `show`, `add`, or `update` for `platform byok`."),
+            "show" => ($"read{operationPrefix}ByokProviderDraft", "GET", path + "/{providerId}", false),
+            "add" => ($"create{operationPrefix}ByokProviderDraft", "POST", path, true),
+            "update" => ($"update{operationPrefix}ByokProviderDraft", "PUT", path + "/{providerId}", true),
+            _ => throw new CliUsageException($"Choose `list`, `show`, `add`, or `update` for `{scopeName} byok`."),
         };
-        var gatewayOperation = RequireOperation(operations, operation.Item1, operation.Item2, operation.Item3, operation.Item4);
+        var gatewayOperation = RequireOperation(
+            operations, operation.Item1, operation.Item2, operation.Item3, operation.Item4, scopeName);
 
         GatewayInvocation invocation;
         Guid? operationId = null;
+        var pathParameters = projectId is null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal) { ["projectId"] = projectId };
         if (command is "add" or "update")
         {
             operationId = ReadOperationId(options.Single("operation-id"));
             var expectedRevision = command == "add" ? 0 : ReadExpectedRevision(options.Single("expected-revision"));
             var metadata = ReadMetadata(options);
-            invocation = new GatewayInvocation(
-                command == "update"
-                    ? new Dictionary<string, string>(StringComparer.Ordinal) { ["providerId"] = providerId! }
-                    : null,
-                Body: SaveBody(operationId.Value, expectedRevision, metadata));
+            if (command == "update")
+                pathParameters["providerId"] = providerId!;
+            invocation = new GatewayInvocation(pathParameters, Body: SaveBody(operationId.Value, expectedRevision, metadata));
         }
         else
         {
-            invocation = new GatewayInvocation(
-                PathParameters: new Dictionary<string, string>(StringComparer.Ordinal) { ["providerId"] = providerId! });
+            pathParameters["providerId"] = providerId!;
+            invocation = new GatewayInvocation(PathParameters: pathParameters);
         }
 
         GatewayResponse response;
         try
         {
-            response = await InvokeAsync(gateway, operation.Item1, invocation, command, operationId, ct)
+            response = await InvokeAsync(gateway, operation.Item1, invocation, command, operationId, scopeName, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested && operationId is { } replayId)
@@ -111,8 +126,9 @@ internal static class PlatformByokCommands
             await error.WriteLineAsync(UnknownWriteMessage(replayId)).ConfigureAwait(false);
             return 130;
         }
-        EnsureSuccess(response, command, operationId);
-        var projected = ProjectProvider(response.Body, command == "update" ? providerId : null);
+        EnsureSuccess(response, scopeName, command, operationId, projectId);
+        var projected = ProjectProvider(
+            response.Body, expectedScope, projectId, command == "update" ? providerId : null);
         await WriteJsonAsync(output, projected).ConfigureAwait(false);
         return 0;
     }
@@ -126,10 +142,14 @@ internal static class PlatformByokCommands
     private static async Task<JsonObject> ListAsync(
         IGatewayClient gateway,
         IReadOnlyDictionary<string, GatewayOperation> operations,
+        string path,
+        string expectedScope,
+        string? projectId,
+        string scopeName,
         CancellationToken ct)
     {
-        const string operationId = "listPlatformByokProviderDrafts";
-        RequireOperation(operations, operationId, "GET", PlatformPath, bodyRequired: false);
+        var operationId = $"list{(projectId is null ? "Platform" : "Project")}ByokProviderDrafts";
+        RequireOperation(operations, operationId, "GET", path, bodyRequired: false, scopeName);
         var providers = new JsonArray();
         var seenProviderIds = new HashSet<string>(StringComparer.Ordinal);
         string? afterProviderId = null;
@@ -146,11 +166,16 @@ internal static class PlatformByokCommands
             var response = await InvokeAsync(
                 gateway,
                 operationId,
-                new GatewayInvocation(Query: query),
+                new GatewayInvocation(
+                    PathParameters: projectId is null
+                        ? null
+                        : new Dictionary<string, string>(StringComparer.Ordinal) { ["projectId"] = projectId },
+                    Query: query),
                 "list",
                 operationIdForReplay: null,
+                scopeName,
                 ct: ct).ConfigureAwait(false);
-            EnsureSuccess(response, "list", operationId: null);
+            EnsureSuccess(response, scopeName, "list", operationId: null, projectId);
             if (response.Body is not JsonObject page ||
                 page["providers"] is not JsonArray pageProviders ||
                 pageProviders.Count > PageSize ||
@@ -162,7 +187,7 @@ internal static class PlatformByokCommands
             string? lastProviderId = null;
             foreach (var provider in pageProviders)
             {
-                var projected = ProjectProvider(provider);
+                var projected = ProjectProvider(provider, expectedScope, projectId);
                 var currentProviderId = projected["providerId"]!.GetValue<string>();
                 if (!seenProviderIds.Add(currentProviderId))
                     throw UnexpectedResponse();
@@ -191,6 +216,7 @@ internal static class PlatformByokCommands
         GatewayInvocation invocation,
         string command,
         Guid? operationIdForReplay,
+        string scopeName,
         CancellationToken ct)
     {
         try
@@ -205,14 +231,19 @@ internal static class PlatformByokCommands
         {
             throw new InvalidOperationException(operationIdForReplay is { } replayId
                 ? UnknownWriteMessage(replayId)
-                : $"The platform BYOK {command} request failed.");
+                : $"The {scopeName} BYOK {command} request failed.");
         }
     }
 
     private static string UnknownWriteMessage(Guid operationId) =>
         $"The write result is unknown. Repeat the same command with --operation-id {operationId:D} and the same fields to replay it.";
 
-    private static void EnsureSuccess(GatewayResponse response, string command, Guid? operationId)
+    private static void EnsureSuccess(
+        GatewayResponse response,
+        string scopeName,
+        string command,
+        Guid? operationId,
+        string? projectId)
     {
         if (response.Status == 200)
             return;
@@ -229,20 +260,26 @@ internal static class PlatformByokCommands
             var revision = OptionalPositiveInt64(response.Body as JsonObject, "revision");
             if (unsafeProviderId is not null && ValidProviderId(unsafeProviderId) && revision is { } currentRevision)
             {
+                var projectOption = projectId is null ? string.Empty : $" --project-id {projectId}";
                 throw new InvalidOperationException(
-                    $"Provider {unsafeProviderId} at revision {currentRevision} has metadata that requires an update. Use `platform byok update {unsafeProviderId} --expected-revision {currentRevision}` with corrected metadata.");
+                    $"Provider {unsafeProviderId} at revision {currentRevision} has metadata that requires an update. Use `{scopeName} byok update {unsafeProviderId}{projectOption} --expected-revision {currentRevision}` with corrected metadata.");
             }
-            throw new InvalidOperationException("The platform BYOK provider metadata requires an update.");
+            throw new InvalidOperationException($"The {scopeName} BYOK provider metadata requires an update.");
         }
         if (response.Status >= 500 && operationId is { } replayId)
         {
             throw new InvalidOperationException(UnknownWriteMessage(replayId));
         }
         if (response.Status == 403)
-            throw new InvalidOperationException("The Gateway denied platform BYOK access. The account needs current PlatformAdmin authority.");
+        {
+            var authority = scopeName == "project"
+                ? "current Owner or PlatformAdmin authority for the selected project"
+                : "current PlatformAdmin authority";
+            throw new InvalidOperationException($"The Gateway denied {scopeName} BYOK access. The account needs {authority}.");
+        }
         if (response.Status == 404)
-            throw new InvalidOperationException("The platform BYOK provider was not found.");
-        throw new InvalidOperationException($"The platform BYOK {command} request failed with HTTP {response.Status}.");
+            throw new InvalidOperationException($"The {scopeName} BYOK provider was not found.");
+        throw new InvalidOperationException($"The {scopeName} BYOK {command} request failed with HTTP {response.Status}.");
     }
 
     private static GatewayOperation RequireOperation(
@@ -250,7 +287,8 @@ internal static class PlatformByokCommands
         string operationId,
         string method,
         string path,
-        bool bodyRequired)
+        bool bodyRequired,
+        string scopeName)
     {
         if (!operations.TryGetValue(operationId, out var operation) ||
             operation.Method != method ||
@@ -263,7 +301,7 @@ internal static class PlatformByokCommands
                 parameter.Location == "header" &&
                 parameter.Name.Equals("X-Agentweaver-Project-Authorization", StringComparison.OrdinalIgnoreCase)))
         {
-            throw new InvalidOperationException("The Gateway does not support the expected platform BYOK operation.");
+            throw new InvalidOperationException($"The Gateway does not support the expected {scopeName} BYOK operation.");
         }
 
         return operation;
@@ -343,7 +381,11 @@ internal static class PlatformByokCommands
         return revision;
     }
 
-    private static JsonObject ProjectProvider(JsonNode? body, string? expectedProviderId = null)
+    private static JsonObject ProjectProvider(
+        JsonNode? body,
+        string expectedScope,
+        string? projectId,
+        string? expectedProviderId = null)
     {
         if (body is not JsonObject provider)
             throw UnexpectedResponse();
@@ -351,8 +393,8 @@ internal static class PlatformByokCommands
         var providerId = RequiredString(provider, "id");
         if (!ValidProviderId(providerId) ||
             expectedProviderId is not null && providerId != expectedProviderId ||
-            RequiredString(provider, "scope") != "platform" ||
-            provider.TryGetPropertyValue("projectId", out var projectId) && projectId is not null)
+            RequiredString(provider, "scope") != expectedScope ||
+            OptionalString(provider, "projectId") != projectId)
         {
             throw UnexpectedResponse();
         }
@@ -426,7 +468,7 @@ internal static class PlatformByokCommands
             char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
 
     private static InvalidDataException UnexpectedResponse() =>
-        new("The Gateway returned an invalid platform BYOK response.");
+        new("The Gateway returned an invalid BYOK response.");
 
     private static Task WriteJsonAsync(TextWriter output, JsonObject result) =>
         output.WriteLineAsync(result.ToJsonString(OutputJson));

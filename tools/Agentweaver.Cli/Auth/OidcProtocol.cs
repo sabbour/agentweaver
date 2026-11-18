@@ -87,7 +87,8 @@ internal static class OidcProtocol
         if (identity.Identity.ProjectId is not null)
         {
             query.Add(new("project_id", identity.Identity.ProjectId));
-            query.Add(new("run_id", identity.Identity.RunId!));
+            if (identity.Identity.RunId is not null)
+                query.Add(new("run_id", identity.Identity.RunId));
         }
         if (selectionIntent is not null)
             query.Add(new("workspace_selection_request", NativeRepoAppSelectionIntent.Encode(selectionIntent)));

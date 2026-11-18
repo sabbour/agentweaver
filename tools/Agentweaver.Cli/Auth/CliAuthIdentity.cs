@@ -43,15 +43,18 @@ internal sealed record CliAuthIdentity(
 
         var project = ValidateBindingSelector(identity.ProjectId, "Project selector");
         var run = ValidateBindingSelector(identity.RunId, "Run selector");
-        if ((project is null) != (run is null))
-            throw new ArgumentException("Project and run selectors must be supplied together.", nameof(identity));
+        if (run is not null && project is null)
+            throw new ArgumentException("A run selector requires a project selector.", nameof(identity));
 
-        // A project/run binding requires projects.orchestrator, not projects.admin; do not combine the two scopes.
+        // Project-only administration uses projects.admin; run-bound calls use projects.orchestrator.
         var issuer = target.Issuer.AbsoluteUri;
         var hasAdmin = scopes.Contains("projects.admin", StringComparer.Ordinal);
         var hasOrchestrator = scopes.Contains("projects.orchestrator", StringComparer.Ordinal);
         if (hasAdmin && hasOrchestrator ||
-            project is not null && (!hasOrchestrator || hasAdmin))
+            project is not null &&
+            (run is null
+                ? !hasAdmin || hasOrchestrator
+                : !hasOrchestrator || hasAdmin))
             throw new ArgumentException("Project scopes do not match the selected project and run.", nameof(identity));
 
         var normalized = new CliIdentity(target, scopes, project, run);
