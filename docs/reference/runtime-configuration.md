@@ -475,6 +475,7 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__Tls__CertificatePath`, `ProjectsConfig__Tls__KeyPath` | Absolute paths to the leaf certificate and private key in the existing read-only `projects-config-tls` mount. Required together with the private Broker audience. |
 | `ProjectsConfig__Tls__ServerCertificateSha256` | SHA-256 pin of the exact Projects leaf certificate. It must match `IdentityBroker__RunBinding__ProjectsServerCertificateSha256`; the Broker separately pins the trusted client CA bundle. |
 | `ProjectsConfig__Knowledge__BaseAddress` | Required HTTPS Knowledge service root. Projects uses the mounted backend CA and forwards the current caller's bearer and tenant selector to read private agent history. |
+| `ProjectsConfig__GovernanceCheckpoints__ContainerUri` | Optional HTTPS Blob container URI for retained governance checkpoints. Use the container root URI, not an account URI or a blob path. When unset, Projects does not write checkpoint exports to Azure. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedIssuer` | Exact issuer approved for the privileged project-setup command: `https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedTenantId` | Exact approved Entra tenant: `72f988bf-86f1-41af-91ab-2d7cd011db47`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedSubject` | Exact approved caller subject: `518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0`. This is the approved user's Identity Broker user ID, which the Broker issues as the token `sub` claim. It is not the Entra object ID. Do not add another subject or role. |
@@ -493,6 +494,25 @@ run starts. When you change the AgentHost bindings, update this copy with the
 same references, source modes, enabled states, reasoning efforts, and revision.
 Because the ConfigMap is immutable, follow
 [Update an immutable ConfigMap](#update-an-immutable-configmap).
+
+### Retain governance checkpoints
+
+Create a dedicated Blob container in an Azure Storage account owned by the
+governance operator. Keep its administration separate from database
+administration. Set and lock a time-based WORM retention policy on the
+container before you configure Projects. Grant the Projects runtime identity
+`Storage Blob Data Contributor` on the container.
+
+Set `ProjectsConfig__GovernanceCheckpoints__ContainerUri` to the container URI,
+such as `https://<storage-account>.blob.core.windows.net/<container>`. Replace
+both placeholders with the account and container names. Keep the retention
+period under operator control.
+
+Projects creates checkpoint blobs without overwriting existing blobs. A
+matching database chain and retained checkpoint returns `Matches`; a changed
+chain returns `Mismatch`. Projects does not inspect the container's WORM
+policy. When the setting is absent, export bytes are not retained in Azure and
+verification returns `Unknown`.
 
 ### Optional Environment Policy source
 

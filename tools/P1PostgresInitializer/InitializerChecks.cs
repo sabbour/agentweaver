@@ -16,6 +16,37 @@ internal static class InitializerChecks
             RETURN NEW;
         END;
         """;
+    private const string GovernanceCheckpointAnchorFunctionSource = """
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM projects_config.project_governance_decision_stream_heads AS head
+                WHERE head.scope_type = NEW.scope_type
+                  AND head.scope_id = NEW.scope_id
+                  AND head.resource_type = NEW.resource_type
+                  AND head.resource_id = NEW.resource_id
+                  AND head.sequence >= NEW.sequence
+                  AND (
+                      NEW.sequence = 0 AND head.sequence = 0
+                          AND NEW.head_hash = repeat('0', 64)
+                      OR NEW.sequence > 0 AND EXISTS (
+                          SELECT 1
+                          FROM projects_config.project_governance_decisions AS decision
+                          WHERE decision.scope_type = NEW.scope_type
+                            AND decision.scope_id = NEW.scope_id
+                            AND decision.resource_type = NEW.resource_type
+                            AND decision.resource_id = NEW.resource_id
+                            AND decision.sequence = NEW.sequence
+                            AND decision.record_hash = NEW.head_hash
+                      )
+                  )
+            ) THEN
+                RAISE EXCEPTION 'governance checkpoint must reference a stream record'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
     private const string GovernanceDecisionHeadAdvanceFunctionSource = """
         BEGIN
             IF NEW.sequence <> OLD.sequence + 1
@@ -199,10 +230,10 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 26 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 14)
+        if (services.Length != 5 || protectedTables.Length != 27 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 15)
             throw new InvalidOperationException(
-                "The exact fourteen row-lock columns and fourteen append-only ledger mutation guards are required.");
+                "The exact fourteen row-lock columns and fifteen append-only ledger mutation guards are required.");
 
         foreach (var (service, table) in protectedTables)
         {
@@ -254,6 +285,19 @@ internal static class InitializerChecks
                 typeSevenGuards[0].SqlState == "55000" &&
                 typeSevenGuards[0].FunctionSource is { } initializeSource &&
                 NormalizeGuardSource(initializeSource) == NormalizeGuardSource(GovernanceDecisionHeadInitializeFunctionSource);
+            var governanceCheckpoint =
+                service.Service == "projects-config" &&
+                service.Schema == "projects_config" &&
+                table.Table == "project_governance_decision_checkpoints";
+            var hasGovernanceCheckpointAnchorGuard =
+                governanceCheckpoint &&
+                typeSevenGuards.Length == 1 &&
+                typeSevenGuards[0].Trigger == "project_governance_decision_checkpoints_anchor" &&
+                typeSevenGuards[0].Function == "require_governance_checkpoint_anchor()" &&
+                typeSevenGuards[0].Message == "governance checkpoint must reference a stream record" &&
+                typeSevenGuards[0].SqlState == "55000" &&
+                typeSevenGuards[0].FunctionSource is { } checkpointSource &&
+                NormalizeGuardSource(checkpointSource) == NormalizeGuardSource(GovernanceCheckpointAnchorFunctionSource);
             var typeNineteenGuards = guards.Where(guard => guard.TriggerType == 19).ToArray();
             var hasGovernanceHeadAdvanceGuard =
                 governanceDecisionHead &&
@@ -266,7 +310,7 @@ internal static class InitializerChecks
                 NormalizeGuardSource(advanceSource) == NormalizeGuardSource(GovernanceDecisionHeadAdvanceFunctionSource);
             var hasKnownTypeSevenGuard =
                 hasReservationIdentityGuard || hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
-                hasGovernanceHeadInitializeGuard;
+                hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard;
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead
                 ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
@@ -280,6 +324,7 @@ internal static class InitializerChecks
                 (table.LockColumn is null && mutationGuardCount != (governanceDecisionHead ? 3 : 2)) ||
                 invalidColumnUpdates ||
                 (governanceDecisionHead && table.LockColumn is not null) ||
+                (governanceCheckpoint && !hasGovernanceCheckpointAnchorGuard) ||
                 (governanceDecisionHead &&
                  (!hasGovernanceHeadInitializeGuard || !hasGovernanceHeadAdvanceGuard)) ||
                 (table.LockColumn is not null && table.MutationDenialGuards is { Length: > 0 } &&

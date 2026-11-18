@@ -507,10 +507,41 @@
       "sourcePrefixes": [
         "services/projects-config/"
       ],
+      "sourceExclusions": [
+        "services/projects-config/Agentweaver.Projects.Config/Program.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceDecisionCanonicalJson.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Migrations/20261117150000_AddProjectGovernanceDecisionCheckpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceCheckpointCanonicalJson.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceCheckpointStore.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectBlobObjectStoreFactory.cs"
+      ],
       "required": [
         "docs/architecture/projects-config.md",
         "docs/reference/contracts.md",
         "docs/guide/testing.md"
+      ]
+    },
+    {
+      "name": "Governance decision checkpoints",
+      "sourcePrefixes": [
+        "services/projects-config/Agentweaver.Projects.Config/Program.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceDecisionCanonicalJson.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Migrations/20261117150000_AddProjectGovernanceDecisionCheckpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceCheckpointCanonicalJson.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceCheckpointStore.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectBlobObjectStoreFactory.cs",
+        "scripts/azure/lib/p1-postgres-plan.mjs",
+        "scripts/azure/lib/p1-postgres-plan.json",
+        "scripts/azure/tests/p1-postgres-plan.test.mjs",
+        "tools/P1PostgresInitializer/InitializerChecks.cs",
+        "tests/Agentweaver.FoundationProbe.Tests/P1PostgresInitializerTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RuntimeGrants.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.GovernanceCheckpoints.cs",
+        "tests/Agentweaver.Projects.Config.Tests/GovernanceCheckpointStorageTests.cs"
+      ],
+      "required": [
+        "docs/architecture/projects-config.md",
+        "docs/reference/runtime-configuration.md"
       ]
     },
     {
@@ -589,7 +620,14 @@
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigMigrationInventoryTests.cs"
       ],
       "sourceExclusions": [
-        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RoleAssignments.cs"
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RoleAssignments.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Migrations/20261117150000_AddProjectGovernanceDecisionCheckpoints.cs",
+        "scripts/azure/lib/p1-postgres-plan.mjs",
+        "scripts/azure/lib/p1-postgres-plan.json",
+        "scripts/azure/tests/p1-postgres-plan.test.mjs",
+        "tools/P1PostgresInitializer/InitializerChecks.cs",
+        "tests/Agentweaver.FoundationProbe.Tests/P1PostgresInitializerTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RuntimeGrants.cs"
       ],
       "required": [
         "docs/architecture/environment-egress.md",
@@ -814,6 +852,11 @@
         "scripts/release/deploy-kustomize.mjs",
         "tools/Agentweaver.FoundationProbe/"
       ],
+      "sourceExclusions": [
+        "scripts/azure/lib/p1-postgres-plan.mjs",
+        "scripts/azure/lib/p1-postgres-plan.json",
+        "scripts/azure/tests/p1-postgres-plan.test.mjs"
+      ],
       "required": [
         "docs/architecture/azure.md",
         "docs/reference/contracts.md",
@@ -928,7 +971,13 @@
         "services/projects-config/"
       ],
       "sourceExclusions": [
-        "services/projects-config/Agentweaver.Projects.Config/ProjectConfigEndpoints.cs"
+        "services/projects-config/Agentweaver.Projects.Config/ProjectConfigEndpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Program.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceDecisionCanonicalJson.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Migrations/20261117150000_AddProjectGovernanceDecisionCheckpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceCheckpointCanonicalJson.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectGovernanceCheckpointStore.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectBlobObjectStoreFactory.cs"
       ],
       "required": [
         "docs/deep-dive/projects-config.md",
@@ -1004,6 +1053,11 @@
         "deploy/",
         "scripts/azure/"
       ],
+      "sourceExclusions": [
+        "scripts/azure/lib/p1-postgres-plan.mjs",
+        "scripts/azure/lib/p1-postgres-plan.json",
+        "scripts/azure/tests/p1-postgres-plan.test.mjs"
+      ],
       "required": [
         "docs/deep-dive/infra-deployment.md"
       ]
@@ -1021,7 +1075,11 @@
         "tests/Agentweaver.EventsAndSessions.Tests/AzureRetailPriceEndpointsTests.cs",
         "tests/Agentweaver.EventsAndSessions.Tests/ProjectsAuthorizationContextClientTests.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RoleAssignments.cs",
-        "tests/Agentweaver.Identity.Broker.Tests/GatewayKnowledgeOpenApiRegressionTests.cs"
+        "tests/Agentweaver.Identity.Broker.Tests/GatewayKnowledgeOpenApiRegressionTests.cs",
+        "tests/Agentweaver.FoundationProbe.Tests/P1PostgresInitializerTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RuntimeGrants.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.GovernanceCheckpoints.cs",
+        "tests/Agentweaver.Projects.Config.Tests/GovernanceCheckpointStorageTests.cs"
       ],
       "required": [
         "docs/deep-dive/testing-strategy.md"
