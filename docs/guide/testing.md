@@ -39,6 +39,19 @@ The Broker test uses disposable PostgreSQL and a fake secret backend. It does
 not call Azure. The tests check exact slot identity, pinned-version lookup,
 vault selection, old pins after disable, and denial for another slot.
 
+## Test Key Vault write-claim recovery
+
+Run the Broker journal and runtime-grant tests from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~ModelProviderCredentialStorePostgresTests|FullyQualifiedName~IdentityBrokerPostgresBootstrapCommandTests"
+```
+
+These tests use disposable PostgreSQL databases. They cover claim replay after a
+process restart, quarantine after an uncertain result, blocked retry and reuse,
+atomic completion with the exact returned version, and runtime table grants.
+They do not write to Key Vault.
+
 ## Test model-provider Draft routes
 
 Run the database-free request-contract and Gateway route tests locally after

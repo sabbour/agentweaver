@@ -448,6 +448,122 @@ namespace Agentweaver.Identity.Broker.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Identity.Broker.ModelProviderCredentialWriteClaim", b =>
+                {
+                    b.Property<Guid>("OperationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<DateTimeOffset>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<long?>("CompletedRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("completed_revision");
+
+                    b.Property<Guid>("CredentialSlotId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("credential_slot_id");
+
+                    b.Property<long>("ExpectedRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("expected_revision");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<DateTimeOffset?>("QuarantinedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("quarantined_at");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("SecretName")
+                        .IsRequired()
+                        .HasMaxLength(127)
+                        .HasColumnType("character varying(127)")
+                        .HasColumnName("secret_name");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("VaultSource")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("vault_source");
+
+                    b.Property<string>("VaultUri")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("vault_uri");
+
+                    b.HasKey("OperationId");
+
+                    b.HasIndex("CredentialSlotId")
+                        .IsUnique()
+                        .HasFilter("state IN ('Claimed', 'Quarantined')");
+
+                    b.HasIndex("ProviderId")
+                        .IsUnique()
+                        .HasFilter("state IN ('Claimed', 'Quarantined')");
+
+                    b.HasIndex("CredentialSlotId", "CompletedRevision");
+
+                    b.ToTable("model_provider_credential_write_claims", "identity_broker", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_byok_name", "vault_source <> 'Byok' OR secret_name = 'byok-' || lower(scope) || '-' || provider_id");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_fingerprint", "request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_outcome", "(state = 'Claimed' AND quarantined_at IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR (state = 'Quarantined' AND quarantined_at IS NOT NULL AND completed_revision IS NULL AND completed_at IS NULL) OR (state = 'Completed' AND quarantined_at IS NULL AND completed_revision IS NOT NULL AND completed_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_revision", "expected_revision >= 0");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL AND length(project_id) > 0)");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_secret_name", "secret_name ~ '^[A-Za-z0-9-]{1,127}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_state", "state IN ('Claimed', 'Quarantined', 'Completed')");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_vault_source", "vault_source IN ('Existing', 'Byok')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Identity.Broker.PendingAuthorization", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1633,6 +1749,14 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasForeignKey("CredentialSlotId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.ModelProviderCredentialWriteClaim", b =>
+                {
+                    b.HasOne("Agentweaver.Identity.Broker.ModelProviderCredentialRevision", null)
+                        .WithMany()
+                        .HasForeignKey("CredentialSlotId", "CompletedRevision")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Agentweaver.Identity.Broker.RemoteMcpOAuthConnectionRecord", b =>

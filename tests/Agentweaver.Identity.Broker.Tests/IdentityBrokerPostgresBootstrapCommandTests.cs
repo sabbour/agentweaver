@@ -198,6 +198,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             "repo_app_connections", "repo_app_installations", "repo_app_repository_selections",
             "issue_sync_grants", "issue_sync_mint_audit",
             "model_provider_credentials", "model_provider_credential_revisions",
+            "model_provider_credential_write_claims",
         };
         foreach (var table in tables)
         {
@@ -269,6 +270,8 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             INSERT INTO identity_broker.model_provider_credentials VALUES (1);
             UPDATE identity_broker.model_provider_credentials SET id = 2;
             INSERT INTO identity_broker.model_provider_credential_revisions VALUES (1);
+            INSERT INTO identity_broker.model_provider_credential_write_claims VALUES (1);
+            UPDATE identity_broker.model_provider_credential_write_claims SET id = 2;
             """, connection))
             await permitted.ExecuteNonQueryAsync();
         await using (var forbidden = new NpgsqlCommand(
@@ -288,7 +291,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
                 $"DELETE FROM identity_broker.{QuoteIdentifier(table)}",
                 $"TRUNCATE identity_broker.{QuoteIdentifier(table)}",
             }.Concat(table is "runtime_grant_heads" or "copilot_connections" or "issue_sync_grants" or
-                "model_provider_credentials" ? [] :
+                "model_provider_credentials" or "model_provider_credential_write_claims" ? [] :
                 new[] { $"UPDATE identity_broker.{QuoteIdentifier(table)} SET id = 2" }))
             {
                 await using var forbidden = new NpgsqlCommand(statement, connection);

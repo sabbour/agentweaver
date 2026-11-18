@@ -201,6 +201,14 @@ runtime role explicitly. After migrations, the command applies the canonical
 as the migration owner and verifies the exact table permissions. Repeating
 the command applies missing grants even when no migration is pending.
 
+The runtime role needs `SELECT`, `INSERT`, and `UPDATE` on credential heads and
+write claims. It needs `SELECT` and `INSERT` on credential history. Database
+guards allow a claim to move from `Claimed` to `Quarantined` or `Completed`;
+they reject other updates and all deletes. The runtime role cannot truncate the
+claim or history tables. See
+[model-provider credential references](../architecture/identity-secrets.md#model-provider-credential-references)
+for the recovery behavior.
+
 Initial database bootstrap grants schema access only. If migrations have not
 run, bootstrap reports `IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING`; that result
 does not prove runtime readiness. After migration, read-only bootstrap

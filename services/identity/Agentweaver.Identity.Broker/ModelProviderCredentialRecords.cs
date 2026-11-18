@@ -26,6 +26,20 @@ public enum ModelProviderCredentialMutationKind
     Disable,
 }
 
+public enum ModelProviderCredentialWriteClaimState
+{
+    Claimed,
+    Quarantined,
+    Completed,
+}
+
+public enum ModelProviderCredentialWriteClaimStatus
+{
+    Acquired,
+    Quarantined,
+    Completed,
+}
+
 public enum ModelProviderCredentialCurrentStatus
 {
     Found,
@@ -74,6 +88,26 @@ public sealed class ModelProviderCredentialRevision
     public DateTimeOffset RecordedAt { get; set; }
 }
 
+public sealed class ModelProviderCredentialWriteClaim
+{
+    public Guid OperationId { get; set; }
+    public Guid CredentialSlotId { get; set; }
+    public ModelProviderCredentialScope Scope { get; set; }
+    public string? ProjectId { get; set; }
+    public required string ProviderId { get; set; }
+    public ModelProviderCredentialVaultSource VaultSource { get; set; }
+    public required string VaultUri { get; set; }
+    public required string SecretName { get; set; }
+    public long ExpectedRevision { get; set; }
+    public required string RequestFingerprint { get; set; }
+    public required string ActorId { get; set; }
+    public ModelProviderCredentialWriteClaimState State { get; set; }
+    public DateTimeOffset ClaimedAt { get; set; }
+    public DateTimeOffset? QuarantinedAt { get; set; }
+    public long? CompletedRevision { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
 public sealed record RecordModelProviderCredentialReference(
     Guid OperationId,
     long ExpectedRevision,
@@ -92,6 +126,17 @@ public sealed record DisableModelProviderCredential(
     ModelProviderCredentialScope Scope,
     string? ProjectId,
     string ProviderId,
+    string ActorId);
+
+public sealed record ClaimModelProviderCredentialWrite(
+    Guid OperationId,
+    long ExpectedRevision,
+    Guid CredentialSlotId,
+    ModelProviderCredentialScope Scope,
+    string? ProjectId,
+    string ProviderId,
+    ModelProviderCredentialVaultSource VaultSource,
+    string SecretName,
     string ActorId);
 
 public sealed record ModelProviderCredentialIdentity(
@@ -116,6 +161,11 @@ public sealed record ModelProviderCredentialCurrentRead(
 
 public sealed record ModelProviderCredentialPinnedRead(
     ModelProviderCredentialPinnedStatus Status,
+    ModelProviderCredentialReference? Credential);
+
+public sealed record ModelProviderCredentialWriteClaimResult(
+    ModelProviderCredentialWriteClaimStatus Status,
+    bool Acquired,
     ModelProviderCredentialReference? Credential);
 
 public sealed class ModelProviderCredentialException(string code)

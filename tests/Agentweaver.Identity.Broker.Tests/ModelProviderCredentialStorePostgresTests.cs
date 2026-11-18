@@ -15,6 +15,162 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
     private const string ByokVault = "https://agentweaver-byok.vault.azure.net/";
 
     [Fact]
+    public async Task UnresolvedWriteClaimStaysQuarantinedAndBlocksRetryAndReuse()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        var identity = Identity();
+        var claim = Claim(Guid.NewGuid(), 0, identity);
+        await using (var db = CreateDb(connectionString))
+        {
+            var acquired = await Store(db).ClaimWriteAsync(claim);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.Acquired, acquired.Status);
+            Assert.True(acquired.Acquired);
+        }
+
+        await using (var db = CreateDb(connectionString))
+        {
+            var store = Store(db);
+            var retry = await store.ClaimWriteAsync(claim);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.Quarantined, retry.Status);
+            Assert.False(retry.Acquired);
+            await AssertCodeAsync("credential_slot_conflict", () => store.RecordReferenceAsync(
+                Record(Guid.NewGuid(), 0, identity, Ref("provider-key", 'a'))));
+            Assert.Equal(ModelProviderCredentialWriteClaimState.Claimed,
+                (await db.ModelProviderCredentialWriteClaims.AsNoTracking().SingleAsync()).State);
+
+            var uncertain = await store.MarkWriteUncertainAsync(claim);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.Quarantined, uncertain.Status);
+            Assert.False(uncertain.Acquired);
+            Assert.Equal(ModelProviderCredentialWriteClaimState.Quarantined,
+                (await db.ModelProviderCredentialWriteClaims.AsNoTracking().SingleAsync()).State);
+            await AssertCodeAsync("credential_slot_conflict", () => store.CompleteWriteAsync(
+                Record(claim.OperationId, 0, identity, Ref("provider-key", 'a'))));
+            await AssertCodeAsync("credential_slot_conflict", () => store.ClaimWriteAsync(
+                claim with { OperationId = Guid.NewGuid() }));
+        }
+
+        await using var verifyDb = CreateDb(connectionString);
+        Assert.Empty(await verifyDb.ModelProviderCredentialHeads.ToListAsync());
+        Assert.Empty(await verifyDb.ModelProviderCredentialRevisions.ToListAsync());
+        Assert.Equal(ModelProviderCredentialWriteClaimState.Quarantined,
+            (await verifyDb.ModelProviderCredentialWriteClaims.AsNoTracking().SingleAsync()).State);
+    }
+
+    [Fact]
+    public async Task ProviderClaimAndReferenceWriteCannotRaceOnTheSameSlot()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        var identity = Identity();
+        var otherProvider = identity with { ProviderId = "provider-2" };
+        var claimTask = CaptureClaimAsync(connectionString, Claim(Guid.NewGuid(), 0, identity));
+        var recordTask = CaptureAsync(() => RecordInNewContextAsync(connectionString,
+            Record(Guid.NewGuid(), 0, otherProvider, Ref("provider-key", 'a'))));
+        await Task.WhenAll(claimTask, recordTask);
+        var claim = await claimTask;
+        var record = await recordTask;
+        Assert.NotEqual(claim is not null, record is not null);
+
+        await using var verifyDb = CreateDb(connectionString);
+        var heads = await verifyDb.ModelProviderCredentialHeads.AsNoTracking().ToListAsync();
+        var claims = await verifyDb.ModelProviderCredentialWriteClaims.AsNoTracking().ToListAsync();
+        if (claim is not null)
+        {
+            Assert.Empty(heads);
+            Assert.Single(claims);
+            Assert.Equal(identity.ProviderId, claims[0].ProviderId);
+        }
+        else
+        {
+            Assert.Single(heads);
+            Assert.Empty(claims);
+            Assert.Equal(otherProvider.ProviderId, heads[0].ProviderId);
+        }
+    }
+
+    [Fact]
+    public async Task ClaimAndReferenceCannotRaceOnOperationIdAcrossSlots()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        var claimedIdentity = Identity();
+        var recordedIdentity = Identity() with { ProviderId = "provider-2" };
+        var operationId = Guid.NewGuid();
+        var claimTask = CaptureClaimAsync(connectionString, Claim(operationId, 0, claimedIdentity));
+        var recordTask = CaptureAsync(() => RecordInNewContextAsync(connectionString,
+            Record(operationId, 0, recordedIdentity, Ref("provider-key", 'a'))));
+        await Task.WhenAll(claimTask, recordTask);
+        var claim = await claimTask;
+        var record = await recordTask;
+        Assert.NotEqual(claim is not null, record is not null);
+
+        await using var verifyDb = CreateDb(connectionString);
+        var heads = await verifyDb.ModelProviderCredentialHeads.AsNoTracking().ToListAsync();
+        var claims = await verifyDb.ModelProviderCredentialWriteClaims.AsNoTracking().ToListAsync();
+        var revisions = await verifyDb.ModelProviderCredentialRevisions.AsNoTracking().ToListAsync();
+        if (claim is not null)
+        {
+            Assert.Empty(heads);
+            Assert.Empty(revisions);
+            Assert.Single(claims);
+            Assert.Equal(operationId, claims[0].OperationId);
+        }
+        else
+        {
+            Assert.Single(heads);
+            Assert.Equal(recordedIdentity.ProviderId, heads[0].ProviderId);
+            Assert.Empty(claims);
+            Assert.Single(revisions);
+            Assert.Equal(operationId, revisions[0].OperationId);
+        }
+    }
+
+    [Fact]
+    public async Task CompletesWriteClaimAtomicallyAndReplaysExactVersion()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        var identity = Identity();
+        var claim = Claim(Guid.NewGuid(), 0, identity);
+        var record = Record(claim.OperationId, 0, identity, Ref("provider-key", 'a'));
+        await using (var db = CreateDb(connectionString))
+            Assert.True((await Store(db).ClaimWriteAsync(claim)).Acquired);
+
+        await using (var failingDb = CreateDb(connectionString, new FailCredentialRevisionInsertOnce()))
+        {
+            var exception = await Assert.ThrowsAsync<DbUpdateException>(() => Store(failingDb).CompleteWriteAsync(record));
+            Assert.IsType<InjectedInsertFailure>(exception.InnerException);
+        }
+
+        await using (var verifyDb = CreateDb(connectionString))
+        {
+            Assert.Empty(await verifyDb.ModelProviderCredentialHeads.ToListAsync());
+            Assert.Empty(await verifyDb.ModelProviderCredentialRevisions.ToListAsync());
+            Assert.Equal(ModelProviderCredentialWriteClaimState.Claimed,
+                (await verifyDb.ModelProviderCredentialWriteClaims.AsNoTracking().SingleAsync()).State);
+        }
+
+        await using (var db = CreateDb(connectionString))
+        {
+            var store = Store(db);
+            var completed = await store.CompleteWriteAsync(record);
+            var replay = await store.CompleteWriteAsync(record);
+            var claimReplay = await store.ClaimWriteAsync(claim);
+            Assert.Equal(1, completed.Revision);
+            Assert.Equal(record.Reference, completed.Reference);
+            Assert.Equal(completed.Revision, replay.Revision);
+            Assert.Equal(completed.Reference, replay.Reference);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.Completed, claimReplay.Status);
+            Assert.False(claimReplay.Acquired);
+            Assert.Equal(record.Reference, claimReplay.Credential!.Reference);
+            await AssertCodeAsync("credential_slot_conflict", () => store.CompleteWriteAsync(
+                record with { Reference = Ref("provider-key", 'b') }));
+        }
+
+        await using var finalDb = CreateDb(connectionString);
+        Assert.Equal(1, await finalDb.ModelProviderCredentialRevisions.CountAsync());
+        Assert.Equal(ModelProviderCredentialWriteClaimState.Completed,
+            (await finalDb.ModelProviderCredentialWriteClaims.AsNoTracking().SingleAsync()).State);
+    }
+
+    [Fact]
     public async Task RecordsRotatesDisablesAndReadsExactHistoricalReferencesAcrossContexts()
     {
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
@@ -265,6 +421,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             "repo_app_authorization_transactions", "repo_app_connections", "repo_app_installations",
             "repo_app_repository_selections", "issue_sync_grants", "issue_sync_mint_audit",
             "model_provider_credentials", "model_provider_credential_revisions",
+            "model_provider_credential_write_claims",
         };
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
@@ -301,6 +458,15 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
                 (@slotId, 1, 'Project', 'project-1', 'provider-1', 'Existing', @vaultUri,
                  'provider-key', @versionA, 'Enabled', 'RecordReference', @operationId,
                  @fingerprint, 'broker:actor', now());
+            INSERT INTO identity_broker.model_provider_credential_write_claims
+                (operation_id, credential_slot_id, scope, project_id, provider_id, vault_source,
+                 vault_uri, secret_name, expected_revision, request_fingerprint, actor_id, state, claimed_at)
+            VALUES
+                (@claimOperationId, @slotId, 'Project', 'project-1', 'provider-1', 'Existing',
+                 @vaultUri, 'provider-key', 2, @fingerprint, 'broker:actor', 'Claimed', now());
+            UPDATE identity_broker.model_provider_credential_write_claims
+            SET state = 'Quarantined', quarantined_at = now()
+            WHERE operation_id = @claimOperationId;
             UPDATE identity_broker.model_provider_credentials
             SET current_version = @versionB, revision = 2, set_at = now()
             WHERE credential_slot_id = @slotId AND revision = 1;
@@ -308,6 +474,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         {
             write.Parameters.AddWithValue("slotId", slotId);
             write.Parameters.AddWithValue("operationId", operationId);
+            write.Parameters.AddWithValue("claimOperationId", Guid.NewGuid());
             write.Parameters.AddWithValue("vaultUri", ExistingVault);
             write.Parameters.AddWithValue("versionA", new string('a', 32));
             write.Parameters.AddWithValue("versionB", new string('b', 32));
@@ -321,6 +488,8 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             "UPDATE identity_broker.model_provider_credential_revisions SET actor_id = 'other'",
             "DELETE FROM identity_broker.model_provider_credential_revisions",
             "TRUNCATE identity_broker.model_provider_credential_revisions",
+            $"DELETE FROM identity_broker.model_provider_credential_write_claims WHERE credential_slot_id = '{slotId}'",
+            "TRUNCATE identity_broker.model_provider_credential_write_claims",
             "CREATE TABLE identity_broker.runtime_must_not_create (id integer)",
         })
         {
@@ -330,6 +499,20 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         }
         await using (var resetRole = new NpgsqlCommand("RESET ROLE", connection))
             await resetRole.ExecuteNonQueryAsync();
+
+        foreach (var statement in new[]
+        {
+            "UPDATE identity_broker.model_provider_credential_write_claims SET actor_id = 'other'",
+            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Completed', " +
+                "quarantined_at = NULL, completed_revision = 3, completed_at = now()",
+            $"DELETE FROM identity_broker.model_provider_credential_write_claims WHERE credential_slot_id = '{slotId}'",
+            "TRUNCATE identity_broker.model_provider_credential_write_claims",
+        })
+        {
+            await using var guarded = new NpgsqlCommand(statement, connection);
+            var error = await Assert.ThrowsAsync<PostgresException>(() => guarded.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
+        }
 
         await using (var disableHead = new NpgsqlCommand("""
             UPDATE identity_broker.model_provider_credentials
@@ -361,8 +544,14 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         {
             await using var guarded = new NpgsqlCommand(statement, connection);
             var error = await Assert.ThrowsAsync<PostgresException>(() => guarded.ExecuteNonQueryAsync());
-            Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
+            var expectedSqlState = statement.StartsWith("TRUNCATE", StringComparison.Ordinal)
+                ? "0A000"
+                : PostgresErrorCodes.CheckViolation;
+            Assert.Equal(expectedSqlState, error.SqlState);
         }
+        await using (var historyCount = new NpgsqlCommand(
+            "SELECT count(*) FROM identity_broker.model_provider_credential_revisions", connection))
+            Assert.Equal(1L, await historyCount.ExecuteScalarAsync());
     }
 
     private static IdentityBrokerDbContext CreateDb(
@@ -391,6 +580,14 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         new(operationId, expectedRevision, identity.CredentialSlotId, identity.Scope, identity.ProjectId,
             identity.ProviderId, ModelProviderCredentialVaultSource.Existing, reference, "broker:actor");
 
+    private static ClaimModelProviderCredentialWrite Claim(
+        Guid operationId,
+        long expectedRevision,
+        ModelProviderCredentialIdentity identity) =>
+        new(operationId, expectedRevision, identity.CredentialSlotId, identity.Scope,
+            identity.ProjectId, identity.ProviderId, ModelProviderCredentialVaultSource.Existing,
+            "provider-key", "broker:actor");
+
     private static DisableModelProviderCredential Disable(
         Guid operationId,
         long expectedRevision,
@@ -414,6 +611,21 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
     {
         await using var db = CreateDb(connectionString);
         return await Store(db).DisableAsync(request);
+    }
+
+    private static async Task<ModelProviderCredentialWriteClaimResult?> CaptureClaimAsync(
+        string connectionString,
+        ClaimModelProviderCredentialWrite request)
+    {
+        try
+        {
+            await using var db = CreateDb(connectionString);
+            return await Store(db).ClaimWriteAsync(request);
+        }
+        catch (ModelProviderCredentialException exception) when (exception.Code == "credential_slot_conflict")
+        {
+            return null;
+        }
     }
 
     private static async Task<ModelProviderCredentialReference?> CaptureAsync(
