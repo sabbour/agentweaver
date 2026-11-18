@@ -779,6 +779,14 @@ Gateway prefix: `/api/v1/projects/{projectId}/skills`.
 | POST | `/api/skills/package` | `api.read`; unbound request | Group uploaded files, a ZIP archive, or draft fields into skill candidates without saving. | `/api/v1/skills/package` |
 | GET | `/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Selection; exact agent and accepted pins | Read effective run skills. | No |
 
+Projects & Config creates scan reports locally. It requires a current passing
+scan before it returns project Skill previews or package results, imports
+content, enables an imported assignment, accepts a run selection that uses an
+imported Skill, or returns Skill bytes to an agent. A non-passing scan returns
+`422 skill_scan_blocked`. Missing, stale, malformed, or evaluator-error reports
+return `503 skill_scan_unavailable`. Caller-supplied reports and source labels
+do not grant admission.
+
 ### Marketplace sources
 
 Native prefix: `/api/projects/{projectId}/skill-marketplaces/sources`.

@@ -41,6 +41,7 @@ sequenceDiagram
     participant DB as projects_config
     participant GH as Public GitHub
     participant S as Skills content service
+    participant V as Local pinned AGT evaluator
     participant O as Immutable content store
     C->>G: Browse source ID + expected source revision + query/page
     G->>P: Forward bearer, tenant selector, and request
@@ -64,12 +65,16 @@ sequenceDiagram
     GH-->>P: Exact selected bytes
     P->>DB: Recheck actor, project authority, and source revision
     alt Preview
-        P->>S: Validate selected bytes and calculate content digest
-        S-->>P: Preview metadata and digest
+        P->>S: Validate selected bytes
+        S->>V: Scan canonical markdown and exact resource bytes
+        V-->>S: Current reports bound to bytes and owner revision
+        S-->>P: Preview metadata and digest after a passing scan
         P-->>G: Preview
         G-->>C: Owner response unchanged
     else Import
         P->>S: Import bytes with expected digest, idempotency key, and source provenance
+        S->>V: Scan before writing the immutable revision
+        V-->>S: Current reports bound to bytes and owner revision
         S->>O: Store immutable content revision
         O-->>S: Stored digest
         S-->>P: Import receipt
@@ -77,6 +82,7 @@ sequenceDiagram
         G-->>C: Owner response unchanged
     end
     Note over P,GH: Browse fetches only current-page manifests. Preview/import reads stay pinned to the selected commit.
+    Note over S,V: Caller reports and source labels do not grant admission. The owner scans every project Skill as third-party content.
     Note over S,O: Skills owns content validation, immutable revisions, idempotency, and assignment.
 ```
 
@@ -208,6 +214,22 @@ not replace already accepted bytes. After you remove a source, browse, preview,
 and import return `404` with `marketplace_source_not_found`. Skills that you
 already imported keep their stored revisions, assignments, and runtime
 delivery. Assignment still uses the existing Skills assignment service.
+
+The Skills content service scans every project candidate with the local pinned
+AGT evaluator. It scans canonical `SKILL.md` bytes rebuilt from the validated
+name, description, and instructions, plus each resource's exact bytes. It
+ignores caller reports and source labels for admission; treat missing and
+caller-supplied source metadata as third-party. A passing
+scan is required for preview, packaging, import, enabled assignments,
+configuration updates with enabled imported Skills, run-selection acceptance
+of those Skills, and accepted-run delivery. The owner scans
+stored content again when it assigns a revision and before it returns runtime
+bytes. Existing bundled Skills remain outside these project content routes.
+
+A non-passing scan returns `422 skill_scan_blocked`. A missing, stale,
+malformed, or error report returns `503 skill_scan_unavailable`. The owner
+returns no preview or runtime bytes and writes no imported object or
+configuration before a scan passes.
 
 Preview requires current project read authority. Import also requires
 `projects.admin` and current project write authority. Both routes re-resolve the

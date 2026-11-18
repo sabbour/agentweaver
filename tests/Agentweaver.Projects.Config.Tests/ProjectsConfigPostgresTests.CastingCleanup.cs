@@ -80,7 +80,8 @@ public sealed partial class ProjectsConfigPostgresTests
     {
         await using var db = CreateDbContext();
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
-        var service = CreateCastingProposalService(db);
+        var objectStore = new SkillContentObjectStore(new SkillTestObjectStore());
+        var service = CreateCastingProposalService(db, objectStore);
         var suffix = Guid.NewGuid().ToString("N");
         var tenantId = "casting-removal-tenant-" + suffix;
         var owner = await SeedCallerAsync(
@@ -120,7 +121,7 @@ public sealed partial class ProjectsConfigPostgresTests
         // Import real pinned revisions because enabled assignments may only target content stored for this project.
         var contentService = new SkillContentService(
             db,
-            new SkillContentObjectStore(new SkillTestObjectStore()),
+            objectStore,
             service,
             TimeProvider.System);
         var adaOnlyCandidate = SkillCandidate("Use Ada's project-specific skill.", "# Ada only\n");

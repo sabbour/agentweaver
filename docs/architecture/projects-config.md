@@ -1190,6 +1190,18 @@ project write authority, that exact digest, and an idempotency key. Each success
 import creates an immutable revision with source provenance. Reusing the key for a
 different request or importing against a stale revision returns a conflict.
 
+Every project Skill candidate must pass an owner-side content scan before the
+service returns a preview or package result, imports content, enables an
+assignment, saves configuration with enabled imported Skills (including casting
+proposal confirmations), accepts a run that uses them, or returns accepted-run
+content. The owner rebuilds canonical
+`SKILL.md` bytes from validated fields and scans each resource's exact bytes.
+Caller-supplied reports and source metadata never grant admission.
+Existing bundled Skills remain outside these project content routes. A
+completed scan below the recommended threshold returns `422` with
+`skill_scan_blocked`. A missing, stale, malformed, or failed scan returns
+`503` with `skill_scan_unavailable`.
+
 `GET /api/projects/{projectId}/skills` returns metadata for stored revisions,
 including unassigned and revoked revisions, and exact current assignments with
 the project configuration revision. It uses stable pages of 25 revisions by
@@ -1200,16 +1212,16 @@ does not grant permission to load or assign that revision.
 `PUT /api/projects/{projectId}/skills/{skillId}/assignment` writes an ordinary
 configuration revision. An enabled assignment pins an imported content revision
 and digest and names one or more active agents in the project casting. Configuration
-validation rejects missing, mismatched, revoked, or inactive-agent pins. New or
-changed enabled skill entries must have these pins. An unchanged legacy entry
-can remain during an unrelated configuration edit, but it is never returned
-as accepted runtime content.
+validation rejects missing, mismatched, revoked, or inactive-agent pins and
+scans enabled imported content. New or changed enabled skill entries must have
+these pins. An unchanged legacy entry can remain during an unrelated
+configuration edit, but it is never returned as accepted runtime content.
 
 `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` rechecks
 current Orchestrator authority and the accepted project/run binding. It returns
 only content pinned by that run's accepted configuration for the requested active
-agent. Unassigned, inactive, stale, revoked, missing, or corrupt content fails
-closed.
+agent after another owner-side scan. Unassigned, inactive, stale, revoked,
+missing, corrupt, or non-passing content fails closed.
 
 Content objects use immutable keys in a dedicated Azure Blob container. Set
 `ProjectsConfig:SkillContent:ContainerUri` to one HTTPS container URI. The Projects
@@ -1251,7 +1263,10 @@ pinned .NET AGT evaluator. Each report binds the result to that input's exact
 bytes, relative path, and source provenance. Authored sources use `Authored`
 provenance with no Git revision or commit; Git sources record their source
 revision and resolved commit. The scanner makes no network or model calls and
-does not change save or import decisions.
+does not make admission decisions. The Skills admission service requires
+current passing reports before it saves or imports project Skills. The separate
+trust-evidence service stores reports without granting assignment or runtime
+access.
 
 ```mermaid
 sequenceDiagram

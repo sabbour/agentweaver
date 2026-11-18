@@ -2162,8 +2162,10 @@ fail closed.
 `PromptContentScanner.Scan` evaluates one exact UTF-8 input with the pinned
 `Microsoft.AgentGovernance` 4.0.0 .NET evaluator from AGT commit
 `7bd5b44339db08e8b96bc2ecdb6fadf28f313450`. The scanner runs locally and makes
-no network or model calls. It returns `PromptContentScanReportV1`; it does not
-change project saves, skill imports, or runtime admission.
+no network or model calls. It returns `PromptContentScanReportV1`. The Projects
+& Config Skill admission service uses owner-generated reports to decide whether
+project content can be previewed, packaged, imported, assigned, accepted for a
+run, or returned to a runtime.
 
 Each report binds the lowercase SHA-256 digest and byte count to an input kind,
 owner kind and ID, owner revision, canonical relative path, provenance,
@@ -2192,6 +2194,8 @@ The pinned Python evaluator at AGT commit
 `48f04e5ad1efd4f2e5692d4b67def2e0f99a6870` remains separate. It has 17 vectors
 and a 100,000-character input limit; its output is not part of the .NET report.
 
+## Skill trust evidence
+
 The internal Projects & Config trust-evidence service scans one stored,
 non-revoked Skill revision. It copies source metadata as stored and reports
 `Authored` provenance; those fields do not verify Git origin. The idempotency
@@ -2200,3 +2204,19 @@ and complete scan report except `EvaluatedAt`. An exact retry returns the saved
 report set. Reusing the key with a changed report returns `409`. A new report
 set appends a pending `skill.trust.evidence.v1` governance decision. This
 service has no HTTP route and does not decide assignment or runtime admission.
+
+## Project Skill scan admission
+
+The owner builds scan inputs from canonical Markdown reconstructed from the
+validated Skill name, description, and instructions, plus each resource's
+exact bytes. It scans every project Skill candidate, including generic preview
+and package requests. Caller-supplied reports and source labels never grant
+admission. Existing bundled Skills remain outside the project content routes.
+
+The owner requires a current, complete, passing report set before it returns a
+preview or package result, imports a revision, enables an assignment, saves
+configuration with enabled imported Skills, accepts a run that uses them, or
+returns accepted-run content. The owner scans stored content again at
+assignment and runtime delivery. A completed report below the recommended
+threshold returns `422` with `skill_scan_blocked`. Missing, stale, malformed,
+or evaluator-error reports return `503` with `skill_scan_unavailable`.

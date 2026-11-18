@@ -62,6 +62,7 @@ public sealed class SkillContentService(
     {
         ArgumentNullException.ThrowIfNull(candidate);
         var content = candidate.Validate();
+        SkillContentScanAdmission.Scan(content, content.ContentDigest, 1, timeProvider);
         return new SkillContentPreview(
             content.Name,
             content.Description,
@@ -200,6 +201,7 @@ public sealed class SkillContentService(
         var content = request.Candidate.Validate();
         if (!string.Equals(content.ContentDigest, request.ExpectedContentDigest, StringComparison.Ordinal))
             throw SkillContentServiceException.Conflict("The previewed skill content digest has changed.");
+        SkillContentScanAdmission.Scan(content, content.ContentDigest, 1, timeProvider);
         var requestDigest = ImportRequestDigest(request);
         var scopeDigest = IdempotencyScopeDigest(caller, projectId, request.IdempotencyKey);
 
@@ -612,18 +614,13 @@ public sealed class SkillContentService(
                 assignment.Revision!.Value,
                 assignment.ContentDigest!,
                 cancellationToken).ConfigureAwait(false);
-            var verified = await store.ReadVerifiedAsync(
-                new ObjectKey(revision.ObjectKey),
-                assignment.ContentDigest!,
-                cancellationToken).ConfigureAwait(false);
-            if (verified.Name != revision.Name ||
-                verified.Description != revision.Description ||
-                verified.Resources.Length != revision.ResourceCount ||
-                SemanticByteCount(verified) != revision.TotalBytes)
-                throw new SkillContentObjectStoreException(
-                    SkillContentObjectStoreException.IntegrityErrorCode,
-                    "The immutable skill revision metadata does not match its stored content.");
-            // The object-store read is separate from the database, so recheck current authority before returning its bytes.
+            var verified = await SkillContentScanAdmission.ReadVerifiedContentAsync(
+                store, revision, cancellationToken).ConfigureAwait(false);
+            SkillContentScanAdmission.Scan(
+                verified,
+                SkillContentScanAdmission.StoredOwnerId(projectId, revision.SkillId),
+                revision.Revision,
+                timeProvider);
             await EnsureCurrentRunAuthorityAsync(caller, projectId, runId, cancellationToken)
                 .ConfigureAwait(false);
             if (await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
@@ -651,6 +648,8 @@ public sealed class SkillContentService(
         string projectId,
         ProjectConfiguration previous,
         ProjectConfiguration configuration,
+        SkillContentObjectStore? skillContentObjects,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var normalized = ProjectConfigurationValidator.ValidateTransition(previous, configuration);
@@ -668,13 +667,28 @@ public sealed class SkillContentService(
                 assignment.AgentIds.Value.Any(agentId => !activeAgentIds.Contains(agentId)))
                 throw SkillContentServiceException.Invalid(
                     "Enabled skill assignments must target current project agents.");
-            _ = await FindAvailableRevisionAsync(
+            var revision = await FindAvailableRevisionAsync(
                 db,
                 projectId,
                 assignment.SkillId,
                 assignment.Revision.Value,
                 assignment.ContentDigest,
                 cancellationToken).ConfigureAwait(false);
+            ValidatedSkillContent verified;
+            try
+            {
+                verified = await SkillContentScanAdmission.ReadVerifiedContentAsync(
+                    skillContentObjects, revision, cancellationToken).ConfigureAwait(false);
+            }
+            catch (SkillContentObjectStoreException)
+            {
+                throw SkillContentScanAdmission.UnavailableException();
+            }
+            SkillContentScanAdmission.Scan(
+                verified,
+                SkillContentScanAdmission.StoredOwnerId(projectId, revision.SkillId),
+                revision.Revision,
+                timeProvider);
         }
         return normalized;
     }
@@ -957,7 +971,7 @@ public sealed class SkillContentService(
         }
     }
 
-    private static long SemanticByteCount(ValidatedSkillContent content)
+    internal static long SemanticByteCount(ValidatedSkillContent content)
     {
         var utf8 = new UTF8Encoding(false, true);
         return checked((long)utf8.GetByteCount(content.Name) +
