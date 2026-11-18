@@ -136,23 +136,26 @@ public sealed partial class ProjectsConfigService
     private readonly TimeProvider timeProvider;
     private readonly IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory;
     private readonly ModelBindingCapabilities modelBindings;
+    private readonly SkillContentObjectStore? skillContentObjects;
 
     /// <summary>
     /// Creates the service over the request context, provider catalog, clock, optional transaction factory, and
-    /// optional model-binding copy. Without a copy, model choices are reported as unavailable.
+    /// optional model-binding copy and skill content store. Without a model-binding copy, model choices are unavailable.
     /// </summary>
     public ProjectsConfigService(
         ProjectsConfigDbContext db,
         ProviderCatalog providerCatalog,
         TimeProvider timeProvider,
         IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null,
-        ModelBindingCapabilities? modelBindings = null)
+        ModelBindingCapabilities? modelBindings = null,
+        SkillContentObjectStore? skillContentObjects = null)
     {
         this.db = db;
         this.providerCatalog = providerCatalog;
         this.timeProvider = timeProvider;
         this.dbContextFactory = dbContextFactory;
         this.modelBindings = modelBindings ?? ModelBindingCapabilities.Unavailable;
+        this.skillContentObjects = skillContentObjects;
     }
 
     /// <summary>
@@ -616,7 +619,13 @@ public sealed partial class ProjectsConfigService
         RejectSubmittedProviderOverrides(configuration);
         configuration = KeepStoredProviderOverrides(previous, configuration);
         var normalized = await SkillContentService.ValidateConfigurationAsync(
-            db, project.ProjectId, previous, configuration, cancellationToken).ConfigureAwait(false);
+            db,
+            project.ProjectId,
+            previous,
+            configuration,
+            skillContentObjects,
+            timeProvider,
+            cancellationToken).ConfigureAwait(false);
         if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
             reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
             throw new ProjectConfigException(
@@ -769,7 +778,13 @@ public sealed partial class ProjectsConfigService
         var projectConfiguration = ProjectConfigurationValidator.Validate(
             Deserialize<ProjectConfiguration>(projectVersion.ConfigurationJson));
         await SkillContentService.ValidateConfigurationAsync(
-            db, project.ProjectId, projectConfiguration, projectConfiguration, cancellationToken)
+            db,
+            project.ProjectId,
+            projectConfiguration,
+            projectConfiguration,
+            skillContentObjects,
+            timeProvider,
+            cancellationToken)
             .ConfigureAwait(false);
 
         var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);

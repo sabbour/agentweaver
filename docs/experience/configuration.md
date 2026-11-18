@@ -118,7 +118,9 @@ If you edit **Configuration JSON** in **Advanced**, save or reload before you
 use the other sections.
 
 Skill assignment also updates project configuration. Save or reload your
-changes before you assign a skill.
+changes before you assign a skill. Projects & Config scans imported Skills
+before it enables an assignment or saves configuration with an enabled
+imported Skill. See the [Skills page guide](./skills.md) for scan outcomes.
 
 ## Understand configuration states and errors
 

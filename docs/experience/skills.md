@@ -76,6 +76,14 @@ revision and content digest. A preview alone does not save an imported skill.
 The local upload and marketplace import are separate paths. Preview validates
 the candidate without importing it.
 
+Projects & Config scans project Skill content before it returns preview or
+package results and before it imports content. The owner scans again when you
+enable an imported skill, save configuration with enabled imported skills,
+accept a run that uses them, and deliver skill bytes to an agent. Caller scan
+reports and source labels do not grant admission. A non-passing scan returns
+`422 skill_scan_blocked`. Missing, stale, malformed, or evaluator-error reports
+return `503 skill_scan_unavailable`.
+
 To prepare candidates from local content, send one of these inputs to
 `POST /api/v1/skills/package`:
 

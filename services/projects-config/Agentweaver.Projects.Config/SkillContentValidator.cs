@@ -44,6 +44,12 @@ public static class SkillContentValidator
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
+    internal static byte[] ToCanonicalMarkdown(ValidatedSkillContent content) =>
+        Encoding.UTF8.GetBytes(
+            $"---\nname: {System.Text.Json.JsonSerializer.Serialize(content.Name)}\n" +
+            $"description: {System.Text.Json.JsonSerializer.Serialize(content.Description)}\n" +
+            $"---\n{content.Instructions}\n");
+
     /// <summary>
     /// Parses and validates the skill candidate, normalizes resource paths, sorts resources, and computes the content digest.
     /// </summary>

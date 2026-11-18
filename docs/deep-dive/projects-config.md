@@ -30,7 +30,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
 | `ProjectBlueprintCatalog.cs`, `AgentSuiteBlueprintConverter.cs`, and `BlueprintPackages/` | 0.x blueprints, their AgentSuite conversion, and the ported 0.x package validator |
-| `ProjectSkillContentService.cs`, `ProjectSkillTrustEvidenceService.cs`, and `ProjectMarketplaceSourceService.cs` | Imported skill content, internal scan evidence, and source ownership |
+| `ProjectSkillContentService.cs`, `SkillContentScanAdmission.cs`, `ProjectSkillTrustEvidenceService.cs`, and `ProjectMarketplaceSourceService.cs` | Imported skill content, owner-side scan admission, persisted trust evidence, and source ownership |
 | `ProjectsConfigMigrator.cs` | Explicit migration and runtime permission checks |
 
 All paths in this table are under
@@ -250,10 +250,18 @@ as AgentSuite packages; see
 [Blueprints on AgentSuite](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-application-bundles.md#blueprints-on-agentsuite).
 
 Skills use imported content revisions and digests, with assignments to project
-agents. Configuration validation checks these pins. An accepted run reads its
-assigned imported revisions, not later content from a marketplace source.
+agents. The owner scans canonical Skill Markdown and exact resource bytes
+before preview, packaging, import, enabled assignment, configuration save, run
+acceptance, and runtime delivery. Casting proposal confirmation uses the same
+configuration scan. Caller-supplied reports and source labels
+never grant admission. The owner scans stored content again at assignment and
+delivery. A non-passing report returns `422` with `skill_scan_blocked`. A
+missing, stale, malformed, or failed report returns `503` with
+`skill_scan_unavailable`.
+Configuration validation checks revision and digest pins. An accepted run reads
+its assigned imported revisions, not later content from a marketplace source.
 Marketplace browsing and imported project content have different owners and
-lifetimes.
+lifetimes. Existing bundled Skills remain outside the project content routes.
 
 The internal trust-evidence service scans the canonical `SKILL.md` and
 validated resources for one stored, non-revoked revision. Current project write
@@ -264,7 +272,7 @@ Its fingerprint binds the exact content digest and scan report, except
 fields. Exact retries return the saved reports; a changed report with the same
 key returns `409`. A new report set appends a pending governance decision. This
 evidence does not assign a Skill or admit a run, and the service has no public
-route.
+route. Its stored reports do not replace the current owner-side admission scan.
 
 ### Recover from configuration errors
 

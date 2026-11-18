@@ -147,6 +147,10 @@ public static class SkillContentEndpoints
             {
                 return ToProblem(exception);
             }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
         })
         .WithMetadata(new RequestSizeLimitAttribute(MaxContentRequestBytes))
         .WithName("PackageSkillContent");

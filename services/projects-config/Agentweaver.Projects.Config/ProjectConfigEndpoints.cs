@@ -442,6 +442,10 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
         });
 
         projects.MapGet("/{projectId}/casting/universes", async (
@@ -791,6 +795,10 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
         });
 
         projects.MapPost("/{projectId}/casting/proposals/{proposalId:guid}/reject", async (
@@ -1018,6 +1026,10 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
         });
 
         projects.MapPut("/{projectId}/runs/{runId}/selection", async (
@@ -1038,6 +1050,10 @@ public static class ProjectConfigEndpoints
                     caller, projectId, runId, request, cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentServiceException exception)
             {
                 return ToProblem(exception);
             }
@@ -1256,6 +1272,13 @@ public static class ProjectConfigEndpoints
 
     /// <summary>Converts an owner error to a problem response while preserving its stable code and HTTP status.</summary>
     private static IResult ToProblem(ProjectConfigException exception) =>
+        Results.Problem(
+            title: exception.Code,
+            detail: exception.Message,
+            statusCode: exception.StatusCode,
+            extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    private static IResult ToProblem(SkillContentServiceException exception) =>
         Results.Problem(
             title: exception.Code,
             detail: exception.Message,

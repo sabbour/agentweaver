@@ -87,6 +87,9 @@ Open `/projects/:projectId`. The **Dashboard** shows:
 - **Recent runs**: the newest runs in this project.
 - A **Team** summary with a link to **Agents**.
 
+Use the [Skills page](./skills.md) to import project Skills and resolve scan
+errors before you assign them.
+
 Costs appear as the service reports them, one line for each price unit and
 disposition. The app never adds subtotals together or converts them. A value
 that the service didn't record shows a dash, not 0. Metrics cover this

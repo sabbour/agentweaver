@@ -455,9 +455,14 @@ public sealed partial class ProjectsConfigService
             // Also covers proposals drafted before project provider overrides were rejected.
             RequireStoredProviderOverridesUnchanged(currentConfiguration, proposedConfiguration);
             proposedConfiguration = KeepStoredProviderOverrides(currentConfiguration, proposedConfiguration);
-            var configuration = ProjectConfigurationValidator.ValidateTransition(
+            var configuration = await SkillContentService.ValidateConfigurationAsync(
+                context,
+                project.ProjectId,
                 currentConfiguration,
-                proposedConfiguration);
+                proposedConfiguration,
+                skillContentObjects,
+                timeProvider,
+                token).ConfigureAwait(false);
             await EnsureCastingProjectNarrowingAsync(context, configuration, token).ConfigureAwait(false);
             var now = timeProvider.GetUtcNow();
             var nextRevision = checked(project.ConfigurationRevision + 1);
