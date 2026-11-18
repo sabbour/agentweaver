@@ -209,6 +209,7 @@ staged proposal with the casting tools. See [AgentSuite import and export](./age
 | `dispatchCoordinatorExecution` | Dispatch a confirmed work plan and read task completion evidence. |
 | `requestAssembly` | Request assembly. |
 | `readDecisions` | Read decision state and pending gate. |
+| `readExecutionPlan` | Read the saved execution plan. |
 | `readSessionTree` | Read the session tree. |
 | `readSessionStatus` | Read lifecycle, activity, and blockers. |
 | `readRuntimeObservationV1` | Read current runtime evidence. |
