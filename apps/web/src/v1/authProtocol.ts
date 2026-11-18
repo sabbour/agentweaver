@@ -13,12 +13,21 @@ export interface RunBinding {
   runId: string;
 }
 
+/** Project scope used by Draft management without granting a run binding. */
+export interface ProjectBinding {
+  projectId: string;
+  runId?: undefined;
+}
+
+/** Exact project binding carried by one browser session. */
+export type AuthorizationBinding = RunBinding | ProjectBinding;
+
 /** PKCE state and scope saved locally while a Broker authorization is in progress. */
 export interface AuthorizationTransaction {
   state: string;
   verifier: string;
   redirectUri: string;
-  binding: RunBinding | null;
+  binding: AuthorizationBinding | null;
 }
 
 /** Identity Broker and OAuth settings required to construct or complete authorization. */
@@ -66,7 +75,7 @@ declare global {
   }
 }
 
-/** Browser-session key for the pending PKCE verifier, state, redirect, and run binding. */
+/** Browser-session key for the pending PKCE verifier, state, redirect, and project binding. */
 export const AUTH_TRANSACTION_STORAGE_KEY = 'agentweaver.oauth.transaction';
 
 /** Returns the configured Broker client settings used by the v1 authorization flow. */
@@ -102,7 +111,7 @@ export async function pkceChallenge(verifier: string): Promise<string> {
   return base64Url(new Uint8Array(digest));
 }
 
-/** Builds the Broker authorization URL, including the exact project/run binding when present. */
+/** Builds the Broker authorization URL with the exact project or project/run binding. */
 export function buildAuthorizeUrl(
   config: AuthorizationConfig,
   transaction: AuthorizationTransaction,
@@ -114,17 +123,20 @@ export function buildAuthorizeUrl(
   url.searchParams.set('redirect_uri', transaction.redirectUri);
   url.searchParams.set('response_type', 'code');
   if (prompt) url.searchParams.set('prompt', prompt);
-  // The Broker's run-bound authority rejects projects.admin; keep it only for unbound flows.
-  const scopes = transaction.binding
+  const isRunBound = transaction.binding !== null && transaction.binding.runId !== undefined;
+  const scopes = isRunBound
     ? config.scopes.filter((scope) => scope !== 'projects.admin')
-    : config.scopes;
+    : transaction.binding
+      ? config.scopes.filter((scope) => scope !== 'projects.orchestrator')
+      : config.scopes;
   url.searchParams.set('scope', scopes.join(' '));
   url.searchParams.set('code_challenge', challenge);
   url.searchParams.set('code_challenge_method', 'S256');
   url.searchParams.set('state', transaction.state);
   if (transaction.binding) {
     url.searchParams.set('project_id', transaction.binding.projectId);
-    url.searchParams.set('run_id', transaction.binding.runId);
+    if (transaction.binding.runId !== undefined)
+      url.searchParams.set('run_id', transaction.binding.runId);
   }
   return url.toString();
 }
@@ -404,7 +416,8 @@ export function readAuthorizationTransaction(
     if (typeof transaction.state !== 'string' || typeof transaction.verifier !== 'string' ||
         typeof transaction.redirectUri !== 'string' ||
         (transaction.binding !== null && transaction.binding !== undefined &&
-          (typeof transaction.binding.projectId !== 'string' || typeof transaction.binding.runId !== 'string')))
+          (typeof transaction.binding.projectId !== 'string' ||
+            transaction.binding.runId !== undefined && typeof transaction.binding.runId !== 'string')))
       return null;
     return { ...transaction, binding: transaction.binding ?? null };
   } catch {

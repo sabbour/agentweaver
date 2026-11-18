@@ -71,7 +71,7 @@ roles. Resource services validate the token and obtain current effective
 permissions from Projects & Config. A tenant selector can select an existing
 membership; it cannot create one.
 
-Project/run-bound tokens use one of two paths:
+Run-bound tokens use one of two paths:
 
 - Secret operations require an active secret-grant binding.
 - Projects-owned operations require a private Projects receipt for current
@@ -79,6 +79,11 @@ Project/run-bound tokens use one of two paths:
 
 The Broker repeats the relevant check during exchange and refresh. A signed
 binding restricts a token to that project and run; it is not a project role.
+
+Project-only tokens support BYOK Draft metadata. The token carries the exact
+`project_id`, no `run_id`, and `projects.admin`. It contains no role claim.
+Projects checks current membership and Owner or PlatformAdmin authority on
+each Draft request.
 
 ### Publish a BYOK credential version
 
@@ -110,15 +115,16 @@ You need a registered client and a valid upstream OIDC sign-in to obtain an
 Agentweaver token.
 
 1. The authorization endpoint validates the client, scopes, redirect URI, and
-   optional run binding.
+   optional exact project or project/run binding.
 2. Upstream OIDC authentication creates or finds the local Broker user.
 3. Consent uses the local cookie, an antiforgery token, and a single-use
    pending authorization handle.
 4. Authorization-code exchange uses proof key for code exchange (PKCE) with
    the S256 code challenge method. OpenIddict signs the Agentweaver token for
    registered resources.
-5. Refresh rechecks the local account and run authority. Atomic redemption
-   prevents two requests from consuming the same refresh token.
+5. Refresh rechecks the local account and run authority for run-bound tokens.
+   Projects checks current project roles on each protected request. Atomic
+   redemption prevents two requests from consuming the same refresh token.
 
 Each sign-in has its own ad hoc authorization for its token family; the
 permanent authorization remains the reusable consent record. OpenIddict rejects

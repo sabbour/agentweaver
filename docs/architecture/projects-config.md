@@ -24,6 +24,12 @@ PlatformAdmin. Project requests must match the exact project binding, have no
 run binding, and come from a current project Owner or PlatformAdmin. See
 [issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
 
+Project Settings > Connections exposes the project Draft routes through a
+metadata-only editor. The Web client uses a runless Broker token bound to the
+exact project. That binding selects the project but does not grant a role;
+Projects checks current membership and the Owner or PlatformAdmin role on each
+request.
+
 The save response contains the immutable revision committed by that operation.
 An exact retry returns that revision, even if a later edit has advanced the
 head. The client reloads before it makes another edit.

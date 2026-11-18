@@ -202,6 +202,47 @@ export interface ProjectSummary {
   effectiveRoles: EffectiveProjectRole[];
 }
 
+/** Provider metadata returned by the project BYOK Draft API. */
+export interface ProjectModelProviderDraft {
+  id: string;
+  name: string;
+  type: string;
+  base_url: string;
+  model: string;
+  wire_api: string | null;
+  azure_api_version: string | null;
+  reasoning_efforts: string[];
+  prompt_capacity_tokens: number | null;
+  scope: 'project';
+  projectId: string;
+  state: 'Draft' | 'Available';
+  revision: number;
+  configurationHash: string;
+  has_api_key: boolean;
+  is_active: boolean;
+  hasCredential: boolean;
+}
+
+/** One bounded page of project BYOK provider metadata. */
+export interface ProjectModelProviderDraftPage {
+  providers: ProjectModelProviderDraft[];
+  nextAfterProviderId: string | null;
+}
+
+/** Metadata accepted by a project BYOK Draft create or update request. */
+export interface ProjectModelProviderDraftSaveRequest {
+  operationId: string;
+  expectedRevision: number;
+  name: string;
+  type: string;
+  base_url: string;
+  model: string;
+  wire_api: string | null;
+  azure_api_version: string | null;
+  reasoning_efforts: string[];
+  prompt_capacity_tokens: number | null;
+}
+
 /** A current owner-confirmed role and its exact tenant or project scope. */
 export interface EffectiveProjectRole {
   resourceType: 'tenant' | 'project';

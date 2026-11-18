@@ -26,7 +26,15 @@ per-client scope permissions alone do not protect them from CLI requests.
 Project roles, memberships, grants, consent, and trusted run provenance remain
 separately enforced.
 
-After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Other resource services obtain current effective permissions through `GET /api/authorization/context` instead of keeping duplicate membership or role records or caches. The route uses the validated caller and returns a versioned, no-store context; token claims and tenant selectors cannot create authority. Grant-validated `project_id` and `run_id` are included only for tokens bound to that exact project and run.
+After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Other resource services obtain current effective permissions through `GET /api/authorization/context` instead of keeping duplicate membership or role records or caches. The route uses the validated caller and returns a versioned, no-store context; token claims and tenant selectors cannot create authority.
+
+Project BYOK Draft access uses a runless project token. The browser requests
+`project_id` with `api.read` and `projects.admin`, and omits `run_id`. The
+Broker issues the exact `project_id` claim without a role claim. Projects checks
+current membership, the exact project binding, the absence of a run binding,
+and the current Owner or PlatformAdmin role on every Draft request. Run-bound
+tokens carry the exact `project_id` and `run_id` checked by their authorization
+path.
 
 ```mermaid
 sequenceDiagram
@@ -48,6 +56,13 @@ sequenceDiagram
     API->>Projects: GET /api/authorization/context with caller token
     Projects-->>API: Effective permissions, contract v1, Cache-Control: no-store
     API->>API: Authorize this request; keep no membership or role cache
+    opt Project BYOK Draft request
+        User->>Broker: Request project_id with projects.admin; omit run_id
+        Broker->>Broker: Bind token to the exact project
+        Broker-->>API: Token with project_id and no run_id
+        API->>Projects: Check current Owner or PlatformAdmin
+        Projects-->>API: Allow or deny Draft request
+    end
     Note over API,Projects: Each privileged request obtains fresh owner context; no authorization pins are issued.
     Note over Broker,Projects: Broker verifies the Projects chain, hostname, server purpose, validity, and exact leaf pin; redirects are disabled
 ```
@@ -60,7 +75,7 @@ sequenceDiagram
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.drawio'">Open editable draw.io source</a></p>
 
-The broker issues `project_id` and `run_id` claims through one of two authorization paths. A secret-grant binding requires an active grant for the authenticated local user. A Projects-owned binding instead requires a private, no-store receipt for the active project, current actor membership, active Orchestrator assignment, and matching accepted run selection. The Projects proof is repeated when authorization resumes and during token exchange and refresh; the broker rejects a changed receipt. The secret-grant path separately rechecks its active run binding during token exchange and refresh. These paths are alternatives: a Projects-owned binding does not also require a secret grant. The short-lived service token uses a separate audience; its receipt does not become a role claim. Project/run claims constrain a request to the exact signed binding; they do not grant a project role. Projects & Config owns its issuer-and-subject memberships, resource-role assignments, and immutable authorization audit in `projects_config`. Its runtime database principal can read but cannot insert, update, or delete those records; provisioning and revocation use a separate privileged source path.
+Run-bound tokens carry `project_id` and `run_id` through one of two authorization paths. A secret-grant binding requires an active grant for the authenticated local user. A Projects-owned binding instead requires a private, no-store receipt for the active project, current actor membership, active Orchestrator assignment, and matching accepted run selection. The Projects proof is repeated when authorization resumes and during token exchange and refresh; the broker rejects a changed receipt. The secret-grant path separately rechecks its active run binding during token exchange and refresh. These paths are alternatives: a Projects-owned binding does not also require a secret grant. The short-lived service token uses a separate audience; its receipt does not become a role claim. Project/run claims constrain a request to the exact signed binding; they do not grant a project role. Projects & Config owns its issuer-and-subject memberships, resource-role assignments, and immutable authorization audit in `projects_config`. Its runtime database principal can read but cannot insert, update, or delete those records; provisioning and revocation use a separate privileged source path.
 
 The Broker owner call uses `IdentityBroker:RunBinding:ProjectsOwnerAddress` and
 `IdentityBroker:RunBinding:ProjectsAudience`. The corresponding

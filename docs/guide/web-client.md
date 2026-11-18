@@ -165,8 +165,11 @@ Within a project, use these destinations:
 
 Open **Settings** in the rail to reach **Account settings** or **Project
 settings**. In project settings, use **Connections** for the GitHub Repo App,
-Copilot, and Remote MCP. Existing `/orchestrations/:runId` links keep their
-query parameters when they open the run.
+Copilot, Remote MCP, and project BYOK provider metadata. BYOK Draft requests
+use a project-bound Broker session with no run and do not accept credentials.
+See [project connections](../experience/connections.md). Existing
+`/orchestrations/:runId` links keep their query parameters when they open the
+run.
 
 The rail footer shows your name from the sign-in token's `name` claim, or
 `preferred_username` when `name` is absent. If the token has neither claim,

@@ -38,6 +38,9 @@ platform and project scopes. Every route requires `api.read` and
 Project routes require the exact project binding, no run binding, and a current
 project Owner or PlatformAdmin. Projects & Config checks current membership and
 role assignments before each read or save, including retries.
+The Web obtains this binding by requesting `project_id` and omitting `run_id`.
+The Broker token carries the exact project claim and `projects.admin` scope;
+the claim selects the project but does not grant a role.
 
 Create and update requests contain `operationId`, `expectedRevision`, `name`,
 `type`, `base_url`, and `model`. Optional fields are `wire_api`,

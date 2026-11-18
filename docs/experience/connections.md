@@ -1,8 +1,7 @@
-# Account connections
+# Project connections
 
-Use this page to connect GitHub Repo App for repository access or GitHub
-Copilot for project-scoped model access. These are separate connections:
-connecting one does not connect the other.
+Use this page to manage GitHub Repo App, GitHub Copilot, Remote MCP, and BYOK
+provider metadata for a project. These settings use separate owner services.
 
 ## Prerequisites
 
@@ -11,6 +10,34 @@ connecting one does not connect the other.
 - Allow the browser to open a tracked popup for GitHub authorization.
 - For GitHub Copilot, open the app over HTTPS and use a Gateway on the same
   origin as the web app.
+
+## Manage project BYOK provider drafts
+
+Open **Project settings** > **Connections** and find **BYOK provider drafts**.
+The page lists saved providers. Select one to read its metadata, or select
+**Add provider draft** to create one. Select **Load more** to see another page.
+
+Enter a name, provider type, base URL, and model or deployment. You can also
+set the wire API, Azure API version, reasoning efforts, and prompt capacity.
+Select **Create draft** to save. The owner creates the provider ID. Use that ID
+to find the provider later; you can change its name.
+
+To edit a provider, open it and select **Edit metadata**. The page shows the
+provider ID, state, and revision. Select **Save metadata** to save changes.
+The form does not accept or store API keys or other credentials.
+
+Projects checks your current role for every request. You need to be a project
+Owner or PlatformAdmin. The browser requests access for this project with no
+run binding. If the page asks you to sign in, select **Sign in for project
+access**. Use **Refresh** or **Retry** when a request fails. An empty list says
+**No provider drafts are set up for this project.**
+After a failed list or detail read, the page hides old data and shows **Retry**.
+If the project session expires, the page hides provider data and asks you to
+sign in for project access again.
+
+After a save error, the form keeps your values. An unchanged retry uses the
+same operation ID. If an update returns `409`, select **Discard edits and
+reload latest**, then review the current provider and reapply your changes.
 
 ## Connect GitHub Repo App
 

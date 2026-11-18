@@ -27,7 +27,7 @@ adds a new configuration revision. The same page also has
 | **Models** | Set **Model defaults** and **Models by task**. When the owner lists eligible models, the fields are selects. Otherwise, entries are typed and verified when a run starts. |
 | **Platform components** | Read the provider choices selected by the platform. Projects cannot override non-model platform components. |
 | **Run limits** | Set model turns, tool calls, child sessions, child sessions at once, run time in seconds, and prompt tokens. Leave a field empty to use the platform limit. |
-| **Connections** | Connect the GitHub Repo App, GitHub Copilot, and remote MCP servers. See [connections](./connections.md). |
+| **Connections** | Connect the GitHub Repo App, GitHub Copilot, and remote MCP servers. Manage project BYOK provider metadata. See [project connections](./connections.md). |
 | **History** | Enter a **Configuration revision** number and select **View revision** to read an earlier revision. History is read-only. |
 | **Danger zone** | Archive or restore the project. Deleting a project is not available in this version. |
 | **Advanced** | Edit the full **Configuration JSON**. Use it only when a section has no field for the setting. |
