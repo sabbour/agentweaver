@@ -98,6 +98,37 @@ public sealed class EnvironmentEgressAuditPostgresTests(EnvironmentPostgresFixtu
     }
 
     [Fact]
+    public async Task FlowReplayAfterOwnerRegistrationDoesNotDuplicateAcrossAuditTables()
+    {
+        var owner = NewOwner();
+        var fingerprint = AgentSandboxProvider.GetOwnerFingerprint(owner);
+        var audit = new EnvironmentEgressAuditStore(database.DataSource);
+        var flow = Flow(fingerprint, "late-owner.example");
+
+        var first = await audit.AppendFlowAsync(flow, CancellationToken.None);
+        Assert.False(first.Attributed);
+        await audit.RegisterOwnerAsync(owner, CancellationToken.None);
+
+        var retry = await audit.AppendFlowAsync(flow, CancellationToken.None);
+        Assert.Equal(first.FlowId, retry.FlowId);
+        Assert.False(retry.Attributed);
+
+        await using var command = database.DataSource.CreateCommand(
+            """
+            SELECT
+                (SELECT count(*) FROM environment.sandbox_egress_flows_attributed
+                 WHERE flow_id = @flow_id),
+                (SELECT count(*) FROM environment.sandbox_egress_flows_unattributed
+                 WHERE flow_id = @flow_id)
+            """);
+        command.Parameters.AddWithValue("flow_id", first.FlowId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.Equal(1L, reader.GetInt64(1));
+    }
+
+    [Fact]
     public async Task AuditMigrationRollsBackAndReappliesOnPostgres()
     {
         var options = new DbContextOptionsBuilder<EnvironmentDbContext>()

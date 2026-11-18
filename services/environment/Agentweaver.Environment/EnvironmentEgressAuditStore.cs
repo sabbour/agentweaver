@@ -92,7 +92,46 @@ public sealed class EnvironmentEgressAuditStore(NpgsqlDataSource dataSource) : I
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
+        await using (var flowLock = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtextextended(@flow_id, 0))",
+            connection,
+            transaction))
+        {
+            flowLock.Parameters.AddWithValue("flow_id", flowId);
+            await flowLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var existingFlow = false;
         var attributed = false;
+        await using (var existing = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM environment.sandbox_egress_flows_attributed
+                    WHERE flow_id = @flow_id),
+                EXISTS (
+                    SELECT 1
+                    FROM environment.sandbox_egress_flows_unattributed
+                    WHERE flow_id = @flow_id)
+            """,
+            connection,
+            transaction))
+        {
+            existing.Parameters.AddWithValue("flow_id", flowId);
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("The egress audit flow lookup returned no result.");
+            attributed = reader.GetBoolean(0);
+            existingFlow = attributed || reader.GetBoolean(1);
+        }
+
+        if (existingFlow)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new(flowId, attributed);
+        }
+
         if (flow.WorkloadRef is not null)
         {
             await using var lookup = new NpgsqlCommand(
