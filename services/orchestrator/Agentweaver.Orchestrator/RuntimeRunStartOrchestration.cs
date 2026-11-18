@@ -1880,6 +1880,8 @@ internal sealed partial class RuntimeRunStartContinuation(
             ModelCredentialIdentity = binding.ModelCredentialIdentity,
             ModelSourceMode = binding.ModelSourceMode,
             ModelBindingPin = binding.ModelBindingPin,
+            ProviderBindingRevision = binding.ProviderBindingRevision,
+            RuntimeRateCardAdmission = binding.RuntimeRateCardAdmission,
             ModelConnectionId = binding.ModelConnectionId,
             ModelConnectionScope = binding.ModelConnectionScope,
             ReasoningEffort = binding.ReasoningEffort,

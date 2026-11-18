@@ -6,6 +6,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
+using Agentweaver.Identity;
 using Agentweaver.Providers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -804,6 +806,8 @@ public sealed partial class ProjectsConfigService
 
         var modelSelections = ResolveModelSelections(
             projectConfiguration, defaults, request.Context, project.ProjectId);
+        modelSelections = await BindProviderBindingRevisionsAsync(
+            project.ProjectId, modelSelections, cancellationToken).ConfigureAwait(false);
         var providers = ResolveProviders(request.Context);
         var egress = ProjectConfigurationValidator.ResolveEgress(
             defaults.EgressBaseline,
@@ -1497,6 +1501,79 @@ public sealed partial class ProjectsConfigService
         ModelSelectionSettings PrimarySelection,
         ImmutableArray<EffectiveModelSelection> EffectiveSelections,
         ImmutableArray<ModelTaskSelectionReference> TaskSelections);
+
+    private async Task<ResolvedModelSelections> BindProviderBindingRevisionsAsync(
+        string projectId,
+        ResolvedModelSelections selections,
+        CancellationToken cancellationToken)
+    {
+        async Task<ModelSelectionSettings> BindAsync(ModelSelectionSettings selection)
+        {
+            if (selection.SourceMode != ModelSourceMode.Byok || selection.CredentialIdentity is not { } identity)
+                return selection;
+            if (selection.CredentialReference is not { } credential ||
+                selection.ModelBindingPin is not { } requestedPin ||
+                identity.ProviderId != selection.Reference ||
+                identity.Scope == ModelProviderBindingScope.Project && identity.ProjectId != projectId)
+                throw ProviderBindingUnavailable();
+
+            var current = await (
+                    from head in db.ModelProviderDrafts.AsNoTracking()
+                    join revision in db.ModelProviderDraftRevisions.AsNoTracking()
+                        on new { head.ProviderId, Revision = head.CurrentRevision }
+                        equals new { revision.ProviderId, Revision = revision.ProviderRevision }
+                    where head.ProviderId == identity.ProviderId &&
+                        head.Scope == identity.Scope &&
+                        head.ProjectId == identity.ProjectId &&
+                        head.State == ModelProviderDraftState.Available
+                    select revision)
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null)
+                throw ProviderBindingUnavailable();
+            var binding = ModelProviderDraftService.ToBinding(current);
+            if (binding.CredentialVersion != credential.Version ||
+                binding.CredentialReference != credential ||
+                binding.CredentialIdentity != identity)
+                throw new ProjectConfigException(
+                    "model_credential_unavailable",
+                    "The selected model credential slot or exact secret reference is no longer available.",
+                    StatusCodes.Status422UnprocessableEntity);
+
+            RuntimeModelBindingPin expectedPin;
+            try
+            {
+                expectedPin = RuntimeModelBindingsResolver.Pin(
+                    binding, selection.ReasoningEffort ?? "high");
+            }
+            catch (RuntimeAuthorizationException)
+            {
+                throw ProviderBindingUnavailable();
+            }
+            if (requestedPin != expectedPin)
+                throw new ProjectConfigException(
+                    "model_provider_binding_stale",
+                    "The selected provider or rate-card revision has changed.",
+                    StatusCodes.Status422UnprocessableEntity);
+            return selection with { ProviderBindingRevision = binding };
+        }
+
+        var primary = await BindAsync(selections.PrimarySelection).ConfigureAwait(false);
+        var effective = ImmutableArray.CreateBuilder<EffectiveModelSelection>(selections.EffectiveSelections.Length);
+        foreach (var item in selections.EffectiveSelections)
+            effective.Add(item with { Selection = await BindAsync(item.Selection).ConfigureAwait(false) });
+        return selections with
+        {
+            PrimarySelection = primary,
+            EffectiveSelections = effective.MoveToImmutable()
+        };
+    }
+
+    private static ProjectConfigException ProviderBindingUnavailable() =>
+        new(
+            "model_provider_binding_unavailable",
+            "The selected BYOK provider or its Events rate card is unavailable.",
+            StatusCodes.Status422UnprocessableEntity);
 
     /// <summary>Resolves provider candidates by seam cardinality and preserves all selected candidate/version metadata.</summary>
     private ImmutableArray<EffectiveProviderSelection> ResolveProviders(RunSelectionContext context)

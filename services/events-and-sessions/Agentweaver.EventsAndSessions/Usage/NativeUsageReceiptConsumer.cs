@@ -30,7 +30,8 @@ internal sealed class NativeUsageReceiptConsumer(
     NpgsqlDataSource dataSource, PostgresSessionsProviderOptions options, PostgresUsageLedger ledger,
     CopilotCostProvider? provider = null, ICostProviderBinder? bindings = null,
     AzureCostProvider? azureProvider = null, AzureCostProviderBinder? azureBindings = null,
-    Agentweaver.AgentRuntime.RuntimeModelBindingsResolver? models = null)
+    Agentweaver.AgentRuntime.RuntimeModelBindingsResolver? models = null,
+    RuntimeRateCardStore? runtimeRateCards = null)
 {
     private const string InboxConsumer = "events.native-sdk-usage.v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -44,26 +45,61 @@ internal sealed class NativeUsageReceiptConsumer(
     private readonly string _bindings = $"\"{options.Schema}\".usage_run_cost_bindings";
     private readonly string _ledger = $"\"{options.Schema}\".usage_ledger";
 
-    /// <summary>Pins Copilot cost identity and returns the current quote and run totals for admission.</summary>
+    /// <summary>Pins the accepted cost identity and returns current accounting for run admission.</summary>
     internal async Task<RuntimeRunAdmissionReceipt> ReadRunAdmissionAsync(
         string tenantId, string projectId, string runId, RuntimeRunAdmissionRequest request,
         JsonElement selection, RuntimeAcceptedModelSelection model, RuntimeModelBindingPin modelPin,
+        ImmutableArray<RuntimeAcceptedModelSelection> rateCardModels,
         Func<CancellationToken, Task> revalidateCurrentAuthority, CancellationToken cancellationToken)
     {
         RuntimeRunAdmissionContract.ValidateRequest(request);
+        var meterSource = model.SourceMode == ModelSourceMode.Byok
+            ? SdkMeterSources.ByokTokens
+            : SdkMeterSources.CopilotNanoAiu;
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await AcquireCostLockAsync(connection, transaction, tenantId, projectId, runId,
-            SdkMeterSources.CopilotNanoAiu, cancellationToken).ConfigureAwait(false);
+            meterSource, cancellationToken).ConfigureAwait(false);
         var pinned = await ReadOrPinBindingAsync(connection, transaction,
-            tenantId, projectId, runId, SdkMeterSources.CopilotNanoAiu, cancellationToken).ConfigureAwait(false);
-        var quote = Quote(modelPin.ModelId, runId, pinned);
+            tenantId, projectId, runId, meterSource, cancellationToken,
+            model.ProviderBindingRevision,
+            model.SourceMode == ModelSourceMode.Byok &&
+                model.ProviderBindingRevision is { } primaryProviderBinding
+                    ? RuntimeByokCostBindingIdentity.From(modelPin, primaryProviderBinding)
+                    : null).ConfigureAwait(false);
+        if (rateCardModels.Any(candidate =>
+                candidate.Reference != model.Reference || candidate.ReasoningEffort != model.ReasoningEffort))
+            await AcquireCostLockAsync(connection, transaction, tenantId, projectId, runId,
+                SdkMeterSources.ByokTokens, cancellationToken).ConfigureAwait(false);
+        var admissions = ImmutableArray.CreateBuilder<RuntimeRateCardAdmission>(rateCardModels.Length);
+        foreach (var candidate in rateCardModels)
+        {
+            var providerBinding = candidate.ProviderBindingRevision
+                ?? throw new RuntimeAuthorizationException("runtime_run_admission_model_binding_invalid");
+            var candidatePin = candidate.ModelBindingPin
+                ?? throw new RuntimeAuthorizationException("runtime_model_binding_pin_required");
+            var candidateBinding = candidate.Reference == model.Reference &&
+                candidate.ReasoningEffort == model.ReasoningEffort
+                    ? pinned
+                    : await ReadOrPinBindingAsync(connection, transaction,
+                        tenantId, projectId, runId, SdkMeterSources.ByokTokens, cancellationToken,
+                        providerBinding, RuntimeByokCostBindingIdentity.From(candidatePin, providerBinding))
+                        .ConfigureAwait(false);
+            admissions.Add(new(candidatePin, providerBinding,
+                candidateBinding.Binding
+                    ?? throw new RuntimeAuthorizationException("runtime_run_admission_rate_card_unavailable")));
+        }
+        var quote = model.SourceMode == ModelSourceMode.Byok
+            ? new CostPrice(null, pinned.Binding?.RateCard.Unit, CostDisposition.Unpriced,
+                pinned.Binding?.RateCard, "byok-token-quotes-unsupported")
+            : Quote(modelPin.ModelId, runId, pinned);
         var totals = await ledger.GetCopilotRunTotalsWithinTransactionAsync(
             connection, transaction, tenantId, projectId, runId, cancellationToken).ConfigureAwait(false);
         var receipt = new RuntimeRunAdmissionReceipt(
             1, tenantId, projectId, runId, request.AcceptedSelectionHash, model, modelPin, pinned.Binding, quote, totals)
         {
-            RateCardContentHash = pinned.Binding?.RateCard?.ContentHash
+            RateCardContentHash = RateCardContentHash(pinned.Binding),
+            RateCardAdmissions = admissions.MoveToImmutable()
         };
         RuntimeRunAdmissionContract.ValidateReceipt(receipt, request, tenantId, projectId, runId, selection);
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -96,7 +132,7 @@ internal sealed class NativeUsageReceiptConsumer(
             costBinding.RateCard.Id != request.RateCardId ||
             costBinding.RateCard.Version != request.RateCardVersion ||
             costBinding.RateCard.Unit != request.RateCardUnit ||
-            costBinding.RateCard.ContentHash != request.RateCardContentHash)
+            RateCardContentHash(costBinding) != request.RateCardContentHash)
             throw new NativeUsageReconciliationException("runtime_usage_reconciliation_binding_mismatch");
 
         var references = await ReadCostReceiptReferencesAsync(
@@ -129,7 +165,7 @@ internal sealed class NativeUsageReceiptConsumer(
             references,
             totals)
         {
-            RateCardContentHash = costBinding.RateCard.ContentHash
+            RateCardContentHash = RateCardContentHash(costBinding)
         };
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -144,7 +180,9 @@ internal sealed class NativeUsageReceiptConsumer(
         string meterSource,
         string verifiedModelId,
         Func<CancellationToken, Task> revalidateCurrentAuthority,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ModelProviderBindingRevision? providerBinding = null,
+        RuntimeModelBindingPin? modelBindingPin = null)
     {
         RuntimeContractValidation.ValidateIdentifier(tenantId);
         RuntimeContractValidation.ValidateIdentifier(projectId);
@@ -160,7 +198,10 @@ internal sealed class NativeUsageReceiptConsumer(
             scope.TenantId, scope.ProjectId, scope.RunId, scope.MeterSource, cancellationToken).ConfigureAwait(false);
         var pinned = await ReadOrPinBindingAsync(
             connection, transaction, scope.TenantId, scope.ProjectId, scope.RunId,
-            scope.MeterSource, cancellationToken).ConfigureAwait(false);
+            scope.MeterSource, cancellationToken, providerBinding,
+            providerBinding is null ? null : RuntimeByokCostBindingIdentity.From(
+                modelBindingPin ?? throw new RuntimeAuthorizationException("runtime_model_binding_pin_required"),
+                providerBinding)).ConfigureAwait(false);
         var result = QuotePreflight(meterSource, verifiedModelId, runId, pinned);
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -177,7 +218,14 @@ internal sealed class NativeUsageReceiptConsumer(
         // Usage without a dispatch message ID is recorded as Unpriced; it is never rejected or dropped.
         // Only dispatch-correlated usage that passes RequireTrustedAzureByok can be priced.
         var trustedAzureByok = false;
+        var trustedRuntimeByok = false;
+        var providerBinding = receipt.Registration.Binding.ProviderBindingRevision;
         var azureOpenAIEndpoint = IsAzureOpenAIV1Endpoint(receipt);
+        if (providerBinding is not null)
+        {
+            RuntimeUsageSourceReceiptContract.RequireTrustedRuntimeByok(receipt);
+            trustedRuntimeByok = receipt.Usage.A2AMessageId is { } dispatchId && dispatchId != Guid.Empty;
+        }
         if (RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt, azureOpenAIEndpoint))
         {
             // Step 1: every Azure claim must have matching provider, deployment, and configuration
@@ -220,9 +268,14 @@ internal sealed class NativeUsageReceiptConsumer(
         else
         {
             var pinned = await ReadOrPinBindingAsync(connection, transaction, usage.Attribution.TenantId,
-                usage.Attribution.ProjectId, usage.Attribution.RunId, usage.ModelBinding.MeterSource, cancellationToken)
+                usage.Attribution.ProjectId, usage.Attribution.RunId, usage.ModelBinding.MeterSource, cancellationToken,
+                providerBinding,
+                providerBinding is null ? null : RuntimeByokCostBindingIdentity.From(
+                    receipt.Registration.Binding.ModelBindingPin
+                        ?? throw new RuntimeAuthorizationException("runtime_model_binding_pin_required"),
+                    providerBinding))
                 .ConfigureAwait(false);
-            var price = Price(usage, pinned, trustedAzureByok);
+            var price = Price(usage, pinned, trustedAzureByok, trustedRuntimeByok);
             var appended = await ledger.AppendWithinTransactionAsync(
                 connection, transaction, usage, pinned.Binding, price, cancellationToken).ConfigureAwait(false);
             acknowledgment = new(receipt.ReceiptId, appended.Receipt, false);
@@ -264,7 +317,12 @@ internal sealed class NativeUsageReceiptConsumer(
         await AcquireCostLockAsync(connection, transaction, scope.TenantId, scope.ProjectId, scope.RunId,
             request.Source.MeterSource, cancellationToken).ConfigureAwait(false);
         var pinned = await ReadOrPinBindingAsync(connection, transaction,
-            scope.TenantId, scope.ProjectId, scope.RunId, request.Source.MeterSource, cancellationToken)
+            scope.TenantId, scope.ProjectId, scope.RunId, request.Source.MeterSource, cancellationToken,
+            scope.ProviderBindingRevision,
+            scope.ProviderBindingRevision is null ? null : RuntimeByokCostBindingIdentity.From(
+                scope.ModelBindingPin
+                    ?? throw new RuntimeAuthorizationException("runtime_model_binding_pin_required"),
+                scope.ProviderBindingRevision))
             .ConfigureAwait(false);
         var quote = Quote(request.Source.ModelId, scope.RunId, pinned);
         var represented = await ReadRequiredReceiptsAsync(
@@ -279,7 +337,7 @@ internal sealed class NativeUsageReceiptConsumer(
         {
             DispatchId = request.DispatchId,
             RepresentedReceipts = represented,
-            RateCardContentHash = pinned.Binding?.RateCard?.ContentHash
+            RateCardContentHash = RateCardContentHash(pinned.Binding)
         };
         RuntimeUsageCostSnapshotContract.ValidateObservedReceipt(receipt, request);
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -329,7 +387,7 @@ internal sealed class NativeUsageReceiptConsumer(
                 accounting.UnpricedReason != (reader.IsDBNull(8) ? null : reader.GetString(8)) ||
                 accounting.RateCardId != (reader.IsDBNull(9) ? null : reader.GetString(9)) ||
                 accounting.RateCardVersion != (reader.IsDBNull(10) ? null : reader.GetString(10)) ||
-                accounting.RateCardContentHash != ledgerBinding?.RateCard?.ContentHash ||
+                accounting.RateCardContentHash != RateCardContentHash(ledgerBinding) ||
                 accounting.RecordedAt != reader.GetFieldValue<DateTimeOffset>(11))
                 throw new RuntimeAuthorizationException("runtime_usage_accounting_mismatch");
             represented.Add(new(source.ReceiptId, accounting));
@@ -496,7 +554,8 @@ internal sealed class NativeUsageReceiptConsumer(
     {
         await using var read = new NpgsqlCommand($"""
             SELECT binding_json, unpriced_reason FROM {_bindings}
-            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run AND meter_source = @meter
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND meter_source = @meter AND binding_identity_hash = ''
             """, connection, transaction);
         AddScope(read, scope);
         await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -516,33 +575,99 @@ internal sealed class NativeUsageReceiptConsumer(
         left.ResourceGeneration == right.ResourceGeneration &&
         left.NegotiatedCapabilities is not null &&
         left.NegotiatedCapabilities.SetEquals(right.NegotiatedCapabilities) &&
-        CopilotCostProvider.RateCardsEqual(left.RateCard, right.RateCard);
+        CopilotCostProvider.RateCardsEqual(left.RateCard, right.RateCard) &&
+        left.RuntimeByokIdentity == right.RuntimeByokIdentity &&
+        RuntimeRateCardPinsEqual(left, right);
 
     /// <summary>Reads an existing run binding or persists the first resolution, including unpriced outcomes.</summary>
     private async Task<RunCostBinding> ReadOrPinBindingAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
-        string tenantId, string projectId, string runId, string meterSource, CancellationToken cancellationToken)
+        string tenantId, string projectId, string runId, string meterSource,
+        CancellationToken cancellationToken, ModelProviderBindingRevision? providerBinding = null,
+        RuntimeByokCostBindingIdentity? runtimeIdentity = null)
     {
+        RuntimeRateCardPin? requestedRateCardPin = null;
+        if (providerBinding is not null)
+        {
+            try
+            {
+                Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ValidateProviderBinding(providerBinding);
+            }
+            catch (RuntimeAuthorizationException)
+            {
+                throw new RuntimeAuthorizationException("runtime_run_admission_model_binding_invalid");
+            }
+            if (meterSource != SdkMeterSources.ByokTokens ||
+                providerBinding.RateCardPin is not { } rateCardPin ||
+                runtimeIdentity is null ||
+                runtimeIdentity.ProviderId != providerBinding.ProviderId ||
+                runtimeIdentity.ProviderRevision != providerBinding.ProviderRevision ||
+                runtimeIdentity.ConfigurationHash != providerBinding.ConfigurationHash)
+                throw new RuntimeAuthorizationException("runtime_run_admission_rate_card_pin_required");
+            requestedRateCardPin = rateCardPin;
+        }
+        else if (runtimeIdentity is not null)
+            throw new RuntimeAuthorizationException("runtime_run_admission_model_binding_invalid");
+        var identityHash = runtimeIdentity is null
+            ? string.Empty
+            : RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(runtimeIdentity, JsonOptions));
+
         await using (var read = new NpgsqlCommand($"""
             SELECT binding_json, unpriced_reason FROM {_bindings}
-            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run AND meter_source = @meter
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND meter_source = @meter AND binding_identity_hash = @identity
             """, connection, transaction))
         {
             AddScope(read, tenantId, projectId, runId, meterSource);
+            read.Parameters.AddWithValue("identity", NpgsqlDbType.Varchar, identityHash);
             await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                return new(reader.IsDBNull(0) ? null : Deserialize<CostBinding>(reader.GetString(0)),
+            {
+                var existing = new RunCostBinding(
+                    reader.IsDBNull(0) ? null : Deserialize<CostBinding>(reader.GetString(0)),
                     reader.IsDBNull(1) ? null : reader.GetString(1));
+                if (requestedRateCardPin is not null &&
+                    (existing.Binding is not { } existingBinding ||
+                     existing.UnpricedReason is not null ||
+                     !IsRuntimeRateCardBinding(
+                         existingBinding, providerBinding!, requestedRateCardPin, runtimeIdentity!)))
+                    throw new RuntimeAuthorizationException("runtime_run_admission_rate_card_mismatch");
+                if (requestedRateCardPin is null && existing.Binding?.RuntimeRateCardPin is not null)
+                    throw new RuntimeAuthorizationException("runtime_cost_preflight_rate_card_pin_required");
+                return existing;
+            }
         }
-        var resolution = BinderFor(meterSource)?.ResolveAndPin(meterSource, runId);
-        var pinned = resolution?.IsSuccess == true && resolution.Value is not null
-            ? new RunCostBinding(resolution.Value, null)
-            : new RunCostBinding(null, resolution?.Error?.Code.ToString() ?? "cost-provider-unavailable");
+        RunCostBinding pinned;
+        if (requestedRateCardPin is not null)
+        {
+            if (runtimeRateCards is null)
+                throw new RuntimeAuthorizationException("runtime_run_admission_rate_card_unavailable");
+            var storedCard = await runtimeRateCards.GetAsync(
+                requestedRateCardPin.RateCardId,
+                requestedRateCardPin.RateCardVersion,
+                cancellationToken).ConfigureAwait(false);
+            if (storedCard is null)
+                throw new RuntimeAuthorizationException("runtime_run_admission_rate_card_unavailable");
+            var response = RuntimeRateCardContract.ToReadResponse(storedCard);
+            if (!RuntimeRateCardReadContract.MatchesPin(response, requestedRateCardPin))
+                throw new RuntimeAuthorizationException("runtime_run_admission_rate_card_mismatch");
+            pinned = new(CreateRuntimeRateCardBinding(
+                providerBinding!, storedCard, requestedRateCardPin, runtimeIdentity!), null);
+        }
+        else
+        {
+            var resolution = BinderFor(meterSource)?.ResolveAndPin(meterSource, runId);
+            pinned = resolution?.IsSuccess == true && resolution.Value is not null
+                ? new RunCostBinding(resolution.Value, null)
+                : new RunCostBinding(null, resolution?.Error?.Code.ToString() ?? "cost-provider-unavailable");
+        }
         await using var insert = new NpgsqlCommand($"""
-            INSERT INTO {_bindings}(tenant_id, project_id, run_id, meter_source, binding_json, unpriced_reason)
-            VALUES (@tenant, @project, @run, @meter, @binding, @reason)
+            INSERT INTO {_bindings}
+                (tenant_id, project_id, run_id, meter_source, binding_identity_hash, binding_json, unpriced_reason)
+            VALUES (@tenant, @project, @run, @meter, @identity, @binding, @reason)
             """, connection, transaction);
         AddScope(insert, tenantId, projectId, runId, meterSource);
+        insert.Parameters.AddWithValue("identity", NpgsqlDbType.Varchar, identityHash);
         insert.Parameters.AddWithValue("binding", NpgsqlDbType.Varchar,
             pinned.Binding is null ? DBNull.Value : JsonSerializer.Serialize(pinned.Binding, JsonOptions));
         insert.Parameters.AddWithValue("reason", NpgsqlDbType.Varchar, (object?)pinned.UnpricedReason ?? DBNull.Value);
@@ -550,15 +675,84 @@ internal sealed class NativeUsageReceiptConsumer(
         return pinned;
     }
 
+    private static CostBinding CreateRuntimeRateCardBinding(
+        ModelProviderBindingRevision providerBinding,
+        RuntimeRateCard runtimeRateCard,
+        RuntimeRateCardPin rateCardPin,
+        RuntimeByokCostBindingIdentity runtimeIdentity) =>
+        new(
+            SdkMeterSources.ByokTokens,
+            "events.runtime-rate-card",
+            "1.0.0",
+            1,
+            providerBinding.ConfigurationHash,
+            rateCardPin.RateCardId,
+            providerBinding.ProviderRevision,
+            ImmutableHashSet.Create(StringComparer.Ordinal, AzureCostCapabilities.PriceUsage),
+            runtimeRateCard.RateCard)
+        {
+            RuntimeRateCardPin = rateCardPin,
+            RuntimeByokIdentity = runtimeIdentity
+        };
+
+    private static bool IsRuntimeRateCardBinding(
+        CostBinding binding,
+        ModelProviderBindingRevision providerBinding,
+        RuntimeRateCardPin rateCardPin,
+        RuntimeByokCostBindingIdentity runtimeIdentity) =>
+        binding.MeterSource == SdkMeterSources.ByokTokens &&
+        binding.ProviderId == "events.runtime-rate-card" &&
+        binding.AdapterVersion == "1.0.0" &&
+        binding.OptionsSchemaVersion == 1 &&
+        binding.OptionsRevision == providerBinding.ConfigurationHash &&
+        binding.ResourceId == rateCardPin.RateCardId &&
+        binding.ResourceGeneration == providerBinding.ProviderRevision &&
+        binding.RuntimeByokIdentity == runtimeIdentity &&
+        binding.RuntimeRateCardPin is { } storedPin &&
+        storedPin.RateCardId == rateCardPin.RateCardId &&
+        storedPin.RateCardVersion == rateCardPin.RateCardVersion &&
+        storedPin.ContentHash == rateCardPin.ContentHash &&
+        RuntimeRateCardReadContract.MatchesPin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, binding.RateCard, storedPin.Provenance),
+            storedPin) &&
+        RuntimeRateCardReadContract.MatchesPin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, binding.RateCard, rateCardPin.Provenance),
+            rateCardPin);
+
+    private static bool RuntimeRateCardPinsEqual(CostBinding left, CostBinding right)
+    {
+        if (left.RuntimeRateCardPin is not { } leftPin ||
+            right.RuntimeRateCardPin is not { } rightPin)
+            return left.RuntimeRateCardPin is null && right.RuntimeRateCardPin is null;
+        return leftPin.RateCardId == rightPin.RateCardId &&
+            leftPin.RateCardVersion == rightPin.RateCardVersion &&
+            leftPin.ContentHash == rightPin.ContentHash &&
+            RuntimeRateCardReadContract.MatchesPin(
+                new(RuntimeRateCardReadContract.CurrentSchemaVersion, left.RateCard, leftPin.Provenance),
+                leftPin) &&
+            RuntimeRateCardReadContract.MatchesPin(
+                new(RuntimeRateCardReadContract.CurrentSchemaVersion, right.RateCard, rightPin.Provenance),
+                rightPin);
+    }
+
+    private static string? RateCardContentHash(CostBinding? binding) =>
+        binding?.RuntimeRateCardPin?.ContentHash ?? binding?.RateCard?.ContentHash;
+
     /// <summary>Selects the binder that serves a meter source; BYOK tokens use the Azure adapter only.</summary>
     private ICostProviderBinder? BinderFor(string meterSource) =>
         meterSource == SdkMeterSources.ByokTokens ? azureBindings : bindings;
 
-    private CostPrice Price(UsageSubmission usage, RunCostBinding pinned, bool trustedAzureByok)
+    private CostPrice Price(
+        UsageSubmission usage,
+        RunCostBinding pinned,
+        bool trustedAzureByok,
+        bool trustedRuntimeByok)
     {
         // BYOK token usage has its own pricing rules and provider; all other meters use the Copilot path.
         if (usage.ModelBinding.MeterSource == SdkMeterSources.ByokTokens)
-            return PriceAzureByok(usage, pinned, trustedAzureByok);
+            return pinned.Binding?.RuntimeRateCardPin is not null
+                ? PriceRuntimeByok(usage, pinned, trustedRuntimeByok)
+                : PriceAzureByok(usage, pinned, trustedAzureByok);
         if (pinned.Binding is null)
             return new(null, UnpricedUnit(usage.ModelBinding.MeterSource),
                 CostDisposition.Unpriced, null, pinned.UnpricedReason);
@@ -592,11 +786,56 @@ internal sealed class NativeUsageReceiptConsumer(
         return azureProvider.Price(usage.Measurement, usage.ModelBinding, pinned.Binding);
     }
 
+    private static CostPrice PriceRuntimeByok(
+        UsageSubmission usage, RunCostBinding pinned, bool trustedRuntimeByok)
+    {
+        var binding = pinned.Binding!;
+        var card = binding.RateCard;
+        if (!trustedRuntimeByok)
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "byok-dispatch-provenance-unavailable");
+        if (binding.RuntimeRateCardPin is not { } pin ||
+            !RuntimeRateCardReadContract.MatchesPin(
+                new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, pin.Provenance), pin))
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "runtime-rate-card-pin-invalid");
+        var measurement = usage.Measurement;
+        if (measurement.ProviderUnits is not null || measurement.ProviderUnit is not (null or "tokens"))
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "provider-units-unsupported");
+        if (measurement.InputTokens is null || measurement.OutputTokens is null)
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "token-measurements-missing");
+        if (measurement.CachedTokens is null || measurement.CacheWriteTokens is null)
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "token-cache-measurements-missing");
+        if (measurement.CacheWriteTokens != 0)
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "token-cache-pricing-unavailable");
+        if (measurement.ReasoningTokens is not null &&
+            measurement.ReasoningTokens > measurement.OutputTokens)
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "token-measurement-inconsistent");
+        if (!card.ModelMultipliers.TryGetValue(
+                AzureCostProviderOptions.InputRateKey(usage.ModelBinding.ModelId), out var inputRate) ||
+            !card.ModelMultipliers.TryGetValue(
+                AzureCostProviderOptions.OutputRateKey(usage.ModelBinding.ModelId), out var outputRate))
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "model-rate-unavailable");
+        var cachedRate = 0m;
+        if (measurement.CachedTokens != 0 && !card.ModelMultipliers.TryGetValue(
+                AzureCostProviderOptions.CachedInputRateKey(usage.ModelBinding.ModelId), out cachedRate))
+            return new(null, card.Unit, CostDisposition.Unpriced, card, "token-cache-pricing-unavailable");
+        decimal amount;
+        checked
+        {
+            amount = ((decimal)measurement.InputTokens.Value * inputRate +
+                (decimal)measurement.CachedTokens.Value * cachedRate +
+                (decimal)measurement.OutputTokens.Value * outputRate) / card.NanoUnitsPerUnit;
+        }
+        return new(amount, card.Unit, CostDisposition.Estimate, card, null);
+    }
+
     private CostPrice Quote(string modelId, string runId, RunCostBinding pinned)
     {
         if (pinned.Binding is null)
             return new(null, CopilotCostProvider.AiCreditUnit,
                 CostDisposition.Unpriced, null, pinned.UnpricedReason);
+        if (pinned.Binding.RuntimeRateCardPin is not null)
+            return new(null, pinned.Binding.RateCard.Unit, CostDisposition.Unpriced,
+                pinned.Binding.RateCard, "byok-token-quotes-unsupported");
         var verified = bindings?.VerifyPinned(SdkMeterSources.CopilotNanoAiu, runId, pinned.Binding);
         if (provider is null || verified?.IsSuccess != true)
             return new(null, pinned.Binding.RateCard.Unit, CostDisposition.Unpriced,
@@ -616,6 +855,8 @@ internal sealed class NativeUsageReceiptConsumer(
         // known. The checks below only choose the reason that is reported for the missing quote.
         if (meterSource == SdkMeterSources.ByokTokens)
         {
+            if (pinned.Binding.RuntimeRateCardPin is not null)
+                return new(pinned.Binding, false, "byok-token-quotes-unsupported");
             var azureVerified = azureBindings?.VerifyPinned(meterSource, runId, pinned.Binding);
             if (azureProvider is null || azureVerified?.IsSuccess != true)
                 return new(pinned.Binding, false, "pinned-cost-binding-unavailable");

@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
+using Agentweaver.Identity;
 using Agentweaver.Providers;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
@@ -297,6 +299,131 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var viewerChoices = await service.GetProjectConfigurationChoicesAsync(
             viewer, project.ProjectId, CancellationToken.None);
         Assert.Equal(project.ProjectId, viewerChoices.ProjectId);
+    }
+
+    [Fact]
+    public async Task RunAcceptanceRejectsAChangedProviderCredentialSlotOrSecretReference()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "provider-acceptance-tenant-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, "provider-acceptance-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var platformAdmin = await SeedCallerAsync(
+            db, authorityStore, "provider-acceptance-platform-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var platformHead = await projects.GetPlatformRuntimeDefaultsAsync(
+            platformAdmin, CancellationToken.None);
+        var platform = await projects.UpdatePlatformRuntimeDefaultsAsync(
+            platformAdmin, platformHead.Revision, PlatformDefaults(), CancellationToken.None);
+        var project = await projects.CreateProjectAsync(
+            tenantAdmin, "Provider credential acceptance", CancellationToken.None);
+        var owner = await ResolveCallerAsync(
+            db, tenantAdmin.ActorId, tenantId, ["api.read", "projects.admin"],
+            boundProjectId: project.ProjectId);
+        var orchestratorSubject = "provider-acceptance-orchestrator-" + suffix;
+        var membership = await SeedMembershipAsync(authorityStore, orchestratorSubject, tenantId);
+        await authorityStore.AssignRoleAsync(
+            membership, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorityRole.Orchestrator, "fixture");
+        var orchestrator = await ResolveCallerAsync(
+            db, orchestratorSubject, tenantId, ["api.read", "projects.orchestrator"]);
+
+        var providerId = "provider-" + suffix;
+        const string rateCardId = "manual-provider-card";
+        const string rateCardVersion = "v1";
+        var drafts = new ModelProviderDraftService(
+            db, TimeProvider.System, new RuntimeRateCardTestClient(true));
+        var saved = await drafts.SaveAsync(
+            owner,
+            ModelProviderBindingScope.Project,
+            project.ProjectId,
+            providerId,
+            DraftRequest(Guid.NewGuid(), 0) with
+            {
+                RateCardId = rateCardId,
+                RateCardVersion = rateCardVersion,
+            },
+            CancellationToken.None);
+        var publication = PublicationRequest(
+            Guid.NewGuid(), saved.Binding.ProviderRevision,
+            ModelProviderBindingScope.Project, project.ProjectId, providerId,
+            "0123456789abcdef0123456789abcdef");
+        await drafts.PublishCredentialAsync(publication, owner.ActorId, CancellationToken.None);
+        var available = await drafts.ReadAsync(
+            owner, ModelProviderBindingScope.Project, project.ProjectId,
+            providerId, CancellationToken.None);
+        var modelPin = RuntimeModelBindingsResolver.Pin(available.Binding, "high");
+        var modelSelection = new ModelSelectionSettings(
+            providerId, publication.CredentialReference, ModelSourceMode.Byok)
+        {
+            CredentialIdentity = publication.CredentialIdentity,
+            ModelBindingPin = modelPin,
+            ReasoningEffort = "high",
+        };
+        var configuration = await projects.UpdateProjectConfigurationAsync(
+            tenantAdmin,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            ProjectSettings() with { ModelSelection = modelSelection },
+            CancellationToken.None);
+
+        AcceptRunSelectionRequest Request(long revision)
+        {
+            var request = RunRequest(revision, platform.Revision);
+            return request with
+            {
+                Context = request.Context with
+                {
+                    AvailableModelSelectionReferences =
+                        request.Context.AvailableModelSelectionReferences.Add(providerId),
+                },
+            };
+        }
+
+        var accepted = await projects.AcceptRunSelectionAsync(
+            orchestrator, project.ProjectId, "provider-accepted-" + suffix,
+            Request(configuration.Revision), CancellationToken.None);
+        Assert.Equal(publication.CredentialIdentity, accepted.ModelSelection.CredentialIdentity);
+        Assert.Equal(publication.CredentialReference, accepted.ModelSelection.CredentialReference);
+        Assert.Equal(publication.CredentialIdentity,
+            accepted.ModelSelection.ProviderBindingRevision!.CredentialIdentity);
+        Assert.Equal(publication.CredentialReference,
+            accepted.ModelSelection.ProviderBindingRevision.CredentialReference);
+
+        var changedSlotSelection = modelSelection with
+        {
+            CredentialIdentity = publication.CredentialIdentity with { CredentialSlotId = Guid.NewGuid() },
+        };
+        var changedSlotConfig = await projects.UpdateProjectConfigurationAsync(
+            tenantAdmin, project.ProjectId, configuration.Revision,
+            ProjectSettings() with { ModelSelection = changedSlotSelection },
+            CancellationToken.None);
+        var changedSlot = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            projects.AcceptRunSelectionAsync(
+                orchestrator, project.ProjectId, "provider-slot-mismatch-" + suffix,
+                Request(changedSlotConfig.Revision), CancellationToken.None));
+        Assert.Equal("model_credential_unavailable", changedSlot.Code);
+
+        var changedSecretSelection = modelSelection with
+        {
+            CredentialReference = new("different-secret", publication.CredentialReference.Version),
+        };
+        var changedSecretConfig = await projects.UpdateProjectConfigurationAsync(
+            tenantAdmin, project.ProjectId, changedSlotConfig.Revision,
+            ProjectSettings() with { ModelSelection = changedSecretSelection },
+            CancellationToken.None);
+        var changedSecret = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            projects.AcceptRunSelectionAsync(
+                orchestrator, project.ProjectId, "provider-secret-mismatch-" + suffix,
+                Request(changedSecretConfig.Revision), CancellationToken.None));
+        Assert.Equal("model_credential_unavailable", changedSecret.Code);
     }
 
     [Fact]

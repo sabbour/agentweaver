@@ -269,7 +269,33 @@ public sealed record CostBinding(
     string ResourceId,
     long ResourceGeneration,
     ImmutableHashSet<string> NegotiatedCapabilities,
-    CostRateCard RateCard);
+    CostRateCard RateCard)
+{
+    /// <summary>Events-owned immutable card identity when this binding uses a runtime rate card.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeRateCardPin? RuntimeRateCardPin { get; init; }
+
+    /// <summary>Accepted BYOK provider and model identity for this runtime rate-card pin.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeByokCostBindingIdentity? RuntimeByokIdentity { get; init; }
+}
+
+/// <summary>Non-secret identity that qualifies one BYOK rate-card pin within a run.</summary>
+public sealed record RuntimeByokCostBindingIdentity(
+    string ModelSelectionReference,
+    string ModelId,
+    string ProviderId,
+    long ProviderRevision,
+    string ConfigurationHash,
+    Guid CredentialSlotId)
+{
+    public static RuntimeByokCostBindingIdentity From(
+        RuntimeModelBindingPin modelPin, ModelProviderBindingRevision providerBinding) =>
+        new(modelPin.ModelSelectionReference, modelPin.ModelId, providerBinding.ProviderId,
+            providerBinding.ProviderRevision, providerBinding.ConfigurationHash,
+            providerBinding.CredentialIdentity?.CredentialSlotId
+                ?? throw new ArgumentException("A provider credential identity is required.", nameof(providerBinding)));
+}
 
 /// <summary>Price returned by a cost provider; unpriced results carry a reason instead of an amount.</summary>
 public sealed record CostPrice(

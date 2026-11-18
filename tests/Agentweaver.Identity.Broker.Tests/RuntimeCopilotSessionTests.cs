@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
@@ -356,6 +357,101 @@ public sealed class RuntimeCopilotSessionTests
         var create = Assert.Single(external.Requests, request => request.Method == "session.create");
         Assert.Equal(16000, create.Parameters.GetProperty("provider").GetProperty("maxPromptTokens").GetInt32());
         Assert.DoesNotContain(external.Requests, request => request.Method == "models.list");
+    }
+
+    [Fact]
+    public async Task ProjectByokSessionUsesItsAcceptedProviderRevisionForRuntimeFacts()
+    {
+        await using var external = new ControlledCopilotRuntime { Byok = true };
+        var card = new CostRateCard(
+            "manual-provider-card",
+            "v1",
+            SdkMeterSources.ByokTokens,
+            "USD",
+            1_000_000m,
+            System.Collections.Immutable.ImmutableDictionary<string, decimal>.Empty);
+        var provenance = new ManualRuntimeRateCardReadProvenance(
+            "https://pricing.example/rate-card", new DateOnly(2026, 1, 1));
+        var rateCardPin = RuntimeRateCardReadContract.CreatePin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, provenance));
+        var credentialIdentity = new ModelCredentialIdentity(
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            ModelProviderBindingScope.Project,
+            "project",
+            "provider");
+        var providerBinding = new ModelProviderBindingRevision(
+            ModelProviderBindingRevision.CurrentContractVersion,
+            "provider",
+            ModelProviderBindingScope.Project,
+            "project",
+            "Customer provider",
+            "azure",
+            "https://byok.test/",
+            external.ModelId,
+            "responses",
+            "2025-04-01-preview",
+            ["high"],
+            null,
+            3,
+            "credential-v1",
+            rateCardPin.RateCardId,
+            rateCardPin.RateCardVersion,
+            new string('d', 64))
+        {
+            CredentialIdentity = credentialIdentity,
+            CredentialReference = new("provider-credential", "credential-v1"),
+            RateCardPin = rateCardPin
+        };
+        var modelPin = RuntimeModelBindingsResolver.Pin(providerBinding);
+        var admissionBinding = new CostBinding(
+            SdkMeterSources.ByokTokens,
+            "events.runtime-rate-card",
+            "1.0.0",
+            1,
+            providerBinding.ConfigurationHash,
+            rateCardPin.RateCardId,
+            providerBinding.ProviderRevision,
+            ImmutableHashSet.Create(StringComparer.Ordinal, "cost.usage.price"),
+            card)
+        {
+            RuntimeRateCardPin = rateCardPin,
+            RuntimeByokIdentity = RuntimeByokCostBindingIdentity.From(modelPin, providerBinding)
+        };
+        var registration = Registration() with
+        {
+            Binding = Registration().Binding with
+            {
+                ModelSelectionReference = providerBinding.ProviderId,
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelCredentialReference = new("provider-credential", "credential-v1"),
+                ModelCredentialIdentity = credentialIdentity,
+                ModelBindingPin = modelPin,
+                ProviderBindingRevision = providerBinding,
+                RuntimeRateCardAdmission = new(modelPin, providerBinding, admissionBinding)
+            }
+        };
+        var factory = new RuntimeCopilotSessionFactory(
+            external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+            new RuntimeModelBindingsResolver("unused", new Dictionary<string, RuntimeModelBinding>()));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await using var session = await factory.CreateAsync(
+            registration,
+            providerBinding.ProviderId,
+            new SecretCredential(external.SdkCredential, DateTimeOffset.UtcNow.AddMinutes(2)),
+            _ => Task.CompletedTask,
+            timeout.Token);
+
+        Assert.Equal(modelPin, session.Facts.ResolvedModelBindingPin);
+        Assert.Equal(new SdkByokProviderFacts(
+            providerBinding.ProviderType, providerBinding.Deployment, providerBinding.ConfigurationHash),
+            session.Facts.ByokProvider);
+        var create = Assert.Single(external.Requests, request => request.Method == "session.create");
+        Assert.Equal(providerBinding.Deployment,
+            create.Parameters.GetProperty("provider").GetProperty("modelId").GetString());
+        Assert.Equal($"{providerBinding.BaseUrl.TrimEnd('/')}/openai",
+            create.Parameters.GetProperty("provider").GetProperty("baseUrl").GetString());
     }
 
     [Theory]

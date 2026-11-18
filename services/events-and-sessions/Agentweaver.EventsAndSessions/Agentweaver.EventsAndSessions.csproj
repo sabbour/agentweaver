@@ -33,5 +33,6 @@
     <EmbeddedResource Include="Migrations\009_project_usage_index.sql" />
     <EmbeddedResource Include="Migrations\010_session_object_inventory.sql" />
     <EmbeddedResource Include="Migrations\011_messaging_binding_row_lock.sql" />
+    <EmbeddedResource Include="Migrations\012_provider_model_cost_bindings.sql" />
   </ItemGroup>
 </Project>

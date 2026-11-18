@@ -327,6 +327,12 @@ Orchestrator persists the typed admission receipt with root acceptance through i
 Backlog claim uses the same acceptance transaction.
 An identical accepted-root replay uses that immutable receipt without repricing earlier admission.
 Configured Copilot credit limits cannot use BYOK token pricing or an unbound hosted connection.
+Revision-backed BYOK uses a separate card-admission path. Events verifies one
+exact provider and card pin for every effective model and effort, including
+task overrides. It qualifies each cost binding by provider and model identity,
+while the aggregate budget meter stays `byok.tokens`. A valid card admission
+does not require a hosted Copilot quote. The existing hard USD BYOK budget
+still denies dispatch when its usage evidence is missing or unpriced.
 The source paths do not prove live PostgreSQL, native availability, or deployment; each still requires separate acceptance.
 
 A transaction commits the rate card and usage entry before returning.

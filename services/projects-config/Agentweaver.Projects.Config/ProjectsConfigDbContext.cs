@@ -344,10 +344,15 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasMaxLength(ModelProviderDraftLimits.Hash).IsRequired();
             entity.Property(revision => revision.CredentialVersion).HasColumnName("credential_version")
                 .HasMaxLength(256);
+            entity.Property(revision => revision.CredentialSlotId).HasColumnName("credential_slot_id");
+            entity.Property(revision => revision.CredentialSecretId).HasColumnName("credential_secret_id")
+                .HasMaxLength(256);
             entity.Property(revision => revision.RateCardId).HasColumnName("rate_card_id")
                 .HasMaxLength(128);
             entity.Property(revision => revision.RateCardVersion).HasColumnName("rate_card_version")
                 .HasMaxLength(64);
+            entity.Property(revision => revision.RateCardPinJson).HasColumnName("rate_card_pin_json")
+                .HasColumnType("jsonb");
             entity.Property(revision => revision.CreatedByActorId).HasColumnName("created_by_actor_id")
                 .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
             entity.Property(revision => revision.CreatedAt).HasColumnName("created_at");

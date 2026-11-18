@@ -116,6 +116,252 @@ public sealed class RuntimeRunAdmissionContractTests
         Assert.Equal(receipt.CostBinding.RateCard.ContentHash, receipt.RateCardContentHash);
     }
 
+    [Fact]
+    public void ByokAdmissionBindsTheExactProviderCredentialAndEventsRateCard()
+    {
+        var provider = ByokProviderBinding();
+        var modelPin = RuntimeModelBindingsResolver.Pin(provider);
+        var selection = ByokSelection(provider, modelPin);
+        var model = RuntimeAcceptedModelSelection.Read(selection);
+        var binding = new CostBinding(
+            SdkMeterSources.ByokTokens,
+            "events.runtime-rate-card",
+            "1.0.0",
+            1,
+            provider.ConfigurationHash,
+            provider.RateCardPin!.RateCardId,
+            provider.ProviderRevision,
+            ImmutableHashSet.Create(StringComparer.Ordinal, "cost.usage.price"),
+            RuntimeRateCard(provider))
+        {
+            RuntimeRateCardPin = provider.RateCardPin,
+            RuntimeByokIdentity = RuntimeByokCostBindingIdentity.From(modelPin, provider)
+        };
+        var receipt = new RuntimeRunAdmissionReceipt(
+            1,
+            "tenant",
+            "project",
+            "run",
+            RuntimeRunAdmissionContract.SelectionHash(selection),
+            model,
+            modelPin,
+            binding,
+            new(null, "USD", CostDisposition.Unpriced, binding.RateCard, "byok-token-quotes-unsupported"),
+            new("tenant", "project", "run", 0, true, [], []))
+        {
+            RateCardContentHash = provider.RateCardPin.ContentHash,
+            RateCardAdmissions = [new(modelPin, provider, binding)]
+        };
+        var request = new RuntimeRunAdmissionRequest(1, receipt.AcceptedSelectionHash);
+
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            receipt, request, "tenant", "project", "run", selection));
+        Assert.Equal(provider, model.ProviderBindingRevision);
+        Assert.Equal("credential-v1", model.CredentialReference!.Version);
+
+        var changedCard = receipt with
+        {
+            CostBinding = binding with
+            {
+                RuntimeRateCardPin = binding.RuntimeRateCardPin! with { ContentHash = new string('b', 64) }
+            }
+        };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunAdmissionContract.ValidateReceipt(changedCard, request, "tenant", "project", "run", selection));
+
+        var changedCredential = receipt with
+        {
+            ModelSelection = model with
+            {
+                ProviderBindingRevision = provider with { CredentialVersion = "credential-v2" }
+            }
+        };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunAdmissionContract.ValidateReceipt(
+                changedCredential, request, "tenant", "project", "run", selection));
+    }
+
+    [Fact]
+    public void RevisionBackedTaskSelectionsRequireTheirOwnCardAdmission()
+    {
+        var primaryProvider = ByokProviderBinding();
+        var primaryPin = RuntimeModelBindingsResolver.Pin(primaryProvider, "high");
+        var taskCredentialIdentity = primaryProvider.CredentialIdentity! with
+        {
+            CredentialSlotId = Guid.NewGuid(),
+            ProviderId = "task-provider",
+        };
+        var taskProvider = primaryProvider with
+        {
+            ProviderId = "task-provider",
+            Deployment = "task-deployment",
+            CredentialVersion = "credential-v2",
+            CredentialIdentity = taskCredentialIdentity,
+            CredentialReference = new("task-provider-key", "credential-v2"),
+            ConfigurationHash = new string('e', 64),
+        };
+        var taskPin = RuntimeModelBindingsResolver.Pin(taskProvider, "high");
+        var selection = JsonSerializer.SerializeToElement(new
+        {
+            projectId = "project",
+            runId = "run",
+            projectRevision = 1,
+            projectConfigurationRevision = 1,
+            platformRuntimeRevision = 1,
+            contextRevision = "context-v1",
+            projectConfiguration = new { },
+            modelSelection = ByokModel(primaryProvider, primaryPin),
+            modelSelections = new[]
+            {
+                new
+                {
+                    selection = ByokModel(taskProvider, taskPin),
+                    connectionScope = "project",
+                },
+            },
+        });
+        var primaryBinding = ByokCostBinding(primaryProvider, primaryPin);
+        var taskBinding = ByokCostBinding(taskProvider, taskPin);
+        Assert.NotEqual(primaryBinding.RuntimeByokIdentity, taskBinding.RuntimeByokIdentity);
+        var model = RuntimeAcceptedModelSelection.Read(selection);
+        var request = new RuntimeRunAdmissionRequest(
+            1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var receipt = new RuntimeRunAdmissionReceipt(
+            1,
+            "tenant",
+            "project",
+            "run",
+            request.AcceptedSelectionHash,
+            model,
+            primaryPin,
+            primaryBinding,
+            new(null, "USD", CostDisposition.Unpriced, primaryBinding.RateCard,
+                "byok-token-quotes-unsupported"),
+            new("tenant", "project", "run", 0, true, [], []))
+        {
+            RateCardContentHash = primaryProvider.RateCardPin!.ContentHash,
+            RateCardAdmissions =
+            [
+                new(primaryPin, primaryProvider, primaryBinding),
+                new(taskPin, taskProvider, taskBinding),
+            ],
+        };
+
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            receipt, request, "tenant", "project", "run", selection));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunAdmissionContract.ValidateReceipt(
+                receipt with { RateCardAdmissions = [receipt.RateCardAdmissions[0]] },
+                request, "tenant", "project", "run", selection));
+    }
+
+    [Fact]
+    public void ReadAllDeduplicatesThePrimaryProviderFromItsEffectiveTaskRoutes()
+    {
+        var provider = ByokProviderBinding();
+        var pin = RuntimeModelBindingsResolver.Pin(provider, "high");
+        var selection = JsonSerializer.SerializeToElement(new
+        {
+            projectId = "project",
+            runId = "run",
+            projectRevision = 1,
+            projectConfigurationRevision = 1,
+            platformRuntimeRevision = 1,
+            contextRevision = "context-v1",
+            projectConfiguration = new { },
+            modelSelection = ByokModel(provider, pin),
+            modelSelections = new[]
+            {
+                new { selection = ByokModel(provider, pin), connectionScope = "project" }
+            }
+        });
+
+        var models = RuntimeAcceptedModelSelection.ReadAll(selection);
+
+        Assert.Equal("provider", Assert.Single(models).Reference);
+    }
+
+    [Fact]
+    public void RevisionBackedTaskAdmissionAllowsLegacyByokPrimarySelection()
+    {
+        var primaryProvider = ByokProviderBinding();
+        var taskProvider = primaryProvider with
+        {
+            ProviderId = "task-provider",
+            Deployment = "task-deployment",
+            CredentialVersion = "credential-v2",
+            CredentialIdentity = primaryProvider.CredentialIdentity! with { ProviderId = "task-provider" },
+            CredentialReference = new("task-provider-key", "credential-v2"),
+            ConfigurationHash = new string('e', 64),
+        };
+        var taskPin = RuntimeModelBindingsResolver.Pin(taskProvider, "high");
+        var legacyPin = new RuntimeModelBindingPin(
+            RuntimeModelBindingPin.CurrentContractVersion,
+            "legacy-provider",
+            "legacy-deployment",
+            ModelSourceMode.Byok,
+            "legacy-revision",
+            new string('b', 64),
+            "high")
+        {
+            ProviderType = "openai"
+        };
+        var selection = JsonSerializer.SerializeToElement(new
+        {
+            projectId = "project",
+            runId = "run",
+            projectRevision = 1,
+            projectConfigurationRevision = 1,
+            platformRuntimeRevision = 1,
+            contextRevision = "context-v1",
+            projectConfiguration = new { },
+            modelSelection = new
+            {
+                reference = "legacy-provider",
+                sourceMode = "byok",
+                credentialReference = new { id = "legacy-credential", version = "legacy-v1" },
+                reasoningEffort = "high",
+                modelBindingPin = legacyPin
+            },
+            modelSelections = new[]
+            {
+                new
+                {
+                    selection = ByokModel(taskProvider, taskPin),
+                    connectionScope = "project",
+                },
+            },
+        });
+        var model = RuntimeAcceptedModelSelection.Read(selection);
+        var taskBinding = ByokCostBinding(taskProvider, taskPin);
+        var request = new RuntimeRunAdmissionRequest(
+            1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var receipt = new RuntimeRunAdmissionReceipt(
+            1,
+            "tenant",
+            "project",
+            "run",
+            request.AcceptedSelectionHash,
+            model,
+            legacyPin,
+            null,
+            new(null, "USD", CostDisposition.Unpriced, null, "byok-token-quotes-unsupported"),
+            new("tenant", "project", "run", 0, true, [], []))
+        {
+            RateCardAdmissions = [new(taskPin, taskProvider, taskBinding)]
+        };
+
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            receipt, request, "tenant", "project", "run", selection));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunAdmissionContract.ValidateReceipt(
+                receipt with
+                {
+                    Quote = receipt.Quote with { UnpricedReason = "model-rate-unavailable" }
+                },
+                request, "tenant", "project", "run", selection));
+    }
+
     [Theory]
     [InlineData("scope")]
     [InlineData("hash")]
@@ -182,6 +428,16 @@ public sealed class RuntimeRunAdmissionContractTests
                 RuntimeRunAdmissionContract.ValidateSelectionScope(document.RootElement, "project", "run")).Code);
     }
 
+    [Fact]
+    public void ReadAllReturnsATypedFailureForNonObjectTaskSelections()
+    {
+        using var document = JsonDocument.Parse("""{"modelSelections":["invalid"]}""");
+
+        Assert.Equal("runtime_accepted_model_selection_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeAcceptedModelSelection.ReadAll(document.RootElement)).Code);
+    }
+
     private static JsonElement Selection(
         string modelReference = "accepted-reference",
         string reasoningEffort = "high",
@@ -225,6 +481,118 @@ public sealed class RuntimeRunAdmissionContractTests
             {
                 [modelReference] = new(modelId, ModelSourceMode.HostedCopilot)
             });
+
+    private static JsonElement ByokSelection(
+        ModelProviderBindingRevision provider, RuntimeModelBindingPin modelPin) =>
+        JsonSerializer.SerializeToElement(new
+        {
+            projectId = "project",
+            runId = "run",
+            projectRevision = 1,
+            projectConfigurationRevision = 1,
+            platformRuntimeRevision = 1,
+            contextRevision = "context-v1",
+            projectConfiguration = new { },
+            modelSelection = new
+            {
+                reference = provider.ProviderId,
+                sourceMode = "byok",
+                credentialReference = new { id = "provider-credential", version = provider.CredentialVersion },
+                credentialIdentity = provider.CredentialIdentity,
+                reasoningEffort = "high",
+                modelBindingPin = modelPin,
+                providerBindingRevision = provider
+            }
+        });
+
+    private static object ByokModel(
+        ModelProviderBindingRevision provider, RuntimeModelBindingPin modelPin) =>
+        new
+        {
+            reference = provider.ProviderId,
+            sourceMode = "byok",
+            credentialReference = new
+            {
+                id = provider.CredentialReference!.Id,
+                version = provider.CredentialReference.Version,
+            },
+            credentialIdentity = provider.CredentialIdentity,
+            reasoningEffort = "high",
+            modelBindingPin = modelPin,
+            providerBindingRevision = provider,
+        };
+
+    private static CostBinding ByokCostBinding(
+        ModelProviderBindingRevision provider, RuntimeModelBindingPin modelPin)
+    {
+        var rateCardPin = provider.RateCardPin!;
+        return new CostBinding(
+            SdkMeterSources.ByokTokens,
+            "events.runtime-rate-card",
+            "1.0.0",
+            1,
+            provider.ConfigurationHash,
+            rateCardPin.RateCardId,
+            provider.ProviderRevision,
+            ImmutableHashSet.Create(StringComparer.Ordinal, "cost.usage.price"),
+            RuntimeRateCard(provider))
+        {
+            RuntimeRateCardPin = rateCardPin,
+            RuntimeByokIdentity = RuntimeByokCostBindingIdentity.From(modelPin, provider),
+        };
+    }
+
+    private static ModelProviderBindingRevision ByokProviderBinding()
+    {
+        var card = new CostRateCard(
+            "manual-provider-card",
+            "v1",
+            SdkMeterSources.ByokTokens,
+            "USD",
+            1_000_000m,
+            ImmutableDictionary<string, decimal>.Empty);
+        var provenance = new ManualRuntimeRateCardReadProvenance(
+            "https://pricing.example/rate-card", new DateOnly(2026, 1, 1));
+        var rateCardPin = RuntimeRateCardReadContract.CreatePin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, provenance));
+        var identity = new ModelCredentialIdentity(
+            Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            ModelProviderBindingScope.Project,
+            "project",
+            "provider");
+        return new(
+            ModelProviderBindingRevision.CurrentContractVersion,
+            "provider",
+            ModelProviderBindingScope.Project,
+            "project",
+            "Customer provider",
+            "azure",
+            "https://provider.example",
+            "deployment-1",
+            "responses",
+            null,
+            ["high"],
+            null,
+            3,
+            "credential-v1",
+            rateCardPin.RateCardId,
+            rateCardPin.RateCardVersion,
+            new string('d', 64))
+        {
+            CredentialIdentity = identity,
+            CredentialReference = new("provider-credential", "credential-v1"),
+            RateCardPin = rateCardPin
+        };
+    }
+
+    private static CostRateCard RuntimeRateCard(ModelProviderBindingRevision provider) =>
+        new(
+            provider.RateCardId!,
+            provider.RateCardVersion!,
+            SdkMeterSources.ByokTokens,
+            "USD",
+            1_000_000m,
+            ImmutableDictionary<string, decimal>.Empty);
 
     /// <summary>Builds a test card with rate entries for both approved HostedCopilot models.</summary>
     private static CostRateCard PublishedCard() =>

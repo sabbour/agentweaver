@@ -499,7 +499,8 @@ public sealed record UsageIngestionResult(UsageLedgerEntry Entry, bool IsDuplica
         Entry.CostBinding?.RateCard.Version,
         Entry.RecordedAt)
     {
-        RateCardContentHash = Entry.CostBinding?.RateCard?.ContentHash,
+        RateCardContentHash = Entry.CostBinding?.RuntimeRateCardPin?.ContentHash ??
+            Entry.CostBinding?.RateCard?.ContentHash,
         DispatchId = Entry.Usage.Attribution.DispatchId,
         AccountingCursor = Entry.AccountingRevision
     };

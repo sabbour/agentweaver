@@ -127,17 +127,26 @@ public static class RuntimeUsageCostSnapshotContract
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         if (receipt.RateCardContentHash is { } contentHash)
             RuntimeContractValidation.ValidateHash(contentHash);
-        var card = receipt.Binding?.RateCard;
+        var binding = receipt.Binding;
+        var card = binding?.RateCard;
+        var runtimeRateCardPin = binding?.RuntimeRateCardPin;
         if (card?.ModelTokenRates is { Count: > 0 } &&
-            (receipt.RateCardContentHash is null || card.ContentHash is null))
+            (receipt.RateCardContentHash is null || card.ContentHash is null) ||
+            runtimeRateCardPin is not null &&
+            (card is null || receipt.RateCardContentHash != runtimeRateCardPin.ContentHash ||
+             !RuntimeRateCardReadContract.MatchesPin(
+                 new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, runtimeRateCardPin.Provenance),
+                 runtimeRateCardPin)))
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
-        if (receipt.RateCardContentHash != receipt.Binding?.RateCard?.ContentHash ||
+        if (receipt.RateCardContentHash !=
+                (runtimeRateCardPin?.ContentHash ?? card?.ContentHash) ||
             receipt.RepresentedReceipts.Any(reference =>
                 reference is null || reference.Accounting is null ||
                 reference.Accounting.RateCardContentHash != receipt.RateCardContentHash ||
-                receipt.Binding is { RateCard: { ContentHash: not null } binding } &&
-                    (reference.Accounting.RateCardId != binding.Id ||
-                     reference.Accounting.RateCardVersion != binding.Version)))
+                binding is { } costBinding &&
+                    (runtimeRateCardPin is not null || costBinding.RateCard.ContentHash is not null) &&
+                    (reference.Accounting.RateCardId != costBinding.RateCard.Id ||
+                     reference.Accounting.RateCardVersion != costBinding.RateCard.Version)))
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         var expected = request.RequiredReceipts.ToDictionary(reference => reference.SourceReceiptId);
         foreach (var represented in receipt.RepresentedReceipts)
@@ -757,6 +766,57 @@ public static class RuntimeUsageSourceReceiptContract
         RequireText(source.SdkVersion);
         RequireText(source.RuntimeVersion);
         RequireText(source.ModelId);
+    }
+
+    /// <summary>Requires usage to match the exact accepted project BYOK provider revision.</summary>
+    public static void RequireTrustedRuntimeByok(RuntimeUsageSourceReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        Validate(receipt);
+        var binding = receipt.Registration.Binding;
+        var source = receipt.Usage.SdkSource;
+        var provider = binding.ProviderBindingRevision;
+        if (binding.ModelSourceMode != ModelSourceMode.Byok ||
+            provider is null ||
+            binding.ModelCredentialIdentity is not { } credentialIdentity ||
+            binding.ModelCredentialReference is not { } credentialReference ||
+            binding.ModelBindingPin is not { } modelPin ||
+            source is not { SourceMode: "byok", ByokProvider: { } byokProvider } ||
+            source.ModelBindingPin is not { } sourcePin ||
+            source.ResolvedModelBindingPin is not { } resolvedPin)
+            throw new RuntimeAuthorizationException("runtime_byok_provider_provenance_invalid");
+
+        try
+        {
+            RuntimeModelBindingsResolver.ValidateProviderBinding(provider);
+        }
+        catch (ArgumentException)
+        {
+            throw new RuntimeAuthorizationException("runtime_byok_provider_provenance_invalid");
+        }
+
+        var expectedPin = RuntimeModelBindingsResolver.Pin(provider, binding.ReasoningEffort);
+        if (provider.CredentialIdentity != credentialIdentity ||
+            provider.CredentialVersion != credentialReference.Version ||
+            provider.CredentialReference != credentialReference ||
+            provider.ProviderId != credentialIdentity.ProviderId ||
+            binding.RuntimeRateCardAdmission is not { } rateCardAdmission ||
+            !RuntimeModelBindingsResolver.ProviderBindingsEqual(
+                rateCardAdmission.ProviderBindingRevision, provider) ||
+            rateCardAdmission.ModelBindingPin != expectedPin ||
+            rateCardAdmission.CostBinding.RuntimeByokIdentity !=
+                RuntimeByokCostBindingIdentity.From(expectedPin, provider) ||
+            modelPin != expectedPin || sourcePin != expectedPin || resolvedPin != expectedPin ||
+            source.ModelSelectionReference != binding.ModelSelectionReference ||
+            source.ModelId != provider.Deployment ||
+            source.MeterSource != SdkMeterSources.ByokTokens ||
+            byokProvider.Type != provider.ProviderType ||
+            byokProvider.DeploymentId != provider.Deployment ||
+            byokProvider.ConfigurationHash != provider.ConfigurationHash ||
+            receipt.Usage.ModelBinding.ModelReference != binding.ModelSelectionReference ||
+            receipt.Usage.ModelBinding.ModelId != provider.Deployment ||
+            receipt.Usage.ModelBinding.MeterSource != SdkMeterSources.ByokTokens)
+            throw new RuntimeAuthorizationException("runtime_byok_provider_provenance_invalid");
     }
 
     /// <summary>Reports whether a receipt claims Azure BYOK provenance without validating the claim.</summary>

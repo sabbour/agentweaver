@@ -172,15 +172,16 @@ verifier is single-use and tied to runtime configuration. Source grants support
 observation, rotation, and revocation. Model-session grants bind the current
 runtime registration to the accepted model and credential reference.
 
-For BYOK model credentials, the accepted runtime binding also carries the
-credential slot identity. The Broker checks that identity against the pinned
-provider and reads the exact secret name and version from the credential
-ledger's enabled history. The ledger row selects the Key Vault root; the
-Broker does not replace the pin with the current slot head or a newer version.
-After a slot is disabled, current-reference reads deny use while a pin to an
-enabled historical version remains usable for its accepted runtime binding.
-Disabling a slot changes ledger state; it does not disable or delete the Key
-Vault secret.
+For BYOK model credentials, the accepted runtime binding carries the credential
+slot identity and exact `SecretRef`. Projects compares both with the provider
+revision during run acceptance. The Broker checks the identity against the
+pinned provider and reads the exact secret name and version from the credential
+ledger's enabled history. The ledger row selects the Key Vault root; the Broker
+does not replace the pin with the current slot head or a newer version. After a
+slot is disabled, current-reference reads deny use while a pin to an enabled
+historical version remains usable for its accepted runtime binding. Disabling
+a slot changes ledger state; it does not disable or delete the Key Vault
+secret.
 
 The Broker's internal credential store requires a durable claim before a
 Key Vault write. An unresolved claim blocks retries and reuse; a quarantined

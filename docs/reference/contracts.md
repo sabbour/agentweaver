@@ -1790,6 +1790,16 @@ The reference and identity are metadata, not a grant or credential value. An
 unknown, unmapped, inactive, stale, or non-dispatchable child is unavailable.
 Caller configure JSON cannot set these fields.
 
+An accepted revision-backed BYOK selection also carries its
+`ModelProviderBindingRevision` and immutable Events `RuntimeRateCardPin`.
+Orchestrator requests one `RuntimeRateCardAdmission` for each effective
+provider/model/effort pair before first dispatch. Events verifies the exact
+provider revision, model pin, and card content and provenance. The runtime
+owner context returns the admission that matches the selected model and
+effort. Events stores cost pins by provider and model identity; it keeps the
+aggregate `byok.tokens` meter unchanged. This admission does not use a hosted
+Copilot quote or replace the hard USD BYOK budget.
+
 Identity extracts only the current user access token from its protected hosted envelope before the Host receives a response.
 BYOK sessions supply explicit SDK provider configuration and skip Copilot authentication and catalog lookup.
 Hosted receipts bind the current connection identity, revision, scope, credential kind, freshness, and exact secret version.

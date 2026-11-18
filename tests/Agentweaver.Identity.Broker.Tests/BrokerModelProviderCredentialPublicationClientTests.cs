@@ -27,7 +27,9 @@ public sealed class BrokerModelProviderCredentialPublicationClientTests
             publication.ProviderId,
             publication.ExpectedProviderRevision + 1,
             publication.CredentialVersion,
-            new string('a', 64));
+            new string('a', 64),
+            publication.CredentialIdentity,
+            publication.CredentialReference);
         var handler = new PublicationResponseHandler(JsonSerializer.Serialize(receipt));
         using var client = new HttpClient(handler);
         var publisher = new BrokerModelProviderCredentialPublicationClient(
@@ -57,6 +59,9 @@ public sealed class BrokerModelProviderCredentialPublicationClientTests
         Assert.Equal("actor-1", token.Payload["actor_id"]);
         Assert.Equal(publication.OperationId.ToString("D"), token.Payload["operation_id"]);
         Assert.Equal(publication.CredentialVersion, token.Payload["credential_version"]);
+        Assert.Equal(publication.CredentialIdentity.CredentialSlotId.ToString("D"),
+            token.Payload["credential_slot_id"]);
+        Assert.Equal(publication.CredentialReference.Id, token.Payload["credential_secret_id"]);
     }
 
     [Fact]
@@ -116,7 +121,10 @@ public sealed class BrokerModelProviderCredentialPublicationClientTests
             ModelProviderBindingScope.Project,
             "project-1",
             "provider-1",
-            "0123456789abcdef0123456789abcdef");
+            "0123456789abcdef0123456789abcdef",
+            new(Guid.Parse("0ef1ea5e-d94b-41d0-9380-900b1c532bf2"),
+                ModelProviderBindingScope.Project, "project-1", "provider-1"),
+            new("credential-secret", "0123456789abcdef0123456789abcdef"));
 
     private sealed class PublicationResponseHandler(string body) : HttpMessageHandler
     {

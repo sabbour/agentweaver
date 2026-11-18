@@ -175,6 +175,14 @@ sequenceDiagram
     Note over O,P: After provisioning, the consumer negotiates a real resource and pins its identity, generation, and capabilities.
 ```
 
+For a revision-backed BYOK selection, the accepted snapshot also carries the
+provider revision, credential slot identity, exact `SecretRef`, model pin, and
+Events rate-card pin. Run acceptance compares the configured credential slot
+and reference with that provider revision. A mismatch returns
+`model_credential_unavailable` and does not accept the run. Orchestrator then
+admits every effective BYOK selection, including task overrides, before its
+first dispatch.
+
 ## Selected runtime profile
 
 For runtime settings, see the

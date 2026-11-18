@@ -42,6 +42,12 @@ internal sealed record ModelProviderDraftSaveBody
 
     [JsonPropertyName("prompt_capacity_tokens")]
     public int? PromptCapacityTokens { get; init; }
+
+    [JsonPropertyName("rate_card_id")]
+    public string? RateCardId { get; init; }
+
+    [JsonPropertyName("rate_card_version")]
+    public string? RateCardVersion { get; init; }
 }
 
 internal sealed record ModelProviderDraftResponse(
@@ -59,6 +65,8 @@ internal sealed record ModelProviderDraftResponse(
     string State,
     long Revision,
     string ConfigurationHash,
+    [property: JsonPropertyName("rate_card_id")] string? RateCardId,
+    [property: JsonPropertyName("rate_card_version")] string? RateCardVersion,
     [property: JsonPropertyName("has_api_key")] bool HasApiKey,
     [property: JsonPropertyName("is_active")] bool IsActive,
     bool HasCredential);
@@ -320,7 +328,7 @@ internal static class ModelProviderDraftEndpoints
                 body.OperationId, body.ExpectedRevision, body.Name, body.Type, body.BaseUrl, body.Model,
                 body.WireApi, body.AzureApiVersion,
                 body.ReasoningEfforts.IsDefault ? ImmutableArray<string>.Empty : body.ReasoningEfforts,
-                body.PromptCapacityTokens);
+                body.PromptCapacityTokens, body.RateCardId, body.RateCardVersion);
             var saved = await service.SaveAsync(
                 caller, scope, projectId, id, request, cancellationToken).ConfigureAwait(false);
             return Results.Ok(Project(saved));
@@ -418,7 +426,7 @@ internal static class ModelProviderDraftEndpoints
             binding.WireApi, binding.AzureApiVersion, binding.ReasoningEfforts, binding.PromptCapacityTokens,
             binding.Scope == ModelProviderBindingScope.Platform ? "platform" : "project",
             binding.ProjectId, draft.State.ToString(), binding.ProviderRevision, binding.ConfigurationHash,
-            false, false, binding.CredentialVersion is not null);
+            null, null, false, false, binding.CredentialVersion is not null);
     }
 
     private static void ValidatePublicUrl(string value, string providerType, string providerId, long revision)

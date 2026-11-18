@@ -41,6 +41,17 @@ Provider selection uses the shared `SessionsCapabilities` identifiers in
 PostgreSQL journal as its default and does not route runs to the optional
 AgentSessions implementation.
 
+## BYOK rate-card admissions
+
+For each revision-backed BYOK model and effort, Events verifies the accepted
+provider revision and exact rate-card ID, version, content hash, and provenance.
+It returns a `RuntimeRateCardAdmission` for each effective selection, including
+task overrides. Cost bindings include provider and model identity, so two
+providers can share one card without sharing a cost pin. The aggregate budget
+meter remains `byok.tokens`. A BYOK admission does not require a hosted Copilot
+quote; the existing hard USD BYOK budget still blocks dispatch when usage is
+unpriced.
+
 ## Event kinds
 
 All fields listed here are inside `payload`, after the discriminator.

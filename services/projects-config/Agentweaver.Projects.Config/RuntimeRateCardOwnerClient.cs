@@ -8,6 +8,8 @@ namespace Agentweaver.Projects.Config;
 
 internal interface IRuntimeRateCardOwnerClient
 {
+    Task<RuntimeRateCardPin?> ReadPinAsync(string id, string version, CancellationToken cancellationToken);
+
     Task<bool> VerifyAsync(string id, string version, CancellationToken cancellationToken);
 }
 
@@ -78,6 +80,12 @@ internal sealed class RuntimeRateCardOwnerClient : IRuntimeRateCardOwnerClient
     public async Task<bool> VerifyAsync(
         string id,
         string version,
+        CancellationToken cancellationToken) =>
+        await ReadPinAsync(id, version, cancellationToken).ConfigureAwait(false) is not null;
+
+    public async Task<RuntimeRateCardPin?> ReadPinAsync(
+        string id,
+        string version,
         CancellationToken cancellationToken)
     {
         try
@@ -86,11 +94,11 @@ internal sealed class RuntimeRateCardOwnerClient : IRuntimeRateCardOwnerClient
         }
         catch (ArgumentException)
         {
-            return false;
+            return null;
         }
         if (!_options.Owners.TryGetValue(PlatformComponentOwners.EventsAndSessions, out var ownerAddress) ||
             _options.TokenFile is null)
-            return false;
+            return null;
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_timeout);
@@ -98,7 +106,7 @@ internal sealed class RuntimeRateCardOwnerClient : IRuntimeRateCardOwnerClient
         {
             var token = (await _readToken(timeout.Token).ConfigureAwait(false))?.Trim();
             if (string.IsNullOrEmpty(token))
-                return false;
+                return null;
 
             using var httpClient = _createHttpClient();
             var query = $"id={Uri.EscapeDataString(id)}&version={Uri.EscapeDataString(version)}";
@@ -113,29 +121,31 @@ internal sealed class RuntimeRateCardOwnerClient : IRuntimeRateCardOwnerClient
             if (response.StatusCode != System.Net.HttpStatusCode.OK ||
                 response.Headers.ETag is not { IsWeak: false } etag ||
                 response.Content.Headers.ContentLength is > MaximumResponseBytes)
-                return false;
+                return null;
 
             var payload = await ReadBoundedAsync(response.Content, timeout.Token).ConfigureAwait(false);
             var rateCard = RuntimeRateCardReadContract.Deserialize(payload);
             if (rateCard is null)
-                return false;
+                return null;
             RuntimeRateCardReadContract.Validate(rateCard, id, version);
             var canonical = Encoding.UTF8.GetBytes(RuntimeRateCardReadContract.SerializeCanonical(rateCard));
             if (!payload.AsSpan().SequenceEqual(canonical))
-                return false;
+                return null;
 
-            var hash = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
-            return string.Equals(etag.Tag, $"\"{hash}\"", StringComparison.Ordinal);
+            var pin = RuntimeRateCardReadContract.CreatePin(rateCard);
+            return string.Equals(etag.Tag, $"\"{pin.ContentHash}\"", StringComparison.Ordinal)
+                ? pin
+                : null;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return false;
+            return null;
         }
         catch (Exception exception) when (
             exception is HttpRequestException or IOException or JsonException or
                 InvalidOperationException or ArgumentException)
         {
-            return false;
+            return null;
         }
     }
 

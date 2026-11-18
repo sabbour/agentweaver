@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
 
 namespace Agentweaver.Orchestrator;
@@ -369,6 +370,8 @@ internal sealed record NativeChildRebindOriginFingerprint(
             newBinding.ModelSelectionReference == oldBinding.ModelSelectionReference &&
             newBinding.ModelCredentialReference == oldBinding.ModelCredentialReference &&
             newBinding.ModelCredentialIdentity == oldBinding.ModelCredentialIdentity &&
+            RuntimeModelBindingsResolver.ProviderBindingsEqual(
+                newBinding.ProviderBindingRevision, oldBinding.ProviderBindingRevision) &&
             newBinding.ModelSourceMode == oldBinding.ModelSourceMode &&
             newBinding.ReasoningEffort == oldBinding.ReasoningEffort &&
             newBinding.ModelBindingPin == oldBinding.ModelBindingPin &&

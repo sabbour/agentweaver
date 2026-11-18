@@ -134,6 +134,8 @@ public sealed class ModelProviderCredentialPublicationEndpointTests
                 new Claim("project_id", "project-1"),
                 new Claim("provider_id", "provider-1"),
                 new Claim("credential_version", "0123456789abcdef0123456789abcdef"),
+                new Claim("credential_slot_id", "0ef1ea5e-d94b-41d0-9380-900b1c532bf2"),
+                new Claim("credential_secret_id", "credential-secret"),
             ], Scheme.Name));
             return Task.FromResult(AuthenticateResult.Success(
                 new AuthenticationTicket(principal, Scheme.Name)));

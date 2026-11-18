@@ -297,16 +297,57 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             Guid.NewGuid(), 1, identity.CredentialSlotId, ModelProviderCredentialScope.Project,
             projectId, providerId, "broker:actor"));
 
-        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
-            new Dictionary<string, RuntimeModelBinding>
-            {
-                [providerId] = new("controlled-model", ModelSourceMode.Byok,
-                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
-                {
-                    SupportedReasoningEfforts = ["high"]
-                }
-            });
-        var pin = resolver.Pin(providerId, ModelSourceMode.Byok) with { ProviderId = providerId };
+        var card = new CostRateCard(
+            "manual-provider-card",
+            "v1",
+            SdkMeterSources.ByokTokens,
+            "USD",
+            1_000_000m,
+            System.Collections.Immutable.ImmutableDictionary<string, decimal>.Empty);
+        var provenance = new ManualRuntimeRateCardReadProvenance(
+            "https://pricing.example/rate-card", new DateOnly(2026, 1, 1));
+        var rateCardPin = RuntimeRateCardReadContract.CreatePin(
+            new(RuntimeRateCardReadContract.CurrentSchemaVersion, card, provenance));
+        var providerBinding = new ModelProviderBindingRevision(
+            ModelProviderBindingRevision.CurrentContractVersion,
+            providerId,
+            ModelProviderBindingScope.Project,
+            projectId,
+            "Customer provider",
+            "openai",
+            "https://byok.test/v1",
+            "controlled-model",
+            "responses",
+            "2025-04-01-preview",
+            ["high"],
+            null,
+            3,
+            reference.Version,
+            rateCardPin.RateCardId,
+            rateCardPin.RateCardVersion,
+            new string('d', 64))
+        {
+            CredentialIdentity = identity,
+            CredentialReference = reference,
+            RateCardPin = rateCardPin
+        };
+        var pin = RuntimeModelBindingsResolver.Pin(providerBinding, "high");
+        var costBinding = new CostBinding(
+            SdkMeterSources.ByokTokens,
+            "events.runtime-rate-card",
+            "1.0.0",
+            1,
+            providerBinding.ConfigurationHash,
+            rateCardPin.RateCardId,
+            providerBinding.ProviderRevision,
+            System.Collections.Immutable.ImmutableHashSet.Create(
+                StringComparer.Ordinal, "cost.usage.price"),
+            card)
+        {
+            RuntimeRateCardPin = rateCardPin,
+            RuntimeByokIdentity = RuntimeByokCostBindingIdentity.From(pin, providerBinding)
+        };
+        var admission = new RuntimeRateCardAdmission(pin, providerBinding, costBinding);
         var owner = new StorageOwner();
         var registration = owner.Registration with
         {
@@ -316,7 +357,9 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
                 ModelSourceMode = ModelSourceMode.Byok,
                 ModelBindingPin = pin,
                 ModelCredentialReference = reference,
-                ModelCredentialIdentity = identity
+                ModelCredentialIdentity = identity,
+                ProviderBindingRevision = providerBinding,
+                RuntimeRateCardAdmission = admission
             }
         };
         owner.Registration = registration;
@@ -366,7 +409,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             CreateActor(), TimeProvider.System, connections: null, modelCredentials: store, credentialBackends: backends);
         var denied = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             foreignAuthority.IssueModelCredentialGrantAsync(foreignRegistration.RuntimeInstanceId, Guid.NewGuid()));
-        Assert.Equal("runtime_model_credential_unavailable", denied.Code);
+        Assert.Equal("runtime_model_binding_pin_mismatch", denied.Code);
         Assert.Equal(1, byokBackend.Calls);
     }
 

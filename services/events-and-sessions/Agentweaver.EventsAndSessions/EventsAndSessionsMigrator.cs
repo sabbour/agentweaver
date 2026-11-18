@@ -8,8 +8,8 @@ namespace Agentweaver.EventsAndSessions;
 /// <summary>Applies explicit Events &amp; Sessions schema migrations and verifies current owner tables and guards.</summary>
 public static class EventsAndSessionsMigrator
 {
-    // Addressed-message binding row locks require migration 011 before this runtime serves traffic.
-    private const int CurrentSchemaVersion = 11;
+    // Provider/model-qualified cost pins require migration 012 before this runtime serves traffic.
+    private const int CurrentSchemaVersion = 12;
 
     /// <summary>Every version <see cref="MigrateAsync"/> can apply, in order.</summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
@@ -68,7 +68,8 @@ public static class EventsAndSessionsMigrator
             (applied.Contains(8) && !applied.Contains(7)) ||
             (applied.Contains(9) && !applied.Contains(8)) ||
             (applied.Contains(10) && !applied.Contains(9)) ||
-            (applied.Contains(11) && !applied.Contains(10)))
+            (applied.Contains(11) && !applied.Contains(10)) ||
+            (applied.Contains(12) && !applied.Contains(11)))
             throw new InvalidOperationException("Unsupported Events & Sessions schema version.");
 
         // Version 2 was used by two historical source layouts, so table presence must disambiguate version 3.
@@ -130,6 +131,7 @@ public static class EventsAndSessionsMigrator
                 9 => "Agentweaver.EventsAndSessions.Migrations.009_project_usage_index.sql",
                 10 => "Agentweaver.EventsAndSessions.Migrations.010_session_object_inventory.sql",
                 11 => "Agentweaver.EventsAndSessions.Migrations.011_messaging_binding_row_lock.sql",
+                12 => "Agentweaver.EventsAndSessions.Migrations.012_provider_model_cost_bindings.sql",
                 _ => throw new InvalidOperationException("Unsupported Events & Sessions schema version.")
             };
             await using var resource = typeof(EventsAndSessionsMigrator).Assembly.GetManifestResourceStream(resourceName)
@@ -168,7 +170,7 @@ public static class EventsAndSessionsMigrator
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 3),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 4),
-                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -224,7 +226,13 @@ public static class EventsAndSessionsMigrator
                       AND tgname = 'messaging_provider_bindings_no_update'
                       AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
                       AND tgenabled = 'O' AND NOT tgisinternal
-                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 12) = 1,
+                EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@usageBindings)
+                    AND attname = 'binding_identity_hash' AND attnum > 0 AND NOT attisdropped),
+                EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conrelid = to_regclass(@usageBindings) AND conname = 'pk_usage_run_cost_bindings'
+                      AND contype = 'p')
             """, connection);
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.sessions");
         command.Parameters.AddWithValue("bindings", NpgsqlDbType.Text, $"{schema}.session_provider_bindings");
@@ -259,7 +267,8 @@ public static class EventsAndSessionsMigrator
             reader.GetInt64(28) != 1 || !reader.GetBoolean(29) || !reader.GetBoolean(30) ||
             Enumerable.Range(31, 6).Any(column => !reader.GetBoolean(column)) ||
             Enumerable.Range(37, 3).Any(column => !reader.GetBoolean(column)) ||
-            !reader.GetBoolean(40) || !reader.GetBoolean(41))
+            !reader.GetBoolean(40) || !reader.GetBoolean(41) ||
+            !reader.GetBoolean(42) || !reader.GetBoolean(43) || !reader.GetBoolean(44))
             throw new InvalidOperationException(
                 "Events & Sessions schema is not current; run the explicit --migrate command.");
     }

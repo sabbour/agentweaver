@@ -225,6 +225,15 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("character varying(256)")
                         .HasColumnName("created_by_actor_id");
 
+                    b.Property<string>("CredentialSecretId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("credential_secret_id");
+
+                    b.Property<Guid?>("CredentialSlotId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("credential_slot_id");
+
                     b.Property<string>("CredentialVersion")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)")
@@ -265,6 +274,10 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)")
                         .HasColumnName("rate_card_id");
+
+                    b.Property<string>("RateCardPinJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("rate_card_pin_json");
 
                     b.Property<string>("RateCardVersion")
                         .HasMaxLength(64)

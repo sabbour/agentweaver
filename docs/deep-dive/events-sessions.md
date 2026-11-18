@@ -145,6 +145,16 @@ consumer checks the source, pins Cost binding and rate-card identity,
 deduplicates receipts, and commits accounting with its acknowledgment. A
 client-supplied token count is not an authenticated SDK receipt.
 
+For run admission, Events verifies the exact card pin in every
+revision-backed BYOK selection and returns one `RuntimeRateCardAdmission` for
+each effective model and effort, including task overrides. Each Cost binding
+uses provider and model identity, so providers can share a card and the
+aggregate `byok.tokens` meter without colliding. The aggregate USD budget still
+uses `byok.tokens`. A BYOK quote can be Unpriced because it is not a hosted
+Copilot credit quote; that does not reject a valid card admission. Missing or
+mismatched cards block dispatch, and later unpriced usage still blocks
+dispatch under the existing hard USD budget.
+
 Events also stores runtime rate cards by card ID and version. A card keeps its
 canonical `CostRateCard` and either manual source details or Azure Retail meter
 IDs and region. Events accepts an exact retry and rejects changed content at an

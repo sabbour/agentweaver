@@ -106,6 +106,24 @@ validation, strong ETags, outage recovery, caller cancellation, and the public
 `Draft` or `Available` response. PostgreSQL cases use disposable test
 containers. No test calls Azure or a deployed service.
 
+## Test revision-backed BYOK run admission
+
+Run the contract and orchestration tests after the Release build:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~RevisionBackedTaskSelectionsRequireTheirOwnCardAdmission|FullyQualifiedName~RuntimeRunAdmissionContractTests"
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~CoordinatorRunAdmissionTests|FullyQualifiedName~AzureByokBudgetUsesCurrencyAndBlocksUnpricedUsage"
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~ProvidersWithTheSameEventsCardKeepSeparatePinsAndOneAggregateBudgetMeter
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~RunAcceptanceRejectsAChangedProviderCredentialSlotOrSecretReference
+```
+
+The Events and Projects tests use disposable PostgreSQL databases. They check
+that two providers can share a card without sharing a cost pin and that run
+acceptance rejects a changed credential slot or exact `SecretRef`. The contract
+and orchestration tests check admission for task overrides, matching delivery
+to the runtime, and denial when the BYOK hard USD budget is missing or
+unpriced. These tests do not call a live provider or create paid usage.
+
 ## Run the standard test suites
 
 Run the following commands to restore, build, and test the main .NET and Node.js

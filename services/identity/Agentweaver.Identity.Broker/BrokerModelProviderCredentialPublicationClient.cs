@@ -92,7 +92,9 @@ internal sealed class BrokerModelProviderCredentialPublicationClient(
                 receipt.ProjectId != publication.ProjectId ||
                 receipt.ProviderId != publication.ProviderId ||
                 receipt.ProviderRevision != publication.ExpectedProviderRevision + 1 ||
-                receipt.CredentialVersion != publication.CredentialVersion)
+                receipt.CredentialVersion != publication.CredentialVersion ||
+                receipt.CredentialIdentity != publication.CredentialIdentity ||
+                receipt.CredentialReference != publication.CredentialReference)
                 throw new BrokerCredentialPublicationException(null);
 
             return receipt;
@@ -134,6 +136,8 @@ internal sealed class BrokerModelProviderCredentialPublicationClient(
             new Claim("project_id", publication.ProjectId ?? string.Empty),
             new Claim("provider_id", publication.ProviderId),
             new Claim("credential_version", publication.CredentialVersion),
+            new Claim("credential_slot_id", publication.CredentialIdentity.CredentialSlotId.ToString("D")),
+            new Claim("credential_secret_id", publication.CredentialReference.Id),
             new Claim(
                 JwtRegisteredClaimNames.Iat,
                 now.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),

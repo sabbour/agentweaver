@@ -250,6 +250,10 @@ public static partial class CoordinationEndpoints
             selection.Selection.Snapshot, modelTaskSelection);
         var runAdmission = await store.ReadRunAdmissionAsync(actor, selection, cancellationToken)
             .ConfigureAwait(false);
+        var rateCardAdmission = FindRateCardAdmission(
+            runAdmission, modelSelectionReference, modelTaskSelection.ReasoningEffort,
+            modelSelection.SourceMode == ModelSourceMode.Byok &&
+                modelSelection.ProviderBindingRevision is not null);
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
         var currentOwner = checkpointRecoveryRegistration is { } currentRecoveryAuthorization
@@ -347,13 +351,16 @@ public static partial class CoordinationEndpoints
             ModelCredentialReference = modelSelection.CredentialReference,
             ModelCredentialIdentity = modelSelection.CredentialIdentity,
             ModelSourceMode = modelSelection.SourceMode,
+            ProviderBindingRevision = rateCardAdmission?.ProviderBindingRevision ??
+                                     modelSelection.ProviderBindingRevision,
+            RuntimeRateCardAdmission = rateCardAdmission,
             ModelBindingPin = runAdmission?.ModelBindingPin is { } runPin &&
                               string.Equals(runPin.ModelSelectionReference, modelSelectionReference,
                                   StringComparison.Ordinal) &&
                               string.Equals(runPin.ReasoningEffort, modelTaskSelection.ReasoningEffort,
                                   StringComparison.Ordinal)
                 ? runPin
-                : modelSelection.ModelBindingPin,
+                : rateCardAdmission?.ModelBindingPin ?? modelSelection.ModelBindingPin,
             ModelConnectionId = modelSelection.ConnectionId,
             ModelConnectionScope = modelSelection.ConnectionScope,
             MaxModelTurns = budgetLimits.MaxModelTurns,
@@ -412,6 +419,10 @@ public static partial class CoordinationEndpoints
 
         var runAdmission = await store.ReadRunAdmissionAsync(actor, selection, cancellationToken)
             .ConfigureAwait(false);
+        var rateCardAdmission = FindRateCardAdmission(
+            runAdmission, modelSelection.Reference, modelSelection.ReasoningEffort,
+            modelSelection.SourceMode == ModelSourceMode.Byok &&
+                modelSelection.ProviderBindingRevision is not null);
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
         var currentOwner = await store.ReadRuntimeOwnerStateForRegistrationAsync(
@@ -449,7 +460,10 @@ public static partial class CoordinationEndpoints
             ModelCredentialIdentity = modelSelection.CredentialIdentity,
             ModelSourceMode = modelSelection.SourceMode,
             ReasoningEffort = modelSelection.ReasoningEffort,
-            ModelBindingPin = modelBindingPin,
+            ModelBindingPin = rateCardAdmission?.ModelBindingPin ?? modelBindingPin,
+            ProviderBindingRevision = rateCardAdmission?.ProviderBindingRevision ??
+                                     modelSelection.ProviderBindingRevision,
+            RuntimeRateCardAdmission = rateCardAdmission,
             ModelConnectionId = modelSelection.ConnectionId,
             ModelConnectionScope = modelSelection.ConnectionScope,
             MaxModelTurns = budgetLimits.MaxModelTurns,
@@ -459,6 +473,22 @@ public static partial class CoordinationEndpoints
             CopilotSoftCreditLimit = budgetLimits.CopilotSoftCreditLimit,
             CopilotHardCreditLimit = budgetLimits.CopilotHardCreditLimit
         };
+    }
+
+    internal static RuntimeRateCardAdmission? FindRateCardAdmission(
+        RuntimeRunAdmissionReceipt? admission,
+        string modelSelectionReference,
+        string reasoningEffort,
+        bool required)
+    {
+        var matches = admission?.RateCardAdmissions
+            .Where(item => item.ModelBindingPin.ModelSelectionReference == modelSelectionReference &&
+                item.ModelBindingPin.ReasoningEffort == reasoningEffort)
+            .ToArray() ?? [];
+        if (matches.Length > 1 || required && matches.Length != 1)
+            throw new CoordinationException(
+                "runtime_run_admission_missing", StatusCodes.Status409Conflict);
+        return matches.SingleOrDefault();
     }
 
     internal static void RequireCoordinatorRootDecision(

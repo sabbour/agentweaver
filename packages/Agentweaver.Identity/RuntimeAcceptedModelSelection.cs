@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 
@@ -25,6 +26,9 @@ public sealed record RuntimeAcceptedModelSelection(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelProviderBindingRevision? ProviderBindingRevision { get; init; }
+
     /// <summary>
     /// Reads and validates the model selection without accepting unknown credential shapes,
     /// mismatched project overrides, or a BYOK pin for a hosted model.
@@ -39,6 +43,41 @@ public sealed record RuntimeAcceptedModelSelection(
             model.ValueKind != JsonValueKind.Object)
             throw Invalid();
         return ReadSelection(snapshot, model, null);
+    }
+
+    /// <summary>Reads every unique model/effort pair accepted for primary and task routes.</summary>
+    public static ImmutableArray<RuntimeAcceptedModelSelection> ReadAll(JsonElement snapshot)
+    {
+        if (snapshot.ValueKind != JsonValueKind.Object)
+            throw Invalid();
+        var selections = new Dictionary<(string Reference, string Effort), RuntimeAcceptedModelSelection>();
+        if (snapshot.TryGetProperty("modelSelection", out var primary))
+            Add(ReadSelection(snapshot, primary, null));
+        if (snapshot.TryGetProperty("modelSelections", out var entries))
+        {
+            if (entries.ValueKind != JsonValueKind.Array)
+                throw Invalid();
+            foreach (var entry in entries.EnumerateArray())
+            {
+                if (!TryReadEffectiveSelection(entry, out var selection, out var connectionScope))
+                    throw Invalid();
+                Add(ReadSelection(snapshot, selection, connectionScope));
+            }
+        }
+        if (selections.Count == 0)
+            throw Invalid();
+        return selections.Values
+            .OrderBy(selection => selection.Reference, StringComparer.Ordinal)
+            .ThenBy(selection => selection.ReasoningEffort, StringComparer.Ordinal)
+            .ToImmutableArray();
+
+        void Add(RuntimeAcceptedModelSelection selection)
+        {
+            var key = (selection.Reference, selection.ReasoningEffort);
+            if (selections.TryGetValue(key, out var existing) && !SelectionsEqual(existing, selection))
+                throw Invalid();
+            selections[key] = selection;
+        }
     }
 
     /// <summary>Reads the exact accepted model/effort variant used by a task route.</summary>
@@ -113,7 +152,8 @@ public sealed record RuntimeAcceptedModelSelection(
         {
             ReasoningEffort = fields.ReasoningEffort,
             CredentialIdentity = fields.CredentialIdentity,
-            ModelBindingPin = fields.ModelBindingPin
+            ModelBindingPin = fields.ModelBindingPin,
+            ProviderBindingRevision = fields.ProviderBindingRevision
         };
     }
 
@@ -125,7 +165,8 @@ public sealed record RuntimeAcceptedModelSelection(
         foreach (var property in model.EnumerateObject())
         {
             if (property.Name is not ("reference" or "sourceMode" or "credentialReference" or
-                    "credentialIdentity" or "connectionId" or "reasoningEffort" or "modelBindingPin") ||
+                    "credentialIdentity" or "connectionId" or "reasoningEffort" or "modelBindingPin" or
+                    "providerBindingRevision") ||
                 !properties.Add(property.Name))
                 throw Invalid();
         }
@@ -217,15 +258,60 @@ public sealed record RuntimeAcceptedModelSelection(
                 throw Invalid();
             }
         }
+        ModelProviderBindingRevision? providerBinding = null;
+        if (model.TryGetProperty("providerBindingRevision", out var suppliedProviderBinding) &&
+            suppliedProviderBinding.ValueKind != JsonValueKind.Null)
+        {
+            try
+            {
+                providerBinding = suppliedProviderBinding.Deserialize<ModelProviderBindingRevision>(
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                    {
+                        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                        Converters =
+                        {
+                            new JsonStringEnumConverter<ModelProviderBindingScope>(JsonNamingPolicy.CamelCase)
+                        }
+                    }) ?? throw Invalid();
+                RuntimeModelBindingsResolver.ValidateProviderBinding(providerBinding);
+            }
+            catch (JsonException)
+            {
+                throw Invalid();
+            }
+            catch (ArgumentException)
+            {
+                throw Invalid();
+            }
+        }
         if ((pin?.ProviderId is null) != (credentialIdentity is null) ||
             credentialIdentity is { } identity &&
             (sourceMode != ModelSourceMode.Byok ||
              credential is null ||
              !IsValidIdentity(identity) ||
              identity.ProviderId != referenceValue ||
-             pin!.ProviderId != identity.ProviderId))
+             pin!.ProviderId != identity.ProviderId) ||
+            providerBinding is not null &&
+                (sourceMode != ModelSourceMode.Byok ||
+                 credential is null ||
+                 credentialIdentity is null ||
+                 providerBinding.ProviderId != referenceValue ||
+                 providerBinding.CredentialVersion != credential.Version ||
+                 providerBinding.CredentialReference != credential ||
+                 providerBinding.CredentialIdentity != credentialIdentity ||
+                 pin != RuntimeModelBindingsResolver.Pin(providerBinding, reasoningEffort)) ||
+            providerBinding is null &&
+                (credentialIdentity is not null || pin?.ProviderId is not null))
             throw Invalid();
-        return new(referenceValue, reasoningEffort, sourceMode, credential, connectionId, pin, credentialIdentity);
+        return new(
+            referenceValue,
+            reasoningEffort,
+            sourceMode,
+            credential,
+            connectionId,
+            pin,
+            credentialIdentity,
+            providerBinding);
     }
 
     /// <summary>Fields extracted from one accepted model selection after shape validation.</summary>
@@ -236,7 +322,8 @@ public sealed record RuntimeAcceptedModelSelection(
         SecretRef? CredentialReference,
         Guid? ConnectionId,
         RuntimeModelBindingPin? ModelBindingPin,
-        ModelCredentialIdentity? CredentialIdentity);
+        ModelCredentialIdentity? CredentialIdentity,
+        ModelProviderBindingRevision? ProviderBindingRevision);
 
     /// <summary>
     /// For an object entry, returns true only when it has one object selection and one recognized string
@@ -250,6 +337,8 @@ public sealed record RuntimeAcceptedModelSelection(
     {
         selection = default;
         connectionScope = default;
+        if (entry.ValueKind != JsonValueKind.Object)
+            return false;
         var seenSelection = false;
         var seenScope = false;
         foreach (var property in entry.EnumerateObject())
@@ -305,6 +394,19 @@ public sealed record RuntimeAcceptedModelSelection(
 
     private static RuntimeAuthorizationException Invalid() =>
         new("runtime_accepted_model_selection_invalid");
+
+    internal static bool SelectionsEqual(
+        RuntimeAcceptedModelSelection left, RuntimeAcceptedModelSelection right) =>
+        left.Reference == right.Reference &&
+        left.SourceMode == right.SourceMode &&
+        left.CredentialReference == right.CredentialReference &&
+        left.ConnectionId == right.ConnectionId &&
+        left.ConnectionScope == right.ConnectionScope &&
+        left.ReasoningEffort == right.ReasoningEffort &&
+        left.CredentialIdentity == right.CredentialIdentity &&
+        left.ModelBindingPin == right.ModelBindingPin &&
+        RuntimeModelBindingsResolver.ProviderBindingsEqual(
+            left.ProviderBindingRevision, right.ProviderBindingRevision);
 
     private static bool IsValidIdentity(ModelCredentialIdentity identity)
     {

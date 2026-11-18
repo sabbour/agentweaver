@@ -84,6 +84,16 @@ The Host later checks the accepted pin before SDK startup and verifies actual na
 The model ID must match the accepted model. Any provider ID returned by the SDK or context metadata must match the accepted BYOK provider; when the SDK omits provider attribution, it remains unknown rather than being treated as a mismatch.
 BYOK token pricing cannot substitute for hosted Copilot credit admission.
 
+Revision-backed BYOK selections carry the exact provider revision, credential
+slot identity and `SecretRef`, model pin, and Events rate-card pin. Before first
+dispatch, Orchestrator admits every effective selection, including task
+overrides, against its exact card. It delivers each verified admission with the
+matching model selection to AgentHost. Events qualifies each BYOK cost pin by
+provider and model identity while keeping the aggregate `byok.tokens` budget
+meter unchanged. Hosted Copilot quote status does not replace the existing
+hard USD BYOK budget: a valid BYOK card admission can proceed, while unpriced
+BYOK usage still blocks dispatch under that hard budget.
+
 Explicit-event forks require the pinned provider's `sessions.events.fork` capability
 and a committed source event matched to its session-bound cursor. Events rechecks the
 Orchestrator's admission receipt inside the fork transaction, then atomically persists

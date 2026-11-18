@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -9,6 +10,13 @@ namespace Agentweaver.Projects.Config;
 
 public sealed class ModelProviderDraftService
 {
+    private static readonly JsonSerializerOptions RateCardPinJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        MaxDepth = 16,
+    };
+
     private readonly ProjectsConfigDbContext db;
     private readonly TimeProvider timeProvider;
     private readonly IRuntimeRateCardOwnerClient? runtimeRateCardOwnerClient;
@@ -132,7 +140,9 @@ public sealed class ModelProviderDraftService
             metadata.WireApi,
             metadata.AzureApiVersion,
             metadata.ReasoningEfforts,
-            metadata.PromptCapacityTokens);
+            metadata.PromptCapacityTokens,
+            metadata.RateCardId,
+            metadata.RateCardVersion);
         var requestFingerprint = Hash(new SaveFingerprint(fingerprintInput, request.ExpectedRevision));
         var configurationHash = Hash(fingerprintInput);
 
@@ -169,13 +179,18 @@ public sealed class ModelProviderDraftService
             throw ModelProviderDraftException.Conflict();
         }
 
-        var currentCredentialVersion = current is null
+        var currentCredential = current is null
             ? null
             : await db.ModelProviderDraftRevisions.AsNoTracking()
                 .Where(revision =>
                     revision.ProviderId == providerId &&
                     revision.ProviderRevision == current.CurrentRevision)
-                .Select(revision => revision.CredentialVersion)
+                .Select(revision => new
+                {
+                    revision.CredentialVersion,
+                    revision.CredentialSlotId,
+                    revision.CredentialSecretId
+                })
                 .SingleAsync(cancellationToken)
                 .ConfigureAwait(false);
         var nextRevision = request.ExpectedRevision + 1;
@@ -196,8 +211,12 @@ public sealed class ModelProviderDraftService
             AzureApiVersion = metadata.AzureApiVersion,
             ReasoningEfforts = metadata.ReasoningEfforts,
             PromptCapacityTokens = metadata.PromptCapacityTokens,
+            RateCardId = metadata.RateCardId,
+            RateCardVersion = metadata.RateCardVersion,
             ConfigurationHash = configurationHash,
-            CredentialVersion = currentCredentialVersion,
+            CredentialVersion = currentCredential?.CredentialVersion,
+            CredentialSlotId = currentCredential?.CredentialSlotId,
+            CredentialSecretId = currentCredential?.CredentialSecretId,
             CreatedByActorId = caller.ActorId,
             CreatedAt = now,
         };
@@ -312,6 +331,8 @@ public sealed class ModelProviderDraftService
             request.ProjectId,
             request.ProviderId,
             request.CredentialVersion,
+            request.CredentialIdentity,
+            request.CredentialReference,
             actorId));
         var replay = await ReadReplayAsync(
                 request.OperationId,
@@ -352,11 +373,13 @@ public sealed class ModelProviderDraftService
                     revision.ProviderRevision == current.CurrentRevision,
                 cancellationToken)
             .ConfigureAwait(false);
-        var state = currentRevision.RateCardId is { } rateCardId &&
+        var rateCardPin = currentRevision.RateCardId is { } rateCardId &&
             currentRevision.RateCardVersion is { } rateCardVersion &&
-            runtimeRateCardOwnerClient is not null &&
-            await runtimeRateCardOwnerClient.VerifyAsync(rateCardId, rateCardVersion, cancellationToken)
-                .ConfigureAwait(false)
+            runtimeRateCardOwnerClient is not null
+                ? await runtimeRateCardOwnerClient.ReadPinAsync(rateCardId, rateCardVersion, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+        var state = rateCardPin is not null
             ? ModelProviderDraftState.Available
             : ModelProviderDraftState.Draft;
         var nextRevision = request.ExpectedProviderRevision + 1;
@@ -379,8 +402,13 @@ public sealed class ModelProviderDraftService
             PromptCapacityTokens = currentRevision.PromptCapacityTokens,
             ConfigurationHash = currentRevision.ConfigurationHash,
             CredentialVersion = request.CredentialVersion,
+            CredentialSlotId = request.CredentialIdentity.CredentialSlotId,
+            CredentialSecretId = request.CredentialReference.Id,
             RateCardId = currentRevision.RateCardId,
             RateCardVersion = currentRevision.RateCardVersion,
+            RateCardPinJson = rateCardPin is null
+                ? null
+                : JsonSerializer.Serialize(rateCardPin, RateCardPinJsonOptions),
             CreatedByActorId = actorId,
             CreatedAt = now,
         };
@@ -588,6 +616,19 @@ public sealed class ModelProviderDraftService
             throw ModelProviderDraftException.InvalidRequest("Azure API version is too long.");
         if (request.PromptCapacityTokens is <= 0)
             throw ModelProviderDraftException.InvalidRequest("Prompt capacity must be positive.");
+        if ((request.RateCardId is null) != (request.RateCardVersion is null))
+            throw ModelProviderDraftException.InvalidRequest("Rate-card ID and version must be set together.");
+        if (request.RateCardId is not null)
+        {
+            try
+            {
+                RuntimeRateCardReadContract.ValidateIdentity(request.RateCardId, request.RateCardVersion!);
+            }
+            catch (ArgumentException)
+            {
+                throw ModelProviderDraftException.InvalidRequest("Rate-card ID and version are invalid.");
+            }
+        }
 
         var reasoningEfforts = request.ReasoningEfforts.IsDefault
             ? []
@@ -608,7 +649,9 @@ public sealed class ModelProviderDraftService
             request.WireApi,
             request.AzureApiVersion,
             reasoningEfforts.Order(StringComparer.Ordinal).ToArray(),
-            request.PromptCapacityTokens);
+            request.PromptCapacityTokens,
+            request.RateCardId,
+            request.RateCardVersion);
     }
 
     private static void ValidateProviderId(string providerId)
@@ -642,10 +685,8 @@ public sealed class ModelProviderDraftService
         return ToDraft(ModelProviderDraftState.Draft, replay);
     }
 
-    private static ModelProviderDraft ToDraft(
-        ModelProviderDraftState state,
-        ModelProviderDraftRevisionRecord revision) =>
-        new(state, new ModelProviderBindingRevision(
+    internal static ModelProviderBindingRevision ToBinding(ModelProviderDraftRevisionRecord revision) =>
+        new(
             ModelProviderBindingRevision.CurrentContractVersion,
             revision.ProviderId,
             revision.Scope,
@@ -662,7 +703,43 @@ public sealed class ModelProviderDraftService
             revision.CredentialVersion,
             revision.RateCardId,
             revision.RateCardVersion,
-            revision.ConfigurationHash));
+            revision.ConfigurationHash)
+        {
+            CredentialIdentity = revision.CredentialSlotId is { } credentialSlotId
+                ? new(credentialSlotId, revision.Scope, revision.ProjectId, revision.ProviderId)
+                : null,
+            CredentialReference = revision.CredentialSecretId is { } credentialSecretId &&
+                                  revision.CredentialVersion is { } credentialVersion
+                ? new(credentialSecretId, credentialVersion)
+                : null,
+            RateCardPin = ReadRateCardPin(revision)
+        };
+
+    private static ModelProviderDraft ToDraft(
+        ModelProviderDraftState state,
+        ModelProviderDraftRevisionRecord revision) =>
+        new(state, ToBinding(revision));
+
+    private static RuntimeRateCardPin? ReadRateCardPin(ModelProviderDraftRevisionRecord revision)
+    {
+        if (revision.RateCardPinJson is null)
+            return null;
+        try
+        {
+            var pin = JsonSerializer.Deserialize<RuntimeRateCardPin>(
+                revision.RateCardPinJson, RateCardPinJsonOptions)
+                ?? throw new JsonException("The rate-card pin is empty.");
+            RuntimeRateCardReadContract.ValidatePin(pin);
+            if (pin.RateCardId != revision.RateCardId ||
+                pin.RateCardVersion != revision.RateCardVersion)
+                throw new JsonException("The rate-card pin does not match the provider revision.");
+            return pin;
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            throw new InvalidOperationException("The stored runtime rate-card pin is invalid.", exception);
+        }
+    }
 
     private static ModelProviderCredentialPublicationReceipt ToCredentialPublicationReceipt(
         ModelProviderDraft draft,
@@ -677,7 +754,11 @@ public sealed class ModelProviderDraftService
             binding.ProviderRevision,
             binding.CredentialVersion
                 ?? throw new InvalidOperationException("The published provider revision has no credential version."),
-            binding.ConfigurationHash);
+            binding.ConfigurationHash,
+            binding.CredentialIdentity
+                ?? throw new InvalidOperationException("The published provider revision has no credential identity."),
+            binding.CredentialReference
+                ?? throw new InvalidOperationException("The published provider revision has no credential reference."));
     }
 
     private void DetachTrackedProvider(string providerId)
@@ -716,7 +797,9 @@ public sealed class ModelProviderDraftService
         string? WireApi,
         string? AzureApiVersion,
         string[] ReasoningEfforts,
-        int? PromptCapacityTokens);
+        int? PromptCapacityTokens,
+        string? RateCardId,
+        string? RateCardVersion);
 
     private sealed record MetadataFingerprint(
         string ProviderId,
@@ -729,7 +812,9 @@ public sealed class ModelProviderDraftService
         string? WireApi,
         string? AzureApiVersion,
         string[] ReasoningEfforts,
-        int? PromptCapacityTokens);
+        int? PromptCapacityTokens,
+        string? RateCardId,
+        string? RateCardVersion);
 
     private sealed record SaveFingerprint(MetadataFingerprint Metadata, long ExpectedRevision);
 
@@ -741,5 +826,7 @@ public sealed class ModelProviderDraftService
         string? ProjectId,
         string ProviderId,
         string CredentialVersion,
+        ModelCredentialIdentity CredentialIdentity,
+        SecretRef CredentialReference,
         string ActorId);
 }
