@@ -613,6 +613,13 @@ explicitly approved step after migration. Without those grants, the service
 can't read its tables and fails at startup. See
 [Applying the Projects & Config runtime grants](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-the-projects--config-runtime-grants).
 
+### Skill trust-evidence ledger
+
+The Projects runtime principal receives `SELECT` and `INSERT` on
+`projects_config.project_skill_trust_evidence`. It receives no `UPDATE` or
+`DELETE` grant, and database triggers reject updates, deletes, and truncates.
+The table stores immutable scan reports and source metadata, not Skill text.
+
 ### Runtime authority writes
 
 The runtime database principal can write project role assignments only
