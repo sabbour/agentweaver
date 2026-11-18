@@ -44,6 +44,13 @@ namespace Agentweaver.Projects.Config.Migrations
                 USING rate_card_version::bigint;
                 """);
 
+            migrationBuilder.Sql(
+                """
+                UPDATE projects_config.model_providers
+                SET state = 'Draft'
+                WHERE state = 'Available';
+                """);
+
             migrationBuilder.AddCheckConstraint(
                 name: "ck_model_providers_state",
                 schema: "projects_config",

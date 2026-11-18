@@ -575,6 +575,57 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task DowngradeReturnsAvailableProviderToDraftBeforeRestoringStateConstraint()
+    {
+        await using var db = CreateDbContext();
+        await using var migrationDb = CreateMigrationDbContext();
+        var migrator = migrationDb.GetService<IMigrator>();
+        var latestMigration = db.Database.GetMigrations().Last();
+        var providerId = "rollback-provider-" + Guid.NewGuid().ToString("N");
+
+        await using (var connection = await fixture.MigrationDataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand(
+            """
+            INSERT INTO projects_config.model_providers
+                (provider_id, scope, project_id, display_name, type, base_url, deployment,
+                 reasoning_efforts, prompt_capacity_tokens, state, current_revision,
+                 created_by_actor_id, created_at, updated_by_actor_id, updated_at)
+            VALUES
+                (@provider_id, 'Platform', NULL, 'Rollback provider', 'OpenAICompatible',
+                 'https://provider.example.com', 'model', ARRAY[]::text[], NULL, 'Available', 1,
+                 'migration-test', now(), 'migration-test', now())
+            """,
+            connection))
+        {
+            insert.Parameters.AddWithValue("provider_id", providerId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            await migrator.MigrateAsync("20261117130000_AddProjectGovernanceDecisionChains");
+
+            await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+            await using var read = new NpgsqlCommand(
+                "SELECT state FROM projects_config.model_providers WHERE provider_id = @provider_id",
+                connection);
+            read.Parameters.AddWithValue("provider_id", providerId);
+            Assert.Equal("Draft", await read.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await migrator.MigrateAsync(latestMigration);
+            await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+            await using var delete = new NpgsqlCommand(
+                "DELETE FROM projects_config.model_providers WHERE provider_id = @provider_id",
+                connection);
+            delete.Parameters.AddWithValue("provider_id", providerId);
+            await delete.ExecuteNonQueryAsync();
+            await RestoreRuntimeGrantsAsync();
+        }
+    }
+
+    [Fact]
     public async Task RejectsNewProjectProviderOverridesAndPreservesButIgnoresLegacyValues()
     {
         await using var db = CreateDbContext();
