@@ -32,6 +32,28 @@ namespace Agentweaver.Projects.Config.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM projects_config.model_provider_revisions
+                        WHERE rate_card_version IS NOT NULL
+                          AND CASE
+                                WHEN rate_card_version ~ '^-?[0-9]+$'
+                                THEN rate_card_version::numeric < -9223372036854775808::numeric
+                                  OR rate_card_version::numeric > 9223372036854775807::numeric
+                                ELSE TRUE
+                              END
+                    ) THEN
+                        RAISE EXCEPTION 'cannot downgrade provider revisions with rate-card versions that are not signed 64-bit integers'
+                            USING ERRCODE = '55000';
+                    END IF;
+                END;
+                $$;
+                """);
+
             migrationBuilder.DropCheckConstraint(
                 name: "ck_model_providers_state",
                 schema: "projects_config",

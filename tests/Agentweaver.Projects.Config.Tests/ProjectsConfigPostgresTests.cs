@@ -626,6 +626,117 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task DowngradeRefusesUnrepresentableRateCardVersionsWithoutChangingSchema()
+    {
+        await using var db = CreateDbContext();
+        await using var migrationDb = CreateMigrationDbContext();
+        var migrator = migrationDb.GetService<IMigrator>();
+        var latestMigration = db.Database.GetMigrations().Last();
+        var providerId = "rollback-version-provider-" + Guid.NewGuid().ToString("N");
+        var operationId = Guid.NewGuid();
+        const string cardId = "manual:runtime-card";
+        const string cardVersion = "v1";
+
+        await using (var connection = await fixture.MigrationDataSource.OpenConnectionAsync())
+        {
+            await using var insertProvider = new NpgsqlCommand(
+                """
+                INSERT INTO projects_config.model_providers
+                    (provider_id, scope, project_id, display_name, type, base_url, deployment,
+                     reasoning_efforts, prompt_capacity_tokens, state, current_revision,
+                     created_by_actor_id, created_at, updated_by_actor_id, updated_at)
+                VALUES
+                    (@provider_id, 'Platform', NULL, 'Rollback provider', 'OpenAICompatible',
+                     'https://provider.example.com', 'model', ARRAY[]::text[], NULL, 'Draft', 1,
+                     'migration-test', now(), 'migration-test', now())
+                """,
+                connection);
+            insertProvider.Parameters.AddWithValue("provider_id", providerId);
+            await insertProvider.ExecuteNonQueryAsync();
+
+            await using var insertRevision = new NpgsqlCommand(
+                """
+                INSERT INTO projects_config.model_provider_revisions
+                    (provider_id, provider_revision, scope, project_id, operation_id,
+                     request_fingerprint, display_name, type, base_url, deployment,
+                     reasoning_efforts, configuration_hash, rate_card_id, rate_card_version,
+                     created_by_actor_id, created_at)
+                VALUES
+                    (@provider_id, 1, 'Platform', NULL, @operation_id,
+                     @request_fingerprint, 'Rollback provider', 'OpenAICompatible',
+                     'https://provider.example.com', 'model', ARRAY[]::text[],
+                     @configuration_hash, @rate_card_id, @rate_card_version,
+                     'migration-test', now())
+                """,
+                connection);
+            insertRevision.Parameters.AddWithValue("provider_id", providerId);
+            insertRevision.Parameters.AddWithValue("operation_id", operationId);
+            insertRevision.Parameters.AddWithValue("request_fingerprint", new string('a', 64));
+            insertRevision.Parameters.AddWithValue("configuration_hash", new string('b', 64));
+            insertRevision.Parameters.AddWithValue("rate_card_id", cardId);
+            insertRevision.Parameters.AddWithValue("rate_card_version", cardVersion);
+            await insertRevision.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var refused = await Assert.ThrowsAsync<PostgresException>(
+                () => migrator.MigrateAsync("20261118062007_AddProjectSkillTrustEvidence"));
+
+            Assert.Equal("55000", refused.SqlState);
+            Assert.Contains("cannot downgrade provider revisions", refused.MessageText, StringComparison.Ordinal);
+            Assert.Contains(latestMigration, await db.Database.GetAppliedMigrationsAsync());
+            await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+            await using var read = new NpgsqlCommand(
+                """
+                SELECT rate_card_id, rate_card_version
+                FROM projects_config.model_provider_revisions
+                WHERE provider_id = @provider_id AND provider_revision = 1
+                """,
+                connection);
+            read.Parameters.AddWithValue("provider_id", providerId);
+            await using var reader = await read.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(cardId, reader.GetString(0));
+            Assert.Equal(cardVersion, reader.GetString(1));
+        }
+        finally
+        {
+            await migrator.MigrateAsync(latestMigration);
+            await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await using (var disableTrigger = new NpgsqlCommand(
+                "ALTER TABLE projects_config.model_provider_revisions DISABLE TRIGGER model_provider_revisions_immutable",
+                connection,
+                transaction))
+                await disableTrigger.ExecuteNonQueryAsync();
+            await using (var deleteRevision = new NpgsqlCommand(
+                "DELETE FROM projects_config.model_provider_revisions WHERE provider_id = @provider_id",
+                connection,
+                transaction))
+            {
+                deleteRevision.Parameters.AddWithValue("provider_id", providerId);
+                await deleteRevision.ExecuteNonQueryAsync();
+            }
+            await using (var enableTrigger = new NpgsqlCommand(
+                "ALTER TABLE projects_config.model_provider_revisions ENABLE TRIGGER model_provider_revisions_immutable",
+                connection,
+                transaction))
+                await enableTrigger.ExecuteNonQueryAsync();
+            await using (var deleteProvider = new NpgsqlCommand(
+                "DELETE FROM projects_config.model_providers WHERE provider_id = @provider_id",
+                connection,
+                transaction))
+            {
+                deleteProvider.Parameters.AddWithValue("provider_id", providerId);
+                await deleteProvider.ExecuteNonQueryAsync();
+            }
+            await transaction.CommitAsync();
+            await RestoreRuntimeGrantsAsync();
+        }
+    }
+
+    [Fact]
     public async Task RejectsNewProjectProviderOverridesAndPreservesButIgnoresLegacyValues()
     {
         await using var db = CreateDbContext();
