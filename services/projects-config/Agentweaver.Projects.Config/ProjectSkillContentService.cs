@@ -29,6 +29,12 @@ public sealed class SkillContentServiceException(string code, string message, in
         new("skill_import_idempotency_conflict", "The idempotency key was used for a different skill import.",
             StatusCodes.Status409Conflict);
 
+    /// <summary>Creates a conflict when an evidence key is reused for different content or scan results.</summary>
+    public static SkillContentServiceException TrustEvidenceIdempotencyConflict() =>
+        new("skill_trust_evidence_idempotency_conflict",
+            "The idempotency key was used for different Skill trust evidence.",
+            StatusCodes.Status409Conflict);
+
     /// <summary>Creates a service-unavailable response when object storage is not configured.</summary>
     public static SkillContentServiceException Unavailable() =>
         new("skill_content_unavailable", "Skill content storage is not configured.",
@@ -291,6 +297,149 @@ public sealed class SkillContentService(
         catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.SerializationFailure)
         {
             throw SkillContentServiceException.Conflict("The skill import conflicted with a concurrent update.");
+        }
+    }
+
+    internal async Task<ProjectSkillTrustEvidenceInput> ReadTrustEvidenceInputAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string skillId,
+        long revision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        RequireProjectId(projectId);
+        RequireIdentifier(skillId, nameof(skillId));
+        if (revision <= 0)
+            throw SkillContentServiceException.Invalid("Skill revision must be positive.");
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+
+        var stored = await FindAvailableRevisionAsync(
+            projectId, skillId, revision, cancellationToken).ConfigureAwait(false);
+        var store = objects ?? throw SkillContentServiceException.Unavailable();
+        var content = await store.ReadVerifiedAsync(
+            new ObjectKey(stored.ObjectKey), stored.ContentDigest, cancellationToken).ConfigureAwait(false);
+        if (content.Name != stored.Name ||
+            content.Description != stored.Description ||
+            content.Resources.Length != stored.ResourceCount ||
+            SemanticByteCount(content) != stored.TotalBytes)
+            throw new SkillContentObjectStoreException(
+                SkillContentObjectStoreException.IntegrityErrorCode,
+                "The immutable skill revision metadata does not match its stored content.");
+
+        await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+        _ = await FindAvailableRevisionAsync(
+            projectId, skillId, revision, stored.ContentDigest, cancellationToken).ConfigureAwait(false);
+        return new ProjectSkillTrustEvidenceInput(stored, content);
+    }
+
+    internal async Task<ProjectSkillTrustEvidenceSaveResult> PersistTrustEvidenceAsync(
+        ProjectAuthorizationContext caller,
+        ProjectSkillContentRevisionRecord revisionSnapshot,
+        string idempotencyKey,
+        string requestFingerprint,
+        byte[] reportSetJson,
+        string reportSetSha256,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(revisionSnapshot);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        RequireIdempotencyKey(idempotencyKey);
+        RequireHash(requestFingerprint);
+        RequireHash(reportSetSha256);
+        if (reportSetJson is null || reportSetJson.Length is 0 or > 1_048_576 ||
+            Hash(reportSetJson) != reportSetSha256)
+            throw SkillContentServiceException.Invalid("The Skill trust report set is invalid.");
+        await EnsureWriteAccessAsync(caller, revisionSnapshot.ProjectId, cancellationToken).ConfigureAwait(false);
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureWriteAccessAsync(caller, revisionSnapshot.ProjectId, cancellationToken).ConfigureAwait(false);
+        var current = await FindAvailableRevisionAsync(
+            revisionSnapshot.ProjectId,
+            revisionSnapshot.SkillId,
+            revisionSnapshot.Revision,
+            revisionSnapshot.ContentDigest,
+            cancellationToken).ConfigureAwait(false);
+        if (!SameSourceMetadata(revisionSnapshot, current))
+            throw SkillContentServiceException.Conflict("The stored Skill source metadata changed during scanning.");
+
+        var existing = await db.SkillTrustEvidence.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ProjectId == current.ProjectId &&
+                item.ActorIssuer == caller.Issuer &&
+                item.ActorId == caller.ActorId &&
+                item.IdempotencyKey == idempotencyKey,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
+        {
+            if (existing.SkillId != current.SkillId ||
+                existing.Revision != current.Revision ||
+                existing.ContentDigest != current.ContentDigest ||
+                existing.SourceId != current.SourceId ||
+                existing.SourceRevision != current.SourceRevision ||
+                existing.RequestedRef != current.RequestedRef ||
+                existing.ResolvedCommitSha != current.ResolvedCommitSha ||
+                existing.SelectedPath != current.SelectedPath ||
+                existing.RequestFingerprint != requestFingerprint)
+                throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new ProjectSkillTrustEvidenceSaveResult(existing, Replayed: true);
+        }
+
+        var record = new ProjectSkillTrustEvidenceRecord
+        {
+            EvidenceId = Guid.NewGuid(),
+            ProjectId = current.ProjectId,
+            SkillId = current.SkillId,
+            Revision = current.Revision,
+            ActorIssuer = caller.Issuer,
+            ActorId = caller.ActorId,
+            IdempotencyKey = idempotencyKey,
+            RequestFingerprint = requestFingerprint,
+            ContentDigest = current.ContentDigest,
+            SourceId = current.SourceId,
+            SourceRevision = current.SourceRevision,
+            RequestedRef = current.RequestedRef,
+            ResolvedCommitSha = current.ResolvedCommitSha,
+            SelectedPath = current.SelectedPath,
+            ReportSetJson = reportSetJson.ToArray(),
+            ReportSetSha256 = reportSetSha256,
+            // PostgreSQL stores timestamps at microsecond precision, so retries use one stable decision time.
+            CreatedAt = ToPostgresTimestampPrecision(timeProvider.GetUtcNow()),
+        };
+        db.SkillTrustEvidence.Add(record);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await EnsureWriteAccessAsync(caller, current.ProjectId, cancellationToken).ConfigureAwait(false);
+            _ = await FindAvailableRevisionAsync(
+                current.ProjectId,
+                current.SkillId,
+                current.Revision,
+                current.ContentDigest,
+                cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new ProjectSkillTrustEvidenceSaveResult(record, Replayed: false);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw SkillContentServiceException.Conflict("The Skill trust evidence changed concurrently.");
+        }
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        {
+            throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
+        }
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.SerializationFailure)
+        {
+            throw SkillContentServiceException.Conflict("The Skill trust evidence conflicted with a concurrent update.");
         }
     }
 
@@ -657,6 +806,14 @@ public sealed class SkillContentService(
         await FindAvailableRevisionAsync(db, projectId, skillId, revision, contentDigest, cancellationToken)
             .ConfigureAwait(false);
 
+    private async Task<ProjectSkillContentRevisionRecord> FindAvailableRevisionAsync(
+        string projectId,
+        string skillId,
+        long revision,
+        CancellationToken cancellationToken) =>
+        await FindAvailableRevisionAsync(db, projectId, skillId, revision, cancellationToken)
+            .ConfigureAwait(false);
+
     /// <summary>Loads the exact digest-pinned revision and rejects it if a revocation marker exists.</summary>
     private static async Task<ProjectSkillContentRevisionRecord> FindAvailableRevisionAsync(
         ProjectsConfigDbContext db,
@@ -666,12 +823,25 @@ public sealed class SkillContentService(
         string contentDigest,
         CancellationToken cancellationToken)
     {
+        var stored = await FindAvailableRevisionAsync(db, projectId, skillId, revision, cancellationToken)
+            .ConfigureAwait(false);
+        if (!string.Equals(stored.ContentDigest, contentDigest, StringComparison.Ordinal))
+            throw ProjectConfigException.NotFound();
+        return stored;
+    }
+
+    private static async Task<ProjectSkillContentRevisionRecord> FindAvailableRevisionAsync(
+        ProjectsConfigDbContext db,
+        string projectId,
+        string skillId,
+        long revision,
+        CancellationToken cancellationToken)
+    {
         var stored = await db.SkillContentRevisions.AsNoTracking()
             .SingleOrDefaultAsync(item =>
                 item.ProjectId == projectId && item.SkillId == skillId && item.Revision == revision,
                 cancellationToken).ConfigureAwait(false);
-        if (stored is null ||
-            !string.Equals(stored.ContentDigest, contentDigest, StringComparison.Ordinal))
+        if (stored is null)
             throw ProjectConfigException.NotFound();
         if (await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
             item.ProjectId == projectId && item.SkillId == skillId && item.Revision == revision,
@@ -679,6 +849,19 @@ public sealed class SkillContentService(
             throw SkillContentServiceException.Conflict("The selected skill revision has been revoked.");
         return stored;
     }
+
+    private static bool SameSourceMetadata(
+        ProjectSkillContentRevisionRecord left,
+        ProjectSkillContentRevisionRecord right) =>
+        left.ProjectId == right.ProjectId &&
+        left.SkillId == right.SkillId &&
+        left.Revision == right.Revision &&
+        left.ContentDigest == right.ContentDigest &&
+        left.SourceId == right.SourceId &&
+        left.SourceRevision == right.SourceRevision &&
+        left.RequestedRef == right.RequestedRef &&
+        left.ResolvedCommitSha == right.ResolvedCommitSha &&
+        left.SelectedPath == right.SelectedPath;
 
     /// <summary>Returns a saved import receipt only when actor, key, and complete request digest all match.</summary>
     private static SkillContentImportReceipt ReadIdempotentReceipt(
@@ -720,6 +903,12 @@ public sealed class SkillContentService(
 
     private static string Hash(ReadOnlySpan<byte> content) =>
         Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+
+    private static DateTimeOffset ToPostgresTimestampPrecision(DateTimeOffset value)
+    {
+        var utcTicks = value.UtcDateTime.Ticks;
+        return new DateTimeOffset(utcTicks - utcTicks % 10, TimeSpan.Zero);
+    }
 
     /// <summary>Encodes versioned page-order, project, size, and last-row values into an opaque URL-safe cursor.</summary>
     private static string EncodeInventoryCursor(string projectId, int pageSize, string skillId, long revision)

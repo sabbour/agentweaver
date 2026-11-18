@@ -2191,3 +2191,12 @@ that content is safe or unsafe.
 The pinned Python evaluator at AGT commit
 `48f04e5ad1efd4f2e5692d4b67def2e0f99a6870` remains separate. It has 17 vectors
 and a 100,000-character input limit; its output is not part of the .NET report.
+
+The internal Projects & Config trust-evidence service scans one stored,
+non-revoked Skill revision. It copies source metadata as stored and reports
+`Authored` provenance; those fields do not verify Git origin. The idempotency
+fingerprint binds the project, actor, key, content digest, stored source fields,
+and complete scan report except `EvaluatedAt`. An exact retry returns the saved
+report set. Reusing the key with a changed report returns `409`. A new report
+set appends a pending `skill.trust.evidence.v1` governance decision. This
+service has no HTTP route and does not decide assignment or runtime admission.

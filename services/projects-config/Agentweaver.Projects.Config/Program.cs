@@ -225,6 +225,8 @@ builder.Services.AddScoped<SkillContentService>(services => new SkillContentServ
     services.GetService<SkillContentObjectStore>(),
     services.GetRequiredService<ProjectsConfigService>(),
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<ProjectGovernanceDecisionStore>();
+builder.Services.AddScoped<ProjectSkillTrustEvidenceService>();
 builder.Services.AddScoped<ISkillContentService>(services => services.GetRequiredService<SkillContentService>());
 builder.Services.AddScoped<ISkillAssignmentService>(services => services.GetRequiredService<SkillContentService>());
 builder.Services.AddSingleton(TimeProvider.System);

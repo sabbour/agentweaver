@@ -57,6 +57,18 @@ sequenceDiagram
     end
 ```
 
+## Skill trust evidence
+
+Projects stores Skills as immutable content revisions. Its internal
+trust-evidence service scans one stored, non-revoked revision and records the
+reports in an append-only evidence table. It checks current project write
+authority and binds retries to the content digest, stored source fields, and
+complete report, except `EvaluatedAt`. Source metadata is copied as stored; it
+does not verify Git origin. A new report set appends a pending governance
+decision. The evidence does not assign a Skill or admit a run, and the service
+has no public route. See the [Skill marketplace architecture](skill-marketplace.md#skill-trust-evidence)
+for the scan and replay contract.
+
 ## BYOK credential publication
 
 The public provider routes accept metadata, not credentials or rate-card

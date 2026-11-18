@@ -118,3 +118,8 @@ internal sealed record ProjectGovernanceDecisionReceipt(
     string PreviousHash,
     string RecordHash,
     bool Replayed);
+
+internal sealed record ProjectGovernanceDecisionStreamHeadSnapshot(
+    long Sequence,
+    long FenceGeneration,
+    string HeadHash);

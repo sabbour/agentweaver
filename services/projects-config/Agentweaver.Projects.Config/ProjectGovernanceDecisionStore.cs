@@ -17,6 +17,66 @@ internal sealed class ProjectGovernanceDecisionStore(
     private static readonly string GenesisHash = new('0', 64);
     private static readonly JsonSerializerOptions OutboxJsonOptions = new(JsonSerializerDefaults.Web);
 
+    internal async Task<ProjectGovernanceDecisionReceipt> AppendWithCurrentHeadAsync(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId,
+        string idempotencyKey,
+        ProjectGovernanceDecisionInput decision,
+        CancellationToken cancellationToken)
+    {
+        ProjectConfigException? lastConflict = null;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var head = await ReadHeadAsync(
+                scopeType, scopeId, resourceType, resourceId, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await AppendAsync(
+                    new ProjectGovernanceDecisionAppendRequest(
+                        scopeType,
+                        scopeId,
+                        resourceType,
+                        resourceId,
+                        head.Sequence,
+                        head.FenceGeneration,
+                        head.HeadHash,
+                        idempotencyKey,
+                        decision),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (ProjectConfigException exception) when (exception.StatusCode == StatusCodes.Status409Conflict)
+            {
+                lastConflict = exception;
+            }
+        }
+
+        throw lastConflict ?? ProjectConfigException.Conflict("The governance decision stream head changed.");
+    }
+
+    private async Task<ProjectGovernanceDecisionStreamHeadSnapshot> ReadHeadAsync(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId,
+        CancellationToken cancellationToken)
+    {
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var head = await db.GovernanceDecisionStreamHeads.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId &&
+                item.ResourceType == resourceType &&
+                item.ResourceId == resourceId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return head is null
+            ? new ProjectGovernanceDecisionStreamHeadSnapshot(0, 0, GenesisHash)
+            : new ProjectGovernanceDecisionStreamHeadSnapshot(
+                head.Sequence, head.FenceGeneration, head.HeadHash);
+    }
+
     internal async Task<ProjectGovernanceDecisionReceipt> AppendAsync(
         ProjectGovernanceDecisionAppendRequest request,
         CancellationToken cancellationToken)

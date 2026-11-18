@@ -1027,6 +1027,7 @@ public sealed class P1PostgresInitializerTests
                     ],
                 },
                 GovernanceCheckpointTable(),
+                AppendOnlyTable("project_skill_trust_evidence"),
             ],
             Functions =
             [

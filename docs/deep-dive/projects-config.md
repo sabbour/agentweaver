@@ -30,7 +30,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
 | `ProjectBlueprintCatalog.cs`, `AgentSuiteBlueprintConverter.cs`, and `BlueprintPackages/` | 0.x blueprints, their AgentSuite conversion, and the ported 0.x package validator |
-| `ProjectSkillContentService.cs` and `ProjectMarketplaceSourceService.cs` | Imported skill content and source ownership |
+| `ProjectSkillContentService.cs`, `ProjectSkillTrustEvidenceService.cs`, and `ProjectMarketplaceSourceService.cs` | Imported skill content, internal scan evidence, and source ownership |
 | `ProjectsConfigMigrator.cs` | Explicit migration and runtime permission checks |
 
 All paths in this table are under
@@ -254,6 +254,17 @@ agents. Configuration validation checks these pins. An accepted run reads its
 assigned imported revisions, not later content from a marketplace source.
 Marketplace browsing and imported project content have different owners and
 lifetimes.
+
+The internal trust-evidence service scans the canonical `SKILL.md` and
+validated resources for one stored, non-revoked revision. Current project write
+authority is checked before and after the scan. The evidence copies source
+metadata as stored, uses `Authored` provenance, and does not verify Git origin.
+Its fingerprint binds the exact content digest and scan report, except
+`EvaluatedAt`, with the project, actor, idempotency key, and stored source
+fields. Exact retries return the saved reports; a changed report with the same
+key returns `409`. A new report set appends a pending governance decision. This
+evidence does not assign a Skill or admit a run, and the service has no public
+route.
 
 ### Recover from configuration errors
 

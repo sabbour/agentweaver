@@ -234,8 +234,11 @@ size limits before it writes the artifact.
 
 The Projects & Config scanner evaluates exact UTF-8 bytes with the pinned .NET
 AGT evaluator. Its report records the input hash, owner revision, source
-provenance, evaluator version, and vector coverage. The scan makes no network or
-model calls and does not admit a save or import.
+provenance, evaluator version, and vector coverage. The scanner makes no
+network or model calls and does not write database state. A separate internal
+trust-evidence service stores reports for one exact, non-revoked Skill revision.
+It does not change imported content or assignments, and it does not decide
+whether a Skill can be used in a run.
 
 Run these commands from the repository root. First install the Python tools:
 
@@ -254,6 +257,17 @@ The .NET tests check exact-byte hashing, owner and source provenance, input
 bounds, invalid UTF-8, evaluator errors, and report validation. The Python check
 confirms the pinned evaluator's separate 17-vector set and 100,000-character
 limit; it does not feed results into the .NET report.
+
+Run the PostgreSQL regressions for persisted Skill trust evidence:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PersistsExactSkillScanEvidenceAndPendingDecision|FullyQualifiedName~ExactReplayIgnoresEvaluationTimeButChangedReportConflicts|FullyQualifiedName~TrustEvidenceRequiresCurrentProjectOwnerAndUnrevokedRevision|FullyQualifiedName~TrustEvidenceReadsOnlyItsProjectWhenProjectsRunInReverseOrder"
+```
+
+These tests use the disposable PostgreSQL fixture. They check exact replay,
+changed-report conflicts, current authority, revocation, source metadata, and
+project-scoped reads. Each test owns its project and evidence rows, so the
+suite can run in either project order.
 
 ## Test the native ACS profile
 

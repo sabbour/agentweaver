@@ -2034,6 +2034,117 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("project_skill_import_idempotency", "projects_config");
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillTrustEvidenceRecord", b =>
+                {
+                    b.Property<Guid>("EvidenceId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("evidence_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("actor_issuer");
+
+                    b.Property<string>("ContentDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_digest");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<byte[]>("ReportSetJson")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("report_set");
+
+                    b.Property<string>("ReportSetSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("report_set_sha256");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("RequestedRef")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("requested_ref");
+
+                    b.Property<string>("ResolvedCommitSha")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("resolved_commit_sha");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("SelectedPath")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("selected_path");
+
+                    b.Property<string>("SkillId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("skill_id");
+
+                    b.Property<string>("SourceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("source_id");
+
+                    b.Property<string>("SourceRevision")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("source_revision");
+
+                    b.HasKey("EvidenceId");
+
+                    b.HasIndex("ProjectId", "SkillId", "Revision");
+
+                    b.HasIndex("ProjectId", "ActorIssuer", "ActorId", "IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_project_skill_trust_evidence_idempotency");
+
+                    b.ToTable("project_skill_trust_evidence", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_skill_trust_evidence_hashes", "request_fingerprint ~ '^[0-9a-f]{64}$' AND content_digest ~ '^[0-9a-f]{64}$' AND report_set_sha256 ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_project_skill_trust_evidence_report_size", "octet_length(report_set) BETWEEN 1 AND 1048576");
+
+                            t.HasCheckConstraint("ck_project_skill_trust_evidence_revision", "revision > 0");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectTenantMembershipRecord", b =>
                 {
                     b.Property<Guid>("MembershipId")
@@ -2292,6 +2403,15 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillTrustEvidenceRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId", "SkillId", "Revision")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

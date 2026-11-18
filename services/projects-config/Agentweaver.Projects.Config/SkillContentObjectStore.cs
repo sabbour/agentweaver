@@ -135,8 +135,7 @@ public sealed class SkillContentObjectStore(IObjectStore objectStore)
                 resources.Add(new SkillContentResourceInput(path, element.GetProperty("content").GetBytesFromBase64()));
             }
 
-            var markdown = Encoding.UTF8.GetBytes(
-                $"---\nname: {JsonSerializer.Serialize(name)}\ndescription: {JsonSerializer.Serialize(description)}\n---\n{instructions}\n");
+            var markdown = CreateCanonicalSkillMarkdown(name, description, instructions);
             var validated = SkillContentValidator.Validate(markdown, resources.ToImmutable());
             if (!string.Equals(validated.ContentDigest, expectedContentDigest, StringComparison.Ordinal))
                 throw IntegrityError("The immutable skill content digest does not match its expected revision.");
@@ -198,6 +197,13 @@ public sealed class SkillContentObjectStore(IObjectStore objectStore)
         return output.ToArray();
     }
 
+    internal static byte[] CreateCanonicalSkillMarkdown(ValidatedSkillContent content) =>
+        CreateCanonicalSkillMarkdown(content.Name, content.Description, content.Instructions);
+
+    private static byte[] CreateCanonicalSkillMarkdown(string name, string description, string instructions) =>
+        Encoding.UTF8.GetBytes(
+            $"---\nname: {JsonSerializer.Serialize(name)}\ndescription: {JsonSerializer.Serialize(description)}\n---\n{instructions}\n");
+
     /// <summary>Recomputes the canonical digest before serialization so callers cannot forge a validated record.</summary>
     private static ValidatedSkillContent Revalidate(ValidatedSkillContent content)
     {
@@ -205,8 +211,7 @@ public sealed class SkillContentObjectStore(IObjectStore objectStore)
         if (content.Resources.IsDefault)
             throw IntegrityError("The validated skill resource collection is missing.");
 
-        var markdown = Encoding.UTF8.GetBytes(
-            $"---\nname: {JsonSerializer.Serialize(content.Name)}\ndescription: {JsonSerializer.Serialize(content.Description)}\n---\n{content.Instructions}\n");
+        var markdown = CreateCanonicalSkillMarkdown(content);
         var validated = SkillContentValidator.Validate(
             markdown,
             content.Resources.Select(resource =>
