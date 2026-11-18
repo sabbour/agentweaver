@@ -2,6 +2,8 @@
 
 Use the native CLI to create, read, and update platform BYOK provider
 metadata. This procedure does not set a key or activate a provider.
+For a Project's provider drafts, see
+[Manage project BYOK provider metadata](./manage-project-byok-provider-metadata.md).
 
 ## Before you begin
 

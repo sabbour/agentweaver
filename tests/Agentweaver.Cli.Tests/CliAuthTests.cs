@@ -29,6 +29,8 @@ public sealed class CliAuthTests
             target, ["openid", "api.read", "offline_access", "projects.admin"]));
         var unboundOrchestrator = CliAuthIdentity.Create(new CliIdentity(
             target, ["openid", "api.read", "offline_access", "projects.orchestrator"]));
+        var projectAdmin = CliAuthIdentity.Create(new CliIdentity(
+            target, ["openid", "api.read", "offline_access", "projects.admin"], "project-a"));
         var run = CliAuthIdentity.Create(new CliIdentity(
             target, ["openid", "api.read", "offline_access", "projects.orchestrator"], "project-a", "run-a"));
         var otherRun = CliAuthIdentity.Create(new CliIdentity(
@@ -40,6 +42,9 @@ public sealed class CliAuthTests
         Assert.NotEqual(unbound.Account, unboundAdmin.Account);
         Assert.NotEqual(unboundAdmin.Account, unboundOrchestrator.Account);
         Assert.NotEqual(unbound.Account, unboundOrchestrator.Account);
+        Assert.NotEqual(unboundAdmin.Account, projectAdmin.Account);
+        Assert.Equal("project-a", projectAdmin.Identity.ProjectId);
+        Assert.Null(projectAdmin.Identity.RunId);
         Assert.NotEqual(unbound.Account, run.Account);
         Assert.NotEqual(unboundOrchestrator.Account, run.Account);
         Assert.NotEqual(run.Account, otherRun.Account);
@@ -84,6 +89,27 @@ public sealed class CliAuthTests
         Assert.Equal("project-a", query["project_id"]);
         Assert.Equal("run-b", query["run_id"]);
         Assert.Equal("S256", query["code_challenge_method"]);
+    }
+
+    [Fact]
+    public void ProjectAdministrationAuthorizationCarriesProjectWithoutRun()
+    {
+        var bound = CliAuthIdentity.Create(new CliIdentity(
+            Target(),
+            ["openid", "api.read", "offline_access", "projects.admin"],
+            "project-a"));
+        var metadata = new OidcMetadata(
+            Issuer,
+            new Uri("https://broker.test/connect/authorize"),
+            new Uri("https://broker.test/connect/token"),
+            new Uri("https://broker.test/.well-known/jwks"));
+
+        var authorization = OidcProtocol.CreateAuthorizationUri(
+            metadata, bound, new Uri(CallbackUri), "state", "nonce", "challenge");
+        var query = ParseQuery(authorization.Query);
+
+        Assert.Equal("project-a", query["project_id"]);
+        Assert.False(query.ContainsKey("run_id"));
     }
 
     [Fact]

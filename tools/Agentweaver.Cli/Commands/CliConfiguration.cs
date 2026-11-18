@@ -38,8 +38,8 @@ internal static class CliConfiguration
 
         var project = discoveryOnly || unbound ? null : Optional("AGENTWEAVER_PROJECT_ID", projectOverride);
         var run = discoveryOnly || unbound ? null : Optional("AGENTWEAVER_RUN_ID", runOverride);
-        if (!unbound && (project is null) != (run is null))
-            throw new InvalidOperationException("AGENTWEAVER_PROJECT_ID and AGENTWEAVER_RUN_ID must be supplied together.");
+        if (!unbound && run is not null && project is null)
+            throw new InvalidOperationException("AGENTWEAVER_RUN_ID requires AGENTWEAVER_PROJECT_ID.");
 
         var scopes = BaseScopes.Concat(discoveryOnly ? [] : requestedScopes ?? [])
             .Distinct(StringComparer.Ordinal)
@@ -75,13 +75,15 @@ internal static class CliConfiguration
                 !BaseScopes.Contains(scope, StringComparer.Ordinal) &&
                 !OptionalScopes.Contains(scope)) ||
             identity.Scopes.Distinct(StringComparer.Ordinal).Count() != identity.Scopes.Count ||
-            (identity.ProjectId is null) != (identity.RunId is null) ||
+            identity.RunId is not null && identity.ProjectId is null ||
             identity.ProjectId is not null && string.IsNullOrWhiteSpace(identity.ProjectId) ||
             identity.RunId is not null && string.IsNullOrWhiteSpace(identity.RunId) ||
             identity.ProjectId is not null &&
-            !identity.Scopes.Contains("projects.orchestrator", StringComparer.Ordinal) ||
-            identity.ProjectId is not null &&
-            identity.Scopes.Contains("projects.admin", StringComparer.Ordinal))
+            (identity.RunId is null
+                ? !identity.Scopes.Contains("projects.admin", StringComparer.Ordinal) ||
+                  identity.Scopes.Contains("projects.orchestrator", StringComparer.Ordinal)
+                : !identity.Scopes.Contains("projects.orchestrator", StringComparer.Ordinal) ||
+                  identity.Scopes.Contains("projects.admin", StringComparer.Ordinal)))
         {
             throw new ArgumentException("The selected CLI target, tenant, scopes, or project/run binding is invalid.");
         }

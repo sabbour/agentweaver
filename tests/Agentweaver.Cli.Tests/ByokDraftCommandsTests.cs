@@ -10,7 +10,7 @@ using Agentweaver.Gateway;
 namespace Agentweaver.Cli.Tests;
 
 [Collection(CliEnvironmentCollection.Name)]
-public sealed class PlatformByokCommandsTests
+public sealed class ByokDraftCommandsTests
 {
     private const string ProviderId = "byok-platform-0001";
     private const string OperationId = "f1b62270-3320-414c-9c2a-803493e50131";
@@ -74,7 +74,7 @@ public sealed class PlatformByokCommandsTests
 
         Assert.Equal(2, fixture.Requests.Count);
         Assert.Empty(fixture.Output.ToString());
-        Assert.Contains("invalid platform BYOK response", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("invalid BYOK response", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -287,6 +287,158 @@ public sealed class PlatformByokCommandsTests
         Assert.Contains("Unknown option: --project-id", fixture.Error.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ProjectListReadsEveryPageWithAnExactProjectOnlyIdentity()
+    {
+        using var fixture = new Fixture();
+        fixture.Respond = request =>
+        {
+            if (request.Query.Contains("afterProviderId=" + ProviderId, StringComparison.Ordinal))
+                return JsonResponse(Page(
+                    [Provider("byok-project-0002", "Second", scope: "project", projectId: "project-1")],
+                    null));
+            return JsonResponse(Page(
+                [Provider(ProviderId, "First", scope: "project", projectId: "project-1", secret: "project-secret-canary")],
+                ProviderId));
+        };
+
+        Assert.Equal(0, await fixture.RunProject("list"));
+
+        Assert.Equal(2, fixture.Requests.Count);
+        Assert.All(fixture.Requests, request =>
+        {
+            Assert.Equal("/api/v1/projects/project-1/byok-providers", request.Path);
+            Assert.Contains("pageSize=100", request.Query, StringComparison.Ordinal);
+        });
+        Assert.Contains("afterProviderId=" + ProviderId, fixture.Requests[1].Query, StringComparison.Ordinal);
+        Assert.Equal("project-1", fixture.Authentication.Identity!.ProjectId);
+        Assert.Null(fixture.Authentication.Identity.RunId);
+        Assert.Contains("projects.admin", fixture.Authentication.Identity.Scopes);
+        Assert.DoesNotContain("project-secret-canary", fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(
+            ["byok-platform-0001", "byok-project-0002"],
+            JsonNode.Parse(fixture.Output.ToString())!["providers"]!.AsArray()
+                .Select(provider => provider!["providerId"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task ProjectShowAndAddUseTheSelectedProjectAndApiGeneratedProviderId()
+    {
+        const string apiGeneratedId = "byok-project-generated-42";
+        using var fixture = new Fixture();
+        fixture.Respond = request => request.Method == HttpMethod.Post.Method
+            ? JsonResponse(Provider(apiGeneratedId, "Project endpoint", scope: "project", projectId: "project-1"))
+            : JsonResponse(Provider(
+                ProviderId, "Project endpoint", scope: "project", projectId: "project-1",
+                secret: "project-response-secret"));
+
+        Assert.Equal(0, await fixture.RunProject("show", ProviderId));
+        Assert.Equal("/api/v1/projects/project-1/byok-providers/" + ProviderId, fixture.Requests.Single().Path);
+        Assert.DoesNotContain("project-response-secret", fixture.Output.ToString(), StringComparison.Ordinal);
+
+        fixture.Output.GetStringBuilder().Clear();
+        Assert.Equal(0, await fixture.RunProject(
+            "add",
+            "--name", "Project endpoint",
+            "--type", "openai",
+            "--base-url", "https://models.example/",
+            "--model", "deployment-a",
+            "--operation-id", OperationId));
+
+        var request = fixture.Requests.Last();
+        Assert.Equal(HttpMethod.Post.Method, request.Method);
+        Assert.Equal("/api/v1/projects/project-1/byok-providers", request.Path);
+        Assert.Equal(OperationId, JsonNode.Parse(request.Body)!["operationId"]!.GetValue<string>());
+        Assert.DoesNotContain("projectId", request.Body, StringComparison.Ordinal);
+        Assert.Equal(apiGeneratedId,
+            JsonNode.Parse(fixture.Output.ToString())!["providerId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProjectReadRejectsAResponseForAnotherProject()
+    {
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse(
+                Provider(ProviderId, "Other project", scope: "project", projectId: "project-2")),
+        };
+
+        Assert.Equal(1, await fixture.RunProject("show", ProviderId));
+
+        Assert.Empty(fixture.Output.ToString());
+        Assert.Contains("invalid BYOK response", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ProjectUpdateUsesRevisionAndDenialNamesCurrentProjectAuthority()
+    {
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse("""{"code":"model_provider_draft_conflict"}""", HttpStatusCode.Conflict),
+        };
+
+        Assert.Equal(1, await fixture.RunProject(
+            "update", ProviderId,
+            "--expected-revision", "1",
+            "--name", "Changed",
+            "--type", "openai",
+            "--base-url", "https://models.example/",
+            "--model", "deployment-b",
+            "--operation-id", OperationId));
+
+        var request = Assert.Single(fixture.Requests);
+        Assert.Equal(HttpMethod.Put.Method, request.Method);
+        Assert.Equal("/api/v1/projects/project-1/byok-providers/" + ProviderId, request.Path);
+        Assert.Equal(1, JsonNode.Parse(request.Body)!["expectedRevision"]!.GetValue<long>());
+        Assert.Contains("revision changed", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        fixture.Requests.Clear();
+        fixture.Error.GetStringBuilder().Clear();
+        fixture.Respond = _ => JsonResponse("{}", HttpStatusCode.Forbidden);
+        Assert.Equal(1, await fixture.RunProject("show", ProviderId));
+        Assert.Contains("current Owner or PlatformAdmin authority", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProjectWriteReplaysWithTheSameOperationIdAndPayload()
+    {
+        using var fixture = new Fixture
+        {
+            Respond = _ => throw new HttpRequestException("The response was lost."),
+        };
+        var arguments = new[]
+        {
+            "add", "--name", "Replayable project provider", "--type", "openai",
+            "--base-url", "https://models.example/", "--model", "deployment-a",
+            "--operation-id", OperationId,
+        };
+
+        Assert.Equal(1, await fixture.RunProject(arguments));
+        Assert.Contains(OperationId, fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+        fixture.Error.GetStringBuilder().Clear();
+        fixture.Respond = _ => JsonResponse(Provider(
+            "byok-project-from-api", "Replayable project provider",
+            scope: "project", projectId: "project-1"));
+        Assert.Equal(0, await fixture.RunProject(arguments));
+
+        Assert.Equal(2, fixture.Requests.Count);
+        Assert.Equal(fixture.Requests[0].Body, fixture.Requests[1].Body);
+        Assert.Equal(OperationId, JsonNode.Parse(fixture.Requests[1].Body)!["operationId"]!.GetValue<string>());
+        Assert.Equal("byok-project-from-api",
+            JsonNode.Parse(fixture.Output.ToString())!["providerId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProjectCommandsRejectRunSelectors()
+    {
+        using var fixture = new Fixture();
+
+        Assert.Equal(1, await fixture.RunProject("list", "--run-id", "run-1"));
+
+        Assert.Empty(fixture.Requests);
+        Assert.Contains("Unknown option: --run-id", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
     private static string Page(IReadOnlyList<JsonObject> providers, string? nextAfterProviderId) =>
         new JsonObject
         {
@@ -294,7 +446,13 @@ public sealed class PlatformByokCommandsTests
             ["nextAfterProviderId"] = nextAfterProviderId,
         }.ToJsonString();
 
-    private static JsonObject Provider(string id, string name, long revision = 1, string? secret = null) =>
+    private static JsonObject Provider(
+        string id,
+        string name,
+        long revision = 1,
+        string? secret = null,
+        string scope = "platform",
+        string? projectId = null) =>
         new()
         {
             ["id"] = id,
@@ -306,8 +464,8 @@ public sealed class PlatformByokCommandsTests
             ["azure_api_version"] = null,
             ["reasoning_efforts"] = new JsonArray("low"),
             ["prompt_capacity_tokens"] = null,
-            ["scope"] = "platform",
-            ["projectId"] = null,
+            ["scope"] = scope,
+            ["projectId"] = projectId,
             ["state"] = "Draft",
             ["revision"] = revision,
             ["configurationHash"] = "abc123",
@@ -359,6 +517,15 @@ public sealed class PlatformByokCommandsTests
                     Error: Error),
                 cancellationToken);
 
+        public Task<int> RunProject(params string[] args) =>
+            CliApplication.RunAsync(
+                ["project", "byok", .. args, "--project-id", "project-1", .. TargetOptions],
+                new CliRuntimeOptions(
+                    GatewayClientFactory: this,
+                    Authentication: Authentication,
+                    Output: Output,
+                    Error: Error));
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -373,8 +540,17 @@ public sealed class PlatformByokCommandsTests
             }
             if (path == "/api/v1/authorization/context")
             {
-                return JsonResponse(
-                    """{"contractVersion":1,"issuer":"https://identity.example/","actorId":"actor-1","tenantId":"tenant-1","membershipRevision":1,"boundProjectId":null,"boundRunId":null,"effectiveAuthority":[]}""");
+                return JsonResponse(new JsonObject
+                {
+                    ["contractVersion"] = 1,
+                    ["issuer"] = "https://identity.example/",
+                    ["actorId"] = "actor-1",
+                    ["tenantId"] = "tenant-1",
+                    ["membershipRevision"] = 1,
+                    ["boundProjectId"] = Authentication.Identity?.ProjectId,
+                    ["boundRunId"] = Authentication.Identity?.RunId,
+                    ["effectiveAuthority"] = new JsonArray(),
+                });
             }
 
             var body = request.Content is null

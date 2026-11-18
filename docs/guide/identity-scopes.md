@@ -90,9 +90,9 @@ whether the requested action is allowed.
 Lets the app ask to manage a project. These requests also need `api.read`.
 Agentweaver checks your project access and role before each action. This
 permission does not make you a project administrator or add a role.
-For project BYOK Drafts, the Web app sends this permission with the exact
-`project_id` and no `run_id`. Projects allows a current Owner or PlatformAdmin;
-other project roles are denied.
+For project BYOK Drafts, the Web app and native CLI send this permission with
+the exact `project_id` and no `run_id`. Projects allows a current Owner or
+PlatformAdmin; other project roles are denied.
 
 ## `projects.orchestrator`
 

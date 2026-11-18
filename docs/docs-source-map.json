@@ -24,6 +24,7 @@
     "docs/guide/quickstart.md",
     "docs/guide/cli.md",
     "docs/guide/manage-model-providers.md",
+    "docs/guide/manage-project-byok-provider-metadata.md",
     "docs/guide/configure-providers.md",
     "docs/guide/configure-knowledge.md",
     "docs/guide/deploy-to-azure.md",
@@ -131,11 +132,17 @@
       "sourceExclusions": [
         "tools/Agentweaver.Cli/Api/GatewayClient.cs",
         "tools/Agentweaver.Cli/Commands/CliApplication.cs",
+        "tools/Agentweaver.Cli/Commands/ByokDraftCommands.cs",
         "tools/Agentweaver.Cli/Commands/PlatformByokCommands.cs",
+        "tools/Agentweaver.Cli/Commands/CliConfiguration.cs",
+        "tools/Agentweaver.Cli/Auth/CliAuthIdentity.cs",
+        "tools/Agentweaver.Cli/Auth/OidcProtocol.cs",
         "tools/Agentweaver.Cli/Program.cs",
         "tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj",
         "tests/Agentweaver.Cli.Tests/GatewayClientTests.cs",
-        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs"
+        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs",
+        "tests/Agentweaver.Cli.Tests/ByokDraftCommandsTests.cs",
+        "tests/Agentweaver.Cli.Tests/CliAuthTests.cs"
       ],
       "required": [
         "docs/specs/native-cli-api-acceptance.md",
@@ -151,15 +158,20 @@
       ]
     },
     {
-      "name": "Platform BYOK metadata CLI",
+      "name": "BYOK metadata CLI",
       "sourcePrefixes": [
         "tools/Agentweaver.Cli/Commands/CliApplication.cs",
-        "tools/Agentweaver.Cli/Commands/PlatformByokCommands.cs",
-        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs"
+        "tools/Agentweaver.Cli/Commands/ByokDraftCommands.cs",
+        "tools/Agentweaver.Cli/Commands/CliConfiguration.cs",
+        "tools/Agentweaver.Cli/Auth/CliAuthIdentity.cs",
+        "tests/Agentweaver.Cli.Tests/ByokDraftCommandsTests.cs",
+        "tests/Agentweaver.Cli.Tests/CliAuthTests.cs"
       ],
       "required": [
         "docs/guide/cli.md",
         "docs/guide/manage-model-providers.md",
+        "docs/guide/manage-project-byok-provider-metadata.md",
+        "docs/guide/identity-scopes.md",
         "docs/guide/index.md"
       ]
     },
@@ -1097,7 +1109,9 @@
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.RuntimeGrants.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.GovernanceCheckpoints.cs",
         "tests/Agentweaver.Projects.Config.Tests/GovernanceCheckpointStorageTests.cs",
-        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs"
+        "tests/Agentweaver.Cli.Tests/PlatformByokCommandsTests.cs",
+        "tests/Agentweaver.Cli.Tests/ByokDraftCommandsTests.cs",
+        "tests/Agentweaver.Cli.Tests/CliAuthTests.cs"
       ],
       "required": [
         "docs/deep-dive/testing-strategy.md"
