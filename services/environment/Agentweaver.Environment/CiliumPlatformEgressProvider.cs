@@ -81,6 +81,9 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
 
     public ProviderDescriptor Descriptor { get; }
 
+    internal string GetProofTargetId() => _store.GetTargetId(_options.Namespace, PolicyName);
+    internal string ProofNamespace => _options.Namespace;
+
     public async Task<PlatformEgressStatus> ApplyAsync(
         PlatformEgressPolicy policy,
         CancellationToken cancellationToken)
@@ -250,6 +253,10 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
                 replaced.Metadata.Uid == reservation.ObjectUid
                 ? status
                 : Failed("readback_mismatch");
+        }
+        catch (PlatformEgressApplyReservationException exception)
+        {
+            return Failed(exception.Code);
         }
         catch (CiliumPolicyException exception)
         {

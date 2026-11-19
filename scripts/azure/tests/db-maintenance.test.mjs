@@ -35,7 +35,7 @@ const goodLogs = {
 const defaultSchemaRanges = {
   [digest('a')]: coreRange(),
   [digest('b')]: range(12, 12),
-  [digest('d')]: range(15, 15),
+  [digest('d')]: range(16, 16),
   [digest('f')]: range(10, 10),
 };
 
@@ -244,7 +244,7 @@ test('the reviewed plan includes 035 through 051, skips reserved Core 034, and m
   assert.ok(plan.coreVersions.includes(42));
   assert.equal(Math.max(...plan.coreVersions), 51);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-  assert.deepEqual(plan.environmentVersions, Array.from({ length: 15 }, (_, index) => index + 1));
+  assert.deepEqual(plan.environmentVersions, Array.from({ length: 16 }, (_, index) => index + 1));
 });
 
 test('P1 migration manifests render one identity, one egress, and three fail-closed Jobs', () => {
@@ -858,9 +858,9 @@ test('the schema range comes from the readiness check in the migrator source', (
     'Agentweaver.EventsAndSessions'), range(Math.max(...plan.eventsVersions), Math.max(...plan.eventsVersions)));
   const environmentSource = readFileSync(
     'services/environment/Agentweaver.Environment/EnvironmentMigrator.cs', 'utf8');
-  assert.deepEqual(schemaRangeFromSource(environmentSource, 'Agentweaver.Environment'), range(15, 15));
-  assert.deepEqual(schemaRangeFromSource(environmentSource.replace('CurrentSchemaVersion = 15', 'CurrentSchemaVersion = 14'),
-    'Agentweaver.Environment'), range(14, 14));
+  assert.deepEqual(schemaRangeFromSource(environmentSource, 'Agentweaver.Environment'), range(16, 16));
+  assert.deepEqual(schemaRangeFromSource(environmentSource.replace('CurrentSchemaVersion = 16', 'CurrentSchemaVersion = 15'),
+    'Agentweaver.Environment'), range(15, 15));
   assert.equal(schemaRangeFromSource(environmentSource.replace('pending.Length > 0', 'pending.Length > 1'),
     'Agentweaver.Environment'), undefined);
   // An older image with no optional version accepts exactly its own highest version.

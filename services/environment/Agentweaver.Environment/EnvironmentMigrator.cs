@@ -7,7 +7,7 @@ namespace Agentweaver.Environment;
 public static class EnvironmentMigrator
 {
     private const string LockName = "agentweaver.environment.migrate";
-    private const int CurrentSchemaVersion = 15;
+    private const int CurrentSchemaVersion = 16;
     private static readonly string[] SupportedMigrationIds =
     [
         "20261006150000_InitialEnvironmentLifecycle",
@@ -25,6 +25,7 @@ public static class EnvironmentMigrator
         "20261117145425_PlatformEgressApplyReservations",
         "20261117221544_EnvironmentSandboxEgressAudit",
         "20261119034552_PlatformPolicyProofReceipts",
+        "20261119050000_PlatformPolicyHoldReservationFence",
     ];
 
     /// <summary>Ordered versions assigned to the EF migration history for maintenance planning.</summary>
@@ -95,6 +96,43 @@ public static class EnvironmentMigrator
         if (pending.Length > 0)
             throw new InvalidOperationException(
                 $"The Environment database has pending migrations ({string.Join(", ", pending)}). Run the explicit Environment migration command before starting the service.");
+
+        await using var fenceCheck = new NpgsqlCommand(
+            """
+            WITH expected(table_name, trigger_name, function_name, pinned) AS (
+                VALUES
+                    ('platform_policy_apply_reservations', 'platform_policy_apply_reservations_active_hold_fence',
+                     'enforce_platform_policy_reservation_hold_fence', true),
+                    ('platform_policy_apply_reservations', 'platform_policy_apply_reservations_consistent_identity',
+                     'enforce_platform_policy_apply_reservation_identity', false),
+                    ('platform_policy_proof_holds', 'platform_policy_proof_holds_reservation_fence',
+                     'enforce_platform_policy_hold_reservation_fence', true),
+                    ('platform_policy_proof_receipts', 'platform_policy_proof_receipts_hold_identity',
+                     'enforce_platform_policy_proof_receipt_hold', true)
+            )
+            SELECT
+                (SELECT count(*) FROM expected e
+                 JOIN pg_catalog.pg_namespace n ON n.nspname = 'environment'
+                 JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = e.table_name
+                 JOIN pg_catalog.pg_trigger t ON t.tgrelid = c.oid AND t.tgname = e.trigger_name
+                 JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid AND p.pronamespace = n.oid
+                 WHERE NOT t.tgisinternal AND t.tgtype = 7 AND t.tgenabled = 'O'
+                   AND t.tgattr = ''::int2vector AND t.tgqual IS NULL AND t.tgnargs = 0
+                   AND p.proname = e.function_name AND p.provolatile = 'v' AND NOT p.prosecdef
+                   AND CASE WHEN e.pinned THEN p.proconfig = ARRAY['search_path=pg_catalog']::text[]
+                            ELSE p.proconfig IS NULL END) = 4
+                AND
+                (SELECT count(*) FROM pg_catalog.pg_trigger t
+                 JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'environment' AND c.relname IN
+                    ('platform_policy_apply_reservations', 'platform_policy_proof_holds', 'platform_policy_proof_receipts')
+                   AND NOT t.tgisinternal AND t.tgtype = 7) = 4
+            """,
+            connection);
+        if (await fenceCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            throw new InvalidOperationException(
+                "The Environment policy fence triggers are incomplete or changed. Run the reviewed database maintenance checks.");
     }
 
     /// <summary>

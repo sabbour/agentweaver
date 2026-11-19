@@ -94,6 +94,34 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
         PlatformPolicyProofHoldRequest request,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            return await AcquireHoldCoreAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException exception) when (
+            (exception.SqlState == PostgresErrorCodes.CheckViolation &&
+             exception.ConstraintName == "ck_platform_policy_hold_current_reservation") ||
+            (exception.SqlState == PostgresErrorCodes.UniqueViolation &&
+             exception.ConstraintName is "PK_platform_policy_proof_holds" or
+                "ux_environment_platform_policy_proof_holds_target" or
+                "ux_environment_platform_policy_proof_holds_reservation" or
+                "ux_environment_platform_policy_proof_holds_physical_namespace"))
+        {
+            throw new PlatformPolicyProofException(
+                "policy_fence_conflict", "Another policy proof bound this target or reservation.");
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task<PlatformPolicyProofHold> AcquireHoldCoreAsync(
+        PlatformPolicyProofHoldRequest request,
+        CancellationToken cancellationToken)
+    {
         Validate(request);
         var fingerprint = Fingerprint(request);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -107,6 +135,23 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
             if (existing.HoldId != request.HoldId || existing.RequestFingerprint != fingerprint)
                 throw new PlatformPolicyProofException(
                     "policy_fence_conflict", "The target already has a different durable policy hold.");
+        }
+
+        await using var latestQuery = new NpgsqlCommand(
+            """
+            SELECT reservation_id FROM environment.platform_policy_apply_reservations
+            WHERE target_id = @target_id
+            ORDER BY source_epoch DESC, generation DESC, created_at DESC, reservation_id DESC
+            LIMIT 1
+            """,
+            connection, transaction);
+        latestQuery.Parameters.AddWithValue("target_id", NpgsqlDbType.Text, request.TargetId);
+        if (await latestQuery.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not Guid latest ||
+            latest != request.ReservationId)
+            throw new PlatformPolicyProofException(
+                "policy_fence_conflict", "The hold does not match the latest reservation.");
+        if (existing is not null)
+        {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return existing with { Replayed = true };
         }
@@ -152,21 +197,28 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
         command.Parameters.AddWithValue("reservation_id", NpgsqlDbType.Uuid, hold.ReservationId);
         command.Parameters.AddWithValue("request_fingerprint", NpgsqlDbType.Text, hold.RequestFingerprint);
         command.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, hold.CreatedAt);
-        try
-        {
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (PostgresException exception) when (
-            exception.SqlState is PostgresErrorCodes.UniqueViolation or PostgresErrorCodes.CheckViolation)
-        {
-            throw new PlatformPolicyProofException(
-                "policy_fence_conflict", "Another policy proof bound this target or reservation.");
-        }
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return hold;
     }
 
     public async Task<PlatformPolicyProofReceipt> PersistReceiptAsync(
+        PlatformPolicyProofReceiptRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await PersistReceiptCoreAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task<PlatformPolicyProofReceipt> PersistReceiptCoreAsync(
         PlatformPolicyProofReceiptRequest request,
         CancellationToken cancellationToken)
     {
@@ -264,6 +316,23 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
         Guid holdId,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            return await ReadCurrentReceiptCoreAsync(targetId, holdId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task<PlatformPolicyProofReceipt?> ReadCurrentReceiptCoreAsync(
+        string targetId,
+        Guid holdId,
+        CancellationToken cancellationToken)
+    {
         ValidateText(targetId, 256, "target ID");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
@@ -285,6 +354,25 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
     }
 
     public async Task RequireAllTargetsAsync(
+        long registryRevision,
+        string preparationId,
+        IEnumerable<string> targetIds,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RequireAllTargetsCoreAsync(
+                registryRevision, preparationId, targetIds, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task RequireAllTargetsCoreAsync(
         long registryRevision,
         string preparationId,
         IEnumerable<string> targetIds,
@@ -325,7 +413,7 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtextextended(@target_id, 9911))",
+            "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(@target_id, 0))",
             connection,
             transaction);
         command.Parameters.AddWithValue("target_id", NpgsqlDbType.Text, targetId);

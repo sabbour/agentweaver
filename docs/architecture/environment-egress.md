@@ -115,8 +115,8 @@ affect AgentHost. The capture reads every
 `networking.k8s.io/v1` `NetworkPolicy` and `cilium.io/v2`
 `CiliumNetworkPolicy` in the AgentHost namespace, plus every
 `CiliumClusterwideNetworkPolicy`. It reads through all pages without a label or
-name filter. The capture reads the namespace UID and binds the lists to an
-attested physical target, sealed epoch, guard digest, profile digest, evaluator
+name filter. The capture reads the namespace UID and binds the lists to a
+supplied physical target, sealed epoch, guard digest, profile digest, evaluator
 version, and System-only ceiling.
 
 The inventory hashes all listed objects, including policies whose selectors do
@@ -160,8 +160,11 @@ sequenceDiagram
     participant DB as Environment PostgreSQL
     participant K as Kubernetes API
     participant V as Full policy-set evaluator
-    E->>DB: Acquire durable target hold
-    DB-->>E: Hold bound to target and reservation
+    E->>DB: Persist provider reservation
+    DB-->>E: Current reservation
+    E->>E: Compare configured provider and reservation target IDs
+    E->>DB: Acquire hold for current reservation
+    DB-->>E: Atomic hold and reservation binding
     E->>K: List all namespaced and cluster policies
     K-->>E: Paged raw inventories and list resourceVersions
     E->>V: Substitute the exact System-only render
@@ -177,9 +180,20 @@ sequenceDiagram
     Note over E,K: An inventory, readback, or epoch conflict creates no successful receipt
 ```
 
-PostgreSQL binds one nonexpiring hold to one physical cluster and namespace UID,
-registry revision, preparation, and reservation. A writer path does not start
-before that binding exists. The coordinator retains the preflight and
+PostgreSQL binds a nonexpiring hold to the current reservation for one logical
+target ID. Reservation and hold inserts use the same target lock. A new
+reservation is rejected while a hold exists. An exact retry returns the saved
+reservation or hold. The coordinator compares the configured provider target ID
+with the frozen target and reservation before acquiring the hold.
+
+The logical ID includes the configured Kubernetes API origin, namespace, and
+policy name. Different API origins can refer to the same physical cluster; the
+database fence does not recognize those aliases. The saved physical target,
+namespace UID, registry revision, and preparation are supplied bindings, not a
+trusted enrollment registry. A future authenticated terminal protocol is needed
+to release a hold.
+
+The coordinator retains the preflight and
 post-write snapshots, then compares the independent named read with the policy
 list element. A lost response is retried only through the same reserved UID and
 resourceVersion. A changed set returns `policy_readback_mismatch`; a stale or
@@ -187,10 +201,9 @@ competing hold returns `policy_fence_conflict`.
 
 Receipt rows are append-only and unique per hold and target. An identical retry
 returns the current receipt. A changed input, stale hold, or different snapshot
-does not return success. The all-target commit gate requires one current
-receipt and retained hold for every target in the frozen registry revision.
-An empty or partial target list keeps the canonical Platform Policy
-preparation uncommitted.
+does not return success. The source-only receipt check requires a current receipt and retained hold for
+each supplied target. The supplied list is not an authoritative target
+registry. The check is not connected to the canonical Platform Policy commit.
 
 This source slice does not register an HTTP route, install the optional fence,
 write a cluster policy, connect the all-target gate to Projects, or prove packet
@@ -603,6 +616,10 @@ Kubernetes `PUT` carries both UID and `resourceVersion`. If a newer write
 updates the object first, Kubernetes rejects an older delayed `PUT` because its
 resource version is stale. A reservation cannot cancel a Kubernetes request
 that is already in flight.
+
+The legacy `EnvironmentEgressManager` calls to Cilium `ApplyAsync` and
+`RemoveAsync` do not use the hold fence. A hold therefore does not block all
+changes to the target or establish a packet-level barrier.
 
 If Kubernetes stores a request but its response is lost, retry the same
 reservation. The provider reads the object and accepts it only when the UID,

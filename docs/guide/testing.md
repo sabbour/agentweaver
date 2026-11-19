@@ -1032,15 +1032,15 @@ enforcement on a cluster or exact-host rules on Kata.
 Run the source-only full policy-set proof checks:
 
 ```powershell
-dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --filter "FullyQualifiedName~KubernetesPlatformPolicyProofTests|FullyQualifiedName~PlatformPolicyProofPostgresTests"
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --filter "FullyQualifiedName~KubernetesPlatformPolicyProofTests|FullyQualifiedName~PlatformPolicyProofPostgresTests|FullyQualifiedName~PlatformEgressApplyReservationPostgresTests|FullyQualifiedName~EnvironmentMigratorTests"
 node --test scripts\release\tests\environment-rbac.test.mjs
 node --test scripts\azure\tests\p1-postgres-plan.test.mjs
 ```
 
 The fake Kubernetes tests cover complete, empty, malformed, forbidden, expired,
 namespaced, cluster-wide, unrelated, and combined policy sets. The PostgreSQL
-tests cover exact receipt replay, competing holds, stale revisions, append-only
-rows, and the all-target commit gate. The Node checks verify the separate RBAC,
+tests cover reservation and hold replay, competing bindings, stale reservations,
+append-only rows, and receipt checks for supplied targets. The Node checks verify the separate RBAC,
 sealed-epoch manifest, runtime grants, and migration plan. These checks do not
 install the fence or write a cluster policy.
 

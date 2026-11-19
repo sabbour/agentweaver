@@ -60,6 +60,23 @@ public sealed class PlatformPolicyProofCoordinator(
     {
         Validate(preparation, target, reservation);
         var ceiling = SystemOnlyPolicyCeiling.Create(preparation.SystemDestinations);
+        string providerTarget;
+        try
+        {
+            providerTarget = provider.GetProofTargetId();
+        }
+        catch (CiliumPolicyException)
+        {
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The provider target identity is unavailable.");
+        }
+        if (string.IsNullOrWhiteSpace(providerTarget))
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The provider target identity is unavailable.");
+        if (providerTarget != target.TargetId || providerTarget != reservation.TargetId ||
+            provider.ProofNamespace != target.Namespace)
+            throw new PlatformPolicyProofException(
+                "policy_fence_conflict", "The provider and reservation targets do not agree.");
         _ = await store.AcquireHoldAsync(
             new(
                 target.HoldId,
@@ -109,6 +126,9 @@ public sealed class PlatformPolicyProofCoordinator(
         {
             status = await provider.ApplyReservedAsync(reservation, cancellationToken).ConfigureAwait(false);
         }
+        if (status.Message == "policy_fence_unavailable")
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The policy fence store is unavailable.");
         if (!status.Matches(reservation.Policy.IntentHash, reservation.Policy.SourceHash) ||
             status.Generation != reservation.Generation)
             throw new PlatformPolicyProofException(
