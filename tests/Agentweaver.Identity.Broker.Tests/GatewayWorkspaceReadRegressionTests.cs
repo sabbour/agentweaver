@@ -89,6 +89,7 @@ public sealed class GatewayWorkspaceReadRegressionTests
             bool Idempotency,
             bool IfMatch,
             bool CallerHeader,
+            bool ProjectAuthorization,
             bool HasBody)>();
         Task<HttpResponseMessage> RespondAsync(
             GatewayOwner owner,
@@ -105,6 +106,7 @@ public sealed class GatewayWorkspaceReadRegressionTests
                 request.Headers.Contains("Idempotency-Key"),
                 request.Headers.Contains("If-Match"),
                 request.Headers.Contains("X-Caller-Header"),
+                request.Headers.Contains("X-Agentweaver-Project-Authorization"),
                 request.Content is not null));
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -170,10 +172,47 @@ public sealed class GatewayWorkspaceReadRegressionTests
 
         using (var existing = CreateRequest(bearer, "/api/v1/policies/platform"))
         {
+            existing.Headers.Remove("X-Agentweaver-Tenant");
+            existing.Headers.Add("X-Agentweaver-Tenant", "tenant-head");
             existing.Headers.Add("Idempotency-Key", "existing-key");
             existing.Headers.Add("If-Match", "\"4\"");
+            existing.Headers.Add("X-Agentweaver-Project-Authorization", "not-forwarded");
             using var response = await gateway.Client.SendAsync(existing);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        foreach (var path in new[] { "/api/v1/policies/platform?unknown=x", "/api/v1/policies/platform?a=1&a=2" })
+        {
+            using var invalid = CreateRequest(bearer, path);
+            using var response = await gateway.Client.SendAsync(invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("native_acs_policy_query_not_supported", body.RootElement.GetProperty("code").GetString());
+        }
+        using (var invalid = CreateRequest(bearer, "/api/v1/policies/platform"))
+        {
+            invalid.Content = new StringContent("body");
+            using var response = await gateway.Client.SendAsync(invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("native_acs_policy_read_request_invalid", body.RootElement.GetProperty("code").GetString());
+        }
+        using (var invalid = CreateRequest(bearer, "/api/v1/policies/platform"))
+        {
+            invalid.Content = new StringContent("");
+            using var response = await gateway.Client.SendAsync(invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("native_acs_policy_read_request_invalid", body.RootElement.GetProperty("code").GetString());
+        }
+        using (var invalid = CreateRequest(bearer, "/api/v1/policies/platform"))
+        {
+            invalid.Headers.TransferEncodingChunked = true;
+            invalid.Content = new ByteArrayContent([1]);
+            using var response = await gateway.Client.SendAsync(invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("native_acs_policy_read_request_invalid", body.RootElement.GetProperty("code").GetString());
         }
 
         Assert.Equal(3, forwarded.Count);
@@ -190,10 +229,45 @@ public sealed class GatewayWorkspaceReadRegressionTests
             Assert.False(request.Idempotency);
             Assert.False(request.IfMatch);
             Assert.False(request.CallerHeader);
+            Assert.False(request.ProjectAuthorization);
             Assert.False(request.HasBody);
         });
-        Assert.True(forwarded[2].Idempotency);
-        Assert.True(forwarded[2].IfMatch);
+        Assert.False(forwarded[2].Idempotency);
+        Assert.False(forwarded[2].IfMatch);
+        Assert.True(forwarded[2].Bearer);
+        Assert.Equal("tenant-head", forwarded[2].Tenant);
+        Assert.False(forwarded[2].ProjectAuthorization);
+        Assert.False(forwarded[2].HasBody);
+    }
+
+    [Theory]
+    [InlineData(5 * 1024 * 1024, HttpStatusCode.OK)]
+    [InlineData(5 * 1024 * 1024 + 1, HttpStatusCode.BadGateway)]
+    public async Task PlatformPolicyHeadEnforcesGatewayResponseLimit(int length, HttpStatusCode expected)
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var bearer = CreateBearer(signingKey);
+        Task<HttpResponseMessage> RespondAsync(GatewayOwner _, HttpRequestMessage request, CancellationToken token) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(new byte[length]),
+            });
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new CallbackHttpMessageHandler((request, cancellationToken) =>
+                RespondAsync(GatewayOwner.Projects, request, cancellationToken)),
+            RespondAsync);
+        using var request = CreateRequest(bearer, "/api/v1/policies/platform");
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(expected, response.StatusCode);
+        if (expected == HttpStatusCode.OK)
+            Assert.Equal(length, (await response.Content.ReadAsByteArrayAsync()).Length);
+        else
+        {
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("owner_response_too_large", body.RootElement.GetProperty("code").GetString());
+        }
     }
 
     [Fact]

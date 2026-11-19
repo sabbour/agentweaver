@@ -328,6 +328,9 @@ change the deployed v4 Policy path.
 
 ## Test the canonical Policy API
 
+The Platform head tests check snapshot consistency, current authority,
+integrity failures, request rejection, and unchanged Policy state.
+
 Run the database-free selector tests and Gateway route/OpenAPI tests after the
 Release build:
 

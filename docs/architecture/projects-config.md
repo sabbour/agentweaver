@@ -265,8 +265,12 @@ Knowledge-selection route. This does not grant access to general run selections
 or create a provider pin.
 
 The Platform Policy API reads current and retained ACS source, validates
-artifacts, and has a disabled-by-default write route. When enabled, the
-Platform PUT stores a durable, immutable preparation against the current head.
+artifacts, and has a disabled-by-default write route. The current Platform
+head read uses a read-only `RepeatableRead` transaction for
+the head, revision, and files. Projects checks the full artifact hash and
+rechecks current authority outside the snapshot before returning.
+The read accepts no query or body and does not change policy state. When
+enabled, the Platform PUT stores a durable, immutable preparation against the current head.
 The preparation has pending state and no checkpoint. It does not change the
 canonical head, revision history, committed-write receipt, audit, or outbox.
 The private Environment source returns only committed artifacts, with pending

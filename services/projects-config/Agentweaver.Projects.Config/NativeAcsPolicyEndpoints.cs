@@ -49,24 +49,48 @@ public static class NativeAcsPolicyEndpoints
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
+            using var protectedRead = PlatformPolicyReadLoggerFactory.BeginProtectedRead();
             try
             {
-                EnsureNoQuery(context);
+                EnsureNoQuery(context, rejectEmptyQuery: true);
+                EnsureNoReadBody(context, () => NativeAcsPolicyStore.ReadRequestInvalid());
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
                 await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
                     .ConfigureAwait(false);
-                var result = await policyStore.ReadAsync(
-                    NativeAcsPolicyScopeType.Platform,
-                    ProjectAuthorizationOwner.PlatformResourceId,
-                    cancellationToken).ConfigureAwait(false);
-                return result is null
-                    ? Results.NotFound(new { code = "native_acs_policy_not_found" })
-                    : Results.Ok(result);
+                IResult outcome;
+                try
+                {
+                    var result = await policyStore.ReadPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
+                    outcome = result is null
+                        ? Results.NotFound(new { code = "native_acs_policy_not_found" })
+                        : Results.Ok(result);
+                }
+                catch (ProjectConfigException exception) when (exception.Code == "native_acs_policy_corrupt")
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    outcome = ToProblem(new ProjectConfigException(
+                        "native_acs_policy_corrupt", "The current Platform Policy source is corrupt.",
+                        StatusCodes.Status500InternalServerError));
+                }
+                catch (Exception exception) when (IsPlatformHeadSourceFailure(exception))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    outcome = SourceUnavailable();
+                }
+                await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
+                    .ConfigureAwait(false);
+                return outcome;
             }
             catch (ProjectConfigException exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 return ToProblem(exception);
+            }
+            catch (Exception exception) when (IsPlatformHeadSourceFailure(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable();
             }
         }).WithName("ReadPlatformNativeAcsPolicy");
 
@@ -507,9 +531,9 @@ public static class NativeAcsPolicyEndpoints
             extensions: new Dictionary<string, object?> { ["code"] = "native_acs_validation_rate_limited" });
     }
 
-    private static void EnsureNoQuery(HttpContext context)
+    private static void EnsureNoQuery(HttpContext context, bool rejectEmptyQuery = false)
     {
-        if (context.Request.Query.Count != 0)
+        if (context.Request.Query.Count != 0 || rejectEmptyQuery && context.Request.QueryString.HasValue)
             throw ProjectConfigException.Invalid(
                 "native_acs_policy_query_not_supported",
                 "Policy routes do not accept query parameters.");
@@ -552,6 +576,10 @@ public static class NativeAcsPolicyEndpoints
 
     internal static bool IsSourceUnavailable(InvalidOperationException exception) =>
         exception.InnerException is NpgsqlException providerException && IsSourceUnavailable(providerException);
+
+    private static bool IsPlatformHeadSourceFailure(Exception exception) =>
+        exception is NpgsqlException or TimeoutException ||
+        exception is InvalidOperationException { InnerException: NpgsqlException or TimeoutException };
 
     private static bool IsSourceUnavailable(NpgsqlException exception) =>
         exception.InnerException is IOException or SocketException or TimeoutException ||
