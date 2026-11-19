@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using System.Text.Json;
+using System.Security.Cryptography;
 using System.Text;
 using Npgsql;
 
@@ -17,6 +18,8 @@ internal static class InitializerChecks
           'triggerType', t.tgtype,
           'enabled', t.tgenabled::text,
           'isInternal', t.tgisinternal,
+          'deferrable', t.tgdeferrable,
+          'initiallyDeferred', t.tginitdeferred,
           'noColumnFilter', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgattr = ''::int2vector END,
           'noCondition', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgqual IS NULL END,
           'columnFilter', CASE WHEN cardinality(t.tgattr::smallint[]) = 1 THEN
@@ -354,6 +357,26 @@ internal static class InitializerChecks
                 service.Schema == "projects_config" && table.Table == "model_providers";
             var providerReservation = service.Service == "projects-config" &&
                 service.Schema == "projects_config" && table.Table == "model_provider_reference_reservations";
+            var providerRevision = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "model_provider_revisions";
+            bool IsProviderWriteGuard(MutationDenialGuardPlan guard)
+            {
+                var marker = guard.Function == "mark_model_provider_write()";
+                var pair = guard.Function == "check_model_provider_pair()";
+                var name = providerHead ? "model_providers" : "model_provider_revisions";
+                var expectedType = marker ? (providerHead ? 23 : 7) : (providerHead ? 21 : 5);
+                var expectedHash = marker
+                    ? "251d3b422db7283268c1264b4743de38b0af2454e34fc23330e1a0d9eba11c18"
+                    : "04c257420b1b56dec4436415bf3a063b4482936ce841630f32bdbee8d87d0964";
+                return (providerHead || providerRevision) && (marker || pair)
+                    && guard.Trigger == $"{name}_write_{(marker ? "marker" : "pair")}"
+                    && guard.TriggerType == expectedType && guard.Deferrable == pair
+                    && guard.Message == "provider transition is unavailable" && guard.SqlState == "23514"
+                    && guard.FunctionSource is { } source
+                    && Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(NormalizeGuardSource(source))))
+                        .Equals(expectedHash, StringComparison.OrdinalIgnoreCase);
+            }
+            var providerWriteGuards = guards.Where(IsProviderWriteGuard).ToArray();
             const string providerReferenceSource = """
                 BEGIN
                     PERFORM pg_catalog.pg_advisory_xact_lock(
@@ -494,14 +517,16 @@ internal static class InitializerChecks
                 hasReservationIdentityGuard || hasHoldReservationGuard || hasProofReceiptIdentityGuard ||
                 hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
                 hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard ||
-                hasProviderReferenceGuard;
+                hasProviderReferenceGuard ||
+                (providerRevision && typeSevenGuards.Length == 1 && IsProviderWriteGuard(typeSevenGuards[0]));
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead
                 ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
                 : table.UpdateColumns is { Length: > 0 };
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
-                guards.Length != mutationGuardCount + typeSevenGuards.Length ||
+                guards.Length != mutationGuardCount + typeSevenGuards.Length +
+                    (providerHead ? 2 : providerRevision ? 1 : 0) ||
                 (table.Privileges.Contains("UPDATE") && !providerHead) ||
                 (environmentReservation && !hasReservationIdentityGuard) ||
                 (environmentHold && !hasHoldReservationGuard) ||
@@ -511,6 +536,7 @@ internal static class InitializerChecks
                 (table.LockColumn is null && mutationGuardCount != (providerHead ? 1 : governanceDecisionHead ? 3 : 2)) ||
                 ((providerHead || providerReservation) && !hasProviderReferenceGuard) ||
                 (providerHead && !hasProviderIdGuard) ||
+                ((providerHead || providerRevision) && providerWriteGuards.Length != 2) ||
                 invalidColumnUpdates ||
                 (governanceDecisionHead && table.LockColumn is not null) ||
                 (governanceCheckpoint && !hasGovernanceCheckpointAnchorGuard) ||
@@ -522,6 +548,9 @@ internal static class InitializerChecks
                 {
                     var matchingFunctions = service.Functions
                         .Where(function => function.Signature == guard.Function).ToArray();
+                    if (IsProviderWriteGuard(guard))
+                        return matchingFunctions.Length != 1 || matchingFunctions[0].Execute ||
+                            guard.Column is not null || guard.Condition is not null;
                     return string.IsNullOrWhiteSpace(guard.Trigger) ||
                         string.IsNullOrWhiteSpace(guard.Function) ||
                         (!hasProviderIdGuard || guard.Trigger != "model_providers_id_immutable") &&
@@ -934,6 +963,7 @@ internal static class InitializerChecks
             if (actual.TriggerName != expected.Trigger || actual.FunctionSchema != service.Schema ||
                 actual.FunctionName != expected.Function || actual.TriggerType != expected.TriggerType ||
                 actual.Enabled != "O" || actual.IsInternal != false ||
+                actual.Deferrable != expected.Deferrable || actual.InitiallyDeferred != expected.Deferrable ||
                 (expected.Column is null ? actual.NoColumnFilter != true :
                     actual.NoColumnFilter != false || actual.ColumnFilter != expected.Column) ||
                 (expected.Condition is null ? actual.NoCondition != true :
@@ -1227,7 +1257,7 @@ internal sealed record TablePlan(string Table, string[] Privileges, string? Lock
 /// <summary>Expected trigger and owner-only function for a protected table.</summary>
 internal sealed record MutationDenialGuardPlan(string Trigger, string Function, int TriggerType,
     string? Message = null, string? SqlState = null, string? FunctionSource = null,
-    string? Column = null, string? Condition = null);
+    string? Column = null, string? Condition = null, bool Deferrable = false);
 /// <summary>Readback of a mutation guard's catalog state and function source.</summary>
 internal sealed record MutationGuardState(string Table, string? TriggerName, string? FunctionSchema,
     string? FunctionName, int? TriggerType, string? Enabled, bool? IsInternal, bool? NoColumnFilter,
@@ -1236,7 +1266,8 @@ internal sealed record MutationGuardState(string Table, string? TriggerName, str
     bool? RuntimeCanExecute,
     string? FunctionSource, string? ColumnFilter = null, string? Condition = null,
     bool? VolatileInvoker = null, bool? PinnedSearchPath = null,
-    bool? DefaultSearchPath = null, string[]? TypeSevenTriggers = null);
+    bool? DefaultSearchPath = null, string[]? TypeSevenTriggers = null,
+    bool? Deferrable = false, bool? InitiallyDeferred = false);
 /// <summary>One live relation in a service schema with its owner and effective runtime privileges.</summary>
 internal sealed record RelationState(string Name, string Kind, string Owner, string[]? RuntimePrivileges);
 /// <summary>Observed owner and effective ACL for one service schema.</summary>

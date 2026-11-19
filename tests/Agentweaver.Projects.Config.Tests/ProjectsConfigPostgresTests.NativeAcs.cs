@@ -218,14 +218,14 @@ public sealed partial class ProjectsConfigPostgresTests
 
     [Fact]
     public Task NativeAcsPolicyHeadMigrationKeepsOneExistingHeadAndRefusesDuplicateHeads() =>
-        RunWithIsolatedProjectsAsync(test => test.NativeAcsPolicyHeadMigrationCoreAsync());
+        RunWithIsolatedProjectsAsync(test => test.NativeAcsPolicyHeadMigrationCoreAsync(), preGuard: true);
 
     private async Task NativeAcsPolicyHeadMigrationCoreAsync()
     {
         const string beforeHeadIndex = "20261111192724_AddNativeAcsPolicyStorage";
         const string headIndex = "20261113221434_EnforceOneNativeAcsPolicyHeadPerScope";
         await using var db = CreateDbContext();
-        var latestMigration = db.Database.GetMigrations().Last();
+        const string latestMigration = "20261119132116_ReserveModelProviderReferences";
         await using var migrationDb = CreateMigrationDbContext();
         var migrator = migrationDb.GetService<IMigrator>();
         var suffix = Guid.NewGuid().ToString("N");
@@ -302,7 +302,6 @@ public sealed partial class ProjectsConfigPostgresTests
                 await cleanup.ExecuteNonQueryAsync();
             }
             await migrator.MigrateAsync(latestMigration);
-            await RestoreRuntimeGrantsAsync();
         }
     }
 

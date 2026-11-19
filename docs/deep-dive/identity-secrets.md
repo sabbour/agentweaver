@@ -26,7 +26,7 @@ bytes only after Identity approves that binding.
 | `RefreshTokenHandlers.cs` | Atomic refresh redemption and replay handling |
 | `IdentityGrantAuthority.cs` | Revisioned secret grants |
 | `SecretRedemptionEndpoints.cs` | Authenticated secret redemption |
-| `BrokerModelProviderCredentialPublicationClient.cs` | Private Projects credential-version publication |
+| `BrokerModelProviderCredentialPublicationClient.cs` | Compatibility client for the disabled private publication path |
 | `RuntimeGrantAuthority.cs` | Runtime bootstrap, source, and model-session grants |
 | `AuthorizedSecretRedemption.cs` | Exact grant checks |
 | `RuntimeOwnerHttpTransport.cs` | Shared internal owner HTTPS trust and bounded requests |

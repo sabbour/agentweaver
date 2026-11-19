@@ -156,30 +156,25 @@ not guarantee that every internal provider request stays below a hard
 admission threshold.
 
 Projects & Config also stores customer-provided model-provider metadata in
-immutable revisions. New providers start in `Draft`; credential publication
-sets `Available` only after Projects verifies the exact Events-owned card,
-content hash, and provenance. An `Available` revision can enter a project BYOK
+immutable revisions. New providers start in `Draft`. Credential publication
+and provider activation are unavailable. An existing `Available` revision can enter a project BYOK
 selection. Run acceptance snapshots the complete provider revision, its
 credential slot identity and exact `SecretRef`, the model pin, and the card pin.
 Later configuration changes do not replace the accepted revision. Task routes
 can select another accepted model and effort, so each effective selection has
 its own admission.
 
-The private `POST /internal/byok/credential-publications` route appends an
-exact credential version to a Draft or Available provider and returns a
-replayable receipt. Identity stores the exact Key Vault reference in its
+The private `/internal/byok/credential-publications` path returns `503
+credential_publication_unavailable`. Identity stores the exact Key Vault reference in its
 credential ledger. Identity matches the accepted slot identity and `SecretRef`
 against enabled history and uses the recorded vault. An enabled historical
 version remains usable after slot disable. The ledger stores no credential
-value or rate-card data. The publication route does not expose credential
-values, activate or select a provider, or accept rate-card data from its
-caller. Public Gateway responses expose only whether the current revision has
+value or rate-card data. Public Gateway responses expose only whether the current revision has
 a credential. See the
 [credential publication contract](../reference/contracts.md#customer-provided-model-provider-draft-contract)
 and [Identity and secrets](./identity-secrets.md#understand-runtime-and-connection-credentials)
 for the redemption path. See the
-[Projects & Config deep dive](./projects-config.md) for rate-card verification
-and recovery.
+[Projects & Config deep dive](./projects-config.md) for provider revision rules.
 
 Before first dispatch, Orchestrator requests an Events admission for every
 revision-backed BYOK selection, including task overrides. Events verifies the

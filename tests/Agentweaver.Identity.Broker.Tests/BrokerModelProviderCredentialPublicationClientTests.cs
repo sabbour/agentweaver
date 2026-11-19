@@ -65,6 +65,23 @@ public sealed class BrokerModelProviderCredentialPublicationClientTests
     }
 
     [Fact]
+    public async Task UnavailablePublicationIsNotAReceipt()
+    {
+        using var rsa = RSA.Create(2048);
+        using var certificate = new CertificateRequest(
+            "CN=broker.test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        using var client = new HttpClient(new PublicationResponseHandler(
+            """{"code":"credential_publication_unavailable"}""", HttpStatusCode.ServiceUnavailable));
+        var publisher = new BrokerModelProviderCredentialPublicationClient(
+            BrokerRunBindingAuthorityTests.CreateOptions(), certificate, client, TimeProvider.System);
+
+        var error = await Assert.ThrowsAsync<BrokerCredentialPublicationException>(
+            () => publisher.PublishAsync(Request(), "actor-1", CancellationToken.None));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
+    }
+
+    [Fact]
     public async Task PublicationRejectsOversizedReceiptWithoutReturningItsBody()
     {
         using var rsa = RSA.Create(2048);
@@ -126,7 +143,7 @@ public sealed class BrokerModelProviderCredentialPublicationClientTests
                 ModelProviderBindingScope.Project, "project-1", "provider-1"),
             new("credential-secret", "0123456789abcdef0123456789abcdef"));
 
-    private sealed class PublicationResponseHandler(string body) : HttpMessageHandler
+    private sealed class PublicationResponseHandler(string body, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {
         internal Uri? RequestUri { get; private set; }
         internal string? BearerToken { get; private set; }
@@ -145,7 +162,7 @@ public sealed class BrokerModelProviderCredentialPublicationClientTests
             Body = request.Content is null
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            var response = new HttpResponseMessage(status)
             {
                 RequestMessage = request,
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),

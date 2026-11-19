@@ -100,6 +100,25 @@
   ],
   "rules": [
     {
+      "name": "Provider publication guard",
+      "sourcePrefixes": [
+        "services/projects-config/Agentweaver.Projects.Config/ModelProviderCredentialPublicationEndpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ModelProviderDraftService.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Migrations/20261119174453_GuardModelProviderPublication.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ModelProviderWriteGuardPostgresTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ModelProviderGuardMigrationPostgresTests.cs"
+      ],
+      "required": [
+        "docs/architecture/projects-config.md",
+        "docs/architecture/identity-secrets.md",
+        "docs/deep-dive/projects-config.md",
+        "docs/deep-dive/providers-models.md",
+        "docs/reference/contracts.md",
+        "docs/reference/api.md",
+        "docs/guide/testing.md"
+      ]
+    },
+    {
       "name": "Native ACS composable domains",
       "sourcePrefixes": [
         "packages/Agentweaver.Policy.Acs/",

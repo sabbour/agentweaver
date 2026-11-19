@@ -39,6 +39,9 @@ if (args.Contains(PlatformAdminInspectionCommand.Argument, StringComparer.Ordina
 var builder = WebApplication.CreateBuilder(
     runMigrations || runPrivilegedProjectSetup || runFirstTenantAdminBootstrap ||
         runFirstPlatformAdminBootstrap || runFirstPlatformAdminInspection ? [] : args);
+var requestContext = new HttpContextAccessor();
+builder.Services.AddSingleton<IHttpContextAccessor>(requestContext);
+ModelProviderCredentialPublicationEndpoints.SuppressLegacyRequestLogs(builder.Services, requestContext);
 if (runPrivilegedProjectSetup)
 {
     // This one-shot path reports only a stable error code; token and exception details never reach console output.
@@ -177,7 +180,6 @@ builder.Services.AddScoped<ProjectsConfigService>();
 builder.Services.AddScoped<ModelProviderDraftService>(services => new(
     services.GetRequiredService<ProjectsConfigDbContext>(),
     services.GetRequiredService<TimeProvider>(),
-    services.GetRequiredService<IRuntimeRateCardOwnerClient>(),
     services.GetRequiredService<ModelBindingCapabilities>(),
     builder.Configuration.GetValue<bool>("ProjectsConfig:ProviderReferenceReservationsEnabled")));
 builder.Services.AddDataProtection()
@@ -241,7 +243,6 @@ builder.Services.AddHttpClient(RuntimeRateCardOwnerClient.HttpClientName, client
     .RedactLoggedHeaders(["Authorization"])
     .ConfigurePrimaryHttpMessageHandler(
         Agentweaver.Identity.RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
-builder.Services.AddScoped<IRuntimeRateCardOwnerClient, RuntimeRateCardOwnerClient>();
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
 

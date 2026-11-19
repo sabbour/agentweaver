@@ -310,6 +310,7 @@ public sealed partial class ProjectsConfigPostgresTests
         {
             await ProjectsConfigMigrator.MigrateAsync(fixture.MigrationDataSource, options);
         }
+
         finally
         {
             await using var revoke = new NpgsqlCommand("""
@@ -318,6 +319,29 @@ public sealed partial class ProjectsConfigPostgresTests
                 """, admin);
             await revoke.ExecuteNonQueryAsync();
         }
+    }
+
+    [Fact]
+    public async Task TransactionalMigrationPreservesAppliedHistoryOnRepeat()
+    {
+        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(fixture.MigrationDataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+        await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        const string historySql = """
+            SELECT array_agg("MigrationId" ORDER BY "MigrationId")
+            FROM projects_config.__ef_migrations_history
+            """;
+        await using var before = new NpgsqlCommand(historySql, connection, transaction);
+        var history = Assert.IsType<string[]>(await before.ExecuteScalarAsync());
+        Assert.NotEmpty(history);
+
+        await ProjectsConfigMigrator.MigrateAsync(connection, transaction, options);
+        await using var after = new NpgsqlCommand(historySql, connection, transaction);
+        Assert.Equal(history, Assert.IsType<string[]>(await after.ExecuteScalarAsync()));
+        await transaction.CommitAsync();
     }
 
     [Fact]

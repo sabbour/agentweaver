@@ -428,7 +428,9 @@ public sealed partial class ProjectsConfigPostgresTests
             """, connection))
         {
             update.Parameters.AddWithValue("source", ordinaryId);
-            Assert.Equal(1, await update.ExecuteNonQueryAsync());
+            var error = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
+            Assert.Equal("ck_model_provider_write_guard", error.ConstraintName);
         }
         await using (var constraints = new NpgsqlCommand("""
             SELECT array_agg(conname::text ORDER BY conname)
@@ -860,7 +862,7 @@ public sealed partial class ProjectsConfigPostgresTests
     public async Task ModelProviderDraftReferenceMigrationDownPreservesPopulatedReservations(bool populated)
     {
         var isolated = new ProjectsConfigPostgresFixture();
-        await isolated.InitializeAsync();
+        await isolated.InitializeToAsync("20261119132116_ReserveModelProviderReferences");
         try
         {
         if (populated)
@@ -958,7 +960,7 @@ public sealed partial class ProjectsConfigPostgresTests
     public async Task ModelProviderDraftLegacyReceiptReplaysAfterReferenceMigration()
     {
         var isolated = new ProjectsConfigPostgresFixture();
-        await isolated.InitializeAsync();
+        await isolated.InitializeToAsync("20261119132116_ReserveModelProviderReferences");
         try
         {
             var migrationOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
@@ -1046,7 +1048,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var reference = "Z" + new string('a', 255);
         var request = DraftRequest(operation, 0) with { Reference = reference };
         var missing = new ModelProviderDraftService(
-            db, TimeProvider.System, null, ModelBindingCapabilities.Unavailable, true);
+            db, TimeProvider.System, ModelBindingCapabilities.Unavailable, true);
         var unavailable = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             missing.SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId, request, CancellationToken.None));
         Assert.Equal("model_provider_draft_unavailable", unavailable.Code);
@@ -1338,7 +1340,7 @@ public sealed partial class ProjectsConfigPostgresTests
                 bindingEnabled ? "true" : "false",
         };
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-        return new ModelProviderDraftService(db, TimeProvider.System, null,
+        return new ModelProviderDraftService(db, TimeProvider.System,
             ModelBindingCapabilities.FromConfiguration(configuration), enabled);
     }
 

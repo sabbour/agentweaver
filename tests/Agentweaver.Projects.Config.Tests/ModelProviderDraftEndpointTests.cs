@@ -612,7 +612,7 @@ public sealed partial class ProjectsConfigPostgresTests
                         var bindings = ModelBindingCapabilities.FromConfiguration(configuration);
                         services.AddScoped<ModelProviderDraftService>(sp => new(
                             sp.GetRequiredService<ProjectsConfigDbContext>(),
-                            TimeProvider.System, null, bindings, true));
+                            TimeProvider.System, bindings, true));
                     }
                     else
                         services.AddScoped<ModelProviderDraftService>();

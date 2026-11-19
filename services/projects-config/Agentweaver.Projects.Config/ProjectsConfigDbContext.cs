@@ -315,6 +315,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(head => head.UpdatedByActorId).HasColumnName("updated_by_actor_id")
                 .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
             entity.Property(head => head.UpdatedAt).HasColumnName("updated_at");
+            entity.Property<string>("WriteTransactionId").HasColumnName("write_transaction_id")
+                .HasColumnType("text").HasDefaultValue("legacy").IsRequired().ValueGeneratedOnAddOrUpdate();
             entity.HasOne<ProjectRecord>()
                 .WithMany()
                 .HasForeignKey(head => head.ProjectId)
@@ -388,6 +390,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(revision => revision.CreatedByActorId).HasColumnName("created_by_actor_id")
                 .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
             entity.Property(revision => revision.CreatedAt).HasColumnName("created_at");
+            entity.Property<string>("WriteTransactionId").HasColumnName("write_transaction_id")
+                .HasColumnType("text").HasDefaultValue("legacy").IsRequired().ValueGeneratedOnAddOrUpdate();
             entity.HasOne<ModelProviderDraftHeadRecord>()
                 .WithMany()
                 .HasForeignKey(revision => revision.ProviderId)

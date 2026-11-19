@@ -26,7 +26,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectConfiguration.cs` | Typed settings, validation, limits, and egress narrowing |
 | `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
 | `NativeAcsPolicyEndpoints.cs`, `PlatformPolicySourceEndpoints.cs`, `PlatformPolicySourceTls.cs`, and `NativeAcsPolicyStore.cs` | Public Platform and Project ACS Policy reads, private Environment source read, and immutable policy source |
-| `ModelProviderDraftService.cs`, `ModelProviderDraftRecords.cs`, and `ModelProviderCredentialPublicationEndpoints.cs` | Customer-provided provider Drafts, immutable revisions, and private credential publication |
+| `ModelProviderDraftService.cs`, `ModelProviderDraftRecords.cs`, and `ModelProviderCredentialPublicationEndpoints.cs` | Provider Drafts, immutable revisions, and the disabled legacy publication path |
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
 | `ProjectBlueprintCatalog.cs`, `AgentSuiteBlueprintConverter.cs`, and `BlueprintPackages/` | 0.x blueprints, their AgentSuite conversion, and the ported 0.x package validator |
@@ -185,25 +185,12 @@ The local copy is not a deployment-wide inventory. The permanent reservation, pr
 head, and first revision commit together under the create and current authority
 locks. A later activation requires separate inventory and fencing.
 
-The private Broker route
-`POST /internal/byok/credential-publications` appends an exact credential
-version to a `Draft` or `Available` provider. It copies the current metadata,
-configuration hash, and rate-card references. The Broker caller checks
-current authority before publication. A short-lived token binds the actor and
-request; Projects checks the native TLS handshake and exact token-to-body
-match. Projects reads the saved card ID and opaque version from the current
-revision through the Projects-only Events owner route. It checks the canonical
-card, exact ID and version, provenance, and strong SHA-256 ETag before it sets
-the state to `Available`.
-
-A missing card, invalid response, or three-second Events timeout sets the
-provider to `Draft` while credential publication commits. Projects rechecks
-the card when it rotates a credential on an `Available` provider. Caller
-cancellation aborts publication. A new Broker operation with a fresh operation ID and
-current provider revision retries verification after Events recovers. Replaying
-the original operation returns its receipt without another Events read or a
-state change. A metadata save on a `Draft` provider preserves the credential version. This route
-does not select a provider. Gateway routes expose list, read, create, and update
+The legacy private publication path returns `503
+credential_publication_unavailable` before authentication and body reads.
+PostgreSQL requires each Draft head change and revision in one transaction.
+An edit preserves the prior credential version, slot, and secret identifier.
+Existing `Available` revisions and accepted run pins remain readable.
+Gateway routes expose list, read, create, and update
 for platform and project providers. They return a public metadata projection,
 not the full binding record. `hasCredential` reports whether the current
 revision has a credential version, but does not expose it. Lists use a bounded,

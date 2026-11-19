@@ -222,6 +222,97 @@ const providerReferenceGuard = trigger => ({
   functionSource: PROVIDER_REFERENCE_GUARD_SOURCE,
 });
 
+const PROVIDER_WRITE_MARKER_SOURCE = `
+DECLARE
+    transaction_id text := pg_catalog.pg_current_xact_id()::text;
+BEGIN
+    IF TG_TABLE_NAME = 'model_providers' AND TG_OP = 'UPDATE'
+       AND OLD.write_transaction_id = transaction_id THEN
+        RAISE EXCEPTION 'provider transition is unavailable'
+            USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+    END IF;
+    NEW.write_transaction_id := transaction_id;
+    RETURN NEW;
+END;`;
+
+const PROVIDER_WRITE_PAIR_SOURCE = `
+DECLARE
+    h projects_config.model_providers%ROWTYPE;
+    r projects_config.model_provider_revisions%ROWTYPE;
+    previous projects_config.model_provider_revisions%ROWTYPE;
+    transaction_id text := pg_catalog.pg_current_xact_id()::text;
+BEGIN
+    IF TG_TABLE_NAME = 'model_providers' THEN
+        SELECT * INTO h FROM projects_config.model_providers
+        WHERE provider_id = NEW.provider_id;
+        SELECT * INTO r FROM projects_config.model_provider_revisions
+        WHERE provider_id = NEW.provider_id AND provider_revision = NEW.current_revision;
+        IF h.provider_id IS NULL OR r.provider_id IS NULL
+           OR h.write_transaction_id <> transaction_id
+           OR r.write_transaction_id <> transaction_id
+           OR h.current_revision <> NEW.current_revision
+           OR NEW.state <> 'Draft'
+           OR (TG_OP = 'INSERT' AND
+               (NEW.current_revision <> 1 OR
+                ROW(NEW.created_by_actor_id, NEW.created_at)
+                IS DISTINCT FROM ROW(NEW.updated_by_actor_id, NEW.updated_at)))
+           OR (TG_OP = 'UPDATE' AND
+               (OLD.state <> 'Draft' OR
+                NEW.current_revision <> OLD.current_revision + 1 OR
+                ROW(NEW.provider_id, NEW.scope, NEW.project_id, NEW.created_by_actor_id, NEW.created_at)
+                IS DISTINCT FROM
+                ROW(OLD.provider_id, OLD.scope, OLD.project_id, OLD.created_by_actor_id, OLD.created_at))) THEN
+            RAISE EXCEPTION 'provider transition is unavailable'
+                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+        END IF;
+    ELSE
+        r := NEW;
+        SELECT * INTO h FROM projects_config.model_providers WHERE provider_id = NEW.provider_id;
+        IF h.provider_id IS NULL OR h.write_transaction_id <> transaction_id
+           OR NEW.write_transaction_id <> transaction_id
+           OR h.current_revision <> NEW.provider_revision
+           OR h.state <> 'Draft'
+           OR ROW(h.scope, h.project_id, h.display_name, h.type, h.base_url, h.deployment,
+                  h.wire_api, h.azure_api_version, h.reasoning_efforts, h.prompt_capacity_tokens,
+                  h.updated_by_actor_id, h.updated_at)
+              IS DISTINCT FROM
+              ROW(NEW.scope, NEW.project_id, NEW.display_name, NEW.type, NEW.base_url, NEW.deployment,
+                  NEW.wire_api, NEW.azure_api_version, NEW.reasoning_efforts, NEW.prompt_capacity_tokens,
+                  NEW.created_by_actor_id, NEW.created_at) THEN
+            RAISE EXCEPTION 'provider transition is unavailable'
+                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+        END IF;
+        IF NEW.provider_revision = 1 THEN
+            IF NEW.credential_version IS NOT NULL OR NEW.credential_slot_id IS NOT NULL
+               OR NEW.credential_secret_id IS NOT NULL THEN
+                RAISE EXCEPTION 'provider transition is unavailable'
+                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+            END IF;
+        ELSE
+            SELECT * INTO previous FROM projects_config.model_provider_revisions
+            WHERE provider_id = NEW.provider_id AND provider_revision = NEW.provider_revision - 1;
+            IF previous.provider_id IS NULL OR
+               ROW(NEW.credential_version, NEW.credential_slot_id, NEW.credential_secret_id)
+               IS DISTINCT FROM
+               ROW(previous.credential_version, previous.credential_slot_id, previous.credential_secret_id) THEN
+                RAISE EXCEPTION 'provider transition is unavailable'
+                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+            END IF;
+        END IF;
+    END IF;
+    RETURN NULL;
+END;`;
+
+const providerWriteGuard = (trigger, marker, triggerType) => ({
+  trigger,
+  function: marker ? 'mark_model_provider_write()' : 'check_model_provider_pair()',
+  triggerType,
+  message: 'provider transition is unavailable',
+  sqlState: '23514',
+  functionSource: marker ? PROVIDER_WRITE_MARKER_SOURCE : PROVIDER_WRITE_PAIR_SOURCE,
+  deferrable: !marker,
+});
+
 const APPEND_ONLY_GUARDS = {
   projects_config: {
     model_providers: [
@@ -232,6 +323,8 @@ const APPEND_ONLY_GUARDS = {
         message: 'records in %.% are immutable', sqlState: '55000',
         column: 'provider_id', condition: '((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)',
       },
+      providerWriteGuard('model_providers_write_marker', true, 23),
+      providerWriteGuard('model_providers_write_pair', false, 21),
     ],
     model_provider_reference_reservations: [
       providerReferenceGuard('model_provider_reference_cross_table_guard'),
@@ -257,6 +350,8 @@ const APPEND_ONLY_GUARDS = {
         function: 'reject_immutable_record_mutation()', triggerType: 34,
         message: 'records in %.% are immutable', sqlState: '55000',
       },
+      providerWriteGuard('model_provider_revisions_write_marker', true, 7),
+      providerWriteGuard('model_provider_revisions_write_pair', false, 5),
     ],
     native_acs_policy_revisions: [
       {
@@ -655,6 +750,8 @@ const APPEND_ONLY_GUARDS = {
 
 const FUNCTIONS = {
   projects_config: [
+    'mark_model_provider_write()',
+    'check_model_provider_pair()',
     'guard_model_provider_reference_cross_table()',
     'reject_immutable_record_mutation()',
     'require_native_acs_policy_file_insert_in_revision_transaction()',

@@ -1,6 +1,7 @@
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using Xunit;
 
@@ -349,218 +350,111 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
-    public async Task CredentialPublicationAppendsReplaysAfterRenameAndPreservesTheVersion()
+    public async Task LegacyDraftEditAndReplayPreservePartialCredential()
     {
-        await using var db = CreateDbContext();
-        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
-        var suffix = Guid.NewGuid().ToString("N");
-        var tenantId = "provider-publication-tenant-" + suffix;
-        var admin = await SeedCallerAsync(
-            db, authorityStore, "provider-publication-admin-" + suffix, tenantId,
+        await using var legacy = await ModelProviderGuardMigrationPostgresTests.PreGuardDatabase.StartAsync();
+        await legacy.ExecuteAsync(ModelProviderGuardMigrationPostgresTests.LegacyRows);
+        await ProjectsConfigMigrator.MigrateAsync(legacy.Migration, legacy.Options);
+        await using var runtime = legacy.CreateRuntimeDataSource();
+        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(runtime, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema)).Options;
+        await using var db = new ProjectsConfigDbContext(options);
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(legacy.Options, TimeProvider.System);
+        var caller = await SeedCallerAsync(db, authority, "legacy-editor", "legacy-tenant",
             ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
             ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
         var service = new ModelProviderDraftService(db, TimeProvider.System);
-        var providerId = "publication-provider-" + suffix;
-        var initial = await service.SaveAsync(
-            admin,
-            ModelProviderBindingScope.Platform,
-            null,
-            providerId,
-            DraftRequest(Guid.NewGuid(), 0),
-            CancellationToken.None);
-        var publication = PublicationRequest(
-            Guid.NewGuid(), initial.Binding.ProviderRevision, ModelProviderBindingScope.Platform,
-            null, providerId, "0123456789abcdef0123456789abcdef");
-
-        var receipt = await service.PublishCredentialAsync(publication, admin.ActorId, CancellationToken.None);
-
-        Assert.Equal(publication.OperationId, receipt.OperationId);
-        Assert.Equal(2, receipt.ProviderRevision);
-        Assert.Equal(publication.CredentialVersion, receipt.CredentialVersion);
-        Assert.Equal(publication.CredentialIdentity, receipt.CredentialIdentity);
-        Assert.Equal(publication.CredentialReference, receipt.CredentialReference);
-        Assert.Equal(initial.Binding.ConfigurationHash, receipt.ConfigurationHash);
-
-        var renamed = await service.SaveAsync(
-            admin,
-            ModelProviderBindingScope.Platform,
-            null,
-            providerId,
-            DraftRequest(Guid.NewGuid(), receipt.ProviderRevision) with { DisplayName = "Renamed model" },
-            CancellationToken.None);
-        Assert.Equal(3, renamed.Binding.ProviderRevision);
-        Assert.Equal(publication.CredentialVersion, renamed.Binding.CredentialVersion);
-        Assert.Equal(publication.CredentialIdentity, renamed.Binding.CredentialIdentity);
-        Assert.Equal(publication.CredentialReference, renamed.Binding.CredentialReference);
-        Assert.True(ModelProviderDraftEndpoints.Project(renamed).HasCredential);
-
-        var replay = await service.PublishCredentialAsync(publication, admin.ActorId, CancellationToken.None);
-        Assert.Equal(receipt, replay);
-        Assert.Equal(3, await db.ModelProviderDraftRevisions.CountAsync(item => item.ProviderId == providerId));
-
-        var changedReplay = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
+        var unavailableEdit = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
+            service.SaveAsync(caller, ModelProviderBindingScope.Platform, null, "legacy-available",
+                DraftRequest(Guid.NewGuid(), 1), CancellationToken.None));
+        Assert.Equal("model_provider_draft_unavailable", unavailableEdit.Code);
+        var oldOperation = await db.ModelProviderDraftRevisions.AsNoTracking()
+            .Where(item => item.ProviderId == "legacy-draft" && item.ProviderRevision == 2)
+            .Select(item => item.OperationId).SingleAsync();
+        var unavailable = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             service.PublishCredentialAsync(
-                publication with
-                {
-                    CredentialVersion = "fedcba9876543210fedcba9876543210",
-                    CredentialReference = new(
-                        publication.CredentialReference.Id, "fedcba9876543210fedcba9876543210")
-                },
-                admin.ActorId,
-                CancellationToken.None));
-        Assert.Equal("model_provider_draft_conflict", changedReplay.Code);
+                PublicationRequest(oldOperation, 1, ModelProviderBindingScope.Platform, null, "legacy-draft",
+                    "0123456789abcdef0123456789abcdef"), caller.ActorId, CancellationToken.None));
+        Assert.Equal("credential_publication_unavailable", unavailable.Code);
 
-        var stale = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
-            service.PublishCredentialAsync(
-                publication with { OperationId = Guid.NewGuid(), ExpectedProviderRevision = 1 },
-                admin.ActorId,
-                CancellationToken.None));
-        Assert.Equal("model_provider_draft_conflict", stale.Code);
+        var edit = DraftRequest(Guid.NewGuid(), 2) with { DisplayName = "edited" };
+        var first = await service.SaveAsync(caller, ModelProviderBindingScope.Platform, null,
+            "legacy-draft", edit, CancellationToken.None);
+        await service.SaveAsync(caller, ModelProviderBindingScope.Platform, null, "legacy-draft",
+            DraftRequest(Guid.NewGuid(), 3) with { DisplayName = "later" }, CancellationToken.None);
+        await using var restartedDb = new ProjectsConfigDbContext(options);
+        var restartedService = new ModelProviderDraftService(restartedDb, TimeProvider.System);
+        var replay = await restartedService.SaveAsync(caller, ModelProviderBindingScope.Platform, null,
+            "legacy-draft", edit, CancellationToken.None);
+        Assert.Equal(first, replay);
+        Assert.Equal(3, replay.Binding.ProviderRevision);
+        var revisions = await db.ModelProviderDraftRevisions.AsNoTracking()
+            .Where(item => item.ProviderId == "legacy-draft" && item.ProviderRevision >= 2)
+            .OrderBy(item => item.ProviderRevision)
+            .Select(item => new { item.CredentialVersion, item.CredentialSlotId, item.CredentialSecretId })
+            .ToArrayAsync();
+        Assert.Equal(3, revisions.Length);
+        Assert.All(revisions, item => Assert.Equal(revisions[0], item));
     }
 
     [Fact]
-    public async Task CredentialPublicationRequiresVerifiedRateCardAndAReplyUsesAFreshOperationToRetry()
+    public async Task ConcurrentDifferentProvidersCannotShareOperation()
     {
-        await using var db = CreateDbContext();
-        var providerId = "rate-card-provider-" + Guid.NewGuid().ToString("N");
-        const string actorId = "broker-agent";
-        const string cardId = "manual:azure-card";
-        const string cardVersion = "20261110";
-        await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
-        var owner = new RuntimeRateCardTestClient(false, true, true);
-        var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
-        var firstRequest = PublicationRequest(Guid.NewGuid(), 1, ModelProviderBindingScope.Platform,
-            null, providerId, "0123456789abcdef0123456789abcdef");
+        await using var seed = CreateDbContext();
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var caller = await SeedCallerAsync(seed, authority, "shared-operation-" + suffix, "tenant-" + suffix,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        await using var firstDb = CreateDbContext();
+        await using var secondDb = CreateDbContext();
+        var operation = Guid.NewGuid();
 
-        var firstReceipt = await service.PublishCredentialAsync(firstRequest, actorId, CancellationToken.None);
-        Assert.Equal(2, firstReceipt.ProviderRevision);
-        Assert.Equal(
-            ModelProviderDraftState.Draft,
-            await db.ModelProviderDrafts.AsNoTracking()
-                .Where(head => head.ProviderId == providerId)
-                .Select(head => head.State)
-                .SingleAsync());
-
-        var replay = await service.PublishCredentialAsync(firstRequest, actorId, CancellationToken.None);
-        Assert.Equal(firstReceipt, replay);
-        Assert.Single(owner.Requests);
-        Assert.Equal((cardId, cardVersion), Assert.Single(owner.Requests));
-
-        var retryRequest = firstRequest with
+        static async Task<(ModelProviderDraft? Result, Exception? Error)> Attempt(
+            ModelProviderDraftService service, ProjectAuthorizationContext caller, string providerId, Guid operation)
         {
-            OperationId = Guid.NewGuid(),
-            ExpectedProviderRevision = firstReceipt.ProviderRevision,
-        };
-        var retryReceipt = await service.PublishCredentialAsync(retryRequest, actorId, CancellationToken.None);
-        Assert.Equal(3, retryReceipt.ProviderRevision);
-        Assert.Equal(
-            ModelProviderDraftState.Available,
-            await db.ModelProviderDrafts.AsNoTracking()
-                .Where(head => head.ProviderId == providerId)
-                .Select(head => head.State)
-                .SingleAsync());
-        Assert.Equal(2, owner.Requests.Count);
-        Assert.All(owner.Requests, request => Assert.Equal((cardId, cardVersion), request));
-
-        var rotation = await service.PublishCredentialAsync(
-            retryRequest with
+            try
             {
-                OperationId = Guid.NewGuid(),
-                ExpectedProviderRevision = retryReceipt.ProviderRevision,
-                CredentialVersion = "fedcba9876543210fedcba9876543210",
-                CredentialReference = new(
-                    retryRequest.CredentialReference.Id, "fedcba9876543210fedcba9876543210"),
-            },
-            actorId,
-            CancellationToken.None);
-        Assert.Equal(4, rotation.ProviderRevision);
-        Assert.Equal(
-            ModelProviderDraftState.Available,
-            await db.ModelProviderDrafts.AsNoTracking()
-                .Where(head => head.ProviderId == providerId)
-                .Select(head => head.State)
-                .SingleAsync());
-        Assert.Equal(3, owner.Requests.Count);
-        Assert.All(owner.Requests, request => Assert.Equal((cardId, cardVersion), request));
+                return (await service.SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId,
+                    DraftRequest(operation, 0), CancellationToken.None), null);
+            }
+            catch (Exception exception)
+            {
+                return (null, exception);
+            }
+        }
+
+        var outcomes = await Task.WhenAll(
+            Attempt(new ModelProviderDraftService(firstDb, TimeProvider.System), caller, "first-" + suffix, operation),
+            Attempt(new ModelProviderDraftService(secondDb, TimeProvider.System), caller, "second-" + suffix, operation));
+        Assert.Single(outcomes, outcome => outcome.Result is not null);
+        var failure = Assert.Single(outcomes, outcome => outcome.Error is not null);
+        Assert.Equal("model_provider_draft_conflict", Assert.IsType<ModelProviderDraftException>(failure.Error).Code);
+        Assert.Equal(1, await seed.ModelProviderDraftRevisions.CountAsync(item => item.OperationId == operation));
     }
 
     [Fact]
-    public async Task FailedCredentialRotationMovesAvailableProviderBackToDraftAndReplaysTheResult()
+    public async Task BrokenProviderPairReturnsUnavailableAndRollsBack()
     {
-        await using var db = CreateDbContext();
-        var providerId = "rate-card-rotation-" + Guid.NewGuid().ToString("N");
-        const string actorId = "broker-agent";
-        const string cardId = "manual:azure-card";
-        const string cardVersion = "20261110";
-        await SeedProviderWithRateCardAsync(db, providerId, actorId, cardId, cardVersion);
-        var owner = new RuntimeRateCardTestClient(true, false);
-        var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
-        var initialRequest = PublicationRequest(Guid.NewGuid(), 1, ModelProviderBindingScope.Platform,
-            null, providerId, "0123456789abcdef0123456789abcdef");
-
-        var initialReceipt = await service.PublishCredentialAsync(initialRequest, actorId, CancellationToken.None);
-        Assert.Equal(2, initialReceipt.ProviderRevision);
-        Assert.Equal(
-            ModelProviderDraftState.Available,
-            await db.ModelProviderDrafts.AsNoTracking()
-                .Where(head => head.ProviderId == providerId)
-                .Select(head => head.State)
-                .SingleAsync());
-
-        var rotationRequest = initialRequest with
-        {
-            OperationId = Guid.NewGuid(),
-            ExpectedProviderRevision = initialReceipt.ProviderRevision,
-            CredentialVersion = "fedcba9876543210fedcba9876543210",
-            CredentialReference = new(
-                initialRequest.CredentialReference.Id, "fedcba9876543210fedcba9876543210"),
-        };
-        var rotationReceipt = await service.PublishCredentialAsync(rotationRequest, actorId, CancellationToken.None);
-
-        Assert.Equal(3, rotationReceipt.ProviderRevision);
-        Assert.Equal(rotationRequest.CredentialVersion, rotationReceipt.CredentialVersion);
-        Assert.Equal(
-            ModelProviderDraftState.Draft,
-            await db.ModelProviderDrafts.AsNoTracking()
-                .Where(head => head.ProviderId == providerId)
-                .Select(head => head.State)
-                .SingleAsync());
-
-        var replay = await service.PublishCredentialAsync(rotationRequest, actorId, CancellationToken.None);
-        Assert.Equal(rotationReceipt, replay);
-        Assert.Equal(2, owner.Requests.Count);
-        Assert.Equal(3, await db.ModelProviderDraftRevisions.CountAsync(item => item.ProviderId == providerId));
-        Assert.Equal(
-            ModelProviderDraftState.Draft,
-            await db.ModelProviderDrafts.AsNoTracking()
-                .Where(head => head.ProviderId == providerId)
-                .Select(head => head.State)
-                .SingleAsync());
-    }
-
-    [Fact]
-    public async Task CredentialPublicationWithoutSavedRateCardStaysDraft()
-    {
-        await using var db = CreateDbContext();
-        var providerId = "rate-card-missing-" + Guid.NewGuid().ToString("N");
-        const string actorId = "broker-agent";
-        await SeedProviderWithRateCardAsync(db, providerId, actorId, null, null);
-        var owner = new RuntimeRateCardTestClient(true);
-        var service = new ModelProviderDraftService(db, TimeProvider.System, owner);
-
-        var receipt = await service.PublishCredentialAsync(
-            PublicationRequest(Guid.NewGuid(), 1, ModelProviderBindingScope.Platform,
-                null, providerId, "0123456789abcdef0123456789abcdef"),
-            actorId,
-            CancellationToken.None);
-
-        Assert.Equal(2, receipt.ProviderRevision);
-        Assert.Equal(ModelProviderDraftState.Draft,
-            await db.ModelProviderDrafts.AsNoTracking()
-                .Where(head => head.ProviderId == providerId)
-                .Select(head => head.State)
-                .SingleAsync());
-        Assert.Empty(owner.Requests);
+        await using var seed = CreateDbContext();
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var caller = await SeedCallerAsync(seed, authority, "pair-admin-" + suffix, "tenant-" + suffix,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>(CreateDbContextOptions())
+            .AddInterceptors(new MismatchedRevisionInterceptor()).Options;
+        await using var db = new ProjectsConfigDbContext(options);
+        var providerId = "pair-" + suffix;
+        var error = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
+            new ModelProviderDraftService(db, TimeProvider.System).SaveAsync(
+                caller, ModelProviderBindingScope.Platform, null, providerId,
+                DraftRequest(Guid.NewGuid(), 0), CancellationToken.None));
+        Assert.Equal("model_provider_draft_unavailable", error.Code);
+        Assert.DoesNotContain("mismatched", error.Message, StringComparison.Ordinal);
+        Assert.False(await seed.ModelProviderDrafts.AnyAsync(item => item.ProviderId == providerId));
+        Assert.False(await seed.ModelProviderDraftRevisions.AnyAsync(item => item.ProviderId == providerId));
     }
 
     [Fact]
@@ -704,71 +598,16 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(1, retry.Binding.ProviderRevision);
     }
 
-    private static async Task SeedProviderWithRateCardAsync(
-        ProjectsConfigDbContext db,
-        string providerId,
-        string actorId,
-        string? rateCardId,
-        string? rateCardVersion)
+    private sealed class MismatchedRevisionInterceptor : SaveChangesInterceptor
     {
-        var now = DateTimeOffset.UtcNow;
-        db.ModelProviderDrafts.Add(new ModelProviderDraftHeadRecord
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
         {
-            ProviderId = providerId,
-            Scope = ModelProviderBindingScope.Platform,
-            DisplayName = "Customer model",
-            ProviderType = "azure",
-            BaseUrl = "https://provider.example",
-            Deployment = "deployment-1",
-            ReasoningEfforts = ["low"],
-            State = ModelProviderDraftState.Draft,
-            CurrentRevision = 1,
-            CreatedByActorId = actorId,
-            CreatedAt = now,
-            UpdatedByActorId = actorId,
-            UpdatedAt = now,
-        });
-        db.ModelProviderDraftRevisions.Add(new ModelProviderDraftRevisionRecord
-        {
-            ProviderId = providerId,
-            Scope = ModelProviderBindingScope.Platform,
-            ProviderRevision = 1,
-            OperationId = Guid.NewGuid(),
-            RequestFingerprint = new string('b', 64),
-            DisplayName = "Customer model",
-            ProviderType = "azure",
-            BaseUrl = "https://provider.example",
-            Deployment = "deployment-1",
-            ReasoningEfforts = ["low"],
-            ConfigurationHash = new string('a', 64),
-            RateCardId = rateCardId,
-            RateCardVersion = rateCardVersion,
-            CreatedByActorId = actorId,
-            CreatedAt = now,
-        });
-        await db.SaveChangesAsync();
-    }
-
-    private sealed class RuntimeRateCardTestClient(params bool[] results) : IRuntimeRateCardOwnerClient
-    {
-        private int _nextResult;
-
-        public List<(string Id, string Version)> Requests { get; } = [];
-
-        public async Task<bool> VerifyAsync(string id, string version, CancellationToken cancellationToken) =>
-            await ReadPinAsync(id, version, cancellationToken) is not null;
-
-        public Task<RuntimeRateCardPin?> ReadPinAsync(
-            string id, string version, CancellationToken cancellationToken)
-        {
-            Requests.Add((id, version));
-            var available = results[_nextResult++];
-            RuntimeRateCardPin? pin = available
-                ? new RuntimeRateCardPin(id, version, new string('c', 64),
-                    new ManualRuntimeRateCardReadProvenance(
-                        "https://pricing.example/rate-card", new DateOnly(2026, 1, 1)))
-                : null;
-            return Task.FromResult(pin);
+            foreach (var entry in eventData.Context!.ChangeTracker.Entries<ModelProviderDraftRevisionRecord>()
+                         .Where(item => item.State == EntityState.Added))
+                entry.Entity.DisplayName = "mismatched";
+            return ValueTask.FromResult(result);
         }
     }
 
