@@ -330,6 +330,11 @@ public sealed partial class ProjectsConfigPostgresTests
     [Fact]
     public async Task ModelProviderDraftReferenceChecksCurrentPlatformSelectors()
     {
+        await RunWithIsolatedProjectsAsync(test => test.CheckCurrentPlatformSelectorsCoreAsync());
+    }
+
+    private async Task CheckCurrentPlatformSelectorsCoreAsync()
+    {
         await using var db = CreateDbContext();
         var caller = await CreateReferenceAdminAsync(db);
         var head = await db.PlatformRuntimeHeads.SingleAsync(item => item.Id == PlatformRuntimeHeadRecord.SingletonId);

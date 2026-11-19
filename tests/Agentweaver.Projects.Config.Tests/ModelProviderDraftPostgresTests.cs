@@ -310,7 +310,7 @@ public sealed partial class ProjectsConfigPostgresTests
             WHERE provider_id = @provider_id AND provider_revision = 1
             """,
             ("provider_id", providerId));
-        await AssertImmutableAsync("TRUNCATE TABLE projects_config.model_provider_revisions");
+        await RunWithIsolatedProjectsAsync(test => test.AssertProviderRevisionTruncateGuardsAsync());
 
         var read = await service.ReadAsync(
             admin, ModelProviderBindingScope.Platform, null, providerId, CancellationToken.None);
@@ -318,6 +318,34 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Contains(
             await service.ListAsync(admin, ModelProviderBindingScope.Platform, null, CancellationToken.None),
             item => item.Binding.ProviderId == providerId);
+    }
+
+    private async Task AssertProviderRevisionTruncateGuardsAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await using var command = new NpgsqlCommand(
+                "TRUNCATE TABLE projects_config.model_provider_revisions CASCADE", connection, transaction);
+            var error = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+            Assert.Equal("55000", error.SqlState);
+            Assert.Equal("records in projects_config.model_provider_revisions are immutable", error.MessageText);
+            await transaction.RollbackAsync();
+        }
+
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await using var disable = new NpgsqlCommand(
+                "ALTER TABLE projects_config.model_provider_revisions DISABLE TRIGGER model_provider_revisions_no_truncate",
+                connection, transaction);
+            await disable.ExecuteNonQueryAsync();
+            await using var command = new NpgsqlCommand(
+                "TRUNCATE TABLE projects_config.model_provider_revisions CASCADE", connection, transaction);
+            var error = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+            Assert.Equal("55000", error.SqlState);
+            Assert.Equal("records in projects_config.model_provider_reference_reservations are immutable", error.MessageText);
+            await transaction.RollbackAsync();
+        }
     }
 
     [Fact]

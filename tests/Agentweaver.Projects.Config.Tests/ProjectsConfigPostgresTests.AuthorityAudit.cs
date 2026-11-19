@@ -62,7 +62,10 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
-    public async Task Migration039BackfillsPreExistingSetupAndP1AuditRowsWithoutChangingThem()
+    public Task Migration039BackfillsPreExistingSetupAndP1AuditRowsWithoutChangingThem() =>
+        RunWithIsolatedProjectsAsync(test => test.Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync());
+
+    private async Task Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync()
     {
         await using var db = CreateDbContext();
         var options = CreateDbContextOptions();
@@ -168,7 +171,12 @@ public sealed partial class ProjectsConfigPostgresTests
     [InlineData("setup-event-type-mismatch", "setup operation references an authority audit event outside its tenant")]
     [InlineData("p1-tenant-mismatch", "P1 authority audit event does not match its project tenant and resource")]
     [InlineData("p1-resource-type-mismatch", "P1 authority audit event does not match its project tenant and resource")]
-    public async Task Migration039RejectsConflictingLegacyLinksAtomically(
+    public Task Migration039RejectsConflictingLegacyLinksAtomically(
+        string scenario,
+        string expectedError) =>
+        RunWithIsolatedProjectsAsync(test => test.Migration039RejectsConflictingLegacyLinksCoreAsync(scenario, expectedError));
+
+    private async Task Migration039RejectsConflictingLegacyLinksCoreAsync(
         string scenario,
         string expectedError)
     {

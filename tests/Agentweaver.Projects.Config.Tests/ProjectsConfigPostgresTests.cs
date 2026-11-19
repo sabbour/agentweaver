@@ -25,6 +25,20 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fixture)
     : IClassFixture<ProjectsConfigPostgresFixture>
 {
+    private static async Task RunWithIsolatedProjectsAsync(Func<ProjectsConfigPostgresTests, Task> test)
+    {
+        var isolated = new ProjectsConfigPostgresFixture();
+        try
+        {
+            await isolated.InitializeAsync();
+            await test(new ProjectsConfigPostgresTests(isolated));
+        }
+        finally
+        {
+            await isolated.DisposeAsync();
+        }
+    }
+
     [Fact]
     public async Task ReplaysLegacyNonCostFingerprintAndSnapshotWithoutMeterSource()
     {
@@ -518,7 +532,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
-    public async Task DowngradeRemovesUnsupportedHostedReasoningEffortsBeforeRestoringConstraint()
+    public Task DowngradeRemovesUnsupportedHostedReasoningEffortsBeforeRestoringConstraint() =>
+        RunWithIsolatedProjectsAsync(test => test.DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync());
+
+    private async Task DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync()
     {
         await using var db = CreateDbContext();
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
@@ -575,7 +592,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
-    public async Task DowngradeReturnsAvailableProviderToDraftBeforeRestoringStateConstraint()
+    public Task DowngradeReturnsAvailableProviderToDraftBeforeRestoringStateConstraint() =>
+        RunWithIsolatedProjectsAsync(test => test.DowngradeReturnsAvailableProviderToDraftCoreAsync());
+
+    private async Task DowngradeReturnsAvailableProviderToDraftCoreAsync()
     {
         await using var db = CreateDbContext();
         await using var migrationDb = CreateMigrationDbContext();
@@ -629,7 +649,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     [InlineData("v1")]
     [InlineData("01")]
     [InlineData("9223372036854775808")]
-    public async Task DowngradeRefusesUnrepresentableRateCardVersionsWithoutChangingSchema(string cardVersion)
+    public Task DowngradeRefusesUnrepresentableRateCardVersionsWithoutChangingSchema(string cardVersion) =>
+        RunWithIsolatedProjectsAsync(test => test.DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(cardVersion));
+
+    private async Task DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(string cardVersion)
     {
         await using var db = CreateDbContext();
         await using var migrationDb = CreateMigrationDbContext();
@@ -680,6 +703,14 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             await insertRevision.ExecuteNonQueryAsync();
         }
 
+        await using var schemaConnection = await fixture.MigrationDataSource.OpenConnectionAsync();
+        await using var columns = new NpgsqlCommand("""
+            SELECT array_agg(format('%s:%s:%s:%s', column_name, data_type,
+                character_maximum_length, is_nullable) ORDER BY ordinal_position)
+            FROM information_schema.columns
+            WHERE table_schema = 'projects_config' AND table_name = 'model_provider_revisions'
+            """, schemaConnection);
+        var columnsBefore = (string[])(await columns.ExecuteScalarAsync())!;
         try
         {
             var failure = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -691,8 +722,9 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 "cannot downgrade provider revisions with rate-card versions that are not losslessly representable",
                 refused.MessageText,
                 StringComparison.Ordinal);
-            Assert.Contains(latestMigration, await db.Database.GetAppliedMigrationsAsync());
+            Assert.Contains("20261118082708_PersistRuntimeProviderPins", await db.Database.GetAppliedMigrationsAsync());
             await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+            Assert.Equal(columnsBefore, (string[])(await columns.ExecuteScalarAsync())!);
             await using var read = new NpgsqlCommand(
                 """
                 SELECT rate_card_id, rate_card_version
