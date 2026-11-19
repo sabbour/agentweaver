@@ -25,12 +25,39 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fixture)
     : IClassFixture<ProjectsConfigPostgresFixture>
 {
-    private static async Task RunWithIsolatedProjectsAsync(Func<ProjectsConfigPostgresTests, Task> test)
+    private sealed class PreGuardModelCustomizer(ModelCustomizerDependencies dependencies)
+        : RelationalModelCustomizer(dependencies)
+    {
+        public override void Customize(ModelBuilder modelBuilder, DbContext context)
+        {
+            base.Customize(modelBuilder, context);
+            modelBuilder.Entity<ModelProviderDraftHeadRecord>().Ignore("WriteTransactionId");
+            modelBuilder.Entity<ModelProviderDraftRevisionRecord>().Ignore("WriteTransactionId");
+        }
+    }
+
+    private sealed class PinnedGrantAuthority(SecretRedemptionGrant grant) : IGrantAuthority
+    {
+        public Task<IReadOnlyList<SecretRedemptionGrant>> FindGrantsAsync(
+            TrustedActorContext actor, SecretRedemptionRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<SecretRedemptionGrant>>([grant]);
+    }
+
+    private sealed class PinnedSecretBackend(SecretRef expected) : ISecretRedemption
+    {
+        public Task<SecretCredential> RedeemAsync(SecretRedemptionRequest request, CancellationToken cancellationToken)
+        {
+            Assert.Equal(expected, request.Secret);
+            return Task.FromResult(new SecretCredential("fixture-value", DateTimeOffset.UtcNow.AddMinutes(5)));
+        }
+    }
+
+    private static async Task RunWithIsolatedProjectsAsync(Func<ProjectsConfigPostgresTests, Task> test, bool preGuard = false)
     {
         var isolated = new ProjectsConfigPostgresFixture();
         try
         {
-            await isolated.InitializeAsync();
+            await isolated.InitializeToAsync(preGuard ? "20261119132116_ReserveModelProviderReferences" : null);
             await test(new ProjectsConfigPostgresTests(isolated));
         }
         finally
@@ -316,9 +343,14 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
-    public async Task RunAcceptanceRejectsAChangedProviderCredentialSlotOrSecretReference()
+    public Task RunAcceptanceRejectsAChangedProviderCredentialSlotOrSecretReference() =>
+        RunWithIsolatedProjectsAsync(test => test.RunAcceptanceWithLegacyProviderAsync(), preGuard: true);
+
+    private async Task RunAcceptanceWithLegacyProviderAsync()
     {
-        await using var db = CreateDbContext();
+        var legacyOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>(CreateDbContextOptions())
+            .ReplaceService<IModelCustomizer, PreGuardModelCustomizer>().Options;
+        await using var db = new ProjectsConfigDbContext(legacyOptions);
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
             CreateDbContextOptions(), TimeProvider.System);
         var suffix = Guid.NewGuid().ToString("N");
@@ -352,24 +384,49 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var providerId = "provider-" + suffix;
         const string rateCardId = "manual-provider-card";
         const string rateCardVersion = "20261118";
-        var drafts = new ModelProviderDraftService(
-            db, TimeProvider.System, new RuntimeRateCardTestClient(true));
-        var saved = await drafts.SaveAsync(
-            owner,
-            ModelProviderBindingScope.Project,
-            project.ProjectId,
-            providerId,
-            DraftRequest(Guid.NewGuid(), 0) with
-            {
-                RateCardId = rateCardId,
-                RateCardVersion = rateCardVersion,
-            },
-            CancellationToken.None);
         var publication = PublicationRequest(
-            Guid.NewGuid(), saved.Binding.ProviderRevision,
+            Guid.NewGuid(), 1,
             ModelProviderBindingScope.Project, project.ProjectId, providerId,
             "0123456789abcdef0123456789abcdef");
-        await drafts.PublishCredentialAsync(publication, owner.ActorId, CancellationToken.None);
+        var card = new RuntimeRateCardPin(rateCardId, rateCardVersion, new string('c', 64),
+            new ManualRuntimeRateCardReadProvenance(
+                "https://pricing.example/rate-card", new DateOnly(2026, 1, 1)));
+        await using (var connection = await fixture.MigrationDataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        await using (var seed = new NpgsqlCommand("""
+            INSERT INTO projects_config.model_providers
+              (provider_id, scope, project_id, display_name, type, base_url, deployment, wire_api,
+               reasoning_efforts, prompt_capacity_tokens, state, current_revision, created_by_actor_id,
+               created_at, updated_by_actor_id, updated_at)
+            VALUES (@provider, 'Project', @project, 'Customer model', 'openai', 'https://provider.example',
+                    'deployment-1', 'responses', ARRAY['low','high'], 32768, 'Available', 1,
+                    @actor, now(), @actor, now());
+            INSERT INTO projects_config.model_provider_revisions
+              (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+               display_name, type, base_url, deployment, wire_api, reasoning_efforts, prompt_capacity_tokens,
+               configuration_hash, credential_version, credential_slot_id, credential_secret_id,
+               rate_card_id, rate_card_version, rate_card_pin_json, created_by_actor_id, created_at)
+            VALUES (@provider, 1, 'Project', @project, @operation, repeat('a',64), 'Customer model',
+                    'openai', 'https://provider.example', 'deployment-1', 'responses', ARRAY['low','high'],
+                    32768, repeat('b',64), @version, @slot, @secret, @card, @card_version, @pin,
+                    @actor, now());
+            """, connection, transaction))
+        {
+            seed.Parameters.AddWithValue("provider", providerId);
+            seed.Parameters.AddWithValue("project", project.ProjectId);
+            seed.Parameters.AddWithValue("actor", owner.ActorId);
+            seed.Parameters.AddWithValue("operation", publication.OperationId);
+            seed.Parameters.AddWithValue("version", publication.CredentialVersion);
+            seed.Parameters.AddWithValue("slot", publication.CredentialIdentity.CredentialSlotId);
+            seed.Parameters.AddWithValue("secret", publication.CredentialReference.Id);
+            seed.Parameters.AddWithValue("card", rateCardId);
+            seed.Parameters.AddWithValue("card_version", rateCardVersion);
+            seed.Parameters.AddWithValue("pin", NpgsqlTypes.NpgsqlDbType.Jsonb,
+                System.Text.Json.JsonSerializer.Serialize(card, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+            await seed.ExecuteNonQueryAsync();
+            await transaction.CommitAsync();
+        }
+        var drafts = new ModelProviderDraftService(db, TimeProvider.System);
         var available = await drafts.ReadAsync(
             owner, ModelProviderBindingScope.Project, project.ProjectId,
             providerId, CancellationToken.None);
@@ -410,6 +467,35 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             accepted.ModelSelection.ProviderBindingRevision!.CredentialIdentity);
         Assert.Equal(publication.CredentialReference,
             accepted.ModelSelection.ProviderBindingRevision.CredentialReference);
+
+        var storedBefore = await db.RunSelections.AsNoTracking()
+            .SingleAsync(item => item.RunId == accepted.RunId);
+        var migrationOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(fixture.MigrationDataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema)).Options;
+        await ProjectsConfigMigrator.MigrateAsync(fixture.MigrationDataSource, migrationOptions);
+        await using var reopened = CreateDbContext();
+        var persisted = await reopened.RunSelections.AsNoTracking()
+            .SingleAsync(item => item.RunId == accepted.RunId);
+        Assert.Equal(storedBefore.SnapshotJson, persisted.SnapshotJson);
+        projects = new ProjectsConfigService(reopened, CreateProviderCatalog(), TimeProvider.System);
+        var restored = await projects.GetRunSelectionAsync(
+            orchestrator, project.ProjectId, accepted.RunId, CancellationToken.None);
+        Assert.Equal(modelPin, restored.ModelSelection.ModelBindingPin);
+        Assert.Equal(publication.CredentialIdentity, restored.ModelSelection.CredentialIdentity);
+        Assert.Equal(publication.CredentialReference, restored.ModelSelection.CredentialReference);
+        Assert.Equal(card, restored.ModelSelection.ProviderBindingRevision!.RateCardPin);
+        var actor = new TrustedActorContext("fixture-runtime", project.ProjectId, accepted.RunId);
+        var grant = new SecretRedemptionGrant("fixture-grant", actor.ActorId, project.ProjectId,
+            accepted.RunId, "model", publication.CredentialReference, GrantState.Active,
+            DateTimeOffset.UtcNow.AddMinutes(5), TimeProvider.System);
+        var redemption = new AuthorizedSecretRedemption(actor, new PinnedGrantAuthority(grant),
+            new PinnedSecretBackend(publication.CredentialReference), TimeProvider.System);
+        var credential = await redemption.RedeemAsync(
+            new SecretRedemptionRequest(restored.ModelSelection.CredentialReference!, "model", accepted.RunId),
+            CancellationToken.None);
+        Assert.Equal("fixture-value", credential.GetValue());
+        credential.Invalidate();
 
         var changedSlotSelection = modelSelection with
         {
@@ -533,7 +619,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
     [Fact]
     public Task DowngradeRemovesUnsupportedHostedReasoningEffortsBeforeRestoringConstraint() =>
-        RunWithIsolatedProjectsAsync(test => test.DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync());
+        RunWithIsolatedProjectsAsync(test => test.DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync(), preGuard: true);
 
     private async Task DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync()
     {
@@ -573,7 +659,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var migrations = db.Database.GetMigrations().ToArray();
         var effortMigrationIndex = Array.IndexOf(migrations, "20261110220017_AllowNoneMinimalReasoningEfforts");
         Assert.True(effortMigrationIndex > 0);
-        var latestMigration = migrations[^1];
+        var latestMigration = "20261119132116_ReserveModelProviderReferences";
         await migrator.MigrateAsync(migrations[effortMigrationIndex - 1]);
         try
         {
@@ -587,20 +673,19 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         finally
         {
             await migrator.MigrateAsync(latestMigration);
-            await RestoreRuntimeGrantsAsync();
         }
     }
 
     [Fact]
     public Task DowngradeReturnsAvailableProviderToDraftBeforeRestoringStateConstraint() =>
-        RunWithIsolatedProjectsAsync(test => test.DowngradeReturnsAvailableProviderToDraftCoreAsync());
+        RunWithIsolatedProjectsAsync(test => test.DowngradeReturnsAvailableProviderToDraftCoreAsync(), preGuard: true);
 
     private async Task DowngradeReturnsAvailableProviderToDraftCoreAsync()
     {
         await using var db = CreateDbContext();
         await using var migrationDb = CreateMigrationDbContext();
         var migrator = migrationDb.GetService<IMigrator>();
-        var latestMigration = db.Database.GetMigrations().Last();
+        const string latestMigration = "20261119132116_ReserveModelProviderReferences";
         var providerId = "rollback-provider-" + Guid.NewGuid().ToString("N");
 
         await using (var connection = await fixture.MigrationDataSource.OpenConnectionAsync())
@@ -641,7 +726,6 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 connection);
             delete.Parameters.AddWithValue("provider_id", providerId);
             await delete.ExecuteNonQueryAsync();
-            await RestoreRuntimeGrantsAsync();
         }
     }
 
@@ -650,14 +734,14 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     [InlineData("01")]
     [InlineData("9223372036854775808")]
     public Task DowngradeRefusesUnrepresentableRateCardVersionsWithoutChangingSchema(string cardVersion) =>
-        RunWithIsolatedProjectsAsync(test => test.DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(cardVersion));
+        RunWithIsolatedProjectsAsync(test => test.DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(cardVersion), preGuard: true);
 
     private async Task DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(string cardVersion)
     {
         await using var db = CreateDbContext();
         await using var migrationDb = CreateMigrationDbContext();
         var migrator = migrationDb.GetService<IMigrator>();
-        var latestMigration = db.Database.GetMigrations().Last();
+        const string latestMigration = "20261119132116_ReserveModelProviderReferences";
         var providerId = "rollback-version-provider-" + Guid.NewGuid().ToString("N");
         var operationId = Guid.NewGuid();
         const string cardId = "manual:runtime-card";
@@ -770,7 +854,6 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 await deleteProvider.ExecuteNonQueryAsync();
             }
             await transaction.CommitAsync();
-            await RestoreRuntimeGrantsAsync();
         }
     }
 
@@ -4270,7 +4353,9 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
         Database = "agentweaver",
     }.ConnectionString;
 
-    public async Task InitializeAsync()
+    public Task InitializeAsync() => InitializeToAsync(null);
+
+    internal async Task InitializeToAsync(string? target)
     {
         await _container.StartAsync();
         await using (var admin = NpgsqlDataSource.Create(_container.GetConnectionString()))
@@ -4306,7 +4391,13 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
             .UseNpgsql(MigrationDataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
-        await ProjectsConfigMigrator.MigrateAsync(MigrationDataSource, options);
+        if (target is null)
+            await ProjectsConfigMigrator.MigrateAsync(MigrationDataSource, options);
+        else
+        {
+            await using var db = new ProjectsConfigDbContext(options);
+            await db.GetService<IMigrator>().MigrateAsync(target);
+        }
     }
 
     public async Task DisposeAsync()

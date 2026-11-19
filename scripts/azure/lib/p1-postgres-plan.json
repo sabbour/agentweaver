@@ -110,6 +110,24 @@
               "sqlState": "55000",
               "column": "provider_id",
               "condition": "((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)"
+            },
+            {
+              "trigger": "model_providers_write_marker",
+              "function": "mark_model_provider_write()",
+              "triggerType": 23,
+              "message": "provider transition is unavailable",
+              "sqlState": "23514",
+              "functionSource": "\nDECLARE\n    transaction_id text := pg_catalog.pg_current_xact_id()::text;\nBEGIN\n    IF TG_TABLE_NAME = 'model_providers' AND TG_OP = 'UPDATE'\n       AND OLD.write_transaction_id = transaction_id THEN\n        RAISE EXCEPTION 'provider transition is unavailable'\n            USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n    END IF;\n    NEW.write_transaction_id := transaction_id;\n    RETURN NEW;\nEND;",
+              "deferrable": false
+            },
+            {
+              "trigger": "model_providers_write_pair",
+              "function": "check_model_provider_pair()",
+              "triggerType": 21,
+              "message": "provider transition is unavailable",
+              "sqlState": "23514",
+              "functionSource": "\nDECLARE\n    h projects_config.model_providers%ROWTYPE;\n    r projects_config.model_provider_revisions%ROWTYPE;\n    previous projects_config.model_provider_revisions%ROWTYPE;\n    transaction_id text := pg_catalog.pg_current_xact_id()::text;\nBEGIN\n    IF TG_TABLE_NAME = 'model_providers' THEN\n        SELECT * INTO h FROM projects_config.model_providers\n        WHERE provider_id = NEW.provider_id;\n        SELECT * INTO r FROM projects_config.model_provider_revisions\n        WHERE provider_id = NEW.provider_id AND provider_revision = NEW.current_revision;\n        IF h.provider_id IS NULL OR r.provider_id IS NULL\n           OR h.write_transaction_id <> transaction_id\n           OR r.write_transaction_id <> transaction_id\n           OR h.current_revision <> NEW.current_revision\n           OR NEW.state <> 'Draft'\n           OR (TG_OP = 'INSERT' AND\n               (NEW.current_revision <> 1 OR\n                ROW(NEW.created_by_actor_id, NEW.created_at)\n                IS DISTINCT FROM ROW(NEW.updated_by_actor_id, NEW.updated_at)))\n           OR (TG_OP = 'UPDATE' AND\n               (OLD.state <> 'Draft' OR\n                NEW.current_revision <> OLD.current_revision + 1 OR\n                ROW(NEW.provider_id, NEW.scope, NEW.project_id, NEW.created_by_actor_id, NEW.created_at)\n                IS DISTINCT FROM\n                ROW(OLD.provider_id, OLD.scope, OLD.project_id, OLD.created_by_actor_id, OLD.created_at))) THEN\n            RAISE EXCEPTION 'provider transition is unavailable'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n        END IF;\n    ELSE\n        r := NEW;\n        SELECT * INTO h FROM projects_config.model_providers WHERE provider_id = NEW.provider_id;\n        IF h.provider_id IS NULL OR h.write_transaction_id <> transaction_id\n           OR NEW.write_transaction_id <> transaction_id\n           OR h.current_revision <> NEW.provider_revision\n           OR h.state <> 'Draft'\n           OR ROW(h.scope, h.project_id, h.display_name, h.type, h.base_url, h.deployment,\n                  h.wire_api, h.azure_api_version, h.reasoning_efforts, h.prompt_capacity_tokens,\n                  h.updated_by_actor_id, h.updated_at)\n              IS DISTINCT FROM\n              ROW(NEW.scope, NEW.project_id, NEW.display_name, NEW.type, NEW.base_url, NEW.deployment,\n                  NEW.wire_api, NEW.azure_api_version, NEW.reasoning_efforts, NEW.prompt_capacity_tokens,\n                  NEW.created_by_actor_id, NEW.created_at) THEN\n            RAISE EXCEPTION 'provider transition is unavailable'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n        END IF;\n        IF NEW.provider_revision = 1 THEN\n            IF NEW.credential_version IS NOT NULL OR NEW.credential_slot_id IS NOT NULL\n               OR NEW.credential_secret_id IS NOT NULL THEN\n                RAISE EXCEPTION 'provider transition is unavailable'\n                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n            END IF;\n        ELSE\n            SELECT * INTO previous FROM projects_config.model_provider_revisions\n            WHERE provider_id = NEW.provider_id AND provider_revision = NEW.provider_revision - 1;\n            IF previous.provider_id IS NULL OR\n               ROW(NEW.credential_version, NEW.credential_slot_id, NEW.credential_secret_id)\n               IS DISTINCT FROM\n               ROW(previous.credential_version, previous.credential_slot_id, previous.credential_secret_id) THEN\n                RAISE EXCEPTION 'provider transition is unavailable'\n                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n            END IF;\n        END IF;\n    END IF;\n    RETURN NULL;\nEND;",
+              "deferrable": true
             }
           ]
         },
@@ -220,6 +238,24 @@
               "triggerType": 34,
               "message": "records in %.% are immutable",
               "sqlState": "55000"
+            },
+            {
+              "trigger": "model_provider_revisions_write_marker",
+              "function": "mark_model_provider_write()",
+              "triggerType": 7,
+              "message": "provider transition is unavailable",
+              "sqlState": "23514",
+              "functionSource": "\nDECLARE\n    transaction_id text := pg_catalog.pg_current_xact_id()::text;\nBEGIN\n    IF TG_TABLE_NAME = 'model_providers' AND TG_OP = 'UPDATE'\n       AND OLD.write_transaction_id = transaction_id THEN\n        RAISE EXCEPTION 'provider transition is unavailable'\n            USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n    END IF;\n    NEW.write_transaction_id := transaction_id;\n    RETURN NEW;\nEND;",
+              "deferrable": false
+            },
+            {
+              "trigger": "model_provider_revisions_write_pair",
+              "function": "check_model_provider_pair()",
+              "triggerType": 5,
+              "message": "provider transition is unavailable",
+              "sqlState": "23514",
+              "functionSource": "\nDECLARE\n    h projects_config.model_providers%ROWTYPE;\n    r projects_config.model_provider_revisions%ROWTYPE;\n    previous projects_config.model_provider_revisions%ROWTYPE;\n    transaction_id text := pg_catalog.pg_current_xact_id()::text;\nBEGIN\n    IF TG_TABLE_NAME = 'model_providers' THEN\n        SELECT * INTO h FROM projects_config.model_providers\n        WHERE provider_id = NEW.provider_id;\n        SELECT * INTO r FROM projects_config.model_provider_revisions\n        WHERE provider_id = NEW.provider_id AND provider_revision = NEW.current_revision;\n        IF h.provider_id IS NULL OR r.provider_id IS NULL\n           OR h.write_transaction_id <> transaction_id\n           OR r.write_transaction_id <> transaction_id\n           OR h.current_revision <> NEW.current_revision\n           OR NEW.state <> 'Draft'\n           OR (TG_OP = 'INSERT' AND\n               (NEW.current_revision <> 1 OR\n                ROW(NEW.created_by_actor_id, NEW.created_at)\n                IS DISTINCT FROM ROW(NEW.updated_by_actor_id, NEW.updated_at)))\n           OR (TG_OP = 'UPDATE' AND\n               (OLD.state <> 'Draft' OR\n                NEW.current_revision <> OLD.current_revision + 1 OR\n                ROW(NEW.provider_id, NEW.scope, NEW.project_id, NEW.created_by_actor_id, NEW.created_at)\n                IS DISTINCT FROM\n                ROW(OLD.provider_id, OLD.scope, OLD.project_id, OLD.created_by_actor_id, OLD.created_at))) THEN\n            RAISE EXCEPTION 'provider transition is unavailable'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n        END IF;\n    ELSE\n        r := NEW;\n        SELECT * INTO h FROM projects_config.model_providers WHERE provider_id = NEW.provider_id;\n        IF h.provider_id IS NULL OR h.write_transaction_id <> transaction_id\n           OR NEW.write_transaction_id <> transaction_id\n           OR h.current_revision <> NEW.provider_revision\n           OR h.state <> 'Draft'\n           OR ROW(h.scope, h.project_id, h.display_name, h.type, h.base_url, h.deployment,\n                  h.wire_api, h.azure_api_version, h.reasoning_efforts, h.prompt_capacity_tokens,\n                  h.updated_by_actor_id, h.updated_at)\n              IS DISTINCT FROM\n              ROW(NEW.scope, NEW.project_id, NEW.display_name, NEW.type, NEW.base_url, NEW.deployment,\n                  NEW.wire_api, NEW.azure_api_version, NEW.reasoning_efforts, NEW.prompt_capacity_tokens,\n                  NEW.created_by_actor_id, NEW.created_at) THEN\n            RAISE EXCEPTION 'provider transition is unavailable'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n        END IF;\n        IF NEW.provider_revision = 1 THEN\n            IF NEW.credential_version IS NOT NULL OR NEW.credential_slot_id IS NOT NULL\n               OR NEW.credential_secret_id IS NOT NULL THEN\n                RAISE EXCEPTION 'provider transition is unavailable'\n                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n            END IF;\n        ELSE\n            SELECT * INTO previous FROM projects_config.model_provider_revisions\n            WHERE provider_id = NEW.provider_id AND provider_revision = NEW.provider_revision - 1;\n            IF previous.provider_id IS NULL OR\n               ROW(NEW.credential_version, NEW.credential_slot_id, NEW.credential_secret_id)\n               IS DISTINCT FROM\n               ROW(previous.credential_version, previous.credential_slot_id, previous.credential_secret_id) THEN\n                RAISE EXCEPTION 'provider transition is unavailable'\n                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';\n            END IF;\n        END IF;\n    END IF;\n    RETURN NULL;\nEND;",
+              "deferrable": true
             }
           ]
         },
@@ -558,6 +594,14 @@
         }
       ],
       "functions": [
+        {
+          "signature": "mark_model_provider_write()",
+          "execute": false
+        },
+        {
+          "signature": "check_model_provider_pair()",
+          "execute": false
+        },
         {
           "signature": "guard_model_provider_reference_cross_table()",
           "execute": false

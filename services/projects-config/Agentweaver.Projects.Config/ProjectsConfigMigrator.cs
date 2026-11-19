@@ -166,10 +166,12 @@ public static class ProjectsConfigMigrator
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
                 "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog and model_providers, SELECT/INSERT but no UPDATE/DELETE/TRUNCATE on model_provider_revisions, model_provider_reference_reservations, and native_acs_policy_preparations, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority, lock_native_acs_policy_authority, issue_p1_project, and read_p1_project, and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
+        await ProjectsConfigRuntimeGrantPlan.VerifyProviderGuardsAsync(connection, null, null, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Serializes schema migration with a PostgreSQL advisory lock and always attempts to release that lock.
+    /// Applies migrations and runtime grants in one transaction under a PostgreSQL advisory lock.
     /// </summary>
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
@@ -179,29 +181,9 @@ public static class ProjectsConfigMigrator
         ArgumentNullException.ThrowIfNull(dataSource);
         ArgumentNullException.ThrowIfNull(options);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using (var advisoryLock = new NpgsqlCommand(
-            "SELECT pg_advisory_lock(hashtext(@lock_name))", connection))
-        {
-            advisoryLock.Parameters.AddWithValue("lock_name", LockName);
-            await advisoryLock.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        try
-        {
-            var builder = new DbContextOptionsBuilder<ProjectsConfigDbContext>(options);
-            builder.UseNpgsql(connection, npgsql =>
-                npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema));
-            await using var context = new ProjectsConfigDbContext(builder.Options);
-            await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
-            await ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            await using var release = new NpgsqlCommand(
-                "SELECT pg_advisory_unlock(hashtext(@lock_name))", connection);
-            release.Parameters.AddWithValue("lock_name", LockName);
-            await release.ExecuteNonQueryAsync(CancellationToken.None).ConfigureAwait(false);
-        }
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await MigrateAsync(connection, transaction, options, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal static async Task MigrateAsync(
@@ -223,15 +205,15 @@ public static class ProjectsConfigMigrator
             await advisoryLock.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        await ProjectsConfigRuntimeGrantPlan.VerifyMigrationPrincipalAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
         var builder = new DbContextOptionsBuilder<ProjectsConfigDbContext>(options);
         builder.UseNpgsql(connection, npgsql =>
             npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema));
         await using var context = new ProjectsConfigDbContext(builder.Options);
-        // The supplied transaction owns atomicity, so the generated script must not start or commit a separate transaction.
-        var script = context.GetService<IMigrator>()
-            .GenerateScript(options: MigrationsSqlGenerationOptions.NoTransactions);
-        await using (var migration = new NpgsqlCommand(script, connection, transaction))
-            await migration.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await context.Database.UseTransactionAsync(transaction, cancellationToken).ConfigureAwait(false);
+        await context.GetService<IHistoryRepository>().CreateIfNotExistsAsync(cancellationToken).ConfigureAwait(false);
+        await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
         await ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, transaction, cancellationToken)
             .ConfigureAwait(false);
     }

@@ -63,7 +63,7 @@ public sealed partial class ProjectsConfigPostgresTests
 
     [Fact]
     public Task Migration039BackfillsPreExistingSetupAndP1AuditRowsWithoutChangingThem() =>
-        RunWithIsolatedProjectsAsync(test => test.Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync());
+        RunWithIsolatedProjectsAsync(test => test.Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync(), preGuard: true);
 
     private async Task Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync()
     {
@@ -174,7 +174,7 @@ public sealed partial class ProjectsConfigPostgresTests
     public Task Migration039RejectsConflictingLegacyLinksAtomically(
         string scenario,
         string expectedError) =>
-        RunWithIsolatedProjectsAsync(test => test.Migration039RejectsConflictingLegacyLinksCoreAsync(scenario, expectedError));
+        RunWithIsolatedProjectsAsync(test => test.Migration039RejectsConflictingLegacyLinksCoreAsync(scenario, expectedError), preGuard: true);
 
     private async Task Migration039RejectsConflictingLegacyLinksCoreAsync(
         string scenario,

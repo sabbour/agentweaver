@@ -127,6 +127,11 @@ public sealed partial class ModelProviderDraftService
                 throw ModelProviderDraftException.ReferenceConflict();
             throw ModelProviderDraftException.Conflict();
         }
+        catch (Exception exception) when (IsProviderWriteGuardFailure(exception))
+        {
+            DetachTrackedProvider(providerId);
+            throw ModelProviderDraftException.Unavailable();
+        }
         catch
         {
             DetachTrackedProvider(providerId);

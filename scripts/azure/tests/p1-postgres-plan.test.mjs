@@ -116,6 +116,8 @@ test('Only exact table DML is planned; history and memberships stay SELECT-only'
     [guard.trigger, guard.function, guard.triggerType]), [
     ['model_provider_revisions_immutable', 'reject_immutable_record_mutation()', 27],
     ['model_provider_revisions_no_truncate', 'reject_immutable_record_mutation()', 34],
+    ['model_provider_revisions_write_marker', 'mark_model_provider_write()', 7],
+    ['model_provider_revisions_write_pair', 'check_model_provider_pair()', 5],
   ]);
   assert.deepEqual(
     projectsConfig.tables.find(item => item.table === 'hosted_model_reasoning_catalog').privileges,
@@ -537,8 +539,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [15, 7, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 56);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [17, 7, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 58);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });

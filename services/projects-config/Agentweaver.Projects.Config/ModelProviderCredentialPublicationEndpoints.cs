@@ -4,8 +4,9 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Projects.Config;
 
@@ -13,6 +14,27 @@ internal static class ModelProviderCredentialPublicationEndpoints
 {
     internal const int MaximumRequestBodyBytes = 8 * 1024;
     internal const string Route = "/internal/byok/credential-publications";
+
+    internal static bool IsLegacyPath(PathString path) =>
+        string.Equals(path.Value?.TrimEnd('/'), Route, StringComparison.OrdinalIgnoreCase);
+
+    internal static void SuppressLegacyRequestLogs(IServiceCollection services, IHttpContextAccessor accessor) =>
+        services.PostConfigure<LoggerFilterOptions>(options =>
+        {
+            bool Allowed(string? category) =>
+                category != "Microsoft.AspNetCore.Hosting.Diagnostics" ||
+                accessor.HttpContext is not { } context || !IsLegacyPath(context.Request.Path);
+            for (var index = 0; index < options.Rules.Count; index++)
+            {
+                var rule = options.Rules[index];
+                var original = rule.Filter;
+                options.Rules[index] = new LoggerFilterRule(rule.ProviderName, rule.CategoryName, rule.LogLevel,
+                    (provider, category, level) =>
+                        Allowed(category) && (original is null || original(provider, category, level)));
+            }
+            options.Rules.Insert(0, new LoggerFilterRule(null, null, null,
+                (_, category, _) => Allowed(category)));
+        });
 
     private static readonly JsonSerializerOptions RequestJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -25,27 +47,18 @@ internal static class ModelProviderCredentialPublicationEndpoints
         this IApplicationBuilder app) =>
         app.Use(async (context, next) =>
         {
-            if (!string.Equals(
-                    context.Request.Path.Value?.TrimEnd('/'),
-                    Route,
-                    StringComparison.OrdinalIgnoreCase))
+            if (!IsLegacyPath(context.Request.Path))
             {
                 await next(context).ConfigureAwait(false);
                 return;
             }
 
             SetNoStore(context);
-            if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } sizeFeature)
-                sizeFeature.MaxRequestBodySize = MaximumRequestBodyBytes;
-            if (context.Request.ContentLength > MaximumRequestBodyBytes)
-            {
-                context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
-                await context.Response.WriteAsJsonAsync(new { code = "request_body_too_large" })
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.ContentType = "application/json";
+            if (!HttpMethods.IsHead(context.Request.Method))
+                await context.Response.WriteAsync("""{"code":"credential_publication_unavailable"}""")
                     .ConfigureAwait(false);
-                return;
-            }
-
-            await next(context).ConfigureAwait(false);
         });
 
     internal static IEndpointRouteBuilder MapModelProviderCredentialPublicationEndpoints(

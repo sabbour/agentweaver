@@ -127,7 +127,7 @@ public sealed class ModelProviderDraftException(string code, string message) : E
         new("reference_conflict", "The provider reference is already in use.");
 
     public static ModelProviderDraftException Unavailable() =>
-        new("model_provider_draft_unavailable", "The provider reference reservation is unavailable.");
+        new("model_provider_draft_unavailable", "The provider draft is unavailable.");
 
     public static ModelProviderDraftException NotFound() =>
         new("model_provider_draft_not_found", "The provider draft was not found.");

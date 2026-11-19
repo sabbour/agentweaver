@@ -106,7 +106,9 @@ list responses to 4 MiB. Draft GET routes reject request bodies.
 Invalid requests return `400`; missing providers return `404`; stale revisions,
 operation conflicts, and unsafe stored URLs return `409`. An unsafe stored
 URL error contains only the provider `id` and `revision`, so the caller can
-repair the Draft with a new operation ID. Owner responses use
+repair the Draft with a new operation ID. An edit of an existing `Available`
+provider at its current revision returns `503 model_provider_draft_unavailable`.
+Owner responses use
 `Cache-Control: no-store`.
 
 <span id="p1-invocation-setup-receipt"></span>
@@ -242,52 +244,20 @@ must not parse or normalize it.
 The Projects & Config service stores metadata in a mutable provider head and
 an append-only revision ledger. New providers start in `Draft`. Public
 metadata requests do not accept credentials, headers, vault references, or
-rate-card references. The private Broker contract attaches an exact credential
-version to a `Draft` or `Available` provider. It stores no key, secret name, or
-vault URI.
-The contract changes the provider to `Available` only after Projects verifies
-the saved rate-card reference with Events. `Available` does not select a
-provider or change accepted run selections.
+rate-card references. Credential publication and activation are unavailable.
+Existing `Available` revisions and accepted run pins remain readable.
 
-`POST /internal/byok/credential-publications` accepts a JSON request with
-`operationId`, `expectedProviderRevision`, `scope` (`platform` or `project`),
-nullable `projectId`, `providerId`, and `credentialVersion`. The credential
-version is 32 hexadecimal characters. Set `projectId` to `null` for platform
-scope and include the project ID for project scope.
-`expectedProviderRevision` must be positive. Unknown or duplicate fields,
-invalid identifiers, or an invalid version return `400`. The request body limit
-is 8 KiB.
+Every method on `/internal/byok/credential-publications` returns `503` before
+authentication, body reads, replay, or database access. The response has
+`Cache-Control: no-store` and `Pragma: no-cache`. Except for `HEAD`, its body is
+`{"code":"credential_publication_unavailable"}`. `HEAD` has no body.
 
-`ProjectsConfig:Authentication:BrokerRunBindingAudience` maps the route. It
-requires the private Projects audience, a signed short-lived
-`agentweaver-credential-publication+jwt` token with purpose
-`credential-publication`, and a native TLS 1.2 or TLS 1.3 handshake. The token
-binds the actor and every request field. It is not exposed through Gateway.
-The Broker caller must check current authority before it sends the request.
-
-Projects requires an existing provider at `expectedProviderRevision`.
-It appends a revision that copies the current metadata, configuration hash, and
-rate-card references, then sets `credentialVersion`. Before the transaction,
-Projects reads the stored rate-card ID and opaque version through Events'
-private `GET /internal/runtime-rate-cards?id={id}&version={version}` route. The route
-requires the exact configured Projects workload subject and returns the
-canonical card and provenance with a strong ETag: the quoted lowercase
-SHA-256 of the response bytes. Projects checks the ETag, canonical bytes,
-exact ID and version, and provenance. One revision-checked transaction
-appends the credential revision and sets `Available` when all checks pass.
-Missing or invalid data and Events timeouts set the provider to `Draft`; the
-credential revision still commits. Projects rechecks the card when it rotates
-a credential on an `Available` provider. Caller cancellation aborts the operation.
-
-The Events call has a three-second deadline. A Broker recovery attempt uses
-the same credential version, a new operation ID, and the current provider
-revision. Replaying a committed operation returns its receipt without another
-Events read or state change. A metadata save on a `Draft` provider keeps the
-credential version.
-The response is a no-store receipt with `operationId`, `scope`, `projectId`,
-`providerId`, `providerRevision`, `credentialVersion`, and
-`configurationHash`. changed-content reuse and stale revisions return `409`;
-a missing provider returns `404`. The route leaves model eligibility unchanged.
+Projects requires each Draft head change and its matching revision in the same
+PostgreSQL transaction. A new Draft starts at revision 1 without a credential.
+An edit advances the revision by one and preserves the previous credential
+version, slot, and secret identifier. Existing `Available` heads cannot change
+through this path. An exact authorized Draft retry returns its saved revision;
+a reused operation ID with changed content returns `409`.
 
 The Events owner-read route is private and is not exposed through Gateway. It
 reads the immutable Events-owned card by its exact string ID and version. The

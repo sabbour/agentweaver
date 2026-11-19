@@ -442,6 +442,8 @@ public sealed class P1PostgresInitializerTests
                     guard with { TriggerType = guard.TriggerType == 27 ? 19 : 27 },
                     guard with { Enabled = "D" },
                     guard with { IsInternal = true },
+                    guard with { Deferrable = !guard.Deferrable },
+                    guard with { InitiallyDeferred = !guard.InitiallyDeferred },
                     guard with { NoColumnFilter = !guard.NoColumnFilter },
                     guard with { NoCondition = !guard.NoCondition },
                     guard with { ArgumentCount = 1 },
@@ -1125,6 +1127,10 @@ public sealed class P1PostgresInitializerTests
     private static ServicePlan[] MutationServices()
     {
         var services = Services();
+        var reviewed = JsonSerializer.Deserialize<PostgresPlan>(
+            File.ReadAllText(Path.Combine(FindRepositoryRoot(), "scripts", "azure", "lib", "p1-postgres-plan.json")),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        var providerTables = reviewed.Services.Single(service => service.Schema == "projects_config").Tables;
         const string providerReferenceSource = """
             BEGIN
                 PERFORM pg_catalog.pg_advisory_xact_lock(
@@ -1169,6 +1175,8 @@ public sealed class P1PostgresInitializerTests
                     new("model_providers_id_immutable", "reject_immutable_record_mutation()", 19,
                         "records in %.% are immutable", "55000", Column: "provider_id",
                         Condition: "((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)"),
+                    .. providerTables.Single(table => table.Table == "model_providers").MutationDenialGuards!
+                        .Where(guard => guard.Trigger is "model_providers_write_marker" or "model_providers_write_pair"),
                 ]),
                 new("model_provider_reference_reservations", ["SELECT", "INSERT"], null, true, null,
                 [
@@ -1185,6 +1193,8 @@ public sealed class P1PostgresInitializerTests
                         27, "records in %.% are immutable", "55000"),
                     new("model_provider_revisions_no_truncate", "reject_immutable_record_mutation()",
                         34, "records in %.% are immutable", "55000"),
+                    .. providerTables.Single(table => table.Table == "model_provider_revisions").MutationDenialGuards!
+                        .Where(guard => guard.Trigger is "model_provider_revisions_write_marker" or "model_provider_revisions_write_pair"),
                 ]),
                 AppendOnlyTable("native_acs_policy_preparations"),
                 AppendOnlyTable("native_acs_policy_revisions"),
@@ -1222,6 +1232,8 @@ public sealed class P1PostgresInitializerTests
             ],
             Functions =
             [
+                new("mark_model_provider_write()", false),
+                new("check_model_provider_pair()", false),
                 new("guard_model_provider_reference_cross_table()", false),
                 new("reject_immutable_record_mutation()", false),
                 new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
@@ -1537,7 +1549,8 @@ public sealed class P1PostgresInitializerTests
                 true, guard.Trigger != "platform_policy_apply_reservations_consistent_identity",
                 guard.Trigger == "platform_policy_apply_reservations_consistent_identity",
                 InitializerChecks.GetMutationDenialGuards(table).Where(item => item.TriggerType == 7)
-                    .Select(item => item.Trigger).Order(StringComparer.Ordinal).ToArray());
+                    .Select(item => item.Trigger).Order(StringComparer.Ordinal).ToArray(),
+                guard.Deferrable, guard.Deferrable);
         }).ToArray();
     }
 

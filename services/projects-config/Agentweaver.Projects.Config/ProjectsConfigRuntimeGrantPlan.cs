@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
+using System.Text;
 using Npgsql;
 
 namespace Agentweaver.Projects.Config;
@@ -64,6 +66,32 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await VerifyRuntimeGrantsAsync(connection, transaction, plan, cancellationToken).ConfigureAwait(false);
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task VerifyMigrationPrincipalAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT current_user = @owner
+               AND EXISTS (
+                   SELECT 1 FROM pg_catalog.pg_roles
+                   WHERE rolname = current_user AND rolcanlogin AND NOT rolsuper AND NOT rolcreatedb
+                     AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
+               AND NOT pg_catalog.has_database_privilege(current_user, current_database(), 'CREATE')
+               AND NOT EXISTS (
+                   SELECT 1 FROM pg_catalog.pg_auth_members
+                   WHERE member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+               AND EXISTS (
+                   SELECT 1 FROM pg_catalog.pg_namespace
+                   WHERE nspname = 'projects_config'
+                     AND pg_catalog.pg_get_userbyid(nspowner) = @owner)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("owner", MigrationOwner);
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            throw new InvalidOperationException(
+                "Projects & Config migrations require the dedicated schema owner; no migrations or grants were applied.");
     }
 
     private static async Task VerifyMigrationOwnerAsync(
@@ -163,6 +191,286 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
                 throw new InvalidOperationException("The model provider identity guard differs from the reviewed plan.");
         }
 
+        await VerifyRuntimeGrantInventoryAsync(connection, transaction, plan, cancellationToken).ConfigureAwait(false);
+        await VerifyProviderGuardsAsync(connection, transaction, plan.Role, cancellationToken).ConfigureAwait(false);
+    }
+
+        internal static async Task VerifyProviderGuardsAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction? transaction,
+            string? role,
+            CancellationToken cancellationToken)
+        {
+            await using var command = new NpgsqlCommand("""
+                WITH RECURSIVE owner AS (
+                    SELECT oid, nspowner FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config'
+                ), relations AS (
+                    SELECT oid, relname, relowner FROM pg_catalog.pg_class
+                    WHERE relnamespace = (SELECT oid FROM owner)
+                      AND relname IN ('model_providers', 'model_provider_revisions')
+                ), reachable_roles(oid) AS (
+                    SELECT oid FROM pg_catalog.pg_roles WHERE rolname = coalesce(@role, current_user)
+                    UNION
+                    SELECT membership.roleid FROM pg_catalog.pg_auth_members membership
+                    JOIN reachable_roles r ON r.oid = membership.member
+                    WHERE membership.set_option
+                ), expected(relation, trigger_name, trigger_type, function_name, deferred) AS (
+                    VALUES
+                        ('model_providers', 'model_providers_write_marker', 23, 'mark_model_provider_write', false),
+                        ('model_providers', 'model_providers_write_pair', 21, 'check_model_provider_pair', true),
+                        ('model_providers', 'model_providers_reference_guard', 7, 'guard_model_provider_reference_cross_table', false),
+                        ('model_providers', 'model_providers_id_immutable', 19, 'reject_immutable_record_mutation', false),
+                        ('model_provider_revisions', 'model_provider_revisions_write_marker', 7, 'mark_model_provider_write', false),
+                        ('model_provider_revisions', 'model_provider_revisions_write_pair', 5, 'check_model_provider_pair', true),
+                        ('model_provider_revisions', 'model_provider_revisions_immutable', 27, 'reject_immutable_record_mutation', false),
+                        ('model_provider_revisions', 'model_provider_revisions_no_truncate', 34, 'reject_immutable_record_mutation', false)
+                )
+                SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = coalesce(@role, current_user)
+                               AND NOT rolsuper AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
+                   AND NOT pg_catalog.pg_has_role(coalesce(@role, current_user),
+                       pg_catalog.pg_get_userbyid((SELECT nspowner FROM owner)), 'MEMBER')
+                   AND NOT pg_catalog.has_parameter_privilege(coalesce(@role, current_user), 'session_replication_role', 'SET')
+                   AND NOT pg_catalog.has_schema_privilege(coalesce(@role, current_user), 'projects_config', 'CREATE')
+                   AND (SELECT pg_catalog.pg_get_userbyid(nspowner) FROM owner) = @owner_name
+                   AND coalesce((SELECT array_agg(c.relname::text ORDER BY c.relname)
+                       FROM pg_catalog.pg_class c WHERE c.relnamespace = (SELECT oid FROM owner)
+                         AND c.relkind IN ('r', 'p', 'f')), ARRAY[]::text[]) = @tables
+                   AND coalesce((SELECT array_agg(c.relname::text ORDER BY c.relname)
+                       FROM pg_catalog.pg_class c WHERE c.relnamespace = (SELECT oid FROM owner)
+                         AND c.relkind = 'S'), ARRAY[]::text[]) = @sequences
+                   AND NOT EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace = (SELECT oid FROM owner)
+                         AND (c.relkind IN ('v', 'm') OR c.relowner <> (SELECT nspowner FROM owner)))
+                   AND (SELECT count(*) FROM pg_catalog.pg_proc p
+                       WHERE p.pronamespace = (SELECT oid FROM owner) AND p.prokind IN ('f', 'p'))
+                       = cardinality(@functions)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM unnest(@functions, @executables) AS expected_function(signature, executable)
+                       WHERE NOT EXISTS (
+                           SELECT 1 FROM pg_catalog.pg_proc p
+                           WHERE p.pronamespace = (SELECT oid FROM owner)
+                             AND format('%I(%s)', p.proname, pg_catalog.oidvectortypes(p.proargtypes)) = expected_function.signature
+                             AND p.proowner = (SELECT nspowner FROM owner)
+                             AND pg_catalog.has_function_privilege(coalesce(@role, current_user), p.oid, 'EXECUTE') =
+                                 expected_function.executable
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM pg_catalog.aclexplode(
+                                     coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) acl
+                                 WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM relations c WHERE c.relowner <> (SELECT nspowner FROM owner))
+                   AND (SELECT count(*) FROM relations) = 2
+                   AND NOT EXISTS (
+                       SELECT 1 FROM relations c
+                       JOIN pg_catalog.pg_class relation ON relation.oid = c.oid
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           coalesce(relation.relacl, pg_catalog.acldefault('r', relation.relowner))) acl
+                       WHERE acl.grantee = 0)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM relations c
+                       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) acl
+                       WHERE acl.grantee = 0)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_class c
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           coalesce(c.relacl, pg_catalog.acldefault('r', c.relowner))) acl
+                       WHERE c.relnamespace = (SELECT oid FROM owner)
+                         AND c.relname IN ('tenant_memberships', 'project_role_assignments', 'authority_audit')
+                         AND acl.grantee = 0 AND acl.privilege_type <> 'SELECT')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_class c
+                       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) acl
+                       WHERE c.relnamespace = (SELECT oid FROM owner)
+                         AND c.relname IN ('tenant_memberships', 'project_role_assignments', 'authority_audit')
+                         AND acl.grantee = 0 AND acl.privilege_type <> 'SELECT')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM expected e
+                       WHERE NOT EXISTS (
+                           SELECT 1 FROM pg_catalog.pg_trigger t
+                           JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                           JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+                           JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+                           WHERE n.nspname = 'projects_config' AND c.relname = e.relation
+                             AND t.tgname = e.trigger_name AND t.tgtype = e.trigger_type
+                             AND t.tgenabled = 'O' AND NOT t.tgisinternal AND t.tgnargs = 0
+                             AND ((e.trigger_name = 'model_providers_id_immutable'
+                                   AND t.tgattr = (SELECT a.attnum::text::int2vector
+                                       FROM pg_catalog.pg_attribute a
+                                       WHERE a.attrelid = c.oid AND a.attname = 'provider_id')
+                                   AND substring(pg_catalog.pg_get_triggerdef(t.oid)
+                                       from ' WHEN (.*) EXECUTE FUNCTION ') =
+                                       '(((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text))')
+                                  OR (e.trigger_name <> 'model_providers_id_immutable'
+                                      AND t.tgattr = ''::int2vector AND t.tgqual IS NULL))
+                             AND t.tgdeferrable = e.deferred AND t.tginitdeferred = e.deferred
+                             AND pn.nspname = 'projects_config' AND p.proname = e.function_name
+                             AND p.proowner = (SELECT nspowner FROM owner)))
+                   AND (SELECT count(*) FROM pg_catalog.pg_trigger
+                        WHERE tgrelid = (SELECT oid FROM relations WHERE relname = 'model_providers') AND NOT tgisinternal) = 4
+                   AND (SELECT count(*) FROM pg_catalog.pg_trigger
+                        WHERE tgrelid = (SELECT oid FROM relations WHERE relname = 'model_provider_revisions') AND NOT tgisinternal) = 4
+                   AND NOT EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_proc p
+                       WHERE p.pronamespace = (SELECT oid FROM owner)
+                         AND p.proname IN ('mark_model_provider_write', 'check_model_provider_pair',
+                                           'guard_model_provider_reference_cross_table', 'reject_immutable_record_mutation')
+                         AND p.pronargs = 0
+                         AND (p.proowner <> (SELECT nspowner FROM owner) OR p.prosecdef
+                              OR (p.proname <> 'reject_immutable_record_mutation'
+                                  AND p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog']::text[])
+                              OR pg_catalog.has_function_privilege(coalesce(@role, current_user), p.oid, 'EXECUTE')
+                              OR EXISTS (
+                                  SELECT 1 FROM pg_catalog.aclexplode(
+                                      coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) acl
+                                  WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')))
+                   AND NOT pg_catalog.has_table_privilege(coalesce(@role, current_user), (SELECT oid FROM relations WHERE relname = 'model_providers'), 'TRIGGER')
+                   AND NOT pg_catalog.has_table_privilege(coalesce(@role, current_user), (SELECT oid FROM relations WHERE relname = 'model_providers'), 'REFERENCES')
+                   AND NOT pg_catalog.has_any_column_privilege(coalesce(@role, current_user), (SELECT oid FROM relations WHERE relname = 'model_providers'), 'REFERENCES')
+                   AND NOT pg_catalog.has_table_privilege(coalesce(@role, current_user), (SELECT oid FROM relations WHERE relname = 'model_provider_revisions'), 'TRIGGER')
+                   AND NOT pg_catalog.has_table_privilege(coalesce(@role, current_user), (SELECT oid FROM relations WHERE relname = 'model_provider_revisions'), 'REFERENCES')
+                   AND NOT pg_catalog.has_any_column_privilege(coalesce(@role, current_user), (SELECT oid FROM relations WHERE relname = 'model_provider_revisions'), 'REFERENCES')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM reachable_roles reachable
+                       JOIN pg_catalog.pg_roles r ON r.oid = reachable.oid
+                       WHERE r.rolsuper OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls
+                          OR pg_catalog.pg_has_role(r.oid, (SELECT nspowner FROM owner), 'MEMBER')
+                          OR pg_catalog.has_schema_privilege(r.oid, (SELECT oid FROM owner), 'CREATE')
+                          OR pg_catalog.has_parameter_privilege(r.oid, 'session_replication_role', 'SET')
+                          OR pg_catalog.has_table_privilege(r.oid, (SELECT oid FROM relations WHERE relname = 'model_providers'),
+                                                            'DELETE, TRUNCATE, REFERENCES, TRIGGER')
+                          OR pg_catalog.has_any_column_privilege(r.oid, (SELECT oid FROM relations WHERE relname = 'model_providers'), 'REFERENCES')
+                          OR pg_catalog.has_table_privilege(r.oid, (SELECT oid FROM relations WHERE relname = 'model_provider_revisions'),
+                                                            'UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+                          OR pg_catalog.has_any_column_privilege(r.oid, (SELECT oid FROM relations WHERE relname = 'model_provider_revisions'),
+                                                                 'UPDATE, REFERENCES')
+                          OR EXISTS (
+                              SELECT 1 FROM pg_catalog.pg_proc p
+                              WHERE p.pronamespace = (SELECT oid FROM owner) AND p.pronargs = 0
+                                AND p.proname IN ('mark_model_provider_write', 'check_model_provider_pair',
+                                                  'guard_model_provider_reference_cross_table', 'reject_immutable_record_mutation')
+                                AND pg_catalog.has_function_privilege(r.oid, p.oid, 'EXECUTE')))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM reachable_roles reachable
+                       JOIN pg_catalog.pg_class c ON c.relnamespace = (SELECT oid FROM owner)
+                       CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) privilege
+                       WHERE c.relkind IN ('r', 'p', 'f')
+                         AND pg_catalog.has_table_privilege(reachable.oid, c.oid, privilege)
+                         AND NOT EXISTS (
+                             SELECT 1 FROM jsonb_array_elements(@allowed_tables::jsonb) planned
+                             WHERE planned->>'name' = c.relname AND planned->'privileges' ? privilege))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM reachable_roles reachable
+                       JOIN pg_catalog.pg_class c ON c.relnamespace = (SELECT oid FROM owner)
+                       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                       CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) privilege
+                       WHERE c.relkind IN ('r', 'p', 'f')
+                         AND pg_catalog.has_column_privilege(reachable.oid, c.oid, a.attnum, privilege)
+                         AND NOT EXISTS (
+                             SELECT 1 FROM jsonb_array_elements(@allowed_tables::jsonb) planned
+                             WHERE planned->>'name' = c.relname
+                               AND (planned->'privileges' ? privilege OR
+                                   (privilege = 'UPDATE' AND planned->'updateColumns' ? a.attname))))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM reachable_roles reachable
+                       JOIN pg_catalog.pg_proc p ON p.pronamespace = (SELECT oid FROM owner)
+                       WHERE pg_catalog.has_function_privilege(reachable.oid, p.oid, 'EXECUTE')
+                         AND NOT pg_catalog.has_function_privilege(coalesce(@role, current_user), p.oid, 'EXECUTE'))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM reachable_roles reachable
+                       JOIN pg_catalog.pg_class c ON c.relnamespace = (SELECT oid FROM owner) AND c.relkind = 'S'
+                       CROSS JOIN unnest(ARRAY['USAGE','SELECT','UPDATE']) privilege
+                       WHERE pg_catalog.has_sequence_privilege(reachable.oid, c.oid, privilege)
+                         AND NOT pg_catalog.has_sequence_privilege(coalesce(@role, current_user), c.oid, privilege))
+                """, connection, transaction);
+            command.Parameters.Add("role", NpgsqlTypes.NpgsqlDbType.Text).Value = (object?)role ?? DBNull.Value;
+            var plan = Plan.Value;
+            command.Parameters.AddWithValue("owner_name", MigrationOwner);
+            command.Parameters.AddWithValue("tables",
+                plan.Tables.Select(item => item.Name).Concat(plan.OwnerOnlyTables).Order(StringComparer.Ordinal).ToArray());
+            command.Parameters.AddWithValue("sequences", plan.OwnerOnlySequences.Order(StringComparer.Ordinal).ToArray());
+            command.Parameters.AddWithValue("functions", plan.Functions.Select(item => item.Signature).ToArray());
+            command.Parameters.AddWithValue("executables", plan.Functions.Select(item => item.Execute).ToArray());
+            command.Parameters.AddWithValue("allowed_tables", JsonSerializer.Serialize(plan.Tables.Select(item => new
+            {
+                name = item.Name,
+                privileges = item.Privileges,
+                updateColumns = item.UpdateColumns,
+            })));
+            if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("The model provider guards or runtime privileges differ from the reviewed plan.");
+
+            await using var sources = new NpgsqlCommand("""
+                SELECT p.proname, p.prosrc FROM pg_catalog.pg_proc p
+                JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'projects_config' AND p.pronargs = 0
+                  AND p.proname IN ('mark_model_provider_write', 'check_model_provider_pair',
+                                    'guard_model_provider_reference_cross_table', 'reject_immutable_record_mutation')
+                """, connection, transaction);
+            await using var reader = await sources.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var checkedSources = 0;
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var expected = reader.GetString(0) switch
+                {
+                    "mark_model_provider_write" => "251d3b422db7283268c1264b4743de38b0af2454e34fc23330e1a0d9eba11c18",
+                    "check_model_provider_pair" => "04c257420b1b56dec4436415bf3a063b4482936ce841630f32bdbee8d87d0964",
+                    "guard_model_provider_reference_cross_table" => "d83b113d3eacaddfa44b872440903b00f366179822b7fc915e3c401ad4b46447",
+                    "reject_immutable_record_mutation" => "c6c7bd8d7525928ec038d60c6e986bd8148e9c5bf4d59668a712e832bd549175",
+                    _ => "",
+                };
+                var normalized = NormalizeGuardSource(reader.GetString(1));
+                var actual = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The model provider guard function differs from the reviewed plan.");
+                checkedSources++;
+            }
+            if (checkedSources != 4)
+                throw new InvalidOperationException("The model provider guard functions are missing.");
+        }
+
+    private static string NormalizeGuardSource(string source)
+    {
+        var result = new StringBuilder();
+        var quote = '\0';
+        var whitespace = false;
+        for (var i = 0; i < source.Length; i++)
+        {
+            var c = source[i];
+            if (quote != '\0')
+            {
+                if (c == '\\') return source;
+                result.Append(c);
+                if (c == quote)
+                {
+                    if (i + 1 < source.Length && source[i + 1] == quote)
+                        result.Append(source[++i]);
+                    else
+                        quote = '\0';
+                }
+            }
+            else if (char.IsWhiteSpace(c))
+                whitespace = result.Length > 0;
+            else
+            {
+                if (c == '$') return source;
+                if (whitespace) result.Append(' ');
+                whitespace = false;
+                result.Append(c);
+                if (c is '\'' or '"') quote = c;
+            }
+        }
+        return result.ToString().TrimEnd(';');
+    }
+
+    private static async Task VerifyRuntimeGrantInventoryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ServicePlan plan,
+        CancellationToken cancellationToken)
+    {
         // Effective privilege checks catch inherited or pre-existing rights that exceed the reviewed plan.
         await using (var schema = new NpgsqlCommand("""
             SELECT has_schema_privilege(@role, @schema, 'USAGE')

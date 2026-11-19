@@ -165,6 +165,13 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("character varying(32)")
                         .HasColumnName("wire_api");
 
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy")
+                        .HasColumnName("write_transaction_id");
+
                     b.HasKey("ProviderId")
                         .HasName("pk_model_providers");
 
@@ -305,6 +312,13 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
                         .HasColumnName("wire_api");
+
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy")
+                        .HasColumnName("write_transaction_id");
 
                     b.HasKey("ProviderId", "ProviderRevision")
                         .HasName("pk_model_provider_revisions");
