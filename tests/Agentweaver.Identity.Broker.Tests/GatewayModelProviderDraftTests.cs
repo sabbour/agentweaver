@@ -9,6 +9,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using GatewayHost::Agentweaver.Gateway;
 using ProjectsConfig::Agentweaver.Projects.Config;
@@ -93,6 +94,22 @@ public sealed class GatewayModelProviderDraftTests
             Assert.DoesNotMatch(pattern, value);
         Assert.DoesNotContain("reference", platformCreate.GetProperty("required")
             .EnumerateArray().Select(value => value.GetString()));
+        var target = platformCreate.GetProperty("properties").GetProperty("targetInstallationId");
+        Assert.Equal("uuid", target.GetProperty("format").GetString());
+        var targetPattern = target.GetProperty("pattern").GetString()!;
+        Assert.Matches(targetPattern, "00112233-4455-4677-8899-aabbccddeeff");
+        foreach (var invalid in new[]
+        {
+            "00000000-0000-0000-0000-000000000000",
+            "00112233-4455-4677-8899-AABBCCDDEEFF",
+            "00112233-4455-4677-8899-aabbccddeeff\n",
+        })
+            Assert.DoesNotMatch(targetPattern, invalid);
+        var dependent = platformCreate.GetProperty("dependentRequired");
+        Assert.Equal("targetInstallationId", Assert.Single(dependent.GetProperty("reference").EnumerateArray()).GetString());
+        Assert.Equal("reference", Assert.Single(dependent.GetProperty("targetInstallationId").EnumerateArray()).GetString());
+        foreach (var name in new[] { "ModelProviderDraftSaveRequest", "ModelProviderDraftProjectCreateRequest" })
+            Assert.False(schemas.GetProperty(name).GetProperty("properties").TryGetProperty("targetInstallationId", out _));
         Assert.False(schemas.GetProperty("ModelProviderDraftSaveRequest")
             .GetProperty("properties").TryGetProperty("reference", out _));
         Assert.False(schemas.GetProperty("ModelProviderDraftProjectCreateRequest")
@@ -165,6 +182,81 @@ public sealed class GatewayModelProviderDraftTests
         Assert.True(response.Headers.CacheControl?.NoStore);
         using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("Available", result.RootElement.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task GatewayForwardsThePinToTheS1StrictRequestContract()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var operation = Guid.NewGuid();
+        var pin = Guid.NewGuid().ToString("D");
+        var bearer = CreateToken(key);
+        var seen = new List<string>();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key, () => new DraftOwnerHandler(async (request, token) =>
+            {
+                var json = await request.Content!.ReadAsStringAsync(token);
+                seen.Add(json);
+                try
+                {
+                    var value = JsonSerializer.Deserialize<S1SaveBody>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                    {
+                        PropertyNameCaseInsensitive = false,
+                        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                        MaxDepth = 16,
+                    });
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(
+                            $$"""{"id":"byok-{{value!.OperationId:N}}","revision":1,"reference":"{{value.Reference}}"}""",
+                            Encoding.UTF8, "application/json"),
+                    };
+                }
+                catch (JsonException)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                    {
+                        Content = new StringContent(
+                            """{"code":"model_provider_draft_invalid_request"}""", Encoding.UTF8, "application/json"),
+                    };
+                }
+            }), (_, _, _) => throw new InvalidOperationException());
+        var prefix = $$"""{"operationId":"{{operation:D}}","expectedRevision":0,"name":"Model","type":"openai","base_url":"https://api.openai.com/v1","model":"test","reference":"Stable"}""";
+        async Task<HttpStatusCode> SendAsync(string body)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/platform/byok-providers")
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+            using var response = await gateway.Client.SendAsync(request);
+            return response.StatusCode;
+        }
+        var pinned = prefix[..^1] + $",\"targetInstallationId\":\"{pin}\"}}";
+        Assert.Equal(HttpStatusCode.BadRequest, await SendAsync(pinned));
+        Assert.Equal(pinned, Assert.Single(seen));
+        Assert.Equal(HttpStatusCode.OK, await SendAsync(prefix));
+        Assert.Equal(prefix, seen[1]);
+    }
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record S1SaveBody
+    {
+        public required Guid OperationId { get; init; }
+        public required long ExpectedRevision { get; init; }
+        public required string Name { get; init; }
+        public required string Type { get; init; }
+        [JsonPropertyName("base_url")] public required string BaseUrl { get; init; }
+        public required string Model { get; init; }
+        [JsonPropertyName("wire_api")] public string? WireApi { get; init; }
+        [JsonPropertyName("azure_api_version")] public string? AzureApiVersion { get; init; }
+        [JsonPropertyName("reasoning_efforts")] public string[]? ReasoningEfforts { get; init; }
+        [JsonPropertyName("prompt_capacity_tokens")] public int? PromptCapacityTokens { get; init; }
+        [JsonPropertyName("rate_card_id")] public string? RateCardId { get; init; }
+        [JsonPropertyName("rate_card_version")] public string? RateCardVersion { get; init; }
+        public string? Reference { get; init; }
     }
 
     [Theory]
@@ -407,6 +499,158 @@ public sealed class GatewayModelProviderDraftTests
 [Collection("IdentityBrokerPostgres")]
 public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixture postgres)
 {
+    [Fact]
+    public async Task GatewayRawReferencePinSurvivesProxyAndRejectsAnotherProjectsDatabase()
+    {
+        var firstConnection = await postgres.CreateMigratedDatabaseAsync();
+        var secondConnection = await postgres.CreateMigratedDatabaseAsync();
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        await using var first = await ProjectsConfigResourceServer.StartAsync(
+            firstConnection, signingKey, enableProviderReferences: true);
+        await using var second = await ProjectsConfigResourceServer.StartAsync(
+            secondConnection, signingKey, enableProviderReferences: true);
+        var tenant = "pin-tenant-" + Guid.NewGuid().ToString("N");
+        var actor = "pin-actor-" + Guid.NewGuid().ToString("N");
+        var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        async Task<(DbContextOptions<ProjectsConfigDbContext> Options, string Id, Guid GrantId, long Revision)> PrepareAsync(
+            ProjectsConfigResourceServer owner)
+        {
+            var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+                .UseNpgsql(owner.PrivilegedFixtureDataSource, config => config.MigrationsHistoryTable(
+                    "__ef_migrations_history", ProjectsConfigDbContext.Schema)).Options;
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+            var membership = await authority.GrantMembershipAsync(issuer, actor, tenant, "fixture");
+            var grant = await authority.AssignRoleAsync(membership.MembershipId, ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin, "fixture");
+            await using var connection = await owner.PrivilegedFixtureDataSource.OpenConnectionAsync();
+            await using var read = new NpgsqlCommand(
+                "SELECT installation_id FROM projects_config.installation_identity WHERE singleton", connection);
+            return (options, ((Guid)(await read.ExecuteScalarAsync())!).ToString("D"), grant.AssignmentId, grant.Revision);
+        }
+        var a = await PrepareAsync(first);
+        var b = await PrepareAsync(second);
+        Assert.NotEqual(a.Id, b.Id);
+        var bearer = CreateToken(signingKey, actor, "api.read projects.admin");
+        await using var gatewayA = await GatewayResourceServer.StartAsync(
+            signingKey, first.CreateHandler, (_, _, _) => throw new InvalidOperationException());
+        await using var gatewayB = await GatewayResourceServer.StartAsync(
+            signingKey, second.CreateHandler, (_, _, _) => throw new InvalidOperationException());
+        var operation = Guid.NewGuid();
+        var id = "byok-" + operation.ToString("N");
+        var reference = "Gateway-" + operation.ToString("N");
+        var body = SaveBody(operation, 0, "Gateway pin");
+        string Pinned(string target) => body[..^1] +
+            $",\"reference\":\"{reference}\",\"targetInstallationId\":\"{target}\"}}";
+        async Task AssertReplyAsync(
+            GatewayResourceServer gateway, HttpMethod method, string path, string json,
+            HttpStatusCode expected, string code)
+        {
+            using var request = OwnerRequest(method, path, bearer, tenant, json);
+            using var response = await gateway.Client.SendAsync(request);
+            Assert.Equal(expected, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(code, result.RootElement.GetProperty("code").GetString());
+            Assert.DoesNotContain(id, result.RootElement.GetRawText());
+        }
+        const string platformPath = "/api/v1/platform/byok-providers";
+        foreach (var suffix in new[]
+        {
+            $",\"reference\":\"{reference}\"}}",
+            $",\"reference\":\"{reference}\",\"targetInstallationId\":null}}",
+            $",\"reference\":\"{reference}\",\"targetInstallationId\":\"not-a-uuid\"}}",
+            $",\"reference\":\"{reference}\",\"targetInstallationId\":\"00000000-0000-0000-0000-000000000000\"}}",
+            $",\"reference\":\"{reference}\",\"targetInstallationId\":42}}",
+            $",\"reference\":\"{reference}\",\"targetInstallationId\":\"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA\"}}",
+            $",\"reference\":\"{reference}\",\"targetInstallationId\":\"{a.Id}\",\"targetInstallationId\":\"{a.Id}\"}}",
+            $",\"targetInstallationId\":\"{a.Id}\"}}",
+        })
+            await AssertReplyAsync(gatewayA, HttpMethod.Post, platformPath, body[..^1] + suffix,
+                HttpStatusCode.BadRequest, "model_provider_draft_invalid_request");
+        await AssertReplyAsync(gatewayB, HttpMethod.Post, platformPath, Pinned(a.Id),
+            HttpStatusCode.Conflict, "target_installation_mismatch");
+        await using (var db = new ProjectsConfigDbContext(a.Options))
+        {
+            Assert.False(await db.ModelProviderDrafts.AnyAsync(row => row.ProviderId == id));
+            Assert.False(await db.ModelProviderDraftRevisions.AnyAsync(row => row.OperationId == operation));
+            Assert.False(await db.ModelProviderReferenceReservations.AnyAsync(row => row.OperationId == operation));
+        }
+        await using (var db = new ProjectsConfigDbContext(b.Options))
+        {
+            Assert.False(await db.ModelProviderDrafts.AnyAsync(row => row.ProviderId == id));
+            Assert.False(await db.ModelProviderDraftRevisions.AnyAsync(row => row.OperationId == operation));
+            Assert.False(await db.ModelProviderReferenceReservations.AnyAsync(row => row.OperationId == operation));
+        }
+        using (var create = OwnerRequest(HttpMethod.Post, platformPath, bearer, tenant, Pinned(a.Id)))
+        using (var response = await gatewayA.Client.SendAsync(create))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(id, result.RootElement.GetProperty("id").GetString());
+            Assert.Equal(reference, result.RootElement.GetProperty("reference").GetString());
+        }
+        using (var create = OwnerRequest(HttpMethod.Post, platformPath, bearer, tenant, Pinned(b.Id)))
+        using (var response = await gatewayB.Client.SendAsync(create))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await AssertReplyAsync(gatewayB, HttpMethod.Post, platformPath, Pinned(a.Id),
+            HttpStatusCode.Conflict, "target_installation_mismatch");
+        await using (var disabled = await ProjectsConfigResourceServer.StartAsync(firstConnection, signingKey))
+        await using (var disabledGateway = await GatewayResourceServer.StartAsync(
+            signingKey, disabled.CreateHandler, (_, _, _) => throw new InvalidOperationException()))
+        {
+            using (var replay = OwnerRequest(HttpMethod.Post, platformPath, bearer, tenant, Pinned(a.Id)))
+            using (var response = await disabledGateway.Client.SendAsync(replay))
+            {
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.Equal(id, result.RootElement.GetProperty("id").GetString());
+                Assert.Equal(1, result.RootElement.GetProperty("revision").GetInt64());
+            }
+            var freshOperation = Guid.NewGuid();
+            var freshBody = SaveBody(freshOperation, 0, "Disabled")[..^1] +
+                $",\"reference\":\"Disabled-{freshOperation:N}\",\"targetInstallationId\":\"{a.Id}\"}}";
+            await AssertReplyAsync(disabledGateway, HttpMethod.Post, platformPath, freshBody,
+                HttpStatusCode.ServiceUnavailable, "model_provider_draft_unavailable");
+        }
+        await AssertReplyAsync(gatewayA, HttpMethod.Put, platformPath + "/" + id,
+            SaveBody(Guid.NewGuid(), 1, "update")[..^1] + $",\"targetInstallationId\":\"{a.Id}\"}}",
+            HttpStatusCode.BadRequest, "model_provider_draft_invalid_request");
+        var boundBearer = CreateToken(signingKey, actor, "api.read projects.admin", projectId: "project-a");
+        using (var projectRequest = OwnerRequest(HttpMethod.Post,
+            "/api/v1/projects/project-a/byok-providers", boundBearer, tenant, Pinned(a.Id)))
+        using (var response = await gatewayA.Client.SendAsync(projectRequest))
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await using (var db = new ProjectsConfigDbContext(a.Options))
+        {
+            var reservation = await db.ModelProviderReferenceReservations.AsNoTracking()
+                .SingleAsync(row => row.OperationId == operation);
+            Assert.Equal(Guid.Parse(a.Id), reservation.InstallationId);
+            Assert.Equal(1, await db.ModelProviderDraftRevisions.CountAsync(row => row.OperationId == operation));
+        }
+        await using (var db = new ProjectsConfigDbContext(b.Options))
+            Assert.Equal(Guid.Parse(b.Id), (await db.ModelProviderReferenceReservations.AsNoTracking()
+                .SingleAsync(row => row.OperationId == operation)).InstallationId);
+        var authorityA = new ProjectsConfigPrivilegedAuthorityStore(a.Options, TimeProvider.System);
+        var otherActor = "other-pin-" + Guid.NewGuid().ToString("N");
+        var otherMembership = await authorityA.GrantMembershipAsync(issuer, otherActor, tenant, "fixture");
+        await authorityA.AssignRoleAsync(otherMembership.MembershipId, ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin, "fixture");
+        using (var other = OwnerRequest(HttpMethod.Post, platformPath,
+            CreateToken(signingKey, otherActor, "api.read projects.admin"), tenant, Pinned(a.Id)))
+        using (var response = await gatewayA.Client.SendAsync(other))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Equal("model_provider_draft_conflict",
+                JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("code").GetString());
+        }
+        await authorityA.RevokeRoleAssignmentAsync(a.GrantId, a.Revision, "fixture");
+        await AssertReplyAsync(gatewayA, HttpMethod.Post, platformPath, Pinned(b.Id),
+            HttpStatusCode.Forbidden, "forbidden");
+        await using (var db = new ProjectsConfigDbContext(a.Options))
+            Assert.Equal(1, await db.ModelProviderDraftRevisions.CountAsync(row => row.OperationId == operation));
+    }
+
     [Fact]
     public async Task GatewayModelProviderDraftPostgresTestsCreatesAndReadsTheCommittedRevision()
     {

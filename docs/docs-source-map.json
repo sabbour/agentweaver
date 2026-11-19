@@ -236,6 +236,20 @@
       ]
     },
     {
+      "name": "Provider reference namespace",
+      "sourcePrefixes": [
+        "services/projects-config/Agentweaver.Projects.Config/ModelProviderReferenceReservations.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ModelProviderDraftEndpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/Migrations/20261119175249_BindProviderInstallationIdentity.cs"
+      ],
+      "required": [
+        "docs/reference/api.md",
+        "docs/reference/contracts.md",
+        "docs/reference/runtime-configuration.md",
+        "docs/architecture/projects-config.md"
+      ]
+    },
+    {
       "name": "Public workflow generation",
       "sourcePrefixes": [
         "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",

@@ -74,7 +74,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         X509Certificate2? brokerRunBindingServerCertificate = null,
         bool grantRoleAssignmentWrites = true,
         bool useKestrel = false,
-        ILoggerProvider? loggerProvider = null)
+        ILoggerProvider? loggerProvider = null,
+        bool enableProviderReferences = false)
     {
         if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))
             throw new ArgumentException(
@@ -170,7 +171,21 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 services.AddSingleton(TimeProvider.System);
                 services.AddPlatformComponentCollector(new ConfigurationBuilder().Build());
                 services.AddScoped<ProjectsConfigService>();
-                services.AddScoped<ModelProviderDraftService>();
+                if (enableProviderReferences)
+                {
+                    var bindings = ModelBindingCapabilities.FromConfiguration(
+                        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                        {
+                            ["AgentHost:ModelBindingsRevision"] = "reference-test-v1",
+                            ["AgentHost:ModelBindings:fixture-binding:SourceMode"] = "Byok",
+                            ["AgentHost:ModelBindings:fixture-binding:Enabled"] = "false",
+                        }).Build());
+                    services.AddScoped<ModelProviderDraftService>(sp => new(
+                        sp.GetRequiredService<ProjectsConfigDbContext>(),
+                        TimeProvider.System, bindings, true));
+                }
+                else
+                    services.AddScoped<ModelProviderDraftService>();
                 services.AddScoped<ProjectRoleAssignmentService>();
                 services.AddScoped<ProjectSetupAuthorityAuditService>();
                 // Preserve service binding while failing fast if the test host reaches a remote Knowledge owner.
@@ -385,6 +400,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT, INSERT, UPDATE ON projects_config.model_providers TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.model_provider_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.model_provider_reference_reservations TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.installation_identity TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[]) TO \"{runtimeRole}\"",

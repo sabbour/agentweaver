@@ -16,7 +16,7 @@
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.14.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
-    <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />
+    <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" Aliases="global,ProjectsService" />
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" />
     <ProjectReference Include="..\..\services\environment\Agentweaver.Environment\Agentweaver.Environment.csproj"
                       Aliases="EnvironmentService" />

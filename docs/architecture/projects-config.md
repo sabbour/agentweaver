@@ -34,11 +34,14 @@ head. The client reloads before it makes another edit.
 
 Platform create can reserve an exact provider reference. The default-off
 `ProjectsConfig:ProviderReferenceReservationsEnabled` switch controls new
-reservations. Projects checks the local binding copy and current saved
-selectors, then commits the head, revision, and permanent reservation together.
-It locks current PlatformAdmin authority through commit. The reservation does
-not change runtime resolution or accepted run pins. Deployment-wide inventory
-and a separate activation fence are required before a later switch.
+reservations. Every reference create pins the Projects database namespace UUID.
+Under the provider-create advisory lock, Projects locks current PlatformAdmin
+authority and reads the UUID before it checks a receipt. A matching new
+reservation stores that UUID with the head and revision in one transaction.
+Legacy or copied receipts that lack the current namespace require reconciliation.
+The [reference contract](../reference/contracts.md#model-provider-draft-metadata)
+describes the rollout fence, restore, and fork rules.
+The reservation does not change runtime resolution or accepted run pins.
 The database insert guards require `READ COMMITTED` isolation. They reject
 `REPEATABLE READ` and `SERIALIZABLE` with a serialization failure because those
 transactions can retain a snapshot from before the create lock was acquired.
@@ -51,24 +54,46 @@ sequenceDiagram
     participant Projects as Projects & Config
     participant DB as PostgreSQL
     Client->>Gateway: POST or PUT with operationId and expectedRevision
-    Gateway->>Projects: Forward bearer, tenant selector, and bounded metadata
+    Gateway->>Projects: Forward bearer, tenant selector, metadata, and pin
     Projects->>Projects: Check current scope, membership, role, and binding
     alt Platform create with reference
         Projects->>DB: Lock create and current PlatformAdmin authority
-        Projects->>DB: Replay or check local bindings and saved selectors
-        Projects->>DB: Commit head, revision, and permanent reference together
+        Projects->>DB: Read database namespace with plain SELECT
+        alt Missing identity or wrong pin
+            Projects-->>Gateway: 503 unavailable or 409 target mismatch
+        else Matching pin
+            Projects->>DB: Check bound receipt or local bindings and selectors
+            alt Legacy or foreign receipt with matching issuer, tenant, and subject
+                Projects-->>Gateway: 409 reconciliation required
+            else Exact replay or new reservation
+                Projects->>DB: Replay or commit head, revision, and bound reservation
+                DB-->>Projects: Committed immutable revision
+                Projects-->>Gateway: Saved revision, no-store
+            end
+        end
     else Ordinary create or update
         Projects->>DB: Replay exact operation or append revision and advance head
+        DB-->>Projects: Committed immutable revision
+        Projects-->>Gateway: Saved revision, no-store
     end
-    DB-->>Projects: Committed immutable revision
-    Projects-->>Gateway: Saved revision, no-store
-    Gateway-->>Client: Save receipt
-    alt Client retries after a lost response
-        Client->>Gateway: Retry the same request
+    Gateway-->>Client: Forward no-store response
+    opt Client retries after a lost response
+        Client->>Gateway: Retry the identical request
         Gateway->>Projects: Forward unchanged
-        Projects->>DB: Find matching operation fingerprint
-        DB-->>Projects: Original saved revision
-        Projects-->>Client: Original receipt
+        Projects->>DB: Recheck current authority
+        alt Reference-bearing create
+            Projects->>DB: Read namespace and compare the pin
+            alt Missing namespace or wrong pin
+                Projects-->>Gateway: 503 unavailable or 409 target mismatch
+            else Matching pin
+                Projects->>DB: Check original issuer, tenant, subject, and receipt
+                Projects-->>Gateway: Original receipt or conflict
+            end
+        else Ordinary create or update
+            Projects->>DB: Check matching operation receipt
+            Projects-->>Gateway: Original receipt or conflict
+        end
+        Gateway-->>Client: Forward no-store response
     end
 ```
 

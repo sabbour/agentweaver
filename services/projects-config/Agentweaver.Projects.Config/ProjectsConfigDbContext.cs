@@ -254,6 +254,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(item => item.ProviderId).HasColumnName("provider_id").HasMaxLength(128).IsRequired();
             entity.Property(item => item.CreationRevision).HasColumnName("creation_revision");
             entity.Property(item => item.OperationId).HasColumnName("operation_id");
+            entity.Property(item => item.InstallationId).HasColumnName("installation_id");
             entity.Property(item => item.Issuer).HasColumnName("issuer").IsRequired();
             entity.Property(item => item.TenantId).HasColumnName("tenant_id").IsRequired();
             entity.Property(item => item.Subject).HasColumnName("subject").IsRequired();

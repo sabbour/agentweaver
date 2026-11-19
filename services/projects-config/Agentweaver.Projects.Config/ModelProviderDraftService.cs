@@ -162,8 +162,8 @@ public sealed partial class ModelProviderDraftService
             return await CreateAsync(
                 caller, scope, projectId, providerId, request, metadata, fingerprintInput,
                 configurationHash, cancellationToken).ConfigureAwait(false);
-        if (request.Reference is not null)
-            throw ModelProviderDraftException.InvalidRequest("A reference is permitted only on platform create.");
+        if (request.Reference is not null || request.TargetInstallationId is not null)
+            throw ModelProviderDraftException.InvalidRequest("A reference and target are permitted only on platform create.");
 
         // Check completed operations first so a lost response can be replayed after later edits.
         var replay = await ReadReplayAsync(

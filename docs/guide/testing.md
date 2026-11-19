@@ -85,6 +85,19 @@ dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~GatewayModelProviderDraftPostgresTests
 ```
 
+Run the Projects namespace identity and reference reservation tests with
+disposable PostgreSQL:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~InstallationIdentity|FullyQualifiedName~InstallationPinRejects|FullyQualifiedName~LegacyReservationDoesNotAcquire|FullyQualifiedName~MissingInstallationBlocks|FullyQualifiedName~UnreadableInstallation|FullyQualifiedName~InternalDraftCallsCannotBypassInstallationPinValidation|FullyQualifiedName~RuntimeCannotInsertMissingOrForeign|FullyQualifiedName~RuntimeGrantPlanRejectsMutatedInstallationGuardSource|FullyQualifiedName~InstallationRekeyAndCreate|FullyQualifiedName~ConflictRetryRechecksInstallation|FullyQualifiedName~NewOwnerRejectsPreIdentitySchema|FullyQualifiedName~FailedIdentityMigrationRollsBack|FullyQualifiedName~ModelProviderDraftReference|FullyQualifiedName~PublicModelProviderDraftNamedDatabaseConflict|FullyQualifiedName~OtherDatabaseCheckViolations"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayRawReferencePin|FullyQualifiedName~GatewayForwardsThePinToTheS1StrictRequestContract"
+```
+
+These tests check migration retention and rollback, restricted runtime grants,
+reference pins through the Gateway, legacy and fork receipts, restore snapshots,
+rekey lock ordering, and owner restart without singleton read access. The S1 request-contract fixture checks forwarding
+against the earlier strict JSON shape.
+
 The local database-free tests do not prove owner persistence or current
 authorization against PostgreSQL.
 

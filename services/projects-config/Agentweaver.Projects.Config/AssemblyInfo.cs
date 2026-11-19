@@ -2,3 +2,4 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Agentweaver.Projects.Config.Tests")]
+[assembly: InternalsVisibleTo("Agentweaver.Identity.Broker.Tests")]

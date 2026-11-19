@@ -65,7 +65,8 @@ the original operation. Delete, activation, and credential routes are not
 available through Gateway. The private Projects publication path returns
 `503 credential_publication_unavailable`.
 Platform create accepts an optional `reference` to reserve the exact spelling
-of a deployment-managed BYOK model. Reservations are permanent and start as
+of a deployment-managed BYOK model, with the matching `targetInstallationId`.
+Reservations are permanent and start as
 inactive Drafts. `ProjectsConfig:ProviderReferenceReservationsEnabled`
 defaults to `false`; an authorized replay still works when it is off. See the
 [reference reservation contract](./contracts.md#model-provider-draft-metadata)

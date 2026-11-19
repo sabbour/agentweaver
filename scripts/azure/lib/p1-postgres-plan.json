@@ -39,6 +39,12 @@
           ]
         },
         {
+          "table": "installation_identity",
+          "privileges": [
+            "SELECT"
+          ]
+        },
+        {
           "table": "platform_runtime_heads",
           "privileges": [
             "SELECT",
@@ -274,6 +280,14 @@
               "message": "provider reference collision",
               "sqlState": "23514",
               "functionSource": "BEGIN\n    PERFORM pg_catalog.pg_advisory_xact_lock(\n        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));\n    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN\n        RAISE EXCEPTION 'provider create requires read committed isolation'\n            USING ERRCODE = '40001';\n    END IF;\n    IF TG_TABLE_NAME = 'model_providers' THEN\n        IF EXISTS (\n            SELECT 1 FROM projects_config.model_provider_reference_reservations AS reservation\n            WHERE reservation.reference_folded =\n                pg_catalog.translate(NEW.provider_id COLLATE \"C\",\n                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')\n        ) THEN\n            RAISE EXCEPTION 'provider reference collision'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';\n        END IF;\n    ELSE\n        IF EXISTS (\n            SELECT 1 FROM projects_config.model_providers AS provider\n            WHERE pg_catalog.translate(provider.provider_id COLLATE \"C\",\n                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = NEW.reference_folded\n        ) THEN\n            RAISE EXCEPTION 'provider reference collision'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';\n        END IF;\n    END IF;\n    RETURN NEW;\nEND;"
+            },
+            {
+              "trigger": "model_provider_reference_installation_guard",
+              "function": "guard_provider_reference_installation()",
+              "triggerType": 7,
+              "message": "provider reference installation mismatch",
+              "sqlState": "23514",
+              "functionSource": "DECLARE\n    current_installation uuid;\nBEGIN\n    PERFORM pg_catalog.pg_advisory_xact_lock(\n        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));\n    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN\n        RAISE EXCEPTION 'provider create requires read committed isolation'\n            USING ERRCODE = '40001';\n    END IF;\n    SELECT installation_id INTO current_installation\n    FROM projects_config.installation_identity WHERE singleton = true;\n    IF current_installation IS NULL OR NEW.installation_id IS NULL OR\n       NEW.installation_id <> current_installation THEN\n        RAISE EXCEPTION 'provider reference installation mismatch'\n            USING ERRCODE = '23514', CONSTRAINT = 'ck_provider_reference_installation_id';\n    END IF;\n    RETURN NEW;\nEND;"
             },
             {
               "trigger": "model_provider_reference_reservations_immutable",
@@ -604,6 +618,10 @@
         },
         {
           "signature": "guard_model_provider_reference_cross_table()",
+          "execute": false
+        },
+        {
+          "signature": "guard_provider_reference_installation()",
           "execute": false
         },
         {

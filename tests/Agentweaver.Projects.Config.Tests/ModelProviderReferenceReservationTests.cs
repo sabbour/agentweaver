@@ -66,7 +66,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         await ReferenceService(db).SaveAsync(admin, ModelProviderBindingScope.Platform, null, providerId,
-            DraftRequest(operation, 0) with { Reference = "Acme" }, CancellationToken.None);
+            DraftRequest(operation, 0) with { Reference = "Acme", TargetInstallationId = fixture.InstallationId }, CancellationToken.None);
         var reservationsBefore = await db.ModelProviderReferenceReservations.AsNoTracking()
             .OrderBy(item => item.ReferenceFolded).ToArrayAsync();
         var after = await service.UpdateProjectConfigurationAsync(
@@ -94,7 +94,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         var reference = "Exact.Model-" + Guid.NewGuid().ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = reference };
+        var request = DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId };
         var enabled = ReferenceService(db);
         var created = await enabled.SaveAsync(
             caller, ModelProviderBindingScope.Platform, null, providerId, request, CancellationToken.None);
@@ -117,7 +117,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var newOperation = Guid.NewGuid();
         var unavailable = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             disabled.SaveAsync(caller, ModelProviderBindingScope.Platform, null, "byok-" + newOperation.ToString("N"),
-                DraftRequest(newOperation, 0) with { Reference = reference + "new" }, CancellationToken.None));
+                DraftRequest(newOperation, 0) with { Reference = reference + "new", TargetInstallationId = fixture.InstallationId }, CancellationToken.None));
         Assert.Equal("model_provider_draft_unavailable", unavailable.Code);
         var mismatch = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             disabled.SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId,
@@ -125,7 +125,7 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal("model_provider_draft_conflict", mismatch.Code);
         var dropped = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             disabled.SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId,
-                request with { Reference = null }, CancellationToken.None));
+                request with { Reference = null, TargetInstallationId = null }, CancellationToken.None));
         Assert.Equal("model_provider_draft_conflict", dropped.Code);
     }
 
@@ -137,7 +137,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         var reference = "Concurrency-" + Guid.NewGuid().ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = reference };
+        var request = DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId };
         await using var firstDb = CreateDbContext();
         await using var secondDb = CreateDbContext();
         var first = ReferenceService(firstDb).SaveAsync(
@@ -156,7 +156,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var conflict = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             ReferenceService(seed).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
                 "byok-" + other.ToString("N"),
-                DraftRequest(other, 0) with { Reference = reference.ToLowerInvariant() }, CancellationToken.None));
+                DraftRequest(other, 0) with { Reference = reference.ToLowerInvariant(), TargetInstallationId = fixture.InstallationId }, CancellationToken.None));
         Assert.Equal("reference_conflict", conflict.Code);
         Assert.False(await seed.ModelProviderDrafts.AnyAsync(item => item.ProviderId == "byok-" + other.ToString("N")));
     }
@@ -177,7 +177,7 @@ public sealed partial class ProjectsConfigPostgresTests
             {
                 var result = await ReferenceService(context).SaveAsync(caller, ModelProviderBindingScope.Platform,
                     null, "byok-" + operation.ToString("N"),
-                    DraftRequest(operation, 0) with { Reference = value }, CancellationToken.None);
+                    DraftRequest(operation, 0) with { Reference = value, TargetInstallationId = fixture.InstallationId }, CancellationToken.None);
                 return result.Reference!;
             }
             catch (ModelProviderDraftException exception)
@@ -204,7 +204,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var second = await CreateReferenceAdminAsync(db);
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = "Actor-" + Guid.NewGuid().ToString("N") };
+        var request = DraftRequest(operation, 0) with { Reference = "Actor-" + Guid.NewGuid().ToString("N"), TargetInstallationId = fixture.InstallationId };
         await ReferenceService(db).SaveAsync(first, ModelProviderBindingScope.Platform, null, providerId,
             request, CancellationToken.None);
         var error = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
@@ -236,7 +236,7 @@ public sealed partial class ProjectsConfigPostgresTests
             ImmutableHashSet.Create(StringComparer.Ordinal, "api.read", "projects.admin"), null, null, null);
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = "Identity-" + operation.ToString("N") };
+        var request = DraftRequest(operation, 0) with { Reference = "Identity-" + operation.ToString("N"), TargetInstallationId = fixture.InstallationId };
         await ReferenceService(db).SaveAsync(first, ModelProviderBindingScope.Platform, null,
             providerId, request, CancellationToken.None);
         var error = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
@@ -264,7 +264,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var service = ReferenceService(db, bindingReference: binding, source: source, bindingEnabled: bindingEnabled);
         var save = () => service.SaveAsync(caller, ModelProviderBindingScope.Platform, null,
-            "byok-" + operation.ToString("N"), DraftRequest(operation, 0) with { Reference = reference },
+            "byok-" + operation.ToString("N"), DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId },
             CancellationToken.None);
         if (allowed)
             Assert.Equal(reference, (await save()).Reference);
@@ -305,20 +305,20 @@ public sealed partial class ProjectsConfigPostgresTests
             var conflict = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
                 ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
                     "byok-" + operation.ToString("N"),
-                    DraftRequest(operation, 0) with { Reference = reference }, CancellationToken.None));
+                    DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId }, CancellationToken.None));
             Assert.Equal("reference_conflict", conflict.Code);
         }
         var matched = prefix + "-primary";
         var allowedOperation = Guid.NewGuid();
         var result = await ReferenceService(db, bindingReference: matched).SaveAsync(
             caller, ModelProviderBindingScope.Platform, null, "byok-" + allowedOperation.ToString("N"),
-            DraftRequest(allowedOperation, 0) with { Reference = matched }, CancellationToken.None);
+            DraftRequest(allowedOperation, 0) with { Reference = matched, TargetInstallationId = fixture.InstallationId }, CancellationToken.None);
         Assert.Equal(matched, result.Reference);
         var caseOperation = Guid.NewGuid();
         var caseConflict = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             ReferenceService(db, bindingReference: prefix + "-task").SaveAsync(
                 caller, ModelProviderBindingScope.Platform, null, "byok-" + caseOperation.ToString("N"),
-                DraftRequest(caseOperation, 0) with { Reference = (prefix + "-task").ToLowerInvariant() },
+                DraftRequest(caseOperation, 0) with { Reference = (prefix + "-task").ToLowerInvariant(), TargetInstallationId = fixture.InstallationId },
                 CancellationToken.None));
         Assert.Equal("reference_conflict", caseConflict.Code);
         Assert.Equal(savedBefore, await db.ProjectConfigurationRevisions.AsNoTracking()
@@ -369,19 +369,19 @@ public sealed partial class ProjectsConfigPostgresTests
                 var error = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
                     ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
                         "byok-" + operation.ToString("N"),
-                        DraftRequest(operation, 0) with { Reference = reference }, CancellationToken.None));
+                        DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId }, CancellationToken.None));
                 Assert.Equal("reference_conflict", error.Code);
             }
             var acceptedOperation = Guid.NewGuid();
             var acceptedReference = prefix + "-agent";
             var accepted = await ReferenceService(db, bindingReference: acceptedReference).SaveAsync(
                 caller, ModelProviderBindingScope.Platform, null, "byok-" + acceptedOperation.ToString("N"),
-                DraftRequest(acceptedOperation, 0) with { Reference = acceptedReference }, CancellationToken.None);
+                DraftRequest(acceptedOperation, 0) with { Reference = acceptedReference, TargetInstallationId = fixture.InstallationId }, CancellationToken.None);
             Assert.Equal(acceptedReference, accepted.Reference);
             var generatedConflict = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
                 ReferenceService(db).SaveAsync(
                     caller, ModelProviderBindingScope.Platform, null, generatedId,
-                    DraftRequest(generatedOperation, 0) with { Reference = prefix + "-different" },
+                    DraftRequest(generatedOperation, 0) with { Reference = prefix + "-different", TargetInstallationId = fixture.InstallationId },
                     CancellationToken.None));
             Assert.Equal("reference_conflict", generatedConflict.Code);
         }
@@ -401,7 +401,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         await ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId,
-            DraftRequest(operation, 0) with { Reference = reference }, CancellationToken.None);
+            DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId }, CancellationToken.None);
         var ordinaryId = "ordinary-" + Guid.NewGuid().ToString("N");
         var ordinaryOperation = Guid.NewGuid();
         await ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null, ordinaryId,
@@ -463,8 +463,9 @@ public sealed partial class ProjectsConfigPostgresTests
         await using (var insert = new NpgsqlCommand("""
             INSERT INTO projects_config.model_provider_reference_reservations
                 (reference, reference_folded, provider_id, creation_revision, operation_id,
-                 issuer, tenant_id, subject, created_at)
-            VALUES (@reference, @folded, @provider, 1, @operation, 'issuer', 'tenant', 'subject', now())
+                 issuer, tenant_id, subject, created_at, installation_id)
+            VALUES (@reference, @folded, @provider, 1, @operation, 'issuer', 'tenant', 'subject', now(),
+                    (SELECT installation_id FROM projects_config.installation_identity WHERE singleton))
             """, connection))
         {
             insert.Parameters.AddWithValue("reference", ordinaryId.ToUpperInvariant());
@@ -480,8 +481,9 @@ public sealed partial class ProjectsConfigPostgresTests
             await using var invalid = new NpgsqlCommand("""
                 INSERT INTO projects_config.model_provider_reference_reservations
                     (reference, reference_folded, provider_id, creation_revision, operation_id,
-                     issuer, tenant_id, subject, created_at)
-                VALUES (@reference, @reference, @provider, 1, @operation, 'issuer', 'tenant', 'subject', now())
+                     issuer, tenant_id, subject, created_at, installation_id)
+                VALUES (@reference, @reference, @provider, 1, @operation, 'issuer', 'tenant', 'subject', now(),
+                        (SELECT installation_id FROM projects_config.installation_identity WHERE singleton))
                 """, connection);
             invalid.Parameters.AddWithValue("reference", invalidReference);
             invalid.Parameters.AddWithValue("provider", ordinaryId);
@@ -537,7 +539,7 @@ public sealed partial class ProjectsConfigPostgresTests
             await release.Task.WaitAsync(token);
         };
         var create = service.SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId,
-            DraftRequest(operation, 0) with { Reference = reference }, timeout.Token);
+            DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId }, timeout.Token);
         Task<int>? insertTask = null;
         try
         {
@@ -624,7 +626,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var reference = "Isolation-" + firstOperation.ToString("N");
         var first = await ReferenceService(runtime).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
             "byok-" + firstOperation.ToString("N"),
-            DraftRequest(firstOperation, 0) with { Reference = reference }, CancellationToken.None);
+            DraftRequest(firstOperation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId }, CancellationToken.None);
         Assert.Equal(reference, first.Reference);
         var ordinaryOperation = Guid.NewGuid();
         var ordinary = await ReferenceService(runtime).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
@@ -653,8 +655,9 @@ public sealed partial class ProjectsConfigPostgresTests
         await using var insert = new NpgsqlCommand("""
             INSERT INTO projects_config.model_provider_reference_reservations
                 (reference, reference_folded, provider_id, creation_revision, operation_id,
-                 issuer, tenant_id, subject, created_at)
-            VALUES (@reference, @reference, @provider, 1, @operation, 'issuer', 'tenant', 'subject', now())
+                 issuer, tenant_id, subject, created_at, installation_id)
+            VALUES (@reference, @reference, @provider, 1, @operation, 'issuer', 'tenant', 'subject', now(),
+                    (SELECT installation_id FROM projects_config.installation_identity WHERE singleton))
             """, connection, transaction);
         insert.Parameters.AddWithValue("reference", "isolation-" + Guid.NewGuid().ToString("N"));
         insert.Parameters.AddWithValue("provider", providerId);
@@ -719,7 +722,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         var reference = "Fault-" + operation.ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = reference };
+        var request = DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId };
         var functionName = "reference_fault_" + operation.ToString("N");
         await using var owner = await fixture.MigrationDataSource.OpenConnectionAsync();
         await using (var install = new NpgsqlCommand($"""
@@ -772,7 +775,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         var reference = "Conflict-" + operation.ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = reference };
+        var request = DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId };
         var functionName = "reference_conflict_" + operation.ToString("N");
         await using var owner = await fixture.MigrationDataSource.OpenConnectionAsync();
         await using (var install = new NpgsqlCommand($"""
@@ -941,6 +944,7 @@ public sealed partial class ProjectsConfigPostgresTests
                 operation, 0, "Example", "openai", "https://example.com", "model-1")
             {
                 Reference = reference,
+                TargetInstallationId = isolated.InstallationId,
             };
             await ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
                 providerId, request, CancellationToken.None);
@@ -1033,7 +1037,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var error = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
-                "byok-" + operation.ToString("N"), DraftRequest(operation, 0) with { Reference = reference },
+                "byok-" + operation.ToString("N"), DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId },
                 CancellationToken.None));
         Assert.Equal("model_provider_draft_invalid_request", error.Code);
     }
@@ -1046,7 +1050,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         var reference = "Z" + new string('a', 255);
-        var request = DraftRequest(operation, 0) with { Reference = reference };
+        var request = DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId };
         var missing = new ModelProviderDraftService(
             db, TimeProvider.System, ModelBindingCapabilities.Unavailable, true);
         var unavailable = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
@@ -1071,14 +1075,14 @@ public sealed partial class ProjectsConfigPostgresTests
         var blocked = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             ReferenceService(db, bindingReference: providerId).SaveAsync(
                 caller, ModelProviderBindingScope.Platform, null, providerId,
-                DraftRequest(operation, 0) with { Reference = "Different-" + Guid.NewGuid().ToString("N") },
+                DraftRequest(operation, 0) with { Reference = "Different-" + Guid.NewGuid().ToString("N"), TargetInstallationId = fixture.InstallationId },
                 CancellationToken.None));
         Assert.Equal("reference_conflict", blocked.Code);
         var reserved = "Reserved-" + Guid.NewGuid().ToString("N");
         var firstOperation = Guid.NewGuid();
         await ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
             "byok-" + firstOperation.ToString("N"),
-            DraftRequest(firstOperation, 0) with { Reference = reserved }, CancellationToken.None);
+            DraftRequest(firstOperation, 0) with { Reference = reserved, TargetInstallationId = fixture.InstallationId }, CancellationToken.None);
         var ordinary = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
                 reserved.ToLowerInvariant(), DraftRequest(Guid.NewGuid(), 0), CancellationToken.None));
@@ -1108,7 +1112,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var conflict = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
                 "byok-" + platformOperation.ToString("N"),
-                DraftRequest(platformOperation, 0) with { Reference = projectId.ToUpperInvariant() },
+                DraftRequest(platformOperation, 0) with { Reference = projectId.ToUpperInvariant(), TargetInstallationId = fixture.InstallationId },
                 CancellationToken.None));
         Assert.Equal("reference_conflict", conflict.Code);
 
@@ -1117,7 +1121,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var reservationOperation = Guid.NewGuid();
         await ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
             "byok-" + reservationOperation.ToString("N"),
-            DraftRequest(reservationOperation, 0) with { Reference = futureProjectId.ToUpperInvariant() },
+            DraftRequest(reservationOperation, 0) with { Reference = futureProjectId.ToUpperInvariant(), TargetInstallationId = fixture.InstallationId },
             CancellationToken.None);
         var projectConflict = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
             ReferenceService(db).SaveAsync(bound, ModelProviderBindingScope.Project, project.ProjectId,
@@ -1146,7 +1150,7 @@ public sealed partial class ProjectsConfigPostgresTests
             var providerId = "byok-" + operation.ToString("N");
             var error = await Assert.ThrowsAsync<ModelProviderDraftException>(() =>
                 ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId,
-                    DraftRequest(operation, 0) with { Reference = "Missing-" + suffix }, CancellationToken.None));
+                    DraftRequest(operation, 0) with { Reference = "Missing-" + suffix, TargetInstallationId = fixture.InstallationId }, CancellationToken.None));
             Assert.Equal("model_provider_draft_unavailable", error.Code);
             Assert.False(await db.ModelProviderDrafts.AnyAsync(item => item.ProviderId == providerId));
         }
@@ -1169,7 +1173,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         var reference = "Locked-" + Guid.NewGuid().ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = reference };
+        var request = DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId };
         if (replay)
             await ReferenceService(seed).SaveAsync(
                 caller, ModelProviderBindingScope.Platform, null, providerId, request, CancellationToken.None);
@@ -1250,7 +1254,7 @@ public sealed partial class ProjectsConfigPostgresTests
             var deniedNew = await Assert.ThrowsAsync<ProjectConfigException>(() =>
                 ReferenceService(seed).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
                     "byok-" + nextOperation.ToString("N"),
-                    DraftRequest(nextOperation, 0) with { Reference = reference + "-new" },
+                    DraftRequest(nextOperation, 0) with { Reference = reference + "-new", TargetInstallationId = fixture.InstallationId },
                     CancellationToken.None));
             Assert.Equal(StatusCodes.Status403Forbidden, deniedNew.StatusCode);
             Assert.Equal(1, await seed.ModelProviderReferenceReservations.CountAsync(item => item.ProviderId == providerId));
@@ -1278,7 +1282,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var providerId = "byok-" + operation.ToString("N");
         var reference = "Revoked-" + Guid.NewGuid().ToString("N");
-        var request = DraftRequest(operation, 0) with { Reference = reference };
+        var request = DraftRequest(operation, 0) with { Reference = reference, TargetInstallationId = fixture.InstallationId };
         if (replay)
             await ReferenceService(db).SaveAsync(
                 caller, ModelProviderBindingScope.Platform, null, providerId, request, CancellationToken.None);

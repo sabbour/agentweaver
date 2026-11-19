@@ -64,7 +64,7 @@ const GROUPS = {
   projects_config: {
     // Memberships stay read-only. The role-assignment API adds assignments and audit rows, and revokes an
     // assignment only through the column-scoped UPDATE in UPDATE_COLUMNS below.
-    SELECT: 'tenant_memberships __ef_migrations_history',
+    SELECT: 'tenant_memberships __ef_migrations_history installation_identity',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
     'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_skill_trust_evidence project_role_assignments authority_audit model_provider_revisions model_provider_reference_reservations native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
@@ -328,6 +328,29 @@ const APPEND_ONLY_GUARDS = {
     ],
     model_provider_reference_reservations: [
       providerReferenceGuard('model_provider_reference_cross_table_guard'),
+      {
+        trigger: 'model_provider_reference_installation_guard',
+        function: 'guard_provider_reference_installation()', triggerType: 7,
+        message: 'provider reference installation mismatch', sqlState: '23514',
+        functionSource: `DECLARE
+    current_installation uuid;
+BEGIN
+    PERFORM pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));
+    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'provider create requires read committed isolation'
+            USING ERRCODE = '40001';
+    END IF;
+    SELECT installation_id INTO current_installation
+    FROM projects_config.installation_identity WHERE singleton = true;
+    IF current_installation IS NULL OR NEW.installation_id IS NULL OR
+       NEW.installation_id <> current_installation THEN
+        RAISE EXCEPTION 'provider reference installation mismatch'
+            USING ERRCODE = '23514', CONSTRAINT = 'ck_provider_reference_installation_id';
+    END IF;
+    RETURN NEW;
+END;`,
+      },
       {
         trigger: 'model_provider_reference_reservations_immutable',
         function: 'reject_immutable_record_mutation()', triggerType: 27,
@@ -753,6 +776,7 @@ const FUNCTIONS = {
     'mark_model_provider_write()',
     'check_model_provider_pair()',
     'guard_model_provider_reference_cross_table()',
+    'guard_provider_reference_installation()',
     'reject_immutable_record_mutation()',
     'require_native_acs_policy_file_insert_in_revision_transaction()',
     'require_native_acs_policy_head_advance()',

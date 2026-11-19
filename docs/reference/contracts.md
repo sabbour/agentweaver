@@ -57,12 +57,26 @@ must contain 1–256 ASCII letters, digits, `.`, `_`, or `-`. It cannot begin or
 end with `_` or contain `__`. The response preserves the exact spelling on
 create, list, read, and update. Other providers omit the field.
 
+Each reference-bearing create also requires `targetInstallationId`, a nonempty
+lowercase UUID in canonical `D` form. Ordinary creates, project creates, and
+updates reject this field. The owner checks current authority and compares the
+pin with the Projects database namespace before it reads a receipt. A different
+pin returns `409 target_installation_mismatch`; a missing or unreadable
+namespace returns `503 model_provider_draft_unavailable`.
+
 `ProjectsConfig:ProviderReferenceReservationsEnabled` defaults to `false`.
 When it is off, a new reference-bearing create returns
-`503 model_provider_draft_unavailable`; authorized replays still return the
-original create receipt. Enable it after the migration, runtime grants, and all
-Projects writers have been upgraded. The local model-binding copy must be
+`503 model_provider_draft_unavailable`; authorized, namespace-bound replays
+still return the original create receipt. The local model-binding copy must be
 available for a new reservation.
+
+Before migration or enabling reference writes, inventory earlier enabled
+reference writes and their receipts. Fence reference-bearing traffic at the
+edge and all direct Projects access. Drain in-flight requests and old Projects
+owners before migration or enabling reference writes. Upgrade every Projects
+owner, verify grants, namespace, reservations, and routing, and reconcile legacy
+receipts before releasing the fence. Old owners accept unpinned replays even when
+new reservations are disabled.
 
 Reservations are permanent and unique under ASCII case folding. A reservation
 cannot match a provider ID, a hosted binding, or a differently cased local
@@ -76,10 +90,45 @@ The insert guards reject `REPEATABLE READ` and `SERIALIZABLE` with SQLSTATE
 `40001` so a stale transaction snapshot cannot bypass a collision check.
 
 For a lost response, retry with the same operation ID and identical input.
-Current authority and the original issuer, tenant, and subject are required.
+Current authority and the original issuer, tenant, subject, and installation
+are required. When the original issuer, tenant, and subject match, a legacy
+receipt without an installation or a copied receipt from another namespace
+returns `409 reference_reconciliation_required`. A different issuer, tenant, or
+subject receives the existing conflict response. Reconcile against independent
+receipt evidence and provider state; do not infer a namespace or use a new
+operation to bypass reconciliation.
 A different operation cannot adopt an existing reservation: inspect the list
 and choose a different reference. A reservation does not select or activate a
 provider or remove a deployment binding.
+
+Back up the installation identity, provider heads and revisions, reservations,
+and authority data together. A restore replacing the original keeps the
+identity; fence the original before serving the replacement. A point-in-time
+restore can lose accepted creates and receipts. Keep reference writes fenced
+and reconcile independent receipts and provider state before retrying.
+
+A clone inherits the source identity. Before reference traffic reaches a fork,
+fence all Gateway and direct Projects traffic and drain in-flight transactions.
+The privileged owner must take the provider-create advisory transaction lock
+and assign a fresh UUID in one transaction. Record the original UUID returned by
+the first `SELECT` before the `UPDATE`:
+
+```sql
+BEGIN;
+SELECT pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));
+SELECT installation_id FROM projects_config.installation_identity WHERE singleton = true;
+UPDATE projects_config.installation_identity
+SET installation_id = pg_catalog.gen_random_uuid()
+WHERE singleton = true
+RETURNING installation_id;
+COMMIT;
+```
+
+Compare the UUID returned by the `UPDATE` with the original UUID. Open the fork
+only when the UUIDs differ.
+Copied reservations remain reserved and cannot replay in the new namespace.
+Never run unfenced copies with the same identity.
 
 The owner requires an absolute HTTPS `base_url` on port 443. It rejects user
 information, queries, fragments, IP addresses, and hosts rejected by
