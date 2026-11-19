@@ -2,9 +2,10 @@
 
 **Status:** Implemented in source. Target: v1.1.0.
 
-This specification defines a fixed composition profile for the native ACS
-library. It combines reviewed action and platform-network rules in one
-artifact. It does not activate ACS or add an API consumer.
+This specification defines fixed composition profiles for the native ACS
+library. The first profile combines reviewed action and platform-network
+rules. The second profile also carries exact model-use and Guardrails rules.
+The profiles do not activate ACS or add a production Policy source consumer.
 
 ## Problem and goals
 
@@ -18,11 +19,10 @@ caller must select a domain through a typed native-library entrypoint.
 
 ## Non-goals
 
-This slice adds no authored rules, custom modules, shared data between
-domains, additional domains, API consumer, write gate, runtime admission, or
-service topology. Projects & Config keeps its current write default; the v4
-Policy path and deployed enforcement remain unchanged. Actions-plus-network is
-the first composition; other domains need separate issues.
+The library accepts only reviewed rule patterns. The service hosts do not
+register the `RuntimeNativePolicyGate` source composition. Projects & Config
+keeps its current write default. The v4 Policy path, deployed enforcement, API
+schema, storage schema, approval flow, and service topology remain unchanged.
 
 ## Intended behavior and requirements
 
@@ -59,6 +59,36 @@ separate composed and composed-System-only candidate methods. Both preserve
 the hash of the complete manifest and every file. The existing compiler
 entrypoints keep accepting only the finite network profile.
 
+## Opt-in model-use and Guardrails profile
+
+`composable-domains-v2` adds four more reviewed files and keeps the actions
+and network files unchanged:
+
+| Domain or component | Policy ID or path | Rule |
+| --- | --- | --- |
+| Model use | `agentweaver_model_use`, `policy/model-use.rego` | Allows only an exact match for model reference, model ID, source mode, provider type and ID, configuration revision, and configuration hash. An explicit deny wins. |
+| Model-use data | `policy/model_use/data.json` | Contains a closed list of exact `allow` or `deny` rules. Missing provider fields are represented as `null`; they are not wildcards. |
+| Guardrails | `agentweaver_guardrails`, `policy/guardrails.rego` | Requires the ordered `UserInput`/`Text` checks and denies blocked normalized findings. |
+| Guardrails data | `policy/guardrails/data.json` | Contains exact ordered provider, adapter, schema, and options revisions plus blocked finding code and severity tuples. |
+| Selector | `agentweaver_domains_v2`, `policy/domains.rego` | Selects one of the four domains at `pre_model_call`. |
+
+The unified profile rejects unknown fields, duplicate keys and rules, additional
+files, changed templates, unsupported stages, approval settings, and budget
+facts. It accepts an empty Guardrails check list. The Orchestrator treats that
+list as inactive.
+
+The opt-in runtime source boundary receives an accepted Policy snapshot and a
+current snapshot. It independently validates and evaluates every applicable
+revision. Its admission binding records each scope, Policy ID, revision, and
+complete artifact hash with the exact request and registration hashes.
+Verification fails when that binding changes. The gate does not substitute a
+different model or provider.
+
+The existing Guardrails resolver still owns provider registration, adapter and
+options matching, resource pins, and classifier execution. The native result narrows the existing AGT and classifier result. A denied, unavailable, stale,
+revoked, or mismatched native result prevents the model send. Budget checks and
+their evidence remain independent.
+
 ## Contracts and boundaries
 
 `Agentweaver.Policy.Acs` owns the profile, its validation, domain selection,
@@ -70,8 +100,8 @@ The conservative owner defaults are:
 
 1. Use fixed reviewed rule patterns. Do not accept authored rules or share
    data between domains.
-2. Ship actions-plus-network composition first. Add other domains in separate
-   issues.
+2. Register the runtime source and admission store only through a later
+   activation decision. Source support does not grant runtime authority.
 
 The owner can override these defaults before later domain additions.
 
@@ -86,6 +116,7 @@ The owner can override these defaults before later domain additions.
 | Invalid selected-domain facts | The selected policy follows its existing deny or validation behavior. |
 | Cleanup fails after evaluation | The evaluator returns an error, including after an allow or deny. |
 | Invalid data-only update | Classification rejects the artifact; no candidate is produced. |
+| Native Policy denies, errors, changes revision, or no longer matches the model pin | Runtime admission or verification fails before the model send. |
 
 Correct the artifact or dependency and retry validation. No state changes during
 validation, evaluation, or candidate compilation.
@@ -98,6 +129,7 @@ validation, evaluation, or candidate compilation.
 | Selected decisions ignore the other domain's deny | `ComposedNativeSelectorKeepsDomainDecisionsIndependent` with Linux native ACS and pinned OPA | Required in Linux CI |
 | Existing finite-network entrypoints reject composed artifacts | Validator and Environment compiler tests | Implemented |
 | Full source hash survives normal and System-only candidate compilation | Environment compiler tests | Implemented |
+| Exact model/provider tuple and Guardrails result | `UnifiedNativeModelAndGuardrailsDecisionsAreHashBound` and `RuntimeNativePolicyGateTests.NativePolicyBlocksEveryWithheldModelSendAndBindsRevision` | Required in Linux CI |
 | Documentation and source-map coverage | Docs build, link, and drift checks | Candidate validation |
 
 The `native-acs` CI shard runs on Ubuntu, verifies OPA 0.70.0 against the
@@ -106,12 +138,14 @@ pass. A Windows skip is not acceptance evidence.
 
 ## Rollout and compatibility
 
-The profile is library support only. No service selects it, no API route
-accepts it, and no policy write or runtime admission is enabled. Existing
-unqualified APIs retain their current profile behavior. The change requires
-no migration, image, or deployment update.
+The profile is source support only. No production service registers the
+opt-in runtime composition, no API route accepts a new Policy form, and no
+policy write or runtime activation is enabled. Existing unqualified APIs
+retain their current profile behavior. The change requires no migration,
+image, deployment, or publication.
 
 ## Open questions and decisions
 
-The two owner defaults above remain available for override before later domain
-additions. Other domains need their own profile and compatibility review.
+Activation needs the separately approved exact-scope Policy source, durable
+admission fence, owner receipt link, and compatible native assets. Approval
+and unattended rules remain outside this profile version.

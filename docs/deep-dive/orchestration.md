@@ -126,6 +126,24 @@ recorded from that time on. See the [API reference](../reference/api.md#project-
 
 ## 6. Runtime view
 
+### Gate model turns with optional native Policy
+
+Production composition still uses the existing AGT action and Guardrails
+owners. Source tests can add `RuntimeNativePolicyGate` with an exact Policy
+source and admission store. This opt-in gate evaluates exact accepted and
+current `composable-domains-v2` revisions before it accepts a model turn.
+
+Both authorization paths use the validated runtime model pin. The gate sends
+no prompt text to evaluate model permission. When native Guardrails checks
+apply, the normal hash-only request returns `428`, and the content path runs
+the existing ordered classifiers with the exact UTF-8 input.
+
+The admission binding contains the request hash, registration hash, Policy
+scope, Policy ID, revision, and complete artifact hash. Verification repeats
+the source and model checks. A denial, dependency error, revocation, stale
+binding, or tuple mismatch stops before AgentHost sends the model request.
+Budgets retain their independent no-send checks.
+
 ### Start the root AgentHost
 
 After Orchestrator commits an accepted root and admits the first message, it

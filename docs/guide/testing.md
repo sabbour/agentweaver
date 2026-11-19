@@ -302,7 +302,8 @@ pinned ACS package contains a Linux-x64 native library. To run its evaluator
 tests, use Linux and set `ACS_OPA_PATH` to the pinned OPA 0.70.0 executable
 described in the [ACS runtime asset guide](https://github.com/sabbour/agentweaver/blob/v1/eng/acs/README.md).
 The composed-domain tests also check fixed module bytes, separate data
-namespaces, and independent action and network decisions.
+namespaces, and independent action and network decisions. The unified profile
+tests check exact model/provider permission and ordered Guardrails findings.
 
 Run these commands from the repository root. Replace `/path/to/opa` with the
 full path of the pinned OPA executable from the runtime asset guide.
@@ -319,7 +320,11 @@ goldens against the existing Policy adapter. The `native-acs` Ubuntu CI shard
 downloads OPA 0.70.0, verifies its pinned SHA-256, and requires each named
 native test to pass. `ComposedNativeSelectorKeepsDomainDecisionsIndependent`
 is one of those required tests. A Windows skip does not satisfy this Linux CI
-check. These tests do not activate ACS or change the deployed v4 Policy path.
+check. `UnifiedNativeModelAndGuardrailsDecisionsAreHashBound` and
+`RuntimeNativePolicyGateTests.NativePolicyBlocksEveryWithheldModelSendAndBindsRevision`
+are also required. The latter counts fake model sends and source revisions
+through the opt-in Orchestrator policy gate. These tests do not activate ACS or
+change the deployed v4 Policy path.
 
 ## Test the canonical Policy API
 

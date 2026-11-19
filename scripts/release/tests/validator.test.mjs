@@ -49,6 +49,7 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Policy.Acs\\Agentweaver.Policy.Acs.csproj',
     '..\\..\\..\\packages\\Agentweaver.SourceControl\\Agentweaver.SourceControl.csproj',
   ]],
   ['Agentweaver.EventsAndSessions', [
@@ -183,6 +184,7 @@ test('the Orchestrator host is registered as a prepared service with all project
     ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0']],
     ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.2.0', '1.2.1', '1.2.2', '1.2.3']],
     ['Agentweaver.Providers', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0']],
+    ['Agentweaver.Policy.Acs', ['1.0.0']],
     ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.2.0', '1.3.0']],
   ]);
   assert.equal(check(fixture).stage, 'draft');

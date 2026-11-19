@@ -103,6 +103,10 @@
       "name": "Native ACS composable domains",
       "sourcePrefixes": [
         "packages/Agentweaver.Policy.Acs/",
+        "packages/Agentweaver.Abstractions/NativeAcsContracts.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/RuntimeNativePolicyGate.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/RuntimeGuardrailsGate.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/RuntimeActionEndpoints.cs",
         "services/environment/Agentweaver.Environment/PlatformEgressAcsCompiler.cs",
         "tests/Agentweaver.Policy.Acs.Tests/",
         "tests/Agentweaver.Environment.Tests/PlatformEgressAcsCompilerTests.cs",
@@ -113,6 +117,9 @@
         "docs/specs/native-acs-composable-domains.md",
         "docs/reference/contracts.md",
         "docs/architecture/environment-egress.md",
+        "docs/architecture/design/provider-seams.md",
+        "docs/deep-dive/providers-models.md",
+        "docs/deep-dive/orchestration.md",
         "docs/guide/testing.md"
       ]
     },

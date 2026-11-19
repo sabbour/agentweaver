@@ -12,6 +12,10 @@
     <EmbeddedResource Include="Assets\ComposableDomainsV1\manifest.yaml" LogicalName="Agentweaver.Policy.Acs.ComposableDomainsV1.manifest.yaml" />
     <EmbeddedResource Include="Assets\ComposableDomainsV1\policy\actions.rego" LogicalName="Agentweaver.Policy.Acs.ComposableDomainsV1.policy.actions.rego" />
     <EmbeddedResource Include="Assets\ComposableDomainsV1\policy\domains.rego" LogicalName="Agentweaver.Policy.Acs.ComposableDomainsV1.policy.domains.rego" />
+    <EmbeddedResource Include="Assets\ComposableDomainsV2\manifest.yaml" LogicalName="Agentweaver.Policy.Acs.ComposableDomainsV2.manifest.yaml" />
+    <EmbeddedResource Include="Assets\ComposableDomainsV2\policy\domains.rego" LogicalName="Agentweaver.Policy.Acs.ComposableDomainsV2.policy.domains.rego" />
+    <EmbeddedResource Include="Assets\ComposableDomainsV2\policy\model-use.rego" LogicalName="Agentweaver.Policy.Acs.ComposableDomainsV2.policy.model-use.rego" />
+    <EmbeddedResource Include="Assets\ComposableDomainsV2\policy\guardrails.rego" LogicalName="Agentweaver.Policy.Acs.ComposableDomainsV2.policy.guardrails.rego" />
     <PackageReference Include="AgentControlSpecification" Version="0.4.0-beta.0" />
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
     <ProjectReference Include="..\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />

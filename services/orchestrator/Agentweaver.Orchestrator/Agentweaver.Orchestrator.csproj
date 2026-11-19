@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\..\packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+    <ProjectReference Include="..\..\..\packages\Agentweaver.Policy.Acs\Agentweaver.Policy.Acs.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
   </ItemGroup>
   <ItemGroup>

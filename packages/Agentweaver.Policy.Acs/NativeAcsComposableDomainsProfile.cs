@@ -9,7 +9,9 @@ namespace Agentweaver.Policy.Acs;
 public enum NativeAcsDomainId
 {
     Actions,
-    PlatformNetwork
+    PlatformNetwork,
+    ModelUse,
+    Guardrails
 }
 
 public static class NativeAcsComposableDomainsProfile
@@ -278,6 +280,12 @@ public static class NativeAcsComposableDomainsProfile
         {
             return false;
         }
+    }
+
+    internal static (bool IsValid, string Code) ValidateActionsData(ImmutableArray<byte> bytes)
+    {
+        var valid = ValidateActionsData(bytes, out var code);
+        return (valid, code);
     }
 
     private static bool IsIdentifier(string? value) =>
