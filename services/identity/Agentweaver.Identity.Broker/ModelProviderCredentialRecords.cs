@@ -31,6 +31,8 @@ public enum ModelProviderCredentialWriteClaimState
     Claimed,
     Quarantined,
     Completed,
+    PublicationPending,
+    Published,
 }
 
 public enum ModelProviderCredentialWriteClaimStatus
@@ -38,6 +40,9 @@ public enum ModelProviderCredentialWriteClaimStatus
     Acquired,
     Quarantined,
     Completed,
+    Claimed,
+    PublicationPending,
+    Published,
 }
 
 public enum ModelProviderCredentialCurrentStatus
@@ -106,6 +111,13 @@ public sealed class ModelProviderCredentialWriteClaim
     public DateTimeOffset? QuarantinedAt { get; set; }
     public long? CompletedRevision { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+    public long? ExpectedProviderRevision { get; set; }
+    public string? Purpose { get; set; }
+    public string? Issuer { get; set; }
+    public string? Tenant { get; set; }
+    public long? PublishedProviderRevision { get; set; }
+    public string? PublishedConfigurationHash { get; set; }
+    public DateTimeOffset? PublishedAt { get; set; }
 }
 
 public sealed record RecordModelProviderCredentialReference(
@@ -138,6 +150,21 @@ public sealed record ClaimModelProviderCredentialWrite(
     ModelProviderCredentialVaultSource VaultSource,
     string SecretName,
     string ActorId);
+
+internal sealed record ClaimModelProviderCredentialPublication(
+    ClaimModelProviderCredentialWrite Claim,
+    long ExpectedProviderRevision,
+    string Purpose,
+    string Issuer,
+    string Tenant);
+
+internal sealed record ModelProviderCredentialPublicationClaimResult(
+    ModelProviderCredentialWriteClaimStatus Status,
+    bool Acquired,
+    ModelProviderCredentialReference? Credential,
+    long? PublishedProviderRevision,
+    string? PublishedConfigurationHash,
+    DateTimeOffset? PublishedAt);
 
 public sealed record ModelProviderCredentialIdentity(
     Guid CredentialSlotId,

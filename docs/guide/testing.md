@@ -49,8 +49,9 @@ dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.
 
 These tests use disposable PostgreSQL databases. They cover claim replay after a
 process restart, quarantine after an uncertain result, blocked retry and reuse,
-atomic completion with the exact returned version, and runtime table grants.
-They do not write to Key Vault.
+atomic completion with the exact returned version, publication receipt replay,
+provider and slot reservations, database transition guards, and runtime table
+grants. They use fixture receipts and do not write to Key Vault or call Projects.
 
 ## Test model-provider Draft routes
 
