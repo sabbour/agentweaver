@@ -5,6 +5,7 @@ using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Policy.Acs;
 using Agentweaver.Providers;
 using Npgsql;
 
@@ -29,13 +30,19 @@ internal static class RuntimeGuardrailsGate
     /// or with <c>runtime_guardrails_unavailable</c> when checks apply and no classifier is registered.
     /// </exception>
     internal static GuardrailsPreparation? Prepare(
-        IServiceProvider services, RuntimeActionRequest request, AuthorizedRunSelection accepted, byte[]? content)
+        IServiceProvider services,
+        RuntimeActionRequest request,
+        AuthorizedRunSelection accepted,
+        byte[]? content,
+        RuntimeNativePolicyPreparation? nativePolicy = null)
     {
         // Only model turns carry user input for the checks. Tool calls and other actions skip this gate.
         if (request.ActionId != "model.turn")
             return null;
         // Read the checks that Projects recorded for this run. A malformed record throws here, before any grant exists.
-        var acceptedChecks = ReadAcceptedChecks(accepted.Selection.Snapshot);
+        var acceptedChecks = MergeAcceptedChecks(
+            ReadAcceptedChecks(accepted.Selection.Snapshot),
+            nativePolicy?.RequiredChecks ?? []);
         var resolver = services.GetService<GuardrailsStagePlanResolver>();
         if (resolver is null)
         {
@@ -55,7 +62,7 @@ internal static class RuntimeGuardrailsGate
         // content endpoint; the endpoint maps this code to HTTP 428 so the runtime knows it is a precondition.
         if (content is null)
             throw new RuntimeAuthorizationException(ContentRequiredCode);
-        return new(resolver, acceptedChecks, content);
+        return new(resolver, acceptedChecks, content, nativePolicy);
     }
 
     /// <summary>Public code returned when Guardrails checks apply and the request has no content.</summary>
@@ -66,7 +73,7 @@ internal static class RuntimeGuardrailsGate
     /// issued and before the policy receipt is written.
     /// </summary>
     /// <exception cref="RuntimeAuthorizationException">Thrown when the checks withhold the content or can't run.</exception>
-    internal static async Task RequireAllowedAsync(
+    internal static async Task<string?> RequireAllowedAsync(
         IServiceProvider services,
         AgtPolicyProvider policy,
         GuardrailsPreparation preparation,
@@ -129,6 +136,28 @@ internal static class RuntimeGuardrailsGate
         // a journal that could not record the evidence. Throwing here means no policy receipt is written.
         if (result.Decision != GuardrailsDecision.Allow)
             throw new RuntimeAuthorizationException(Code(result.ReasonCode));
+        if (preparation.NativePolicy is not null)
+        {
+            var native = services.GetService<RuntimeNativePolicyGate>()
+                ?? throw new RuntimeAuthorizationException(RuntimeNativePolicyGate.UnavailableCode);
+            var checks = plan.Plan!.Checks.Select(check => new NativeAcsGuardrailsCheckFacts(
+                check.ProviderId,
+                check.AdapterVersion.ToString(),
+                check.OptionsSchemaVersion,
+                check.Options.OptionsRevision)).ToImmutableArray();
+            var findings = result.Findings.Select(finding => new NativeAcsGuardrailsFindingFacts(
+                finding.ProviderId,
+                finding.Code,
+                finding.Severity.ToString().ToLowerInvariant())).ToImmutableArray();
+            return await native.RequireGuardrailsAsync(
+                preparation.NativePolicy,
+                registration,
+                request,
+                checks,
+                findings,
+                cancellationToken).ConfigureAwait(false);
+        }
+        return null;
     }
 
     /// <summary>
@@ -170,6 +199,33 @@ internal static class RuntimeGuardrailsGate
             .Select(item => new GuardrailsAcceptedCheck(
                 item.ProviderId, item.AdapterVersion, item.OptionsSchemaVersion, item.OptionsRevision))
             .ToArray();
+    }
+
+    private static IReadOnlyList<GuardrailsAcceptedCheck>? MergeAcceptedChecks(
+        IReadOnlyList<GuardrailsAcceptedCheck>? accepted,
+        ImmutableArray<NativeAcsGuardrailsRequiredCheck> required)
+    {
+        if (required.IsDefaultOrEmpty)
+            return accepted;
+        var merged = accepted?.ToList() ?? [];
+        foreach (var check in required)
+        {
+            var existing = merged.SingleOrDefault(item =>
+                item.ProviderId == check.ProviderId);
+            var exact = new GuardrailsAcceptedCheck(
+                check.ProviderId,
+                check.AdapterVersion,
+                check.OptionsSchemaVersion,
+                check.OptionsRevision);
+            if (existing is not null)
+            {
+                if (existing != exact)
+                    throw new RuntimeAuthorizationException(RuntimeNativePolicyGate.StaleCode);
+            }
+            else
+                merged.Add(exact);
+        }
+        return merged;
     }
 
     /// <summary>Returns the revision identifier of the accepted selection.</summary>
@@ -268,4 +324,5 @@ internal static class RuntimeGuardrailsGate
 internal sealed record GuardrailsPreparation(
     GuardrailsStagePlanResolver Resolver,
     IReadOnlyList<GuardrailsAcceptedCheck>? AcceptedChecks,
-    byte[] Content);
+    byte[] Content,
+    RuntimeNativePolicyPreparation? NativePolicy);

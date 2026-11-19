@@ -50,7 +50,10 @@ public sealed class NativeAcsPolicyEvaluator
         if (cancellationToken.IsCancellationRequested)
             return Error("unavailable", "evaluation_cancelled");
         if (domain is { } selectedDomain &&
-            (!Enum.IsDefined(selectedDomain) || interventionPoint != InterventionPoint.PreModelCall))
+            (!Enum.IsDefined(selectedDomain) ||
+             interventionPoint != InterventionPoint.PreModelCall ||
+             !NativeAcsUnifiedPolicyProfile.IsCandidate(artifact) &&
+                 selectedDomain is NativeAcsDomainId.ModelUse or NativeAcsDomainId.Guardrails))
             return Error("unavailable", "domain_intervention_point_unsupported");
 
         var validation = domain is null
@@ -77,6 +80,14 @@ public sealed class NativeAcsPolicyEvaluator
             snapshot.Network is { } network &&
             !IsValidNetworkFacts(network))
             return Deny(artifactHash);
+        if (domain == NativeAcsDomainId.ModelUse &&
+            snapshot.ModelUse is { } modelUse &&
+            !IsValidModelUseFacts(modelUse))
+            return Error(artifactHash, "snapshot_invalid");
+        if (domain == NativeAcsDomainId.Guardrails &&
+            snapshot.Guardrails is { } guardrails &&
+            !IsValidGuardrailsFacts(guardrails))
+            return Error(artifactHash, "snapshot_invalid");
 
         if (!Enum.IsDefined(interventionPoint))
             return Error(artifactHash, "intervention_point_invalid");
@@ -96,7 +107,7 @@ public sealed class NativeAcsPolicyEvaluator
             var manifestPath = Path.Combine(workDirectory, "manifest.yaml");
             var control = AgentControl.FromPath(manifestPath);
             using var snapshotDocument = JsonDocument.Parse(
-                JsonSerializer.SerializeToUtf8Bytes(CreateSnapshot(snapshot, domain)));
+                JsonSerializer.SerializeToUtf8Bytes(CreateSnapshot(snapshot, domain, artifact)));
             var result = await control.EvaluateInterventionPointAsync(
                 interventionPoint,
                 snapshotDocument.RootElement,
@@ -163,6 +174,42 @@ public sealed class NativeAcsPolicyEvaluator
              string.Equals(human.TenantId, snapshot.TenantId, StringComparison.Ordinal));
     }
 
+    private static bool IsValidModelUseFacts(NativeAcsModelUseEvaluationFacts facts) =>
+        Enum.IsDefined(facts.SourceMode) &&
+        IsIdentifier(facts.ModelSelectionReference) &&
+        IsIdentifier(facts.ModelId) &&
+        IsIdentifier(facts.ConfigurationRevision) &&
+        facts.ConfigurationHash is { Length: 64 } &&
+        facts.ConfigurationHash.All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f') &&
+        (facts.SourceMode == ModelSourceMode.HostedCopilot
+            ? facts.ProviderType is null && facts.ProviderId is null
+            : facts.ProviderType is "azure" or "openai" or "anthropic" &&
+              (facts.ProviderId is null || IsIdentifier(facts.ProviderId)));
+
+    private static bool IsValidGuardrailsFacts(NativeAcsGuardrailsEvaluationFacts facts) =>
+        facts.Stage is "userInput" &&
+        facts.ContentClass is "text" &&
+        !facts.Checks.IsDefault &&
+        facts.Checks.Length <= GuardrailsMaximumChecks &&
+        facts.Checks.All(check =>
+            IsIdentifier(check.ProviderId) &&
+            Version.TryParse(check.AdapterVersion, out var version) &&
+            version.ToString() == check.AdapterVersion &&
+            check.OptionsSchemaVersion >= 1 &&
+            IsIdentifier(check.OptionsRevision)) &&
+        facts.Checks.Select(check => check.ProviderId).Distinct(StringComparer.Ordinal).Count() ==
+            facts.Checks.Length &&
+        !facts.Findings.IsDefault &&
+        facts.Findings.Length <= GuardrailsMaximumFindings &&
+        facts.Findings.All(finding =>
+            IsIdentifier(finding.CheckId) &&
+            IsIdentifier(finding.Code) &&
+            finding.Severity is "low" or "medium" or "high" or "critical");
+
+    private const int GuardrailsMaximumChecks = 16;
+    private const int GuardrailsMaximumFindings = 48;
+
     /// <summary>Returns true for a non-blank identifier of at most 256 ASCII letters, digits, dot, underscore, hyphen, or colon; otherwise false.</summary>
     private static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
@@ -210,7 +257,8 @@ public sealed class NativeAcsPolicyEvaluator
 
     private static NativeAcsSnapshotDocument CreateSnapshot(
         NativeAcsEvaluationSnapshot snapshot,
-        NativeAcsDomainId? domain)
+        NativeAcsDomainId? domain,
+        NativeAcsArtifact artifact)
     {
         var verifiedHuman = snapshot.VerifiedHumanIdentity;
         return new NativeAcsSnapshotDocument(
@@ -233,8 +281,32 @@ public sealed class NativeAcsPolicyEvaluator
                             ? new NativeAcsNetworkDestinationFacts(destination.Kind, destination.Value)
                             : null)
                     : null,
+                snapshot.ModelUse is { } modelUse
+                    ? new NativeAcsModelUseFacts(
+                        modelUse.ModelSelectionReference,
+                        modelUse.ModelId,
+                        modelUse.SourceMode == ModelSourceMode.HostedCopilot ? "hostedCopilot" : "byok",
+                        modelUse.ProviderType,
+                        modelUse.ProviderId,
+                        modelUse.ConfigurationRevision,
+                        modelUse.ConfigurationHash)
+                    : null,
+                snapshot.Guardrails is { } guardrails
+                    ? new NativeAcsGuardrailsFacts(
+                        guardrails.Stage,
+                        guardrails.ContentClass,
+                        guardrails.Checks.Select(check => new NativeAcsGuardrailsCheck(
+                            check.ProviderId,
+                            check.AdapterVersion,
+                            check.OptionsSchemaVersion,
+                            check.OptionsRevision)).ToArray(),
+                        guardrails.Findings.Select(finding => new NativeAcsGuardrailsFinding(
+                            finding.CheckId, finding.Code, finding.Severity)).ToArray())
+                    : null,
                 domain is { } selectedDomain
-                    ? NativeAcsComposableDomainsProfile.GetPolicyId(selectedDomain)
+                    ? NativeAcsUnifiedPolicyProfile.IsCandidate(artifact)
+                        ? NativeAcsUnifiedPolicyProfile.GetPolicyId(selectedDomain)
+                        : NativeAcsComposableDomainsProfile.GetPolicyId(selectedDomain)
                     : null));
     }
 
@@ -289,6 +361,10 @@ public sealed class NativeAcsPolicyEvaluator
         string? HumanTenantId,
         [property: JsonPropertyName("network"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         NativeAcsNetworkFacts? Network,
+        [property: JsonPropertyName("model_use"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        NativeAcsModelUseFacts? ModelUse,
+        [property: JsonPropertyName("guardrails"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        NativeAcsGuardrailsFacts? Guardrails,
         [property: JsonPropertyName("domain_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? DomainId);
 
@@ -301,4 +377,30 @@ public sealed class NativeAcsPolicyEvaluator
     private sealed record NativeAcsNetworkDestinationFacts(
         [property: JsonPropertyName("kind")] string Kind,
         [property: JsonPropertyName("value")] string Value);
+
+    private sealed record NativeAcsModelUseFacts(
+        [property: JsonPropertyName("model_selection_reference")] string ModelSelectionReference,
+        [property: JsonPropertyName("model_id")] string ModelId,
+        [property: JsonPropertyName("source_mode")] string SourceMode,
+        [property: JsonPropertyName("provider_type")] string? ProviderType,
+        [property: JsonPropertyName("provider_id")] string? ProviderId,
+        [property: JsonPropertyName("configuration_revision")] string ConfigurationRevision,
+        [property: JsonPropertyName("configuration_hash")] string ConfigurationHash);
+
+    private sealed record NativeAcsGuardrailsFacts(
+        [property: JsonPropertyName("stage")] string Stage,
+        [property: JsonPropertyName("content_class")] string ContentClass,
+        [property: JsonPropertyName("checks")] NativeAcsGuardrailsCheck[] Checks,
+        [property: JsonPropertyName("findings")] NativeAcsGuardrailsFinding[] Findings);
+
+    private sealed record NativeAcsGuardrailsCheck(
+        [property: JsonPropertyName("provider_id")] string ProviderId,
+        [property: JsonPropertyName("adapter_version")] string AdapterVersion,
+        [property: JsonPropertyName("options_schema_version")] int OptionsSchemaVersion,
+        [property: JsonPropertyName("options_revision")] string OptionsRevision);
+
+    private sealed record NativeAcsGuardrailsFinding(
+        [property: JsonPropertyName("check_id")] string CheckId,
+        [property: JsonPropertyName("code")] string Code,
+        [property: JsonPropertyName("severity")] string Severity);
 }

@@ -78,6 +78,12 @@ unavailable OPA or native validator separately from artifact diagnostics.
 Invalid policy input remains a validation diagnostic. See the
 [native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
 
+The opt-in `composable-domains-v2` artifact adds model-use and Guardrails
+domains. Model use binds the exact accepted model pin; it does not select a
+fallback model. Guardrails policy binds ordered provider registrations and
+blocked normalized findings; classifiers still run through the existing
+resolver and evidence gate.
+
 ## 6. Runtime view
 
 ### Resolve and pin a resource
@@ -131,6 +137,11 @@ The resolver reads `AgentHost:ModelBindings` and
 canonical map, including explicit provider settings and optional prompt
 capacities. The pin includes the reference, concrete model ID, source mode,
 configuration revision, hash, and BYOK provider type when applicable.
+
+The G1 native Policy gate compares that pin with the accepted selection and
+evaluates accepted and current Policy revisions independently. It retains the
+request hash, registration hash, source revisions, and complete Policy hashes
+before verification. A changed source or model pin withholds the turn.
 
 `HostedCopilot` and `Byok` are explicit modes. Bring your own key (BYOK) pins
 accept `azure`, `openai`, or `anthropic`. Resolution rejects a missing

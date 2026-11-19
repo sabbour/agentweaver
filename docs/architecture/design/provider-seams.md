@@ -753,6 +753,12 @@ model input/output, MCP discovery, structured results, and non-text content requ
 on every check in the accepted stage pin. Permission metadata and MCP annotations are provenance only and
 never grant tool authority.
 
+The opt-in native `model-use` and `guardrails` Policy domains add a
+second narrowing decision at runtime composition tests. They do not replace
+the catalog resolver or classifiers. Model use receives only the validated
+model pin. Guardrails receives only exact check pins and normalized findings.
+The service hosts do not register the source or admission store in this slice.
+
 <a id="p2-runtime-gate-for-model-turn-user-input"></a>
 
 ### Runtime gate for model-turn user input
@@ -779,6 +785,13 @@ admission (`/internal/runtime/actions/authorize`):
    table (Orchestrator migration 028). The row holds digests, provider IDs, versions, finding codes, and
    the AGT outcome. It never holds the content. Classifier timeouts and unavailable classifiers aren't
    recorded, so a retry can reach the final decision.
+
+When the opt-in native composition is present, its required checks join the
+accepted plan before the 428 response. Native model permission runs on both
+authorize paths. Its Guardrails result runs after classifier findings. Verify
+rechecks the exact Policy source binding. Any native denial, unavailable
+dependency, stale revision, revoked source, or model mismatch withholds the
+turn.
 
 A withheld turn has no policy receipt, so the runtime can't verify or perform it. Classifier timeouts and
 unavailable classifiers, journals, or owners return HTTP 503 and fail closed. Tool-approval denial and

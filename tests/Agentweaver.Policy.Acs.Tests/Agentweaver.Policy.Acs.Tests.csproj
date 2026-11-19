@@ -13,6 +13,8 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <ProjectReference Include="..\..\packages\Agentweaver.Policy.Acs\Agentweaver.Policy.Acs.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
+    <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" />
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator.Core\Agentweaver.Orchestrator.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

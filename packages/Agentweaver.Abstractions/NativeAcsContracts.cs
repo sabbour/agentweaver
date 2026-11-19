@@ -67,6 +67,36 @@ public sealed record NativeAcsNetworkEvaluationFacts(
     int Port,
     NativeAcsNetworkDestinationFacts Destination);
 
+/// <summary>Exact accepted model tuple supplied to native model-use policy evaluation.</summary>
+public sealed record NativeAcsModelUseEvaluationFacts(
+    string ModelSelectionReference,
+    string ModelId,
+    ModelSourceMode SourceMode,
+    string ConfigurationRevision,
+    string ConfigurationHash,
+    string? ProviderType,
+    string? ProviderId);
+
+/// <summary>Exact provider registration admitted for one ordered Guardrails check.</summary>
+public sealed record NativeAcsGuardrailsCheckFacts(
+    string ProviderId,
+    string AdapterVersion,
+    int OptionsSchemaVersion,
+    string OptionsRevision);
+
+/// <summary>Normalized classifier finding supplied to native Guardrails policy evaluation.</summary>
+public sealed record NativeAcsGuardrailsFindingFacts(
+    string CheckId,
+    string Code,
+    string Severity);
+
+/// <summary>Bounded Guardrails stage, ordered checks, and normalized findings for one content evaluation.</summary>
+public sealed record NativeAcsGuardrailsEvaluationFacts(
+    string Stage,
+    string ContentClass,
+    ImmutableArray<NativeAcsGuardrailsCheckFacts> Checks,
+    ImmutableArray<NativeAcsGuardrailsFindingFacts> Findings);
+
 /// <summary>
 /// Bounded runtime facts for native ACS evaluation. A null human identity means that verified
 /// human facts are unavailable; callers must not infer them from Broker subject, actor ID, or UPN.
@@ -77,7 +107,9 @@ public sealed record NativeAcsEvaluationSnapshot(
     string AgentId,
     string ActionId,
     NativeAcsVerifiedHumanIdentity? VerifiedHumanIdentity = null,
-    NativeAcsNetworkEvaluationFacts? Network = null);
+    NativeAcsNetworkEvaluationFacts? Network = null,
+    NativeAcsModelUseEvaluationFacts? ModelUse = null,
+    NativeAcsGuardrailsEvaluationFacts? Guardrails = null);
 
 /// <summary>A bounded validation diagnostic. It does not include source snippets.</summary>
 public sealed record NativeAcsDiagnostic(

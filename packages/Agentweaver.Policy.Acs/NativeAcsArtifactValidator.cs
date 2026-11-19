@@ -49,6 +49,23 @@ public sealed class NativeAcsArtifactValidator
     {
         "input.policy_target.value.domain_id"
     };
+    private static readonly HashSet<string> AllowedModelUseInputPaths = new(StringComparer.Ordinal)
+    {
+        "input.policy_target.value.model_use.model_selection_reference",
+        "input.policy_target.value.model_use.model_id",
+        "input.policy_target.value.model_use.source_mode",
+        "input.policy_target.value.model_use.provider_type",
+        "input.policy_target.value.model_use.provider_id",
+        "input.policy_target.value.model_use.configuration_revision",
+        "input.policy_target.value.model_use.configuration_hash"
+    };
+    private static readonly HashSet<string> AllowedGuardrailsInputPaths = new(StringComparer.Ordinal)
+    {
+        "input.policy_target.value.guardrails.stage",
+        "input.policy_target.value.guardrails.content_class",
+        "input.policy_target.value.guardrails.checks",
+        "input.policy_target.value.guardrails.findings"
+    };
     private static readonly HashSet<string> UnsafeBuiltins = new(StringComparer.Ordinal)
     {
         "http.send",
@@ -169,20 +186,34 @@ public sealed class NativeAcsArtifactValidator
             return Result(false, diagnostics);
         var isNetworkArtifact = NativeAcsFiniteNetworkProfile.IsCandidate(artifact);
         var isComposedArtifact = NativeAcsComposableDomainsProfile.IsCandidate(artifact);
+        var isUnifiedArtifact = NativeAcsUnifiedPolicyProfile.IsCandidate(artifact);
         if (requireComposedProfile)
         {
-            if (!isComposedArtifact)
+            if (!isComposedArtifact && !isUnifiedArtifact)
             {
                 Add(diagnostics, "composed_profile_required", "The composed ACS validator requires the reviewed domains profile.");
                 return Result(false, diagnostics);
             }
 
-            var inspection = NativeAcsComposableDomainsProfile.Inspect(artifact);
-            if (!inspection.IsValid)
+            if (isUnifiedArtifact)
             {
-                foreach (var diagnostic in inspection.Diagnostics)
-                    Add(diagnostics, diagnostic.Code, diagnostic.Message, diagnostic.RelativePath);
-                return Result(false, diagnostics);
+                var inspection = NativeAcsUnifiedPolicyProfile.Inspect(artifact);
+                if (!inspection.IsValid)
+                {
+                    foreach (var diagnostic in inspection.Diagnostics)
+                        Add(diagnostics, diagnostic.Code, diagnostic.Message, diagnostic.RelativePath);
+                    return Result(false, diagnostics);
+                }
+            }
+            else
+            {
+                var inspection = NativeAcsComposableDomainsProfile.Inspect(artifact);
+                if (!inspection.IsValid)
+                {
+                    foreach (var diagnostic in inspection.Diagnostics)
+                        Add(diagnostics, diagnostic.Code, diagnostic.Message, diagnostic.RelativePath);
+                    return Result(false, diagnostics);
+                }
             }
         }
 
@@ -212,12 +243,16 @@ public sealed class NativeAcsArtifactValidator
                     if (remainingMilliseconds <= 0)
                         return Result(false, diagnostics, NativeAcsValidationDependencyFailure.OpaUnavailable);
 
-                    IReadOnlySet<string> allowedInputPaths = requireComposedProfile && isComposedArtifact
+                    IReadOnlySet<string> allowedInputPaths = requireComposedProfile &&
+                        (isComposedArtifact || isUnifiedArtifact)
                         ? file.RelativePath switch
                         {
                             NativeAcsComposableDomainsProfile.ActionsModulePath => AllowedInputPaths,
                             NativeAcsComposableDomainsProfile.NetworkModulePath => AllowedNetworkInputPaths,
-                            NativeAcsComposableDomainsProfile.SelectorModulePath => AllowedDomainSelectorInputPaths,
+                            NativeAcsComposableDomainsProfile.SelectorModulePath =>
+                                AllowedDomainSelectorInputPaths,
+                            NativeAcsUnifiedPolicyProfile.ModelUseModulePath => AllowedModelUseInputPaths,
+                            NativeAcsUnifiedPolicyProfile.GuardrailsModulePath => AllowedGuardrailsInputPaths,
                             _ => new HashSet<string>(StringComparer.Ordinal)
                         }
                         : isNetworkArtifact ? AllowedActionAndNetworkInputPaths : AllowedInputPaths;

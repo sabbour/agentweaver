@@ -53,17 +53,22 @@ internal sealed class RuntimeActionOwner(
         var policyBinding = await SourceControlEndpoints.ResolvePolicyBindingAsync(
             accepted.Selection.Snapshot, binding.RunId, catalog, resolver, policy,
             policyOptions, cancellationToken).ConfigureAwait(false);
+        var nativePolicyPreparation = await PrepareNativePolicyAsync(
+            registration, accepted, request, cancellationToken).ConfigureAwait(false);
         // Decide before the grant is issued whether Guardrails checks apply. If content is required but missing,
         // this throws now, so a rejected request leaves no grant behind.
-        var guardrails = RuntimeGuardrailsGate.Prepare(services, request, accepted, content);
+        var guardrails = RuntimeGuardrailsGate.Prepare(
+            services, request, accepted, content, nativePolicyPreparation);
         var grant = await IssueOrRecordNumericLimitDenialAsync(
             context, registration, request, cancellationToken).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
         // Guardrails checks run before the guarded callback, so withheld content never gets a policy receipt.
         // The authority check re-reads the registration and the accepted selection from their owners, and
         // compares them with the values used for this admission.
+        string? nativeGuardrailsBinding = null;
         if (guardrails is not null)
-            await RuntimeGuardrailsGate.RequireAllowedAsync(services, policy, guardrails,
+            nativeGuardrailsBinding = await RuntimeGuardrailsGate.RequireAllowedAsync(
+                services, policy, guardrails,
                 RuntimeGuardrailsGate.AuthorityCheck(
                     token => registrations.ReadCurrentAsync(context, registration.RuntimeInstanceId, token),
                     token => projects.ReadAcceptedSelectionWithAuthorityAsync(
@@ -85,6 +90,9 @@ internal sealed class RuntimeActionOwner(
                 return true;
             }, cancellationToken).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        if (nativePolicyPreparation is not null)
+            await CommitNativePolicyAsync(
+                nativePolicyPreparation, nativeGuardrailsBinding, cancellationToken).ConfigureAwait(false);
         return new(1, request, grant.GrantId, grant.Revision, request.EventId,
             evaluated.Outcome, evaluated.ReasonCode);
     }
@@ -135,6 +143,8 @@ internal sealed class RuntimeActionOwner(
             ?? throw new RuntimeAuthorizationException("runtime_action_policy_unavailable");
         var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        await RequireNativePolicyVerifyAsync(
+            registration, accepted, admission.Request, cancellationToken).ConfigureAwait(false);
         _ = await SourceControlEndpoints.ResolvePolicyBindingAsync(
             accepted.Selection.Snapshot, binding.RunId, catalog, resolver, policy,
             policyOptions, cancellationToken).ConfigureAwait(false);
@@ -154,6 +164,39 @@ internal sealed class RuntimeActionOwner(
             throw new RuntimeAuthorizationException("runtime_action_journal_ack_missing");
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
         return admission;
+    }
+
+    internal async Task<RuntimeNativePolicyPreparation?> PrepareNativePolicyAsync(
+        RuntimeRegistration registration,
+        AuthorizedRunSelection accepted,
+        RuntimeActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var gate = services.GetService<RuntimeNativePolicyGate>();
+        return request.ActionId == "model.turn" && gate is not null
+            ? await gate.PrepareAuthorizeAsync(
+                registration, accepted, request, cancellationToken).ConfigureAwait(false)
+            : null;
+    }
+
+    internal Task CommitNativePolicyAsync(
+        RuntimeNativePolicyPreparation preparation,
+        string? guardrailsBindingHash,
+        CancellationToken cancellationToken) =>
+        (services.GetService<RuntimeNativePolicyGate>()
+            ?? throw new RuntimeAuthorizationException(RuntimeNativePolicyGate.UnavailableCode))
+        .CommitAsync(preparation, guardrailsBindingHash, cancellationToken);
+
+    internal async Task RequireNativePolicyVerifyAsync(
+        RuntimeRegistration registration,
+        AuthorizedRunSelection accepted,
+        RuntimeActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var gate = services.GetService<RuntimeNativePolicyGate>();
+        if (request.ActionId == "model.turn" && gate is not null)
+            _ = await gate.RequireVerifyAsync(
+                registration, accepted, request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -546,6 +589,7 @@ public static class RuntimeActionEndpoints
             var status = failure.Code == RuntimeGuardrailsGate.ContentRequiredCode
                 ? StatusCodes.Status428PreconditionRequired
                 : failure.Code == "runtime_fixed_credit_guard_unavailable" ||
+                failure.Code == RuntimeNativePolicyGate.UnavailableCode ||
                 RuntimeGuardrailsGate.IsTransient(failure.Code)
                 ? StatusCodes.Status503ServiceUnavailable
                 : StatusCodes.Status403Forbidden;

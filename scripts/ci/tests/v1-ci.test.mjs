@@ -170,9 +170,12 @@ test('Environment P1 owner tests are explicitly enforced after the actual CI tes
 
 test('native ACS tests use the locked Linux runtime and must execute in CI', () => {
   const runner = readFileSync(new URL('../v1-test-plan.mjs', import.meta.url), 'utf8');
-  const source = readFileSync(new URL('../../../tests/Agentweaver.Policy.Acs.Tests/NativeAcsPolicyTests.cs', import.meta.url), 'utf8');
+  const source = ['NativeAcsPolicyTests', 'RuntimeNativePolicyGateTests']
+    .map((name) => readFileSync(
+      new URL(`../../../tests/Agentweaver.Policy.Acs.Tests/${name}.cs`, import.meta.url), 'utf8'))
+    .join('\n');
   const coverageSettings = readFileSync(new URL('../../../coverage.runsettings', import.meta.url), 'utf8');
-  assert.equal(nativeAcsRequiredMethods.length, 6);
+  assert.equal(nativeAcsRequiredMethods.length, 8);
   for (const method of nativeAcsRequiredMethods)
     assert.ok(source.includes(`Task ${method.split('.').at(-1)}()`) || source.includes(`void ${method.split('.').at(-1)}()`), method);
   assert.match(runner, /entry\.name === 'native-acs'[\s\S]*--runtime', 'linux-x64'[\s\S]*AgentweaverUseLinuxX64LockFile=true/);

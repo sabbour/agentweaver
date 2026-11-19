@@ -627,6 +627,104 @@ public sealed class NativeAcsPolicyTests
     }
 
     [NativeAcsFact]
+    public async Task UnifiedNativeModelAndGuardrailsDecisionsAreHashBound()
+    {
+        var artifact = CreateUnifiedArtifact();
+        var validator = new NativeAcsArtifactValidator(RequireNativeRuntime());
+        var validation = validator.ValidateComposed(artifact);
+        Assert.True(
+            validation.IsValid,
+            string.Join("; ", validation.Diagnostics.Select(diagnostic => $"{diagnostic.Code}:{diagnostic.Message}")));
+        var evaluator = new NativeAcsPolicyEvaluator(validator, WorkRoot);
+        var baseSnapshot = Snapshot("model.turn") with
+        {
+            ModelUse = ModelUseFacts()
+        };
+
+        var allowed = await evaluator.EvaluateComposedAsync(
+            artifact, NativeAcsDomainId.ModelUse, InterventionPoint.PreModelCall, baseSnapshot);
+        var mismatched = await evaluator.EvaluateComposedAsync(
+            artifact, NativeAcsDomainId.ModelUse, InterventionPoint.PreModelCall,
+            baseSnapshot with
+            {
+                ModelUse = baseSnapshot.ModelUse! with { ModelId = "other-deployment" }
+            });
+        var guardrailsAllowed = await evaluator.EvaluateComposedAsync(
+            artifact, NativeAcsDomainId.Guardrails, InterventionPoint.PreModelCall,
+            Snapshot("model.turn") with { Guardrails = GuardrailsFacts([]) });
+        var guardrailsBlocked = await evaluator.EvaluateComposedAsync(
+            artifact, NativeAcsDomainId.Guardrails, InterventionPoint.PreModelCall,
+            Snapshot("model.turn") with
+            {
+                Guardrails = GuardrailsFacts(
+                [
+                    new NativeAcsGuardrailsFindingFacts(
+                        "prompt-shields", "prompt-injection", "high")
+                ])
+            });
+
+        Assert.Equal(PolicyEvaluationOutcome.Allow, allowed.Outcome);
+        Assert.Equal(artifact.ContentSha256, allowed.ArtifactSha256);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, mismatched.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Allow, guardrailsAllowed.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, guardrailsBlocked.Outcome);
+        AssertNoEvaluationWorkspaces();
+    }
+
+    [Fact]
+    public void UnifiedProfileRoundTripsAndKeepsDomainEditsIsolated()
+    {
+        var original = CreateUnifiedArtifact();
+        var edited = ReplaceComposedFile(
+            original,
+            NativeAcsUnifiedPolicyProfile.ModelUseDataPath,
+            UnifiedModelUseData.Replace(
+                "allow\",", "deny\",", StringComparison.Ordinal));
+        var changes = NativeAcsUnifiedPolicyProfile.ClassifyChanges(original, edited);
+        var inspection = NativeAcsUnifiedPolicyProfile.Inspect(edited);
+
+        Assert.True(changes.IsValid);
+        Assert.Equal([NativeAcsDomainId.ModelUse], changes.ChangedDomains.ToArray());
+        Assert.True(inspection.IsValid);
+        Assert.Equal(original.Files.Single(item =>
+            item.RelativePath == NativeAcsUnifiedPolicyProfile.GuardrailsDataPath).Bytes,
+            edited.Files.Single(item =>
+                item.RelativePath == NativeAcsUnifiedPolicyProfile.GuardrailsDataPath).Bytes);
+        Assert.NotEqual(original.ContentSha256, edited.ContentSha256);
+    }
+
+    [Fact]
+    public void UnifiedProfileRejectsUnknownFieldsBudgetsAndApprovalShapes()
+    {
+        var original = CreateUnifiedArtifact();
+        var unknownField = ReplaceComposedFile(
+            original,
+            NativeAcsUnifiedPolicyProfile.ModelUseDataPath,
+            UnifiedModelUseData.Replace(
+                "\"rules\": [", "\"budget\": 1, \"rules\": [", StringComparison.Ordinal));
+        var approvalField = ReplaceComposedFile(
+            original,
+            NativeAcsUnifiedPolicyProfile.GuardrailsDataPath,
+            UnifiedGuardrailsData.Replace(
+                "\"required_checks\": [",
+                "\"approval\": {\"mode\": \"auto\"}, \"required_checks\": [",
+                StringComparison.Ordinal));
+        var extraFile = Rehash(original with
+        {
+            Files = original.Files.Add(new NativeAcsArtifactFile(
+                "policy/approval.rego",
+                "package unsupported"u8.ToArray().ToImmutableArray()))
+        });
+
+        Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(unknownField).IsValid);
+        Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(approvalField).IsValid);
+        Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(extraFile).IsValid);
+        Assert.Equal("model_use_data_shape",
+            Assert.Single(NativeAcsUnifiedPolicyProfile.Inspect(unknownField).Diagnostics,
+                item => item.Code == "model_use_data_shape").Code);
+    }
+
+    [NativeAcsFact]
     public void NetworkFactsDoNotExpandTheActionProfileInputGate()
     {
         var artifact = CreateArtifact("""
@@ -824,6 +922,71 @@ public sealed class NativeAcsPolicyTests
         NativeAcsComposableDomainsProfile.CreateArtifact(
             """{"allowed_action_ids":["merge"]}""",
             ComposedNetworkData);
+
+    private static NativeAcsArtifact CreateUnifiedArtifact() =>
+        NativeAcsUnifiedPolicyProfile.CreateArtifact(
+            """{"allowed_action_ids":["merge","model.turn"]}""",
+            ComposedNetworkData,
+            UnifiedModelUseData,
+            UnifiedGuardrailsData);
+
+    private const string UnifiedModelUseData = """
+        {
+          "rules": [
+            {
+              "effect": "allow",
+              "model_selection_reference": "byok-model",
+              "model_id": "deployment-1",
+              "source_mode": "byok",
+              "provider_type": "azure",
+              "provider_id": "byok-model",
+              "configuration_revision": "7",
+              "configuration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+        """;
+
+    private const string UnifiedGuardrailsData = """
+        {
+          "required_checks": [
+            {
+              "provider_id": "prompt-shields",
+              "adapter_version": "1.0.0",
+              "options_schema_version": 1,
+              "options_revision": "options-v1"
+            }
+          ],
+          "blocked_findings": [
+            {
+              "check_id": "prompt-shields",
+              "code": "prompt-injection",
+              "severity": "high"
+            }
+          ]
+        }
+        """;
+
+    private static NativeAcsModelUseEvaluationFacts ModelUseFacts() =>
+        new(
+            "byok-model",
+            "deployment-1",
+            ModelSourceMode.Byok,
+            "7",
+            new string('a', 64),
+            "azure",
+            "byok-model");
+
+    private static NativeAcsGuardrailsEvaluationFacts GuardrailsFacts(
+        params NativeAcsGuardrailsFindingFacts[] findings) =>
+        new(
+            "userInput",
+            "text",
+            [
+                new NativeAcsGuardrailsCheckFacts(
+                    "prompt-shields", "1.0.0", 1, "options-v1")
+            ],
+            findings.ToImmutableArray());
 
     private const string ComposedNetworkData = """
         {

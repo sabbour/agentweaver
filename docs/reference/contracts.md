@@ -320,6 +320,13 @@ identity source or infer identity from the Broker subject, actor ID, or UPN.
 `NativeAcsEvaluationResult` binds the decision to the artifact hash. Invalid
 artifacts and native runtime failures return an error rather than an allow.
 
+The opt-in `composable-domains-v2` snapshot can also contain
+`model_use` and `guardrails` facts. Model-use facts carry the accepted
+reference, concrete model ID, source mode, provider type and ID, configuration
+revision, and configuration hash. Guardrails facts carry the
+`UserInput`/`Text` stage, exact ordered check registrations, and normalized
+findings. The snapshot does not contain budget or approval facts.
+
 The `composable-domains-v1` profile adds reviewed `actions` and
 `platform_network` domains to one artifact. It pins the manifest and all three
 Rego modules. Actions data under `data.actions` and network data under
@@ -335,6 +342,13 @@ compiler entrypoints keep their single-profile behavior and reject composed
 artifacts. The Environment candidate compiler has separate composed and
 System-only entrypoints, and each candidate hash covers the complete artifact.
 This profile adds no API consumer, runtime admission, or policy write.
+
+`RuntimeNativePolicyGate` is an unregistered Orchestrator source boundary for
+the opt-in profile. An explicit test composition supplies accepted and current
+Policy revisions and an append-only admission store. The gate records the exact
+source references and complete content hash beside request and registration
+hashes. It rechecks all values during verification. Production hosts do not
+register this composition.
 
 Projects & Config exposes the current Platform policy artifact through a
 source API. It uses one head per scope and keeps the Policy ID of an existing
