@@ -175,6 +175,16 @@ binding, have no run binding, and be made by a project Owner or PlatformAdmin.
 provenance passed verification. It does not change model eligibility or
 accepted run selections.
 
+Platform Draft creation can reserve a reference without changing selection.
+Projects compares ASCII-folded references with all local bindings and current
+saved selectors, including archived projects. It allows an exact saved
+selector only when the local copy contains the exact BYOK binding. The selector
+check is a creation-time snapshot. Later configuration saves and pending casting
+proposals are not fenced. S2 must fence both selector sources through activation.
+The local copy is not a deployment-wide inventory. The permanent reservation, provider
+head, and first revision commit together under the create and current authority
+locks. A later activation requires separate inventory and fencing.
+
 The private Broker route
 `POST /internal/byok/credential-publications` appends an exact credential
 version to a `Draft` or `Available` provider. It copies the current metadata,

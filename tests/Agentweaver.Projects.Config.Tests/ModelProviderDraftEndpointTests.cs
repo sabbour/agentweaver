@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -20,6 +21,145 @@ namespace Agentweaver.Projects.Config.Tests;
 
 public sealed partial class ProjectsConfigPostgresTests
 {
+    [Theory]
+    [InlineData("23505", "pk_model_provider_reference_reservations")]
+    [InlineData("23514", "ck_model_provider_reference_cross_table")]
+    public async Task PublicModelProviderDraftNamedDatabaseConflictReturns409(string sqlState, string constraint)
+    {
+        await using var db = CreateDbContext();
+        var caller = await CreateReferenceAdminAsync(db);
+        var operation = Guid.NewGuid();
+        var providerId = "byok-" + operation.ToString("N");
+        var name = "endpoint_conflict_" + operation.ToString("N");
+        await using var owner = await fixture.MigrationDataSource.OpenConnectionAsync();
+        await using (var install = new Npgsql.NpgsqlCommand($"""
+            CREATE FUNCTION projects_config.{name}() RETURNS trigger LANGUAGE plpgsql AS $body$
+            BEGIN
+                IF NEW.operation_id = '{operation}'::uuid THEN
+                    RAISE EXCEPTION 'injected conflict' USING ERRCODE = '{sqlState}', CONSTRAINT = '{constraint}';
+                END IF;
+                RETURN NEW;
+            END;
+            $body$;
+            CREATE TRIGGER {name} BEFORE INSERT
+            ON projects_config.model_provider_reference_reservations
+            FOR EACH ROW EXECUTE FUNCTION projects_config.{name}();
+            """, owner))
+            await install.ExecuteNonQueryAsync();
+        try
+        {
+            using var host = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs(), true);
+            using var client = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId);
+            var body = SaveDraftBody(operation, 0, "Conflict");
+            using var request = SaveRequest("/api/platform/byok-providers",
+                body[..^1] + ",\"reference\":\"conflict-" + operation.ToString("N") + "\"}");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("reference_conflict", await response.Content.ReadAsStringAsync());
+            Assert.False(await db.ModelProviderDrafts.AsNoTracking().AnyAsync(item => item.ProviderId == providerId));
+            Assert.False(await db.ModelProviderDraftRevisions.AsNoTracking().AnyAsync(item => item.OperationId == operation));
+            Assert.False(await db.ModelProviderReferenceReservations.AsNoTracking().AnyAsync(item => item.OperationId == operation));
+        }
+        finally
+        {
+            await using var remove = new Npgsql.NpgsqlCommand($"""
+                DROP TRIGGER IF EXISTS {name} ON projects_config.model_provider_reference_reservations;
+                DROP FUNCTION IF EXISTS projects_config.{name}();
+                """, owner);
+            await remove.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public async Task PublicModelProviderDraftCorruptStoredSelectorReturnsUnavailable()
+    {
+        await using var db = CreateDbContext();
+        var caller = await CreateReferenceAdminAsync(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "corrupt-selector-" + suffix;
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var owner = await SeedCallerAsync(db, authority, "owner-" + suffix, tenant,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenant, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(owner, "Corrupt selector", CancellationToken.None);
+        var head = await db.Projects.SingleAsync(item => item.ProjectId == project.ProjectId);
+        var originalRevision = head.ConfigurationRevision;
+        var json = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(
+            new ProjectConfiguration { ModelSelection = new("sentinel") }, LegacyJsonOptions()))!;
+        json["modelSelection"]!["reference"] = 42;
+        db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
+        {
+            ProjectId = project.ProjectId, Revision = originalRevision + 1,
+            ConfigurationJson = json.ToJsonString(), UpdatedByActorId = owner.ActorId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        head.ConfigurationRevision++;
+        await db.SaveChangesAsync();
+        try
+        {
+            using var host = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs(), true);
+            using var client = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId);
+            var body = SaveDraftBody(Guid.NewGuid(), 0, "Corrupt");
+            using var invalid = SaveRequest("/api/platform/byok-providers", body[..^1] + ",\"reference\":42}");
+            using var invalidResponse = await client.SendAsync(invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
+            Assert.Contains("model_provider_draft_invalid_request", await invalidResponse.Content.ReadAsStringAsync());
+            using var request = SaveRequest("/api/platform/byok-providers", body[..^1] + ",\"reference\":\"safe-reference\"}");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            var responseBody = await response.Content.ReadAsStringAsync();
+            Assert.Contains("model_provider_draft_unavailable", responseBody);
+            Assert.DoesNotContain("sentinel", responseBody);
+            Assert.DoesNotContain("modelSelection", responseBody);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        }
+        finally
+        {
+            head.ConfigurationRevision = originalRevision;
+            await db.SaveChangesAsync();
+        }
+    }
+
+    [Fact]
+    public async Task PublicModelProviderDraftReferenceIsCreateOnlyAndPreservesExactSpelling()
+    {
+        await using var db = CreateDbContext();
+        var caller = await CreateReferenceAdminAsync(db);
+        using var host = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs(), true);
+        using var client = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId);
+        var operation = Guid.NewGuid();
+        var reference = "Case.Reference-" + Guid.NewGuid().ToString("N");
+        var body = SaveDraftBody(operation, 0, "Reference");
+        string WithReference(string field) => body[..^1] + ",\"reference\":" + field + "}";
+        foreach (var value in new[] { "null", "42", "\"\"", "\"_invalid\"", "\"has__gap\"" })
+        {
+            using var invalid = SaveRequest("/api/platform/byok-providers", WithReference(value));
+            using var response = await client.SendAsync(invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        }
+        using (var request = SaveRequest("/api/platform/byok-providers", WithReference("\"" + reference + "\"")))
+        using (var response = await client.SendAsync(request))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(reference, json.RootElement.GetProperty("reference").GetString());
+            Assert.Equal("byok-" + operation.ToString("N"), json.RootElement.GetProperty("id").GetString());
+        }
+        using (var update = SaveRequest(
+            "/api/platform/byok-providers/byok-" + operation.ToString("N"),
+            SaveDraftBody(Guid.NewGuid(), 1, "Rename")[..^1] + ",\"reference\":null}", HttpMethod.Put))
+        using (var response = await client.SendAsync(update))
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using (var read = await client.GetAsync("/api/platform/byok-providers/byok-" + operation.ToString("N")))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            using var json = JsonDocument.Parse(await read.Content.ReadAsStringAsync());
+            Assert.Equal(reference, json.RootElement.GetProperty("reference").GetString());
+        }
+    }
+
     [Fact]
     public async Task PublicModelProviderDraftOwnerErrorsAreNoStoreAndDoNotLogRequestBodies()
     {
@@ -102,6 +242,24 @@ public sealed partial class ProjectsConfigPostgresTests
                 var responseBody = await response.Content.ReadAsStringAsync();
                 Assert.Contains("model_provider_draft_invalid_request", responseBody);
                 Assert.DoesNotContain("draft-secret-sentinel", responseBody);
+            }
+            if (route.ProjectId is not null)
+            {
+                foreach (var reference in new[] { "null", "\"Reference\"" })
+                {
+                    var body = SaveDraftBody(Guid.NewGuid(), 0, "x");
+                    using var request = SaveRequest(route.Path, body[..^1] + ",\"reference\":" + reference + "}");
+                    using var response = await client.SendAsync(request);
+                    Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+                }
+            }
+            foreach (var reference in new[] { "null", "\"Reference\"" })
+            {
+                var body = SaveDraftBody(Guid.NewGuid(), 1, "x");
+                using var request = SaveRequest(route.Path + "/provider-id",
+                    body[..^1] + ",\"reference\":" + reference + "}", HttpMethod.Put);
+                using var response = await client.SendAsync(request);
+                Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             }
 
             var providerId = "bad-input-" + Guid.NewGuid().ToString("N");
@@ -421,7 +579,8 @@ public sealed partial class ProjectsConfigPostgresTests
 
     private static async Task<IHost> StartDraftEndpointHostAsync(
         Npgsql.NpgsqlDataSource dataSource,
-        ILoggerProvider loggerProvider) =>
+        ILoggerProvider loggerProvider,
+        bool enableReferences = false) =>
         await new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -441,7 +600,22 @@ public sealed partial class ProjectsConfigPostgresTests
                     services.AddSingleton(TimeProvider.System);
                     services.AddSingleton(new ProjectsConfigIdentityOptions(TestIssuer));
                     services.AddScoped<ProjectAuthorizationOwner>();
-                    services.AddScoped<ModelProviderDraftService>();
+                    if (enableReferences)
+                    {
+                        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+                            new Dictionary<string, string?>
+                            {
+                                ["AgentHost:ModelBindingsRevision"] = "reference-test-v1",
+                                ["AgentHost:ModelBindings:fixture-binding:SourceMode"] = "Byok",
+                                ["AgentHost:ModelBindings:fixture-binding:Enabled"] = "false",
+                            }).Build();
+                        var bindings = ModelBindingCapabilities.FromConfiguration(configuration);
+                        services.AddScoped<ModelProviderDraftService>(sp => new(
+                            sp.GetRequiredService<ProjectsConfigDbContext>(),
+                            TimeProvider.System, null, bindings, true));
+                    }
+                    else
+                        services.AddScoped<ModelProviderDraftService>();
                 });
                 web.ConfigureLogging(logging => logging.AddProvider(loggerProvider));
                 web.Configure(app =>

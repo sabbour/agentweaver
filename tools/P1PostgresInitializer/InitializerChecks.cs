@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
+using Npgsql;
 
 namespace Agentweaver.P1PostgresInitializer;
 
@@ -230,15 +232,59 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 30 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 18)
+        if (services.Length != 5 || protectedTables.Length != 32 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 19)
             throw new InvalidOperationException(
-                "The exact fourteen row-lock columns and eighteen append-only ledger mutation guards are required.");
+                "The exact fourteen row-lock columns, nineteen append-only ledgers, and provider insert guard are required.");
 
         foreach (var (service, table) in protectedTables)
         {
             var guards = GetMutationDenialGuards(table);
             var typeSevenGuards = guards.Where(guard => guard.TriggerType == 7).ToArray();
+            var providerHead = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "model_providers";
+            var providerReservation = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "model_provider_reference_reservations";
+            const string providerReferenceSource = """
+                BEGIN
+                    PERFORM pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));
+                    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                        RAISE EXCEPTION 'provider create requires read committed isolation'
+                            USING ERRCODE = '40001';
+                    END IF;
+                    IF TG_TABLE_NAME = 'model_providers' THEN
+                        IF EXISTS (
+                            SELECT 1 FROM projects_config.model_provider_reference_reservations AS reservation
+                            WHERE reservation.reference_folded =
+                                pg_catalog.translate(NEW.provider_id COLLATE "C",
+                                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+                        ) THEN
+                            RAISE EXCEPTION 'provider reference collision'
+                                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';
+                        END IF;
+                    ELSE
+                        IF EXISTS (
+                            SELECT 1 FROM projects_config.model_providers AS provider
+                            WHERE pg_catalog.translate(provider.provider_id COLLATE "C",
+                                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = NEW.reference_folded
+                        ) THEN
+                            RAISE EXCEPTION 'provider reference collision'
+                                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';
+                        END IF;
+                    END IF;
+                    RETURN NEW;
+                END;
+                """;
+            var hasProviderReferenceGuard =
+                (providerHead || providerReservation) && typeSevenGuards.Length == 1 &&
+                typeSevenGuards[0].Trigger == (providerHead
+                    ? "model_providers_reference_guard" : "model_provider_reference_cross_table_guard") &&
+                typeSevenGuards[0].Function == "guard_model_provider_reference_cross_table()" &&
+                typeSevenGuards[0].Message == "provider reference collision" &&
+                typeSevenGuards[0].SqlState == "23514" &&
+                typeSevenGuards[0].FunctionSource is { } providerSource &&
+                NormalizeGuardSource(providerSource) == NormalizeGuardSource(providerReferenceSource);
             var hasReservationIdentityGuard =
                 table.Table == "platform_policy_apply_reservations" &&
                 typeSevenGuards.Length == 1 &&
@@ -307,6 +353,13 @@ internal static class InitializerChecks
                 typeSevenGuards[0].FunctionSource is { } checkpointSource &&
                 NormalizeGuardSource(checkpointSource) == NormalizeGuardSource(GovernanceCheckpointAnchorFunctionSource);
             var typeNineteenGuards = guards.Where(guard => guard.TriggerType == 19).ToArray();
+            var hasProviderIdGuard = providerHead && typeNineteenGuards.Length == 1 &&
+                typeNineteenGuards[0].Trigger == "model_providers_id_immutable" &&
+                typeNineteenGuards[0].Function == "reject_immutable_record_mutation()" &&
+                typeNineteenGuards[0].Message == "records in %.% are immutable" &&
+                typeNineteenGuards[0].SqlState == "55000" &&
+                typeNineteenGuards[0].Column == "provider_id" &&
+                typeNineteenGuards[0].Condition == "((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)";
             var hasGovernanceHeadAdvanceGuard =
                 governanceDecisionHead &&
                 typeNineteenGuards.Length == 1 &&
@@ -319,7 +372,8 @@ internal static class InitializerChecks
             var hasKnownTypeSevenGuard =
                 hasReservationIdentityGuard || hasProofReceiptIdentityGuard ||
                 hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
-                hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard;
+                hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard ||
+                hasProviderReferenceGuard;
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead
                 ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
@@ -327,10 +381,12 @@ internal static class InitializerChecks
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
                 guards.Length != mutationGuardCount + (hasKnownTypeSevenGuard ? 1 : 0) ||
-                table.Privileges.Contains("UPDATE") ||
+                (table.Privileges.Contains("UPDATE") && !providerHead) ||
                 (table.LockColumn is not null &&
                  mutationGuardCount != (table.MutationDenialGuards is { Length: > 0 } ? 2 : 1)) ||
-                (table.LockColumn is null && mutationGuardCount != (governanceDecisionHead ? 3 : 2)) ||
+                (table.LockColumn is null && mutationGuardCount != (providerHead ? 1 : governanceDecisionHead ? 3 : 2)) ||
+                ((providerHead || providerReservation) && !hasProviderReferenceGuard) ||
+                (providerHead && !hasProviderIdGuard) ||
                 invalidColumnUpdates ||
                 (governanceDecisionHead && table.LockColumn is not null) ||
                 (governanceCheckpoint && !hasGovernanceCheckpointAnchorGuard) ||
@@ -344,6 +400,8 @@ internal static class InitializerChecks
                         .Where(function => function.Signature == guard.Function).ToArray();
                     return string.IsNullOrWhiteSpace(guard.Trigger) ||
                         string.IsNullOrWhiteSpace(guard.Function) ||
+                        (!hasProviderIdGuard || guard.Trigger != "model_providers_id_immutable") &&
+                            (guard.Column is not null || guard.Condition is not null) ||
                         guard.TriggerType is not (7 or 11 or 19 or 27 or 34) ||
                         (guard.TriggerType == 7 &&
                          (guard.FunctionSource is null ||
@@ -704,6 +762,48 @@ internal static class InitializerChecks
             throw new InvalidOperationException("The continuation receipt records work beyond the exact Projects-only prefix.");
     }
 
+    internal static async Task<MutationGuardState[]> ReadMutationGuardStatesAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, ServicePlan service, CancellationToken cancellationToken)
+    {
+        var protectedGuards = service.Tables.Where(table => table.MutationDenialRequired)
+            .SelectMany(table => GetMutationDenialGuards(table)
+                .Select(guard => (Table: table.Table, Guard: guard))).ToArray();
+        if (protectedGuards.Length == 0) return [];
+        await using var command = new NpgsqlCommand("""
+            SELECT coalesce(jsonb_agg(jsonb_build_object(
+              'table', expected.table_name, 'triggerName', t.tgname,
+              'functionSchema', function_namespace.nspname,
+              'functionName', CASE WHEN p.oid IS NULL THEN NULL ELSE p.proname || '()' END,
+              'triggerType', t.tgtype, 'enabled', t.tgenabled::text, 'isInternal', t.tgisinternal,
+              'noColumnFilter', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgattr = ''::int2vector END,
+              'noCondition', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgqual IS NULL END,
+              'columnFilter', CASE WHEN cardinality(t.tgattr::smallint[]) = 1 THEN
+                (SELECT a.attname FROM pg_catalog.pg_attribute a
+                 WHERE a.attrelid = t.tgrelid AND a.attnum = t.tgattr[0]) END,
+              'condition', substring(pg_catalog.pg_get_triggerdef(t.oid) from ' WHEN (.*) EXECUTE FUNCTION '),
+              'argumentCount', t.tgnargs, 'functionOwnerOid', p.proowner,
+              'runtimeCanExecute', CASE WHEN p.oid IS NULL THEN NULL
+                ELSE pg_catalog.has_function_privilege(@role, p.oid, 'EXECUTE') END,
+              'functionSource', p.prosrc)
+              ORDER BY expected.table_name), '[]'::jsonb)::text
+            FROM unnest(@tables, @triggers) AS expected(table_name, trigger_name)
+            LEFT JOIN pg_catalog.pg_namespace service_namespace ON service_namespace.nspname = @schema
+            LEFT JOIN pg_catalog.pg_class c
+              ON c.relnamespace = service_namespace.oid AND c.relname = expected.table_name
+            LEFT JOIN pg_catalog.pg_trigger t
+              ON t.tgrelid = c.oid AND t.tgname = expected.trigger_name
+            LEFT JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+            LEFT JOIN pg_catalog.pg_namespace function_namespace ON function_namespace.oid = p.pronamespace
+            """, connection, transaction);
+        command.Parameters.AddWithValue("tables", protectedGuards.Select(item => item.Table).ToArray());
+        command.Parameters.AddWithValue("triggers", protectedGuards.Select(item => item.Guard.Trigger).ToArray());
+        command.Parameters.AddWithValue("schema", service.Schema);
+        command.Parameters.AddWithValue("role", service.Role);
+        var json = (string)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        return JsonSerializer.Deserialize<MutationGuardState[]>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+    }
+
     /// <summary>Verifies guard trigger shape, owner, source body, and runtime non-executability.</summary>
     internal static void AssertMutationDenialGuards(ServicePlan service, MutationGuardState[] guards,
         uint ownerOid, uint runtimeOid)
@@ -723,12 +823,19 @@ internal static class InitializerChecks
             var actual = matches[0];
             var expectedBody = NormalizeGuardSource(expected.FunctionSource ??
                 $"BEGIN RAISE EXCEPTION '{expected.Message}'" +
+                    (service.Schema == "projects_config" && expected.Function == "reject_immutable_record_mutation()"
+                        ? ", TG_TABLE_SCHEMA, TG_TABLE_NAME" : string.Empty) +
                     (expected.SqlState is null ? string.Empty : $" USING ERRCODE = '{expected.SqlState}'") +
                     "; END");
             if (actual.TriggerName != expected.Trigger || actual.FunctionSchema != service.Schema ||
                 actual.FunctionName != expected.Function || actual.TriggerType != expected.TriggerType ||
-                actual.Enabled != "O" || actual.IsInternal != false || actual.NoColumnFilter != true ||
-                actual.NoCondition != true || actual.ArgumentCount != 0 ||
+                actual.Enabled != "O" || actual.IsInternal != false ||
+                (expected.Column is null ? actual.NoColumnFilter != true :
+                    actual.NoColumnFilter != false || actual.ColumnFilter != expected.Column) ||
+                (expected.Condition is null ? actual.NoCondition != true :
+                    actual.NoCondition != false ||
+                    actual.Condition != $"({expected.Condition})") ||
+                actual.ArgumentCount != 0 ||
                 actual.FunctionOwnerOid != ownerOid || actual.RuntimeCanExecute != false ||
                 actual.FunctionSource is null || NormalizeGuardSource(actual.FunctionSource) != expectedBody ||
                 ownerOid == 0 || runtimeOid == 0)
@@ -979,14 +1086,15 @@ internal sealed record TablePlan(string Table, string[] Privileges, string? Lock
 }
 /// <summary>Expected trigger and owner-only function for a protected table.</summary>
 internal sealed record MutationDenialGuardPlan(string Trigger, string Function, int TriggerType,
-    string? Message = null, string? SqlState = null, string? FunctionSource = null);
+    string? Message = null, string? SqlState = null, string? FunctionSource = null,
+    string? Column = null, string? Condition = null);
 /// <summary>Readback of a mutation guard's catalog state and function source.</summary>
 internal sealed record MutationGuardState(string Table, string? TriggerName, string? FunctionSchema,
     string? FunctionName, int? TriggerType, string? Enabled, bool? IsInternal, bool? NoColumnFilter,
     bool? NoCondition, int? ArgumentCount,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint? FunctionOwnerOid,
     bool? RuntimeCanExecute,
-    string? FunctionSource);
+    string? FunctionSource, string? ColumnFilter = null, string? Condition = null);
 /// <summary>One live relation in a service schema with its owner and effective runtime privileges.</summary>
 internal sealed record RelationState(string Name, string Kind, string Owner, string[]? RuntimePrivileges);
 /// <summary>Observed owner and effective ACL for one service schema.</summary>

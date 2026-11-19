@@ -138,6 +138,31 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         ServicePlan plan,
         CancellationToken cancellationToken)
     {
+        await using (var guard = new NpgsqlCommand("""
+            SELECT EXISTS (
+              SELECT 1 FROM pg_catalog.pg_trigger t
+              JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+              JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+              JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attname = 'provider_id'
+              WHERE n.nspname = 'projects_config' AND c.relname = 'model_providers'
+                AND t.tgname = 'model_providers_id_immutable' AND t.tgtype = 19
+                AND t.tgenabled = 'O' AND NOT t.tgisinternal AND t.tgnargs = 0
+                AND t.tgattr = (a.attnum::text)::int2vector
+                AND substring(pg_catalog.pg_get_triggerdef(t.oid) from ' WHEN (.*) EXECUTE FUNCTION ') =
+                    '(((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text))'
+                AND pn.nspname = 'projects_config' AND p.proname = 'reject_immutable_record_mutation'
+                AND p.proowner = n.nspowner
+                AND btrim(pg_catalog.regexp_replace(p.prosrc, '\s+', ' ', 'g'), ' ;') =
+                    'BEGIN RAISE EXCEPTION ''records in %.% are immutable'', TG_TABLE_SCHEMA, TG_TABLE_NAME USING ERRCODE = ''55000''; END'
+            )
+            """, connection, transaction))
+        {
+            if (await guard.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("The model provider identity guard differs from the reviewed plan.");
+        }
+
         // Effective privilege checks catch inherited or pre-existing rights that exceed the reviewed plan.
         await using (var schema = new NpgsqlCommand("""
             SELECT has_schema_privilege(@role, @schema, 'USAGE')
@@ -340,6 +365,19 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             service.GetProperty("schema").GetString() != "projects_config" ||
             service.GetProperty("role").GetString() != "agentweaver-id-projects-config")
             throw new InvalidOperationException("The reviewed PostgreSQL grant plan has no approved Projects & Config entry.");
+
+        var providerHead = service.GetProperty("tables").EnumerateArray().Single(table =>
+            table.GetProperty("table").GetString() == "model_providers");
+        var identityGuards = providerHead.GetProperty("mutationDenialGuards").EnumerateArray()
+            .Where(guard => guard.GetProperty("trigger").GetString() == "model_providers_id_immutable").ToArray();
+        if (identityGuards.Length != 1 ||
+            RequiredString(identityGuards[0], "function") != "reject_immutable_record_mutation()" ||
+            identityGuards[0].GetProperty("triggerType").GetInt32() != 19 ||
+            RequiredString(identityGuards[0], "message") != "records in %.% are immutable" ||
+            RequiredString(identityGuards[0], "sqlState") != "55000" ||
+            RequiredString(identityGuards[0], "column") != "provider_id" ||
+            RequiredString(identityGuards[0], "condition") != "((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)")
+            throw new InvalidOperationException("The reviewed PostgreSQL plan requires the exact model provider identity guard.");
 
         // Plan values become SQL identifiers or function signatures, so validate them before building grant commands.
         var tables = service.GetProperty("tables").EnumerateArray().Select(table => new TablePlan(

@@ -54,6 +54,20 @@ They do not write to Key Vault.
 
 ## Test model-provider Draft routes
 
+Run the reference reservation, authority-race, and migration tests with the
+disposable PostgreSQL fixture:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~ModelProviderDraft|FullyQualifiedName~ProjectsConfigMigrationInventoryTests|FullyQualifiedName~ProjectModelChoices"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~GatewayModelProviderDraft
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~MigrationRejectsChangedProviderIdentityGuardBeforeCommittingGrants
+dotnet test tests\Agentweaver.FoundationProbe.Tests\Agentweaver.FoundationProbe.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~P1PostgresInitializerTests|FullyQualifiedName~ProviderIdentityGuardIsRequiredByInitializerAndRuntimeGrantPlan"
+```
+
+These tests cover local reference collisions, current authority, later selector
+saves, and the database trigger that protects provider IDs. The reservation
+does not activate a provider.
+
 Run the database-free request-contract and Gateway route tests locally after
 building the solution:
 

@@ -91,6 +91,26 @@
             "SELECT",
             "INSERT",
             "UPDATE"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "model_providers_reference_guard",
+              "function": "guard_model_provider_reference_cross_table()",
+              "triggerType": 7,
+              "message": "provider reference collision",
+              "sqlState": "23514",
+              "functionSource": "BEGIN\n    PERFORM pg_catalog.pg_advisory_xact_lock(\n        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));\n    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN\n        RAISE EXCEPTION 'provider create requires read committed isolation'\n            USING ERRCODE = '40001';\n    END IF;\n    IF TG_TABLE_NAME = 'model_providers' THEN\n        IF EXISTS (\n            SELECT 1 FROM projects_config.model_provider_reference_reservations AS reservation\n            WHERE reservation.reference_folded =\n                pg_catalog.translate(NEW.provider_id COLLATE \"C\",\n                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')\n        ) THEN\n            RAISE EXCEPTION 'provider reference collision'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';\n        END IF;\n    ELSE\n        IF EXISTS (\n            SELECT 1 FROM projects_config.model_providers AS provider\n            WHERE pg_catalog.translate(provider.provider_id COLLATE \"C\",\n                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = NEW.reference_folded\n        ) THEN\n            RAISE EXCEPTION 'provider reference collision'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';\n        END IF;\n    END IF;\n    RETURN NEW;\nEND;"
+            },
+            {
+              "trigger": "model_providers_id_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 19,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000",
+              "column": "provider_id",
+              "condition": "((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)"
+            }
           ]
         },
         {
@@ -196,6 +216,38 @@
             },
             {
               "trigger": "model_provider_revisions_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
+          "table": "model_provider_reference_reservations",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "model_provider_reference_cross_table_guard",
+              "function": "guard_model_provider_reference_cross_table()",
+              "triggerType": 7,
+              "message": "provider reference collision",
+              "sqlState": "23514",
+              "functionSource": "BEGIN\n    PERFORM pg_catalog.pg_advisory_xact_lock(\n        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));\n    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN\n        RAISE EXCEPTION 'provider create requires read committed isolation'\n            USING ERRCODE = '40001';\n    END IF;\n    IF TG_TABLE_NAME = 'model_providers' THEN\n        IF EXISTS (\n            SELECT 1 FROM projects_config.model_provider_reference_reservations AS reservation\n            WHERE reservation.reference_folded =\n                pg_catalog.translate(NEW.provider_id COLLATE \"C\",\n                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')\n        ) THEN\n            RAISE EXCEPTION 'provider reference collision'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';\n        END IF;\n    ELSE\n        IF EXISTS (\n            SELECT 1 FROM projects_config.model_providers AS provider\n            WHERE pg_catalog.translate(provider.provider_id COLLATE \"C\",\n                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = NEW.reference_folded\n        ) THEN\n            RAISE EXCEPTION 'provider reference collision'\n                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';\n        END IF;\n    END IF;\n    RETURN NEW;\nEND;"
+            },
+            {
+              "trigger": "model_provider_reference_reservations_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "model_provider_reference_reservations_no_truncate",
               "function": "reject_immutable_record_mutation()",
               "triggerType": 34,
               "message": "records in %.% are immutable",
@@ -506,6 +558,10 @@
         }
       ],
       "functions": [
+        {
+          "signature": "guard_model_provider_reference_cross_table()",
+          "execute": false
+        },
         {
           "signature": "reject_immutable_record_mutation()",
           "execute": false

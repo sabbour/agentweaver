@@ -11,6 +11,66 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
     : IClassFixture<ProbePostgresFixture>
 {
     [Fact]
+    public async Task ProviderIdentityGuardIsRequiredByInitializerAndRuntimeGrantPlan()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await state.CreateProjectsPrefixAsync();
+        await using var connection = await state.MigrationDataSource.OpenConnectionAsync();
+        var service = state.Plan.Services[0];
+        InitializerChecks.AssertMutationDenialPlan(state.Plan.Services);
+        var head = Assert.Single(service.Tables, table => table.Table == "model_providers");
+        var guarded = service with { Tables = [head] };
+        var ownerOid = await ScalarAsync<uint>(connection, "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user");
+        var runtimeOid = await ScalarAsync<uint>(connection,
+            "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @role", ("role", service.Role));
+
+        async Task AssertInitializerGuardAsync(bool valid)
+        {
+            await using var transaction = await connection.BeginTransactionAsync();
+            var guards = await InitializerChecks.ReadMutationGuardStatesAsync(
+                connection, transaction, guarded, CancellationToken.None);
+            if (valid)
+                InitializerChecks.AssertMutationDenialGuards(guarded, guards, ownerOid, runtimeOid);
+            else
+                Assert.Throws<InvalidOperationException>(() =>
+                    InitializerChecks.AssertMutationDenialGuards(guarded, guards, ownerOid, runtimeOid));
+            await transaction.RollbackAsync();
+        }
+
+        await AssertInitializerGuardAsync(true);
+        await using (var prefix = await state.DataSource.OpenConnectionAsync())
+            await state.AssertProjectsPrefixAsync(prefix, true, CancellationToken.None);
+        const string drop = "DROP TRIGGER model_providers_id_immutable ON projects_config.model_providers";
+        const string create = """
+            CREATE TRIGGER model_providers_id_immutable
+            BEFORE UPDATE OF provider_id ON projects_config.model_providers
+            FOR EACH ROW WHEN (OLD.provider_id IS DISTINCT FROM NEW.provider_id)
+            EXECUTE FUNCTION projects_config.reject_immutable_record_mutation()
+            """;
+        foreach (var mutation in new[]
+        {
+            "ALTER TABLE projects_config.model_providers DISABLE TRIGGER model_providers_id_immutable",
+            drop,
+            drop + "; " + create.Replace("UPDATE OF provider_id", "UPDATE OF display_name", StringComparison.Ordinal),
+            drop + "; " + create.Replace("IS DISTINCT FROM", "IS NOT DISTINCT FROM", StringComparison.Ordinal),
+            drop + "; " + create.Replace("UPDATE OF provider_id", "UPDATE", StringComparison.Ordinal),
+        })
+        {
+            await ExecuteAsync(connection, mutation);
+            await AssertInitializerGuardAsync(false);
+            await using (var prefix = await state.DataSource.OpenConnectionAsync())
+            {
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    state.AssertProjectsPrefixAsync(prefix, true, CancellationToken.None));
+                Assert.Contains("identity guard", error.Message, StringComparison.Ordinal);
+            }
+            await ExecuteAsync(connection, "DROP TRIGGER IF EXISTS model_providers_id_immutable ON projects_config.model_providers");
+            await ExecuteAsync(connection, create);
+        }
+        await AssertInitializerGuardAsync(true);
+    }
+
+    [Fact]
     public async Task FreshProjectsInitializationMigratesAsDedicatedOwnerAndPreservesSetMembership()
     {
         await using var state = await ContinuationState.CreateAsync(fixture);

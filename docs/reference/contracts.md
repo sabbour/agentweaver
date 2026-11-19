@@ -50,6 +50,37 @@ Credential values, headers, vault references, and rate-card references are not
 accepted. Create requires revision `0`; update requires a revision greater
 than `0`. Create derives a stable provider ID from the operation ID.
 
+Platform create also accepts an optional `reference`. Omit it for an ordinary
+create. Null, an empty string, a project create with `reference`, and any update
+with `reference` return `400 model_provider_draft_invalid_request`. The value
+must contain 1–256 ASCII letters, digits, `.`, `_`, or `-`. It cannot begin or
+end with `_` or contain `__`. The response preserves the exact spelling on
+create, list, read, and update. Other providers omit the field.
+
+`ProjectsConfig:ProviderReferenceReservationsEnabled` defaults to `false`.
+When it is off, a new reference-bearing create returns
+`503 model_provider_draft_unavailable`; authorized replays still return the
+original create receipt. Enable it after the migration, runtime grants, and all
+Projects writers have been upgraded. The local model-binding copy must be
+available for a new reservation.
+
+Reservations are permanent and unique under ASCII case folding. A reservation
+cannot match a provider ID, a hosted binding, or a differently cased local
+binding or saved selector. An exact BYOK binding is allowed, including when it
+is disabled. An exact saved selector is allowed only with that exact local
+BYOK binding. Conflicts return `409 reference_conflict`. The check covers the
+local binding copy and current saved platform and project selectors, including
+archived projects; it is not a deployment-wide inventory.
+Database writers use `READ COMMITTED` for provider and reservation inserts.
+The insert guards reject `REPEATABLE READ` and `SERIALIZABLE` with SQLSTATE
+`40001` so a stale transaction snapshot cannot bypass a collision check.
+
+For a lost response, retry with the same operation ID and identical input.
+Current authority and the original issuer, tenant, and subject are required.
+A different operation cannot adopt an existing reservation: inspect the list
+and choose a different reference. A reservation does not select or activate a
+provider or remove a deployment binding.
+
 The owner requires an absolute HTTPS `base_url` on port 443. It rejects user
 information, queries, fragments, IP addresses, and hosts rejected by
 `PlatformEgressHostValidator`. Azure URLs must not contain a path. This check

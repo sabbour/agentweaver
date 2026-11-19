@@ -319,8 +319,8 @@ public sealed class P1PostgresInitializerTests
                     guard with { TriggerType = guard.TriggerType == 27 ? 19 : 27 },
                     guard with { Enabled = "D" },
                     guard with { IsInternal = true },
-                    guard with { NoColumnFilter = false },
-                    guard with { NoCondition = false },
+                    guard with { NoColumnFilter = !guard.NoColumnFilter },
+                    guard with { NoCondition = !guard.NoCondition },
                     guard with { ArgumentCount = 1 },
                     guard with { FunctionOwnerOid = Owner + 1 },
                     guard with { RuntimeCanExecute = true },
@@ -785,6 +785,26 @@ public sealed class P1PostgresInitializerTests
         InitializerChecks.AssertMutationDenialPlan(plan.Services);
         InitializerChecks.AssertColumnUpdatePlan(plan.Services);
         InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);
+        var projects = plan.Services.Single(service => service.Service == "projects-config");
+        var head = projects.Tables.Single(table => table.Table == "model_providers");
+        var identity = head.MutationDenialGuards!.Single(guard => guard.Trigger == "model_providers_id_immutable");
+        foreach (var replacement in new MutationDenialGuardPlan?[]
+        {
+            null, identity with { Column = "display_name" },
+            identity with { Condition = "(old.provider_id IS NOT DISTINCT FROM new.provider_id)" },
+            identity with { Function = "guard_model_provider_reference_cross_table()" },
+        })
+        {
+            var changed = head with
+            {
+                MutationDenialGuards = head.MutationDenialGuards!.Where(guard => guard != identity)
+                    .Concat(replacement is null ? [] : [replacement]).ToArray(),
+            };
+            var services = plan.Services.Select(service => service == projects
+                ? service with { Tables = service.Tables.Select(table => table == head ? changed : table).ToArray() }
+                : service).ToArray();
+            Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(services));
+        }
     }
 
     [Fact]
@@ -982,12 +1002,60 @@ public sealed class P1PostgresInitializerTests
     private static ServicePlan[] MutationServices()
     {
         var services = Services();
+        const string providerReferenceSource = """
+            BEGIN
+                PERFORM pg_catalog.pg_advisory_xact_lock(
+                    pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));
+                IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                    RAISE EXCEPTION 'provider create requires read committed isolation'
+                        USING ERRCODE = '40001';
+                END IF;
+                IF TG_TABLE_NAME = 'model_providers' THEN
+                    IF EXISTS (
+                        SELECT 1 FROM projects_config.model_provider_reference_reservations AS reservation
+                        WHERE reservation.reference_folded =
+                            pg_catalog.translate(NEW.provider_id COLLATE "C",
+                                'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+                    ) THEN
+                        RAISE EXCEPTION 'provider reference collision'
+                            USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';
+                    END IF;
+                ELSE
+                    IF EXISTS (
+                        SELECT 1 FROM projects_config.model_providers AS provider
+                        WHERE pg_catalog.translate(provider.provider_id COLLATE "C",
+                                'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = NEW.reference_folded
+                    ) THEN
+                        RAISE EXCEPTION 'provider reference collision'
+                            USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';
+                    END IF;
+                END IF;
+                RETURN NEW;
+            END;
+            """;
         services[0] = services[0] with
         {
             Service = "projects-config",
             Schema = "projects_config",
             Tables =
             [
+                new("model_providers", ["SELECT", "INSERT", "UPDATE"], null, true, null,
+                [
+                    new("model_providers_reference_guard", "guard_model_provider_reference_cross_table()",
+                        7, "provider reference collision", "23514", providerReferenceSource),
+                    new("model_providers_id_immutable", "reject_immutable_record_mutation()", 19,
+                        "records in %.% are immutable", "55000", Column: "provider_id",
+                        Condition: "((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)"),
+                ]),
+                new("model_provider_reference_reservations", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("model_provider_reference_cross_table_guard", "guard_model_provider_reference_cross_table()",
+                        7, "provider reference collision", "23514", providerReferenceSource),
+                    new("model_provider_reference_reservations_immutable", "reject_immutable_record_mutation()",
+                        27, "records in %.% are immutable", "55000"),
+                    new("model_provider_reference_reservations_no_truncate", "reject_immutable_record_mutation()",
+                        34, "records in %.% are immutable", "55000"),
+                ]),
                 new("model_provider_revisions", ["SELECT", "INSERT"], null, true, null,
                 [
                     new("model_provider_revisions_immutable", "reject_immutable_record_mutation()",
@@ -1031,6 +1099,7 @@ public sealed class P1PostgresInitializerTests
             ],
             Functions =
             [
+                new("guard_model_provider_reference_cross_table()", false),
                 new("reject_immutable_record_mutation()", false),
                 new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
                 new("require_native_acs_policy_head_advance()", false),
@@ -1294,10 +1363,13 @@ public sealed class P1PostgresInitializerTests
         return InitializerChecks.GetMutationDenialGuards(table).Select(guard =>
         {
             var source = guard.FunctionSource ?? $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
+                (service.Schema == "projects_config" && guard.Function == "reject_immutable_record_mutation()"
+                    ? ", TG_TABLE_SCHEMA, TG_TABLE_NAME" : string.Empty) +
                 (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
                 "; END";
             return new MutationGuardState(table.Table, guard.Trigger, service.Schema, guard.Function,
-                guard.TriggerType, "O", false, true, true, 0, Owner, false, source);
+                guard.TriggerType, "O", false, guard.Column is null, guard.Condition is null, 0, Owner, false,
+                source, guard.Column, guard.Condition is null ? null : $"({guard.Condition})");
         }).ToArray();
     }
 
