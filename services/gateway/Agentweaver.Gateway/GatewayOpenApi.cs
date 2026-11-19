@@ -765,7 +765,9 @@ else if (route.OperationId is
             "writePlatformNativeAcsPolicy" or "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision")
         {
-            responses["400"] = ProblemResponse("The request includes an undeclared query value or invalid policy selector.");
+            responses["400"] = ProblemResponse(route.OperationId == "readPlatformNativeAcsPolicy"
+                ? "The request includes a query, body, content type, or transfer encoding."
+                : "The request includes an undeclared query value or invalid policy selector.");
             var isProjectPolicyRead = route.OperationId is
                 "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                 "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";

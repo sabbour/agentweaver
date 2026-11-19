@@ -690,6 +690,15 @@ revision, actor, and timestamp. They never include access tokens or secrets.
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
 
 The Policy API uses the existing head for each scope and keeps its Policy ID.
+The Platform head read accepts no query, body, content type, or transfer
+encoding. It reads one PostgreSQL snapshot, checks the complete artifact hash,
+and rechecks current PlatformAdmin authority before returning. It returns
+`400 native_acs_policy_query_not_supported` for a query and
+`400 native_acs_policy_read_request_invalid` for a body or content header,
+`404 native_acs_policy_not_found` for a missing head,
+`500 native_acs_policy_corrupt` for inconsistent stored data, and
+`503 native_acs_policy_source_unavailable` when the source or authority
+database is unavailable. The response has `Cache-Control: no-store`.
 Project listing returns only existing heads visible to the caller; it does not
 include Platform Policy or an inherited view. Its protected cursor is bound to
 the caller's current read grants. A grant change invalidates the cursor, and

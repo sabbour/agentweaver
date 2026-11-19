@@ -82,13 +82,33 @@ public sealed partial class GatewayOwnerClient(
     {
         try
         {
-            if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" ||
+            if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" or "readPlatformNativeAcsPolicy" ||
                 IsModelProviderDraftRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(
                 cancellationToken,
                 route.OperationId == "dispatchCoordinatorExecution" ? DispatchRequestTimeout : null);
+            if (route.OperationId == "readPlatformNativeAcsPolicy")
+            {
+                if (context.Request.QueryString.HasValue)
+                {
+                    await WriteProblemAsync(
+                        context, "native_acs_policy_query_not_supported", StatusCodes.Status400BadRequest)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                if (context.Request.ContentLength is > 0 ||
+                    context.Request.ContentType is not null ||
+                    context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+                    context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true)
+                {
+                    await WriteProblemAsync(
+                        context, "native_acs_policy_read_request_invalid", StatusCodes.Status400BadRequest)
+                        .ConfigureAwait(false);
+                    return;
+                }
+            }
             // The setup routes take no body or query. The Transfer-Encoding check rejects an HTTP/1.1 chunked
             // body. An HTTP/2 or HTTP/3 body can have neither header, so when CanHaveBody is true,
             // HasP1SetupBodyAsync reads one byte to find the body. The request fails before any owner call.
@@ -2184,7 +2204,7 @@ public sealed partial class GatewayOwnerClient(
     {
         tenantSelector = null;
         var isPlatformPolicyRevisionRead = route.OperationId is
-            "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision";
+            "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision";
         var isProjectPolicyRead = route.OperationId is
             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";

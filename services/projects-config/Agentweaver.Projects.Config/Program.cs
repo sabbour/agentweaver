@@ -161,8 +161,10 @@ builder.Services.AddSingleton<TokenCredential>(_ => new WorkloadIdentityCredenti
 builder.Services.AddSingleton<NpgsqlDataSource>(provider =>
     ProjectsConfigPostgresDataSource.Create(
         runtimeConnectionString, provider.GetRequiredService<TokenCredential>()));
+builder.Services.AddSingleton<PlatformPolicyReadLoggerFactory>();
 builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options) =>
 {
+    options.UseLoggerFactory(provider.GetRequiredService<PlatformPolicyReadLoggerFactory>());
     options.UseNpgsql(
         provider.GetRequiredService<NpgsqlDataSource>(),
         npgsql => npgsql.MigrationsHistoryTable(

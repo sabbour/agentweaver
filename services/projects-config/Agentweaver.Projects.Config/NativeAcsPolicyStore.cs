@@ -400,6 +400,36 @@ internal sealed class NativeAcsPolicyStore(
         CancellationToken cancellationToken)
     {
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadHeadAsync(db, scopeType, scopeId, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<NativeAcsPolicyReadResult?> ReadPlatformHeadAsync(CancellationToken cancellationToken)
+    {
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken).ConfigureAwait(false);
+        NativeAcsPolicyReadResult? result;
+        try
+        {
+            result = await ReadHeadAsync(
+                db, NativeAcsPolicyScopeType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            throw Corrupt("The current native ACS policy artifact failed its integrity check.");
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    private static async Task<NativeAcsPolicyReadResult?> ReadHeadAsync(
+        ProjectsConfigDbContext db,
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        CancellationToken cancellationToken)
+    {
         var head = await db.NativeAcsPolicyHeads.AsNoTracking()
             .SingleOrDefaultAsync(item =>
                 item.ScopeType == scopeType &&

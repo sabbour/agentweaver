@@ -15,6 +15,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using Xunit;
@@ -38,6 +39,9 @@ public sealed partial class ProjectsConfigPostgresTests
         var artifact = Artifact("platform policy read " + suffix);
         var written = await WritePlatformPolicyAsync(
             caller, artifact, "acs-platform-read-" + suffix, "acs-platform-read-correlation-" + suffix);
+        var storedHead = await CreateNativeAcsStore().ReadAsync(
+            NativeAcsPolicyScopeType.Platform, ProjectAuthorizationOwner.PlatformResourceId, CancellationToken.None);
+        Assert.NotNull(storedHead);
 
         using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
         using var client = host.GetTestClient();
@@ -51,8 +55,11 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Contains("no-store", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = document.RootElement;
+        Assert.Equal("platform", root.GetProperty("scopeType").GetString());
+        Assert.Equal(ProjectAuthorizationOwner.PlatformResourceId, root.GetProperty("scopeId").GetString());
         Assert.Equal(written.PolicyId, root.GetProperty("policyId").GetString());
         Assert.Equal(written.Revision, root.GetProperty("revision").GetInt64());
+        Assert.Equal(storedHead.UpdatedAt, root.GetProperty("updatedAt").GetDateTimeOffset());
         Assert.Equal(artifact.ContentSha256, root.GetProperty("contentSha256").GetString());
         Assert.Equal(
             artifact.ContentSha256,
@@ -60,6 +67,341 @@ public sealed partial class ProjectsConfigPostgresTests
         var manifest = root.GetProperty("artifact").GetProperty("manifestBytes")
             .EnumerateArray().Select(value => value.GetByte()).ToArray();
         Assert.Equal(artifact.ManifestBytes.ToArray(), manifest);
+    }
+
+    [Fact]
+    public async Task NativeAcsPlatformPolicyReadUsesOneSnapshotWhenHeadAdvances()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "head-snapshot-" + suffix;
+        var tenantId = "head-snapshot-tenant-" + suffix;
+        var caller = await SeedCallerAsync(
+            db, authorityStore, subject, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var oldArtifact = HistoryArtifact("old " + suffix);
+        var old = await WritePlatformPolicyAsync(caller, oldArtifact, "old-" + suffix, "old-correlation-" + suffix);
+        var newArtifact = HistoryArtifact("new " + suffix);
+        NativeAcsPolicyWriteReceipt? next = null;
+        var advanced = 0;
+        var settingsObserved = 0;
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath: null,
+            commandInterceptor: new PolicyReadInterceptor(async _ =>
+            {
+                if (Interlocked.Exchange(ref advanced, 1) == 0)
+                    next = await WritePlatformPolicyAsync(caller, newArtifact, "new-" + suffix, "new-correlation-" + suffix);
+            }, "native_acs_policy_revisions", observeCommand: async command =>
+            {
+                Assert.NotNull(command.Transaction);
+                await using var settings = command.Connection!.CreateCommand();
+                settings.Transaction = command.Transaction;
+                settings.CommandText =
+                    "SELECT current_setting('transaction_isolation'), current_setting('transaction_read_only')";
+                await using var reader = await settings.ExecuteReaderAsync();
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal("repeatable read", reader.GetString(0));
+                Assert.Equal("on", reader.GetString(1));
+                Interlocked.Increment(ref settingsObserved);
+            }));
+        using var client = CreatePlatformPolicyReader(host, subject, tenantId);
+
+        using var firstResponse = await client.GetAsync("/api/policies/platform/");
+        Assert.Equal(System.Net.HttpStatusCode.OK, firstResponse.StatusCode);
+        using var first = JsonDocument.Parse(await firstResponse.Content.ReadAsStringAsync());
+        Assert.Equal(old.PolicyId, first.RootElement.GetProperty("policyId").GetString());
+        Assert.Equal(old.Revision, first.RootElement.GetProperty("revision").GetInt64());
+        Assert.Equal(oldArtifact.ContentSha256, first.RootElement.GetProperty("contentSha256").GetString());
+        Assert.Equal(oldArtifact.ManifestBytes.ToArray(), first.RootElement.GetProperty("artifact")
+            .GetProperty("manifestBytes").EnumerateArray().Select(value => value.GetByte()).ToArray());
+        Assert.NotNull(next);
+        var state = await CapturePolicyTableStateAsync();
+        using var secondResponse = await client.GetAsync("/api/policies/platform/");
+        Assert.Equal(System.Net.HttpStatusCode.OK, secondResponse.StatusCode);
+        using var second = JsonDocument.Parse(await secondResponse.Content.ReadAsStringAsync());
+        Assert.Equal(next.Revision, second.RootElement.GetProperty("revision").GetInt64());
+        Assert.Equal(newArtifact.ContentSha256, second.RootElement.GetProperty("contentSha256").GetString());
+        Assert.Equal(newArtifact.ManifestBytes.ToArray(), second.RootElement.GetProperty("artifact")
+            .GetProperty("manifestBytes").EnumerateArray().Select(value => value.GetByte()).ToArray());
+        Assert.Equal(2, settingsObserved);
+        Assert.Equal(state, await CapturePolicyTableStateAsync());
+    }
+
+    [Theory]
+    [InlineData("policy", "provider")]
+    [InlineData("initial-authority", "provider")]
+    [InlineData("recheck-authority", "provider")]
+    [InlineData("policy", "timeout")]
+    [InlineData("policy", "wrapped-timeout")]
+    [InlineData("policy", "provider-timeout")]
+    [InlineData("policy", "wrapped-provider-timeout")]
+    [InlineData("initial-authority", "timeout")]
+    [InlineData("initial-authority", "provider-timeout")]
+    [InlineData("recheck-authority", "wrapped-timeout")]
+    public async Task NativeAcsPlatformPolicyReadSanitizesDatabaseFailuresInResponsesAndLogs(
+        string phase, string failure)
+    {
+        const string sentinel = "synthetic-sensitive-provider-detail-2655";
+        var (subject, tenant) = await SeedPlatformPolicyReadCallerAsync();
+        var logs = new PolicyReadLogProvider();
+        var interceptor = new PlatformReadFailureInterceptor(phase, failure, sentinel);
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath: null, commandInterceptor: interceptor, loggerProvider: logs);
+        using var client = CreatePlatformPolicyReader(host, subject, tenant);
+
+        using var response = await client.GetAsync("/api/policies/platform/");
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal("native_acs_policy_source_unavailable", document.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain(sentinel, body, StringComparison.Ordinal);
+        Assert.Equal(phase != "initial-authority", interceptor.Rechecked);
+        Assert.Contains(logs.Entries, entry =>
+            entry.EventName == "Microsoft.EntityFrameworkCore.Query.QueryIterationFailed" &&
+            entry.Message == "Platform Policy read database event.");
+        Assert.DoesNotContain(logs.Entries, entry => entry.Message.Contains(sentinel, StringComparison.Ordinal));
+
+        interceptor.Reset();
+        logs.Clear();
+        using var historyResponse = await client.GetAsync("/api/policies/platform/revisions");
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, historyResponse.StatusCode);
+        Assert.Contains(logs.Entries, entry =>
+            entry.EventName == "Microsoft.EntityFrameworkCore.Query.QueryIterationFailed" &&
+            entry.Message.Contains(sentinel, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeAcsPlatformPolicyReadPropagatesCancellationWhenDatabaseFailureRaces(
+        bool wrappedProviderFailure)
+    {
+        var (subject, tenant) = await SeedPlatformPolicyReadCallerAsync();
+        using var cancellation = new CancellationTokenSource();
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath: null,
+            commandInterceptor: new PolicyReadInterceptor(_ =>
+            {
+                cancellation.Cancel();
+                return Task.FromException(wrappedProviderFailure
+                    ? new InvalidOperationException("synthetic", new NpgsqlException("synthetic"))
+                    : new TimeoutException("synthetic"));
+            }),
+            requestToken: cancellation.Token);
+        using var client = CreatePlatformPolicyReader(host, subject, tenant);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => client.GetAsync("/api/policies/platform/"));
+    }
+
+    [Fact]
+    public async Task NativeAcsPlatformPolicyReadPreservesAllArtifactProfilesAndHistoricalSizes()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "head-profiles-" + suffix;
+        var tenant = "head-profiles-tenant-" + suffix;
+        var caller = await SeedCallerAsync(db, authorityStore, subject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var finite = FiniteNetworkArtifact("approved.example.com");
+        var network = Encoding.UTF8.GetString(finite.Files.Single(file => file.RelativePath == "policy/data.json").Bytes.AsSpan());
+        var actions = """{"allowed_action_ids":["merge","model.turn"]}""";
+        var composed = NativeAcsComposableDomainsProfile.CreateArtifact(actions, network);
+        var unified = NativeAcsUnifiedPolicyProfile.CreateArtifact(actions, network,
+            """{"rules":[{"effect":"allow","model_selection_reference":"byok-model","model_id":"deployment-1","source_mode":"byok","provider_type":"azure","provider_id":"byok-model","configuration_revision":"7","configuration_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}""",
+            """{"required_checks":[{"provider_id":"prompt-shields","adapter_version":"1.0.0","options_schema_version":1,"options_revision":"options-v1"}],"blocked_findings":[{"check_id":"prompt-shields","code":"prompt-injection","severity":"high"}]}""");
+        Assert.True(NativeAcsFiniteNetworkProfile.Validate(finite).IsValid);
+        Assert.True(NativeAcsComposableDomainsProfile.Inspect(composed).IsValid);
+        Assert.True(NativeAcsUnifiedPolicyProfile.Inspect(unified).IsValid);
+        var opaque = HistoryArtifact("opaque " + suffix);
+        var large = opaque with
+        {
+            Files = opaque.Files.Add(new NativeAcsArtifactFile(
+                "data/large.json", System.Collections.Immutable.ImmutableArray.CreateRange(new byte[262_145])))
+        };
+        large = large with { ContentSha256 = NativeAcsArtifactHash.Compute(large) };
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
+        using var client = CreatePlatformPolicyReader(host, subject, tenant);
+        var index = 0;
+        foreach (var artifact in new[] { finite, composed, unified, opaque, large })
+        {
+            var receipt = await WritePlatformPolicyAsync(caller, artifact, $"profile-{suffix}-{index}",
+                $"profile-correlation-{suffix}-{index}");
+            var state = await CapturePolicyTableStateAsync();
+            using var response = await client.GetAsync("/api/policies/platform/");
+            Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(receipt.PolicyId, body.RootElement.GetProperty("policyId").GetString());
+            Assert.Equal(receipt.Revision, body.RootElement.GetProperty("revision").GetInt64());
+            Assert.Equal(artifact.ContentSha256, body.RootElement.GetProperty("contentSha256").GetString());
+            var returned = JsonSerializer.Deserialize<NativeAcsArtifact>(
+                body.RootElement.GetProperty("artifact"), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(returned);
+            Assert.Equal(artifact.ManifestBytes.ToArray(), returned.ManifestBytes.ToArray());
+            Assert.Equal(artifact.Files.Length, returned.Files.Length);
+            foreach (var file in artifact.Files)
+                Assert.Equal(file.Bytes.ToArray(), returned.Files.Single(item => item.RelativePath == file.RelativePath).Bytes.ToArray());
+            Assert.Equal(artifact.ContentSha256, NativeAcsArtifactHash.Compute(returned));
+            Assert.Equal(state, await CapturePolicyTableStateAsync());
+            index++;
+        }
+    }
+
+    [Fact]
+    public async Task NativeAcsPlatformPolicyReadDeniesRevocationAfterCorruptResult()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "head-corrupt-revoked-" + suffix;
+        var tenantId = "head-corrupt-revoked-tenant-" + suffix;
+        var caller = await SeedCallerAsync(
+            db, authorityStore, subject, tenantId, ["api.read"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var grant = caller.Grants.Single(item => item.Role == ProjectAuthorityRole.PlatformAdmin);
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath: null,
+            commandInterceptor: new PolicyReadInterceptor(async cancellationToken =>
+            {
+                await authorityStore.RevokeRoleAssignmentAsync(grant.AssignmentId, grant.Revision, "fixture", cancellationToken);
+                throw new ProjectConfigException("native_acs_policy_corrupt", "Stored source failed integrity validation.", 500);
+            }));
+        using var client = CreatePlatformPolicyReader(host, subject, tenantId);
+        var state = await CapturePolicyTableStateAsync();
+
+        using var response = await client.GetAsync("/api/policies/platform/");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("native_acs_policy_corrupt", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
+        Assert.Equal(state, await CapturePolicyTableStateAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsPlatformPolicyReadRechecksAuthorityWhenHeadIsMissing()
+    {
+        var emptyFixture = new ProjectsConfigPostgresFixture();
+        try
+        {
+            await emptyFixture.InitializeAsync();
+            var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+                .UseNpgsql(emptyFixture.DataSource).Options;
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+            await using var db = new ProjectsConfigDbContext(options);
+            var suffix = Guid.NewGuid().ToString("N");
+            var subject = "missing-head-" + suffix;
+            var tenant = "missing-head-tenant-" + suffix;
+            var caller = await SeedCallerAsync(db, authorityStore, subject, tenant, ["api.read"],
+                ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin);
+            var state = await CapturePolicyTableStateAsync(emptyFixture.DataSource);
+            using (var host = await StartNativeAcsPolicyEndpointHostAsync(emptyFixture.DataSource, opaPath: null))
+            using (var client = CreatePlatformPolicyReader(host, subject, tenant))
+            using (var response = await client.GetAsync("/api/policies/platform/"))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.Equal("native_acs_policy_not_found", body.RootElement.GetProperty("code").GetString());
+            }
+            var grant = caller.Grants.Single(item => item.Role == ProjectAuthorityRole.PlatformAdmin);
+            using (var host = await StartNativeAcsPolicyEndpointHostAsync(
+                emptyFixture.DataSource, opaPath: null,
+                commandInterceptor: new PolicyReadInterceptor(cancellationToken =>
+                    authorityStore.RevokeRoleAssignmentAsync(grant.AssignmentId, grant.Revision, "fixture", cancellationToken))))
+            using (var client = CreatePlatformPolicyReader(host, subject, tenant))
+            using (var response = await client.GetAsync("/api/policies/platform/"))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
+                var body = await response.Content.ReadAsStringAsync();
+                Assert.DoesNotContain("native_acs_policy_not_found", body, StringComparison.Ordinal);
+                Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
+            }
+            Assert.Equal(state, await CapturePolicyTableStateAsync(emptyFixture.DataSource));
+        }
+        finally
+        {
+            await emptyFixture.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task NativeAcsPlatformPolicyReadReturnsUnavailableWhenAuthorityRecheckFails()
+    {
+        var (subject, tenant) = await SeedPlatformPolicyReadCallerAsync();
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath: null, commandInterceptor: new AuthorityRecheckFailureInterceptor());
+        using var client = CreatePlatformPolicyReader(host, subject, tenant);
+        var state = await CapturePolicyTableStateAsync();
+        using var response = await client.GetAsync("/api/policies/platform/");
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal("native_acs_policy_source_unavailable", document.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain("private connection detail", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
+        Assert.Equal(state, await CapturePolicyTableStateAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsPlatformPolicyReadRejectsCorruptStoredHash()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "head-hash-" + suffix;
+        var tenant = "head-hash-tenant-" + suffix;
+        var caller = await SeedCallerAsync(db, authorityStore, subject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var artifact = HistoryArtifact("hash corruption " + suffix);
+        var receipt = await WritePlatformPolicyAsync(caller, artifact, "hash-" + suffix, "hash-correlation-" + suffix);
+        var before = await CapturePolicyTableStateAsync();
+        async Task SetHashAsync(string hash)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand(
+                """
+                UPDATE projects_config.native_acs_policy_revisions SET content_sha256 = @hash
+                WHERE scope_type = 'Platform' AND scope_id = 'default'
+                  AND policy_id = @id AND revision = @revision
+                """, connection);
+            command.Parameters.AddWithValue("hash", hash);
+            command.Parameters.AddWithValue("id", receipt.PolicyId);
+            command.Parameters.AddWithValue("revision", receipt.Revision);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+        await SetImmutableTriggerEnabledAsync(
+            fixture.DataSource, "native_acs_policy_revisions", "native_acs_policy_revisions_immutable", false);
+        try
+        {
+            await SetHashAsync(new string(artifact.ContentSha256[0] == '0' ? '1' : '0', 64));
+            using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
+            using var client = CreatePlatformPolicyReader(host, subject, tenant);
+            using var response = await client.GetAsync("/api/policies/platform/");
+            Assert.Equal(System.Net.HttpStatusCode.InternalServerError, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(body);
+            Assert.Equal("native_acs_policy_corrupt", document.RootElement.GetProperty("code").GetString());
+            Assert.DoesNotContain(receipt.ContentSha256, body, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { await SetHashAsync(artifact.ContentSha256); }
+            finally
+            {
+                await SetImmutableTriggerEnabledAsync(
+                    fixture.DataSource, "native_acs_policy_revisions", "native_acs_policy_revisions_immutable", true);
+            }
+        }
+        Assert.Equal(before, await CapturePolicyTableStateAsync());
     }
 
     [Fact]
@@ -722,7 +1064,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     """
                     DELETE FROM projects_config.native_acs_policy_artifact_files
                     WHERE scope_type = 'Platform' AND scope_id = 'default'
-                      AND policy_id = @policy_id AND revision = 2
+                      AND policy_id = @policy_id AND revision IN (2, 3)
                     """,
                     connection))
                 {
@@ -733,7 +1075,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     """
                     DELETE FROM projects_config.native_acs_policy_revisions
                     WHERE scope_type = 'Platform' AND scope_id = 'default'
-                      AND policy_id = @policy_id AND revision = 2
+                      AND policy_id = @policy_id AND revision IN (2, 3)
                     """,
                     connection);
                 deleteRevision.Parameters.AddWithValue("policy_id", policyId);
@@ -766,6 +1108,10 @@ public sealed partial class ProjectsConfigPostgresTests
             Assert.Equal(System.Net.HttpStatusCode.InternalServerError, missingCommitted.StatusCode);
             using var missingCommittedBody = JsonDocument.Parse(await missingCommitted.Content.ReadAsStringAsync());
             Assert.Equal("native_acs_policy_corrupt", missingCommittedBody.RootElement.GetProperty("code").GetString());
+            using var missingHeadRevision = await client.GetAsync("/api/policies/platform/");
+            Assert.Equal(System.Net.HttpStatusCode.InternalServerError, missingHeadRevision.StatusCode);
+            using var missingHeadBody = JsonDocument.Parse(await missingHeadRevision.Content.ReadAsStringAsync());
+            Assert.Equal("native_acs_policy_corrupt", missingHeadBody.RootElement.GetProperty("code").GetString());
             Assert.Equal(stateBeforeMissingRead, await CapturePolicyTableStateAsync(emptyFixture.DataSource));
         }
         finally
@@ -818,6 +1164,13 @@ public sealed partial class ProjectsConfigPostgresTests
             using var document = JsonDocument.Parse(body);
             Assert.Equal("native_acs_policy_corrupt", document.RootElement.GetProperty("code").GetString());
             Assert.DoesNotContain(Convert.ToBase64String(originalBytes), body, StringComparison.Ordinal);
+            using var headResponse = await client.GetAsync("/api/policies/platform/");
+            Assert.Equal(System.Net.HttpStatusCode.InternalServerError, headResponse.StatusCode);
+            var headBody = await headResponse.Content.ReadAsStringAsync();
+            using var headDocument = JsonDocument.Parse(headBody);
+            Assert.Equal("native_acs_policy_corrupt", headDocument.RootElement.GetProperty("code").GetString());
+            Assert.DoesNotContain(relativePath, headBody, StringComparison.Ordinal);
+            Assert.DoesNotContain(Convert.ToBase64String(originalBytes), headBody, StringComparison.Ordinal);
         }
         finally
         {
@@ -828,6 +1181,8 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData("/api/policies/platform/?unknown=x", "native_acs_policy_query_not_supported")]
+    [InlineData("/api/policies/platform/?x=1&x=2", "native_acs_policy_query_not_supported")]
     [InlineData("/api/policies/platform/revisions?unknown=x", "native_acs_policy_history_request_invalid")]
     [InlineData("/api/policies/platform/revisions?pageSize=1&pageSize=2", "native_acs_policy_history_request_invalid")]
     [InlineData("/api/policies/platform/revisions/1?cursor=x", "native_acs_policy_revision_request_invalid")]
@@ -847,6 +1202,7 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData("/api/policies/platform/", "native_acs_policy_read_request_invalid")]
     [InlineData("/api/policies/platform/revisions", "native_acs_policy_history_request_invalid")]
     [InlineData("/api/policies/platform/revisions/1", "native_acs_policy_revision_request_invalid")]
     public async Task NativeAcsPolicyHistoryRoutesRejectRequestBodies(string path, string expectedCode)
@@ -866,6 +1222,29 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeAcsPlatformPolicyReadRejectsContentTypeAndTransferEncoding(bool chunked)
+    {
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath: null);
+        using var client = CreatePlatformPolicyReader(host, "invalid-body-subject", "invalid-body-tenant");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/policies/platform/");
+        if (chunked)
+        {
+            request.Headers.TransferEncodingChunked = true;
+            request.Content = new ByteArrayContent([1]);
+        }
+        else
+            request.Content = new StringContent("");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("native_acs_policy_read_request_invalid", body.RootElement.GetProperty("code").GetString());
+    }
+
+    [Theory]
+    [InlineData("/api/policies/platform/")]
     [InlineData("/api/policies/platform/revisions")]
     [InlineData("/api/policies/platform/revisions/1")]
     public async Task NativeAcsPolicyHistoryRoutesRequireCurrentUnboundPlatformAuthority(string path)
@@ -915,6 +1294,9 @@ public sealed partial class ProjectsConfigPostgresTests
         runBoundClient.DefaultRequestHeaders.Add("X-Test-Run", "bound-run-" + suffix);
         using var purposeBoundClient = CreatePlatformPolicyReader(host, validSubject, tenantId);
         purposeBoundClient.DefaultRequestHeaders.Add("X-Test-Purpose", "policy.read");
+        using var missingScopeClient = CreatePlatformPolicyReader(host, validSubject, tenantId);
+        missingScopeClient.DefaultRequestHeaders.Remove("X-Test-Scope");
+        missingScopeClient.DefaultRequestHeaders.Add("X-Test-Scope", "projects.admin");
         var stateBeforeDeniedReads = await CapturePolicyTableStateAsync();
 
         foreach (var client in new[]
@@ -926,6 +1308,7 @@ public sealed partial class ProjectsConfigPostgresTests
             projectBoundClient,
             runBoundClient,
             purposeBoundClient,
+            missingScopeClient,
         })
         {
             using var response = await client.GetAsync(path);
@@ -936,6 +1319,7 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData("/api/policies/platform/")]
     [InlineData("/api/policies/platform/revisions")]
     [InlineData("/api/policies/platform/revisions/1")]
     public async Task NativeAcsPolicyHistoryRoutesRejectRevokedMembership(string path)
@@ -1006,6 +1390,7 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData("/api/policies/platform/")]
     [InlineData("/api/policies/platform/revisions")]
     [InlineData("/api/policies/platform/revisions/1")]
     public async Task NativeAcsPolicyHistoryRoutesRecheckAuthorityAfterRetrieval(string path)
@@ -1037,7 +1422,7 @@ public sealed partial class ProjectsConfigPostgresTests
                         grant.AssignmentId, grant.Revision, "fixture", cancellationToken);
             }, "native_acs_policy_revisions"));
         using var client = CreatePlatformPolicyReader(host, subject, tenantId);
-        var requestPath = path.EndsWith("/revisions", StringComparison.Ordinal)
+        var requestPath = path.EndsWith("/revisions", StringComparison.Ordinal) || path.EndsWith("/platform/", StringComparison.Ordinal)
             ? path
             : $"/api/policies/platform/revisions/{receipt.Revision}";
 
@@ -1051,6 +1436,8 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData("/api/policies/platform/", "unavailable", 503, "native_acs_policy_source_unavailable")]
+    [InlineData("/api/policies/platform/", "corrupt", 500, "native_acs_policy_corrupt")]
     [InlineData("/api/policies/platform/revisions", "unavailable", 503, "native_acs_policy_source_unavailable")]
     [InlineData("/api/policies/platform/revisions/1", "unavailable", 503, "native_acs_policy_source_unavailable")]
     [InlineData("/api/policies/platform/revisions", "corrupt", 500, "native_acs_policy_corrupt")]
@@ -1096,6 +1483,7 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData("/api/policies/platform/")]
     [InlineData("/api/policies/platform/revisions")]
     [InlineData("/api/policies/platform/revisions/1")]
     public async Task NativeAcsPolicyHistoryReadsPropagateCancellation(string path)
@@ -1119,6 +1507,7 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Theory]
+    [InlineData("/api/policies/platform/")]
     [InlineData("/api/policies/platform/revisions")]
     [InlineData("/api/policies/platform/revisions/1")]
     public async Task NativeAcsPolicyHistoryReadsDoNotClassifyUnrelatedExceptionsAsOutages(string path)
@@ -1379,7 +1768,7 @@ public sealed partial class ProjectsConfigPostgresTests
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options);
 
-    private async Task<(int Heads, int Revisions, int Files, int Idempotency, int Audit, int Outbox,
+    private async Task<(int Heads, int Revisions, int Files, int Preparations, int Idempotency, int Audit, int Outbox,
         long? HeadRevision, string RetainedBytes)>
         CapturePolicyTableStateAsync(NpgsqlDataSource? dataSource = null)
     {
@@ -1411,6 +1800,7 @@ public sealed partial class ProjectsConfigPostgresTests
             await db.NativeAcsPolicyHeads.AsNoTracking().CountAsync(),
             await db.NativeAcsPolicyRevisions.AsNoTracking().CountAsync(),
             await db.NativeAcsPolicyArtifactFiles.AsNoTracking().CountAsync(),
+            await db.NativeAcsPolicyPreparations.AsNoTracking().CountAsync(),
             await db.NativeAcsPolicyIdempotency.AsNoTracking().CountAsync(),
             await db.NativeAcsPolicyChangeAudit.AsNoTracking().CountAsync(),
             await db.NativeAcsPolicyOutbox.AsNoTracking().CountAsync(),
@@ -1539,7 +1929,9 @@ public sealed partial class ProjectsConfigPostgresTests
         Npgsql.NpgsqlDataSource dataSource,
         string? opaPath,
         bool headWritesEnabled = false,
-        DbCommandInterceptor? commandInterceptor = null) =>
+        DbCommandInterceptor? commandInterceptor = null,
+        ILoggerProvider? loggerProvider = null,
+        CancellationToken? requestToken = null) =>
         await new HostBuilder()
             .ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
@@ -1549,6 +1941,8 @@ public sealed partial class ProjectsConfigPostgresTests
             .ConfigureWebHost(web =>
             {
                 web.UseTestServer();
+                if (loggerProvider is not null)
+                    web.ConfigureLogging(logging => logging.AddProvider(loggerProvider));
                 web.ConfigureServices(services =>
                 {
                     services.AddRouting();
@@ -1557,8 +1951,10 @@ public sealed partial class ProjectsConfigPostgresTests
                             ProjectSummaryTestAuthenticationHandler.SchemeName, _ => { });
                     services.AddAuthorization();
                     services.AddSingleton<IDataProtectionProvider>(CreateTestDataProtectionProvider());
-                    services.AddDbContextFactory<ProjectsConfigDbContext>(options =>
+                    services.AddSingleton<PlatformPolicyReadLoggerFactory>();
+                    services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options) =>
                     {
+                        options.UseLoggerFactory(provider.GetRequiredService<PlatformPolicyReadLoggerFactory>());
                         options.UseNpgsql(
                             dataSource,
                             npgsql => npgsql.MigrationsHistoryTable(
@@ -1582,6 +1978,12 @@ public sealed partial class ProjectsConfigPostgresTests
                 });
                 web.Configure(app =>
                 {
+                    if (requestToken is not null)
+                        app.Use(async (context, next) =>
+                        {
+                            context.RequestAborted = requestToken.Value;
+                            await next(context);
+                        });
                     app.UseRouting();
                     app.UseAuthentication();
                     app.UseAuthorization();
@@ -1612,7 +2014,8 @@ public sealed partial class ProjectsConfigPostgresTests
     private sealed class PolicyReadInterceptor(
         Func<CancellationToken, Task> intercept,
         string targetTable = "native_acs_policy_heads",
-        Action<DbDataReader>? observeResult = null) : DbCommandInterceptor
+        Action<DbDataReader>? observeResult = null,
+        Func<DbCommand, Task>? observeCommand = null) : DbCommandInterceptor
     {
         public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command,
@@ -1621,7 +2024,11 @@ public sealed partial class ProjectsConfigPostgresTests
             CancellationToken cancellationToken = default)
         {
             if (command.CommandText.Contains(targetTable, StringComparison.OrdinalIgnoreCase))
+            {
+                if (observeCommand is not null)
+                    await observeCommand(command).ConfigureAwait(false);
                 await intercept(cancellationToken).ConfigureAwait(false);
+            }
             return result;
         }
 
@@ -1633,6 +2040,87 @@ public sealed partial class ProjectsConfigPostgresTests
         {
             if (command.CommandText.Contains(targetTable, StringComparison.OrdinalIgnoreCase))
                 observeResult?.Invoke(result);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+        private sealed class PlatformReadFailureInterceptor(string phase, string failure, string sentinel)
+            : DbCommandInterceptor
+        {
+            private bool _headRead;
+            private bool _control;
+            public bool Rechecked { get; private set; }
+
+            public void Reset()
+            {
+                _headRead = false;
+                _control = true;
+                Rechecked = false;
+            }
+
+            public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+                DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+                CancellationToken cancellationToken = default)
+            {
+                var head = command.CommandText.Contains("native_acs_policy_heads", StringComparison.OrdinalIgnoreCase);
+                var authority = command.CommandText.Contains("tenant_memberships", StringComparison.OrdinalIgnoreCase);
+                if (head)
+                    _headRead = true;
+                if (authority && _headRead)
+                    Rechecked = true;
+                if (phase == "policy" && head ||
+                    phase == "initial-authority" && authority && !_headRead ||
+                    phase == "recheck-authority" && authority && _headRead)
+                {
+                    throw (_control ? "provider" : failure) switch
+                    {
+                        "timeout" => new TimeoutException(sentinel),
+                        "wrapped-timeout" => new InvalidOperationException(sentinel, new TimeoutException(sentinel)),
+                        "provider-timeout" => new NpgsqlException(sentinel, new TimeoutException(sentinel)),
+                        "wrapped-provider-timeout" => new InvalidOperationException(sentinel,
+                            new NpgsqlException(sentinel, new TimeoutException(sentinel))),
+                        _ => new InvalidOperationException(sentinel,
+                            new NpgsqlException(sentinel, new IOException(sentinel))),
+                    };
+                }
+                return ValueTask.FromResult(result);
+            }
+        }
+
+        private sealed class PolicyReadLogProvider : ILoggerProvider
+        {
+            private readonly ConcurrentQueue<(string? EventName, string Message)> _entries = new();
+            public (string? EventName, string Message)[] Entries => _entries.ToArray();
+            public void Clear() => _entries.Clear();
+            public ILogger CreateLogger(string categoryName) => new CaptureLogger(_entries);
+            public void Dispose() { }
+
+            private sealed class CaptureLogger(ConcurrentQueue<(string? EventName, string Message)> entries) : ILogger
+            {
+                public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+                public bool IsEnabled(LogLevel logLevel) => true;
+                public void Log<TState>(
+                    LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                    Func<TState, Exception?, string> formatter) =>
+                    entries.Enqueue((eventId.Name, formatter(state, exception) + exception));
+            }
+        }
+
+    private sealed class AuthorityRecheckFailureInterceptor : DbCommandInterceptor
+    {
+        private bool _headRead;
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("native_acs_policy_heads", StringComparison.OrdinalIgnoreCase))
+                _headRead = true;
+            if (_headRead && command.CommandText.Contains("project_role_assignments", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("private connection detail",
+                    new NpgsqlException("private connection detail", new IOException("private connection detail")));
             return ValueTask.FromResult(result);
         }
     }
