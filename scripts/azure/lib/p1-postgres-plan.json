@@ -717,6 +717,62 @@
           ]
         },
         {
+          "table": "platform_policy_proof_holds",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "platform_policy_proof_holds_immutable",
+              "function": "reject_platform_policy_proof_mutation()",
+              "triggerType": 27,
+              "message": "platform policy proof records are append-only",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "platform_policy_proof_holds_no_truncate",
+              "function": "reject_platform_policy_proof_mutation()",
+              "triggerType": 34,
+              "message": "platform policy proof records are append-only",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
+          "table": "platform_policy_proof_receipts",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "platform_policy_proof_receipts_hold_identity",
+              "function": "enforce_platform_policy_proof_receipt_hold()",
+              "triggerType": 7,
+              "message": "platform policy proof receipt does not match its hold",
+              "sqlState": "23514",
+              "functionSource": "BEGIN\n          IF NOT EXISTS (\n              SELECT 1\n              FROM environment.platform_policy_proof_holds hold\n              WHERE hold.hold_id = NEW.hold_id\n                AND hold.target_id = NEW.target_id\n                AND hold.reservation_id = NEW.reservation_id\n                AND hold.profile_digest = NEW.profile_digest\n                AND hold.guard_digest = NEW.guard_digest\n          ) THEN\n              RAISE EXCEPTION 'platform policy proof receipt does not match its hold'\n                  USING ERRCODE = '23514';\n          END IF;\n          RETURN NEW;\n        END;"
+            },
+            {
+              "trigger": "platform_policy_proof_receipts_immutable",
+              "function": "reject_platform_policy_proof_mutation()",
+              "triggerType": 27,
+              "message": "platform policy proof records are append-only",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "platform_policy_proof_receipts_no_truncate",
+              "function": "reject_platform_policy_proof_mutation()",
+              "triggerType": 34,
+              "message": "platform policy proof records are append-only",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
           "table": "sandbox_owner_mappings",
           "privileges": [
             "SELECT",
@@ -748,7 +804,15 @@
           "execute": false
         },
         {
+          "signature": "enforce_platform_policy_proof_receipt_hold()",
+          "execute": false
+        },
+        {
           "signature": "reject_platform_policy_apply_reservation_mutation()",
+          "execute": false
+        },
+        {
+          "signature": "reject_platform_policy_proof_mutation()",
           "execute": false
         }
       ]
@@ -1858,7 +1922,8 @@
     11,
     12,
     13,
-    14
+    14,
+    15
   ],
   "eventsVersions": [
     1,

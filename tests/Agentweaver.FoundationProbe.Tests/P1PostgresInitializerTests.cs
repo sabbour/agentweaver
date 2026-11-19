@@ -1060,11 +1060,51 @@ public sealed class P1PostgresInitializerTests
                         "reject_platform_policy_apply_reservation_mutation()", 34,
                         "platform policy apply reservations are append-only", "55000"),
                 ]),
+                new("platform_policy_proof_holds", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("platform_policy_proof_holds_immutable",
+                        "reject_platform_policy_proof_mutation()", 27,
+                        "platform policy proof records are append-only", "55000"),
+                    new("platform_policy_proof_holds_no_truncate",
+                        "reject_platform_policy_proof_mutation()", 34,
+                        "platform policy proof records are append-only", "55000"),
+                ]),
+                new("platform_policy_proof_receipts", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("platform_policy_proof_receipts_hold_identity",
+                        "enforce_platform_policy_proof_receipt_hold()", 7,
+                        "platform policy proof receipt does not match its hold", "23514",
+                        """
+                        BEGIN
+                          IF NOT EXISTS (
+                              SELECT 1
+                              FROM environment.platform_policy_proof_holds hold
+                              WHERE hold.hold_id = NEW.hold_id
+                                AND hold.target_id = NEW.target_id
+                                AND hold.reservation_id = NEW.reservation_id
+                                AND hold.profile_digest = NEW.profile_digest
+                                AND hold.guard_digest = NEW.guard_digest
+                          ) THEN
+                              RAISE EXCEPTION 'platform policy proof receipt does not match its hold'
+                                  USING ERRCODE = '23514';
+                          END IF;
+                          RETURN NEW;
+                        END;
+                        """),
+                    new("platform_policy_proof_receipts_immutable",
+                        "reject_platform_policy_proof_mutation()", 27,
+                        "platform policy proof records are append-only", "55000"),
+                    new("platform_policy_proof_receipts_no_truncate",
+                        "reject_platform_policy_proof_mutation()", 34,
+                        "platform policy proof records are append-only", "55000"),
+                ]),
             ],
             Functions =
             [
                 new("enforce_platform_policy_apply_reservation_identity()", false),
+                new("enforce_platform_policy_proof_receipt_hold()", false),
                 new("reject_platform_policy_apply_reservation_mutation()", false),
+                new("reject_platform_policy_proof_mutation()", false),
             ],
         };
         services[3] = services[3] with

@@ -246,6 +246,19 @@ test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
   for (const guard of reservations.mutationDenialGuards)
     assert.ok(environment.functions.some(item =>
       item.signature === guard.function && !item.execute));
+  for (const name of ['platform_policy_proof_holds', 'platform_policy_proof_receipts']) {
+    const proofTable = environment.tables.find(table => table.table === name);
+    assert.deepEqual(proofTable.privileges, ['SELECT', 'INSERT']);
+    assert.equal(proofTable.mutationDenialRequired, true);
+    assert.deepEqual(proofTable.mutationDenialGuards.map(guard =>
+      [guard.trigger, guard.function, guard.triggerType]), [
+      ...(name === 'platform_policy_proof_receipts'
+        ? [['platform_policy_proof_receipts_hold_identity', 'enforce_platform_policy_proof_receipt_hold()', 7]]
+        : []),
+      [`${name}_immutable`, 'reject_platform_policy_proof_mutation()', 27],
+      [`${name}_no_truncate`, 'reject_platform_policy_proof_mutation()', 34],
+    ]);
+  }
 
   for (const name of ['p1_run_request_provenance', 'p1_invocation_bindings']) {
     const table = orchestrator.tables.find(item => item.table === name);
@@ -475,7 +488,7 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
 
   assert.deepEqual(catalog, migrationIds);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
-  assert.match(source, /private const int CurrentSchemaVersion = 14;/);
+  assert.match(source, /private const int CurrentSchemaVersion = 15;/);
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 
@@ -491,7 +504,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 144);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 146);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -515,8 +528,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [14, 3, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 51);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [14, 5, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 53);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });
@@ -530,7 +543,15 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
       execute: false,
     },
     {
+      signature: 'enforce_platform_policy_proof_receipt_hold()',
+      execute: false,
+    },
+    {
       signature: 'reject_platform_policy_apply_reservation_mutation()',
+      execute: false,
+    },
+    {
+      signature: 'reject_platform_policy_proof_mutation()',
       execute: false,
     },
   ]);

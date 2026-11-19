@@ -230,10 +230,10 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 28 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 16)
+        if (services.Length != 5 || protectedTables.Length != 30 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 18)
             throw new InvalidOperationException(
-                "The exact fourteen row-lock columns and sixteen append-only ledger mutation guards are required.");
+                "The exact fourteen row-lock columns and eighteen append-only ledger mutation guards are required.");
 
         foreach (var (service, table) in protectedTables)
         {
@@ -245,6 +245,14 @@ internal static class InitializerChecks
                 typeSevenGuards[0].Trigger == "platform_policy_apply_reservations_consistent_identity" &&
                 typeSevenGuards[0].Function == "enforce_platform_policy_apply_reservation_identity()" &&
                 typeSevenGuards[0].Message == "platform policy apply reservation content conflicts" &&
+                typeSevenGuards[0].SqlState == "23514" &&
+                !string.IsNullOrWhiteSpace(typeSevenGuards[0].FunctionSource);
+            var hasProofReceiptIdentityGuard =
+                table.Table == "platform_policy_proof_receipts" &&
+                typeSevenGuards.Length == 1 &&
+                typeSevenGuards[0].Trigger == "platform_policy_proof_receipts_hold_identity" &&
+                typeSevenGuards[0].Function == "enforce_platform_policy_proof_receipt_hold()" &&
+                typeSevenGuards[0].Message == "platform policy proof receipt does not match its hold" &&
                 typeSevenGuards[0].SqlState == "23514" &&
                 !string.IsNullOrWhiteSpace(typeSevenGuards[0].FunctionSource);
             var hasNativeAcsRevisionGuard =
@@ -309,7 +317,8 @@ internal static class InitializerChecks
                 typeNineteenGuards[0].FunctionSource is { } advanceSource &&
                 NormalizeGuardSource(advanceSource) == NormalizeGuardSource(GovernanceDecisionHeadAdvanceFunctionSource);
             var hasKnownTypeSevenGuard =
-                hasReservationIdentityGuard || hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
+                hasReservationIdentityGuard || hasProofReceiptIdentityGuard ||
+                hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
                 hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard;
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead

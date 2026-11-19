@@ -18,6 +18,10 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
         Set<EnvironmentProviderLifecycleReportRow>();
     internal DbSet<EnvironmentPlatformPolicyApplyReservationRow> PlatformPolicyApplyReservations =>
         Set<EnvironmentPlatformPolicyApplyReservationRow>();
+    internal DbSet<EnvironmentPlatformPolicyProofHoldRow> PlatformPolicyProofHolds =>
+        Set<EnvironmentPlatformPolicyProofHoldRow>();
+    internal DbSet<EnvironmentPlatformPolicyProofReceiptRow> PlatformPolicyProofReceipts =>
+        Set<EnvironmentPlatformPolicyProofReceiptRow>();
     internal DbSet<EnvironmentSandboxOwnerMappingRow> SandboxOwnerMappings =>
         Set<EnvironmentSandboxOwnerMappingRow>();
     internal DbSet<EnvironmentAttributedEgressFlowRow> AttributedEgressFlows =>
@@ -376,6 +380,90 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                 .HasDatabaseName("ix_environment_platform_policy_apply_reservations_latest");
         });
 
+        modelBuilder.Entity<EnvironmentPlatformPolicyProofHoldRow>(entity =>
+        {
+            entity.ToTable("platform_policy_proof_holds", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_proof_holds_versions",
+                    "seal_epoch > 0 AND registry_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_proof_holds_hashes",
+                    "guard_digest ~ '^[0-9a-f]{64}$' AND profile_digest ~ '^[0-9a-f]{64}$' " +
+                    "AND request_fingerprint ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(row => row.HoldId);
+            entity.Property(row => row.HoldId).HasColumnName("hold_id");
+            entity.Property(row => row.TargetId).HasColumnName("target_id").HasMaxLength(256);
+            entity.Property(row => row.PhysicalTarget).HasColumnName("physical_target").HasMaxLength(512);
+            entity.Property(row => row.Namespace).HasColumnName("namespace").HasMaxLength(63);
+            entity.Property(row => row.NamespaceUid).HasColumnName("namespace_uid").HasMaxLength(128);
+            entity.Property(row => row.SealEpoch).HasColumnName("seal_epoch");
+            entity.Property(row => row.GuardDigest).HasColumnName("guard_digest").HasMaxLength(64);
+            entity.Property(row => row.ProfileDigest).HasColumnName("profile_digest").HasMaxLength(64);
+            entity.Property(row => row.RegistryRevision).HasColumnName("registry_revision");
+            entity.Property(row => row.PreparationId).HasColumnName("preparation_id").HasMaxLength(256);
+            entity.Property(row => row.ReservationId).HasColumnName("reservation_id");
+            entity.Property(row => row.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
+            entity.Property(row => row.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(row => row.TargetId).IsUnique()
+                .HasDatabaseName("ux_environment_platform_policy_proof_holds_target");
+            entity.HasIndex(row => row.ReservationId).IsUnique()
+                .HasDatabaseName("ux_environment_platform_policy_proof_holds_reservation");
+            entity.HasIndex(row => new { row.PhysicalTarget, row.NamespaceUid }).IsUnique()
+                .HasDatabaseName("ux_environment_platform_policy_proof_holds_physical_namespace");
+        });
+
+        modelBuilder.Entity<EnvironmentPlatformPolicyProofReceiptRow>(entity =>
+        {
+            entity.ToTable("platform_policy_proof_receipts", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_proof_receipts_versions",
+                    "source_epoch > 0 AND source_revision > 0 AND policy_generation > 0");
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_proof_receipts_hashes",
+                    "source_hash ~ '^[0-9a-f]{64}$' AND intent_hash ~ '^[0-9a-f]{64}$' " +
+                    "AND profile_digest ~ '^[0-9a-f]{64}$' " +
+                    "AND guard_digest ~ '^[0-9a-f]{64}$' AND snapshot_id ~ '^[0-9a-f]{64}$' " +
+                    "AND spec_digest ~ '^[0-9a-f]{64}$' AND request_fingerprint ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_environment_platform_policy_proof_receipts_snapshot",
+                    "jsonb_typeof(snapshot_json) = 'object'");
+            });
+            entity.HasKey(row => row.ReceiptId);
+            entity.Property(row => row.ReceiptId).HasColumnName("receipt_id");
+            entity.Property(row => row.HoldId).HasColumnName("hold_id");
+            entity.Property(row => row.TargetId).HasColumnName("target_id").HasMaxLength(256);
+            entity.Property(row => row.ReservationId).HasColumnName("reservation_id");
+            entity.Property(row => row.SourceEpoch).HasColumnName("source_epoch");
+            entity.Property(row => row.SourceRevision).HasColumnName("source_revision");
+            entity.Property(row => row.SourceId).HasColumnName("source_id").HasMaxLength(256);
+            entity.Property(row => row.SourceHash).HasColumnName("source_hash").HasMaxLength(64);
+            entity.Property(row => row.IntentHash).HasColumnName("intent_hash").HasMaxLength(64);
+            entity.Property(row => row.CompilerId).HasColumnName("compiler_id").HasMaxLength(128);
+            entity.Property(row => row.EvaluatorVersion).HasColumnName("evaluator_version").HasMaxLength(128);
+            entity.Property(row => row.CeilingVersion).HasColumnName("ceiling_version").HasMaxLength(128);
+            entity.Property(row => row.ProfileDigest).HasColumnName("profile_digest").HasMaxLength(64);
+            entity.Property(row => row.GuardDigest).HasColumnName("guard_digest").HasMaxLength(64);
+            entity.Property(row => row.SnapshotId).HasColumnName("snapshot_id").HasMaxLength(64);
+            entity.Property(row => row.SpecDigest).HasColumnName("spec_digest").HasMaxLength(64);
+            entity.Property(row => row.PostWriteResourceVersion)
+                .HasColumnName("post_write_resource_version").HasMaxLength(256);
+            entity.Property(row => row.ObjectUid).HasColumnName("object_uid").HasMaxLength(128);
+            entity.Property(row => row.PolicyGeneration).HasColumnName("policy_generation");
+            entity.Property(row => row.SnapshotJson).HasColumnName("snapshot_json").HasColumnType("jsonb");
+            entity.Property(row => row.RequestFingerprint)
+                .HasColumnName("request_fingerprint").HasMaxLength(64);
+            entity.Property(row => row.EvidenceAt).HasColumnName("evidence_at");
+            entity.HasIndex(row => new { row.HoldId, row.TargetId }).IsUnique()
+                .HasDatabaseName("ux_environment_platform_policy_proof_receipts_hold");
+            entity.HasOne<EnvironmentPlatformPolicyProofHoldRow>()
+                .WithMany()
+                .HasForeignKey(row => row.HoldId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
         EnvironmentProviderLifecycleReportModel.Configure(modelBuilder);
     }
 }
@@ -463,6 +551,49 @@ internal sealed class EnvironmentPlatformPolicyApplyReservationRow
     public string ResourceVersion { get; set; } = string.Empty;
     public string ProviderRequestJson { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
+}
+
+internal sealed class EnvironmentPlatformPolicyProofHoldRow
+{
+    public Guid HoldId { get; set; }
+    public string TargetId { get; set; } = string.Empty;
+    public string PhysicalTarget { get; set; } = string.Empty;
+    public string Namespace { get; set; } = string.Empty;
+    public string NamespaceUid { get; set; } = string.Empty;
+    public long SealEpoch { get; set; }
+    public string GuardDigest { get; set; } = string.Empty;
+    public string ProfileDigest { get; set; } = string.Empty;
+    public long RegistryRevision { get; set; }
+    public string PreparationId { get; set; } = string.Empty;
+    public Guid ReservationId { get; set; }
+    public string RequestFingerprint { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+internal sealed class EnvironmentPlatformPolicyProofReceiptRow
+{
+    public Guid ReceiptId { get; set; }
+    public Guid HoldId { get; set; }
+    public string TargetId { get; set; } = string.Empty;
+    public Guid ReservationId { get; set; }
+    public long SourceEpoch { get; set; }
+    public long SourceRevision { get; set; }
+    public string SourceId { get; set; } = string.Empty;
+    public string SourceHash { get; set; } = string.Empty;
+    public string IntentHash { get; set; } = string.Empty;
+    public string CompilerId { get; set; } = string.Empty;
+    public string EvaluatorVersion { get; set; } = string.Empty;
+    public string CeilingVersion { get; set; } = string.Empty;
+    public string ProfileDigest { get; set; } = string.Empty;
+    public string GuardDigest { get; set; } = string.Empty;
+    public string SnapshotId { get; set; } = string.Empty;
+    public string SpecDigest { get; set; } = string.Empty;
+    public string PostWriteResourceVersion { get; set; } = string.Empty;
+    public string ObjectUid { get; set; } = string.Empty;
+    public long PolicyGeneration { get; set; }
+    public string SnapshotJson { get; set; } = string.Empty;
+    public string RequestFingerprint { get; set; } = string.Empty;
+    public DateTimeOffset EvidenceAt { get; set; }
 }
 
 /// <summary>Database row tracking a workspace-volume cleanup claim and its retry state.</summary>
