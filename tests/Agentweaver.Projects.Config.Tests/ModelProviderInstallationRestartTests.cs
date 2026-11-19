@@ -53,7 +53,8 @@ public sealed partial class ProjectsConfigPostgresTests
                             ["ProjectsConfig:Authentication:Audience"] = "projects",
                             ["ProjectsConfig:Database:WorkloadIdentity:TenantId"] = Guid.NewGuid().ToString("D"),
                             ["ProjectsConfig:Database:WorkloadIdentity:ClientId"] = Guid.NewGuid().ToString("D"),
-                            ["ProjectsConfig:Database:WorkloadIdentity:TokenFilePath"] = @"C:\fixture-token",
+                            ["ProjectsConfig:Database:WorkloadIdentity:TokenFilePath"] =
+                                Path.Combine(AppContext.BaseDirectory, "not-read-token"),
                             ["ProjectsConfig:ProviderReferenceReservationsEnabled"] = enabled.ToString(),
                         })
                         builder.UseSetting(key, value);
