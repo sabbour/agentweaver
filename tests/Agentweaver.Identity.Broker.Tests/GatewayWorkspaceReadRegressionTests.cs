@@ -40,6 +40,24 @@ public sealed class GatewayWorkspaceReadRegressionTests
     }
 
     [Fact]
+    public void RecoveryEventsRouteForwardsNoStoreAndUsesTheOwnerResponseLimit()
+    {
+        var route = Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "readCheckpointRecoveryEvents");
+        Assert.Equal("GET", route.Method);
+        Assert.Equal(
+            "/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/checkpoint-recoveries/{operationId}/events",
+            route.PublicPath);
+        Assert.Equal(
+            "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/checkpoint-recoveries/{operationId}/events",
+            route.OwnerPath);
+        Assert.Equal(GatewayOwner.Orchestrator, route.Owner);
+        Assert.Equal(new[] { "cursor", "limit" }, route.QueryParameters);
+        Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
+        Assert.Equal(8 * 1024 * 1024, route.MaximumResponseBytes);
+    }
+
+    [Fact]
     public void PlatformPolicyRoutesAreBoundedAndExcludedFromMcp()
     {
         var routes = new[]

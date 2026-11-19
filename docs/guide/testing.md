@@ -530,6 +530,17 @@ to compare a retained before-capture with normal status after recovery. Its
 before and after modes use finite native CLI reads for a pending gate, saved
 child, or recorded OpenPullRequest receipt. Full plan, dependency graph,
 committed recovery-event, and physical no-duplicate evidence remain separate.
+`readCheckpointRecoveryEvents` exposes retained owner progress for one
+operation. The observation case does not use this read as complete recovery
+or physical-effect proof.
+
+Run the event projection and owner tests from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~CheckpointRecoveryEventProjectionTests|FullyQualifiedName~RecoveryEvents|FullyQualifiedName~OriginalLegacyAdmissionIsReadWithItsSavedFieldsAndBindings|FullyQualifiedName~NewCheckpointRecoveryWaitsForBlockedHostAndAdvancesOneFence|FullyQualifiedName~ChildRecoveryCommitsFrozenManifestAndHoldWithFenceAndExactReplay|FullyQualifiedName~ChildRecoverySupersessionPreservesR1ToR2CheckpointLineageAndReleasesHoldAfterReady"
+```
+
+The owner tests use disposable PostgreSQL. They do not access a live target.
 
 Run its local regression tests from the repository root:
 

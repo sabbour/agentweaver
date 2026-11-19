@@ -44,6 +44,7 @@ public static partial class CoordinationEndpoints
         coordination.MapGet(
             "/sessions/{sessionId}/execution-plan",
             ReadExecutionPlanAsync);
+        MapCheckpointRecoveryEventRoute(coordination);
         coordination.MapPost(
             "/sessions/{sessionId}/actions/propose_outcome_spec",
             ProposeCoordinatorOutcomeAsync);

@@ -1,0 +1,56 @@
+{
+  "sourceRevision": "567d151c863b0e7c2639f5ada06fbaecc54dbaf1",
+  "actorIssuer": "https://identity.example/",
+  "actorSubject": "392cae0c-4586-46d3-8f55-e874237a12d9",
+  "tenantId": "tenant-1",
+  "eventId": "b7224ed9-cd93-48c3-9715-550ec186fca6",
+  "sequence": 1,
+  "eventType": "orchestrator.run.checkpoint_recovery_pending",
+  "eventVersion": 1,
+  "occurredAt": "2026-11-19T21:56:01.57229+00:00",
+  "payload": {
+    "result": {
+      "state": "active",
+      "session": {
+        "runId": "49eddc47-aaa4-492b-be9c-439e105067a5",
+        "projectId": "project-1",
+        "sessionId": "root"
+      },
+      "causeCode": "operator_recovery",
+      "reference": "legacy-capture",
+      "isDuplicate": false,
+      "operationId": "b7224ed9-cd93-48c3-9715-550ec186fca6",
+      "previousState": "active",
+      "executionFence": 2,
+      "fencedSessions": [
+        {
+          "state": "idle",
+          "sessionId": "root",
+          "stateVersion": 2
+        }
+      ],
+      "runStateVersion": 2,
+      "previousCauseCode": null,
+      "previousReference": null,
+      "checkpointRecovery": {
+        "phase": "pending",
+        "executionFence": 2,
+        "sourceCheckpointId": "legacy-gate",
+        "recoveryCheckpointId": "recovery-b7224ed9cd9348c39715550ec186fca6",
+        "sourceCheckpointHash": "EFAFB8B97AB997D9977363F58E6A85B219804C821AD0875DA0B2F1080952402F",
+        "previousExecutionFence": 1,
+        "sourceCheckpointRevision": 3,
+        "previousRuntimeInstanceId": "01b50781-0a23-4c0e-9fe3-dc3cf817b1c2",
+        "recoveryCheckpointRevision": 4,
+        "previousRegistrationRevision": 1
+      },
+      "logicalTurnOrdinal": 0,
+      "sessionStateVersion": 2,
+      "previousExecutionFence": 1,
+      "previousRunStateVersion": 1,
+      "previousSessionStateVersion": 1
+    },
+    "runtimeEffectsState": "pending",
+    "physicalEffectsReplayed": false
+  }
+}

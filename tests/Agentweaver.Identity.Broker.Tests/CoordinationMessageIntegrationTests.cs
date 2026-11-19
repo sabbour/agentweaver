@@ -5176,6 +5176,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             using (var roleDenied = await SendAsync(
                        orchestrator, HttpMethod.Get, executionPlanPath, runToken, [TenantId]))
                 Assert.Equal(HttpStatusCode.Forbidden, roleDenied.StatusCode);
+            var recoveryEventsPath =
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/checkpoint-recoveries/{recovered.OperationId:D}/events";
+            using (var recoveryEventsDenied = await SendAsync(
+                       orchestrator, HttpMethod.Get, recoveryEventsPath, runToken, [TenantId]))
+                Assert.Equal(HttpStatusCode.Forbidden, recoveryEventsDenied.StatusCode);
 
             runnerRole = await AssignRoleAsync(
                 projects.PrivilegedFixtureDataSource,
@@ -5183,6 +5188,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ProjectAuthorityResourceType.Project,
                 project.ProjectId,
                 ProjectAuthorityRole.Orchestrator);
+            using (var unsupportedRecoveryEvents = await SendAsync(
+                       orchestrator, HttpMethod.Get, recoveryEventsPath, runToken, [TenantId]))
+            {
+                Assert.Equal(HttpStatusCode.Conflict, unsupportedRecoveryEvents.StatusCode);
+                Assert.Equal("no-store", unsupportedRecoveryEvents.Headers.CacheControl?.ToString());
+            }
             using (var runDenied = await SendAsync(
                        orchestrator,
                        HttpMethod.Get,

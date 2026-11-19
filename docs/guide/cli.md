@@ -367,6 +367,9 @@ frozen manifest. It does not send another task message for that child. A
 missing or mismatched result keeps the hold active. After recovery is `ready`,
 ordinary dispatch can send saved messages for children that were pending and
 unsent. `ready` does not mean that all child tasks or the run are complete.
+Use `api describe readCheckpointRecoveryEvents` to inspect the read contract
+for one operation's retained progress. Follow its cursor to read each page.
+Start a new read for later events. The read does not restart recovery.
 For a prepared native child, the owner preserves the original dispatch row and
 adds a verified `native-child-rebind` receipt before it releases the hold.
 This receipt changes the effective runtime binding, not the saved message,

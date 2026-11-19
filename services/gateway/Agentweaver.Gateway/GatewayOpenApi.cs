@@ -159,6 +159,7 @@ internal static partial class GatewayOpenApi
             ["requestAssembly"] = C("RequestCoordinatorAssemblyRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readDecisions"] = C(null, "CoordinatorDecisionStateView", "200"),
             ["readExecutionPlan"] = C(null, "CoordinationExecutionPlanSnapshot", "200"),
+            ["readCheckpointRecoveryEvents"] = C(null, "CheckpointRecoveryEventPage", "200"),
             ["readSessionTree"] = C(null, "SessionTreeSnapshot", "200"),
             ["readSessionStatus"] = C(null, "SessionStatusSnapshot", "200", "503"),
             ["dispatchCoordinatorExecution"] = C(
@@ -322,7 +323,10 @@ internal static partial class GatewayOpenApi
                         pattern = "^[1-9][0-9]{0,18}$",
                         description = "Canonical positive decimal Int64 value.",
                     }
-                    : PathParameterSchema(match.Groups["constraint"].Value),
+                    : route.OperationId == "readCheckpointRecoveryEvents" &&
+                      match.Groups["name"].Value == "operationId"
+                        ? Uuid()
+                        : PathParameterSchema(match.Groups["constraint"].Value),
             })
             .Concat(route.QueryParameters.Select(name => (object)new
             {
@@ -425,6 +429,16 @@ internal static partial class GatewayOpenApi
             responses["502"] = DraftErrorResponse("Projects & Config is unavailable or returned an invalid response.");
             responses["504"] = DraftErrorResponse("The Projects & Config request timed out.");
         }
+        if (route.OperationId == "readCheckpointRecoveryEvents")
+        {
+            responses["400"] = CoordinationReadErrorResponse("The operation ID, limit, or cursor is invalid.");
+            responses["401"] = CoordinationReadErrorResponse("The caller is not authenticated.");
+            responses["403"] = CoordinationReadErrorResponse("The caller lacks current run authority.");
+            responses["404"] = CoordinationReadErrorResponse("The run, session, or recovery operation was not found.");
+            responses["409"] = CoordinationReadErrorResponse("The recovery binding or event stream changed.");
+            responses["502"] = CoordinationReadErrorResponse("Projects authority or selection is unavailable.");
+            responses["503"] = CoordinationReadErrorResponse("The retained recovery events are unavailable or invalid.");
+        }
         foreach (var status in contract.SuccessStatuses)
         {
             responses[status] = status == "204"
@@ -442,7 +456,7 @@ internal static partial class GatewayOpenApi
                             : "Owner response; returned by the owning service.",
                         (route.Owner == GatewayOwner.Environment && status is ("200" or "202")) ||
                         ((route.OperationId is "readRuntimeObservationV1" or "readRuntimeObservationV2" or
-                         "readExecutionPlan" or
+                         "readExecutionPlan" or "readCheckpointRecoveryEvents" or
                          "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
@@ -464,6 +478,8 @@ internal static partial class GatewayOpenApi
                                         {
                                             "readExecutionPlan" =>
                                                 "Execution-plan responses are not cacheable.",
+                                            "readCheckpointRecoveryEvents" =>
+                                                "Checkpoint recovery event responses are not cacheable.",
                                             "getProjectAgentHistory" =>
                                                 "Private project agent history responses are not cacheable.",
                                             "getProjectConfigurationChoices" =>
@@ -1223,6 +1239,17 @@ else if (route.OperationId is
             },
         };
 
+    private static object CoordinationReadErrorResponse(string description) =>
+        new
+        {
+            description,
+            content = new Dictionary<string, object>
+            {
+                ["application/json"] = new { schema = Obj(["error"], ("error", Str())) },
+                ["application/problem+json"] = new { schema = Ref("Problem") },
+            },
+        };
+
     private static object DraftErrorResponse(string description)
     {
         var response = new Dictionary<string, object>(StringComparer.Ordinal)
@@ -1313,6 +1340,10 @@ else if (route.OperationId is
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId == "readCheckpointRecoveryEvents")
+            return name == "limit"
+                ? new { type = "integer", minimum = 1, maximum = 200, @default = 100 }
+                : new { type = "string", minLength = 1, maxLength = 2048 };
         if (operationId == "searchProjectAzureRetailPrices")
             return name == "region"
                 ? new { type = "string", minLength = 1, maxLength = 64, pattern = "^[A-Za-z0-9]{1,64}$" }
@@ -2633,6 +2664,29 @@ else if (route.OperationId is
             ("checkpoint", NullableRef("CoordinationExecutionCheckpointSnapshot")),
             ("children", BoundedArray(Ref("CoordinationExecutionChildSnapshot"), 0, 512)),
             ("recovery", NullableRef("CoordinationExecutionRecoverySnapshot"))),
+        ["CheckpointRecoveryEventPage"] = StrictObj(
+            ["session", "operationId", "watermark", "events", "nextCursor", "hasMore"],
+            ("session", Ref("SessionIdentity")), ("operationId", Uuid()), ("watermark", Int()),
+            ("events", BoundedArray(Ref("CheckpointRecoveryEvent"), 0, 200)),
+            ("nextCursor", NullableStr()), ("hasMore", Bool())),
+        ["CheckpointRecoveryEvent"] = StrictObj(
+            ["eventId", "sequence", "eventType", "eventVersion", "occurredAt", "operationId", "status"],
+            ("eventId", Uuid()), ("sequence", Int()), ("eventType", Str()), ("eventVersion", Int()),
+            ("occurredAt", Date()), ("operationId", Uuid()), ("status", Ref("CheckpointRecoveryEventStatus")),
+            ("runtimeEffectsState", NullableStr())),
+        ["CheckpointRecoveryEventStatus"] = StrictObj(
+            ["phase", "sourceCheckpointId", "sourceCheckpointRevision", "previousExecutionFence",
+                "executionFence", "previousRuntimeInstanceId", "previousRegistrationRevision"],
+            ("phase", Enum("pending", "ready", "blocked", "indeterminate", "failed")),
+            ("sourceCheckpointId", Str()), ("sourceCheckpointRevision", Int()),
+            ("previousExecutionFence", Int()), ("executionFence", Int()),
+            ("previousRuntimeInstanceId", Uuid()), ("previousRegistrationRevision", Int()),
+            ("currentStep", NullableStr()), ("reasonCode", NullableStr()), ("recoveryMaterialMode", NullableStr()),
+            ("boundaryKind", NullableStr()), ("dispatchHeld", NullableBool()),
+            ("sourceCheckpointHash", NullableStr()), ("recoveryCheckpointId", NullableStr()),
+            ("recoveryCheckpointRevision", NullableInt()), ("recoveryCheckpointHash", NullableStr()),
+            ("decisionStateVersion", NullableInt()), ("runtimeInstanceId", NullableUuid()),
+            ("registrationRevision", NullableInt()), ("childManifestSha256", NullableStr())),
         ["WorkPlanSnapshot"] = Obj(
             ["workflow", "plan", "isolationProviderBinding"],
             ("workflow", Ref("ExecutionPlanWorkflowDefinitionSnapshot")), ("plan", Ref("WorkPlan")),

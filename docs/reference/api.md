@@ -1533,8 +1533,27 @@ For gate recovery, `readRunStatus` and root `readSessionStatus` expose the
 current recovery step, reason, checkpoint IDs, fences, and old and new runtime
 identities. For child-join admission, the status exposes `boundaryKind`,
 `dispatchHeld`, `childManifestSha256`, and any supersession link.
-`replayRunEvents` exposes committed recovery progress through its cursor.
-These reads do not retry the operation.
+`readCheckpointRecoveryEvents` reads retained Orchestrator outbox records for
+one recovery operation:
+
+`GET /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/checkpoint-recoveries/{operationId}/events`
+
+The caller needs `api.read`, `projects.orchestrator`, the run-bound owner
+identity, and current Projects authority. Each page rechecks authority. The
+response has `Cache-Control: no-store`. Set `limit` from 1 to 200; the default
+is 100. Follow `nextCursor` while `hasMore` is true. Each page retains the
+first page's stream watermark. Start a new read to see later events. A changed
+or unavailable binding returns an error; retry a failed page with its cursor.
+
+The response contains the saved event ID, stream sequence, event type,
+operation ID, time, and allowed checkpoint recovery status. A child admission
+event can have type `blocked` or `indeterminate` while its saved phase is
+`pending`. A `ready` event records recovery readiness, not run completion.
+The read includes committed events awaiting delivery. It is not a delivery
+receipt, a complete event inventory, or proof of physical effect uniqueness.
+The cursor does not detect changes or deletion of previously retained rows.
+`replayRunEvents` reads the separate session journal. These reads do not retry
+the operation.
 For gate recovery, do not start a second recovery with a new key while the
 first operation is pending. A new key is allowed after gate recovery is
 blocked. A child-join hold remains active until all required registrations and readiness
