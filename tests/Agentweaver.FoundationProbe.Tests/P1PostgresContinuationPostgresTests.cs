@@ -68,6 +68,33 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
             await ExecuteAsync(connection, create);
         }
         await AssertInitializerGuardAsync(true);
+
+        var referenceTables = service with
+        {
+            Tables = service.Tables.Where(table =>
+                table.Table is "model_providers" or "model_provider_reference_reservations").ToArray(),
+        };
+        foreach (var mutation in new[]
+        {
+            "DROP TRIGGER model_providers_reference_guard ON projects_config.model_providers",
+            "ALTER TABLE projects_config.model_providers DISABLE TRIGGER model_providers_reference_guard",
+            "DROP TRIGGER model_provider_reference_cross_table_guard ON projects_config.model_provider_reference_reservations",
+            "ALTER TABLE projects_config.model_provider_reference_reservations DISABLE TRIGGER model_provider_reference_cross_table_guard",
+            "CREATE OR REPLACE FUNCTION projects_config.guard_model_provider_reference_cross_table() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+        })
+        {
+            await using var transaction = await connection.BeginTransactionAsync();
+            var baseline = await InitializerChecks.ReadMutationGuardStatesAsync(
+                connection, transaction, referenceTables, CancellationToken.None);
+            InitializerChecks.AssertMutationDenialGuards(referenceTables, baseline, ownerOid, runtimeOid);
+            await using (var command = new NpgsqlCommand(mutation, connection, transaction))
+                await command.ExecuteNonQueryAsync();
+            var changed = await InitializerChecks.ReadMutationGuardStatesAsync(
+                connection, transaction, referenceTables, CancellationToken.None);
+            Assert.Throws<InvalidOperationException>(() =>
+                InitializerChecks.AssertMutationDenialGuards(referenceTables, changed, ownerOid, runtimeOid));
+            await transaction.RollbackAsync();
+        }
     }
 
     [Fact]

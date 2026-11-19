@@ -530,6 +530,22 @@ const APPEND_ONLY_GUARDS = {
         END;`,
       },
       {
+        trigger: 'platform_policy_apply_reservations_active_hold_fence',
+        function: 'enforce_platform_policy_reservation_hold_fence()', triggerType: 7,
+        message: 'target has a policy hold', sqlState: '23514',
+        functionSource: `BEGIN
+          IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+              RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';
+          END IF;
+          PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));
+          IF EXISTS (SELECT 1 FROM environment.platform_policy_proof_holds h WHERE h.target_id = NEW.target_id) THEN
+              RAISE EXCEPTION 'target has a policy hold'
+                  USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_reservation_held';
+          END IF;
+          RETURN NEW;
+        END;`,
+      },
+      {
         trigger: 'platform_policy_apply_reservations_immutable',
         function: 'reject_platform_policy_apply_reservation_mutation()', triggerType: 27,
         message: 'platform policy apply reservations are append-only', sqlState: '55000',
@@ -541,6 +557,28 @@ const APPEND_ONLY_GUARDS = {
       },
     ],
     platform_policy_proof_holds: [
+      {
+        trigger: 'platform_policy_proof_holds_reservation_fence',
+        function: 'enforce_platform_policy_hold_reservation_fence()', triggerType: 7,
+        message: 'policy hold does not match the latest reservation', sqlState: '23514',
+        functionSource: `BEGIN
+          IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+              RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';
+          END IF;
+          PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));
+          IF NEW.reservation_id IS DISTINCT FROM (
+              SELECT r.reservation_id
+              FROM environment.platform_policy_apply_reservations r
+              WHERE r.target_id = NEW.target_id
+              ORDER BY r.source_epoch DESC, r.generation DESC, r.created_at DESC, r.reservation_id DESC
+              LIMIT 1
+          ) THEN
+              RAISE EXCEPTION 'policy hold does not match the latest reservation'
+                  USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_hold_current_reservation';
+          END IF;
+          RETURN NEW;
+        END;`,
+      },
       {
         trigger: 'platform_policy_proof_holds_immutable',
         function: 'reject_platform_policy_proof_mutation()', triggerType: 27,
@@ -636,6 +674,8 @@ const FUNCTIONS = {
   environment: [
     'enforce_p1_creation_link_immutability()',
     'enforce_platform_policy_apply_reservation_identity()',
+    'enforce_platform_policy_reservation_hold_fence()',
+    'enforce_platform_policy_hold_reservation_fence()',
     'enforce_platform_policy_proof_receipt_hold()',
     'reject_platform_policy_apply_reservation_mutation()',
     'reject_platform_policy_proof_mutation()',
@@ -769,7 +809,7 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 051 adds immutable native-child rebind receipts.
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
     // Bind each owner migration catalog into the reviewed plan hash.
-    environmentVersions: Array.from({ length: 15 }, (_, index) => index + 1),
+    environmentVersions: Array.from({ length: 16 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 12 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',

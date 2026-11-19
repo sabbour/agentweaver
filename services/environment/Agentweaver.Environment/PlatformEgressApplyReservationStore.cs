@@ -65,6 +65,22 @@ public sealed class PlatformEgressApplyReservationStore(
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            return await FindCoreAsync(targetId, idempotencyKey, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw Conflict("policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task<PlatformEgressApplyReservation?> FindCoreAsync(
+        string targetId,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
         ValidateText(targetId, 256, "target ID");
         ValidateText(idempotencyKey, 128, "idempotency key");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -77,6 +93,21 @@ public sealed class PlatformEgressApplyReservationStore(
     }
 
     public async Task<PlatformEgressApplyReservation?> FindLatestAsync(
+        string targetId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await FindLatestCoreAsync(targetId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw Conflict("policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task<PlatformEgressApplyReservation?> FindLatestCoreAsync(
         string targetId,
         CancellationToken cancellationToken)
     {
@@ -94,6 +125,33 @@ public sealed class PlatformEgressApplyReservationStore(
         PlatformEgressApplyReservationRequest request,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            return await ReserveCoreAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException exception) when (
+            exception.SqlState == PostgresErrorCodes.CheckViolation &&
+            exception.ConstraintName == "ck_platform_policy_reservation_held")
+        {
+            throw Conflict("policy_fence_conflict", "The target has a durable policy hold.");
+        }
+        catch (PostgresException exception) when (
+            exception.SqlState == PostgresErrorCodes.UniqueViolation &&
+            exception.ConstraintName == "ux_environment_platform_policy_apply_reservations_idempotency")
+        {
+            throw Conflict("reservation_conflict", "The target already has a reservation with this idempotency key.");
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw Conflict("policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task<PlatformEgressApplyReservation> ReserveCoreAsync(
+        PlatformEgressApplyReservationRequest request,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(request);
         Validate(request);
         var policyJson = JsonSerializer.Serialize(request.Policy, JsonOptions);
@@ -106,7 +164,7 @@ public sealed class PlatformEgressApplyReservationStore(
             IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
 
         await using (var acquire = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtextextended(@target_id, 0))",
+            "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(@target_id, 0))",
             connection,
             transaction))
         {
@@ -121,12 +179,25 @@ public sealed class PlatformEgressApplyReservationStore(
         {
             if (replay.RequestFingerprint != fingerprint)
                 throw Conflict("idempotency_conflict", "The idempotency key was already used for a different provider request.");
+        }
+
+        await using var heldQuery = new NpgsqlCommand(
+            "SELECT reservation_id FROM environment.platform_policy_proof_holds WHERE target_id = @target_id",
+            connection, transaction);
+        heldQuery.Parameters.AddWithValue("target_id", NpgsqlDbType.Text, request.TargetId);
+        var held = await heldQuery.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (held is Guid heldReservation && (replay is null || replay.ReservationId != heldReservation))
+            throw Conflict("policy_fence_conflict", "The target has a durable policy hold.");
+        var latest = await ReadLatestAsync(connection, transaction, request.TargetId, cancellationToken)
+            .ConfigureAwait(false);
+        if (held is Guid heldId && latest?.ReservationId != heldId)
+            throw Conflict("policy_fence_conflict", "The hold does not match the latest reservation.");
+        if (replay is not null)
+        {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return replay with { Replayed = true };
         }
 
-        var latest = await ReadLatestAsync(connection, transaction, request.TargetId, cancellationToken)
-            .ConfigureAwait(false);
         if (latest is not null)
             EnsureNextReservation(request, latest);
 
@@ -149,41 +220,34 @@ public sealed class PlatformEgressApplyReservationStore(
             createdAt,
             Replayed: false);
 
-        try
-        {
-            await using var insert = new NpgsqlCommand(
-                $"""
-                INSERT INTO {Table}
-                    (reservation_id, target_id, idempotency_key, request_fingerprint,
-                     source_epoch, generation, source_id, source_revision, source_hash, intent_hash,
-                     object_uid, resource_version, provider_request_json, created_at)
-                VALUES
-                    (@reservation_id, @target_id, @idempotency_key, @request_fingerprint,
-                     @source_epoch, @generation, @source_id, @source_revision, @source_hash, @intent_hash,
-                     @object_uid, @resource_version, @provider_request_json, @created_at)
-                """,
-                connection,
-                transaction);
-            insert.Parameters.AddWithValue("reservation_id", NpgsqlDbType.Uuid, reservation.ReservationId);
-            insert.Parameters.AddWithValue("target_id", NpgsqlDbType.Text, reservation.TargetId);
-            insert.Parameters.AddWithValue("idempotency_key", NpgsqlDbType.Text, reservation.IdempotencyKey);
-            insert.Parameters.AddWithValue("request_fingerprint", NpgsqlDbType.Text, reservation.RequestFingerprint);
-            insert.Parameters.AddWithValue("source_epoch", NpgsqlDbType.Bigint, reservation.SourceEpoch);
-            insert.Parameters.AddWithValue("generation", NpgsqlDbType.Bigint, reservation.Generation);
-            insert.Parameters.AddWithValue("source_id", NpgsqlDbType.Text, reservation.SourceId);
-            insert.Parameters.AddWithValue("source_revision", NpgsqlDbType.Bigint, reservation.SourceRevision);
-            insert.Parameters.AddWithValue("source_hash", NpgsqlDbType.Text, reservation.Policy.SourceHash);
-            insert.Parameters.AddWithValue("intent_hash", NpgsqlDbType.Text, reservation.Policy.IntentHash);
-            insert.Parameters.AddWithValue("object_uid", NpgsqlDbType.Text, reservation.ObjectUid);
-            insert.Parameters.AddWithValue("resource_version", NpgsqlDbType.Text, reservation.ResourceVersion);
-            insert.Parameters.AddWithValue("provider_request_json", NpgsqlDbType.Jsonb, policyJson);
-            insert.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, reservation.CreatedAt);
-            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.UniqueViolation)
-        {
-            throw Conflict("reservation_conflict", "The target already has a reservation with this idempotency key.");
-        }
+        await using var insert = new NpgsqlCommand(
+            $"""
+            INSERT INTO {Table}
+                (reservation_id, target_id, idempotency_key, request_fingerprint,
+                 source_epoch, generation, source_id, source_revision, source_hash, intent_hash,
+                 object_uid, resource_version, provider_request_json, created_at)
+            VALUES
+                (@reservation_id, @target_id, @idempotency_key, @request_fingerprint,
+                 @source_epoch, @generation, @source_id, @source_revision, @source_hash, @intent_hash,
+                 @object_uid, @resource_version, @provider_request_json, @created_at)
+            """,
+            connection,
+            transaction);
+        insert.Parameters.AddWithValue("reservation_id", NpgsqlDbType.Uuid, reservation.ReservationId);
+        insert.Parameters.AddWithValue("target_id", NpgsqlDbType.Text, reservation.TargetId);
+        insert.Parameters.AddWithValue("idempotency_key", NpgsqlDbType.Text, reservation.IdempotencyKey);
+        insert.Parameters.AddWithValue("request_fingerprint", NpgsqlDbType.Text, reservation.RequestFingerprint);
+        insert.Parameters.AddWithValue("source_epoch", NpgsqlDbType.Bigint, reservation.SourceEpoch);
+        insert.Parameters.AddWithValue("generation", NpgsqlDbType.Bigint, reservation.Generation);
+        insert.Parameters.AddWithValue("source_id", NpgsqlDbType.Text, reservation.SourceId);
+        insert.Parameters.AddWithValue("source_revision", NpgsqlDbType.Bigint, reservation.SourceRevision);
+        insert.Parameters.AddWithValue("source_hash", NpgsqlDbType.Text, reservation.Policy.SourceHash);
+        insert.Parameters.AddWithValue("intent_hash", NpgsqlDbType.Text, reservation.Policy.IntentHash);
+        insert.Parameters.AddWithValue("object_uid", NpgsqlDbType.Text, reservation.ObjectUid);
+        insert.Parameters.AddWithValue("resource_version", NpgsqlDbType.Text, reservation.ResourceVersion);
+        insert.Parameters.AddWithValue("provider_request_json", NpgsqlDbType.Jsonb, policyJson);
+        insert.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, reservation.CreatedAt);
+        await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return reservation;

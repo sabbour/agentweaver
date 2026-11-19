@@ -217,11 +217,11 @@ ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 49 Core migration versions (1 through 16, 18
 through 33, and 35-51), with version 17 excluded and reserved version 34
-skipped, 11 Events versions, and 14 Environment versions. The initializer
+skipped, 12 Events versions, and 16 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`fef7969cf371f856a536c57eb9ee25884700a239be73be12f75bc12ff33001b4`.
-It contains 144 tables, 14 row-lock columns, and 51 exact function signatures.
+`48e913dda94edfa6cf3a11b3b5222c7eac80d4cf729500c143f5fd1cb2bb1060`.
+It contains 147 tables, 14 row-lock columns, and 56 exact function signatures.
 The Projects & Config plan grants `SELECT, INSERT` and column-scoped
 `UPDATE (sequence, fence_generation, head_hash, updated_at)` on
 `project_governance_decision_stream_heads`. The initializer reads back its
@@ -277,6 +277,9 @@ Environment schema version 14 adds `environment.sandbox_owner_mappings`,
 rows. This slice does not collect source flow logs or define automatic expiry.
 The migration and grant-plan hash change are source-only; they do not apply
 the migration or grants to a live database.
+Environment schema version 15 adds policy proof holds and receipts. Version 16
+adds reservation and hold fences. The initializer checks the installed fence
+triggers and their functions before committing grants.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,

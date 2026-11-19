@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using System.Text.Json;
+using System.Text;
 using Npgsql;
 
 namespace Agentweaver.P1PostgresInitializer;
@@ -7,6 +8,114 @@ namespace Agentweaver.P1PostgresInitializer;
 /// <summary>Builds exact database readbacks and enforces the initializer's ownership and grant invariants.</summary>
 internal static class InitializerChecks
 {
+    internal const string MutationGuardReadbackQuery = """
+        SELECT coalesce(jsonb_agg(jsonb_build_object(
+          'table', expected.table_name,
+          'triggerName', t.tgname,
+          'functionSchema', function_namespace.nspname,
+          'functionName', CASE WHEN p.oid IS NULL THEN NULL ELSE p.proname || '()' END,
+          'triggerType', t.tgtype,
+          'enabled', t.tgenabled::text,
+          'isInternal', t.tgisinternal,
+          'noColumnFilter', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgattr = ''::int2vector END,
+          'noCondition', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgqual IS NULL END,
+          'columnFilter', CASE WHEN cardinality(t.tgattr::smallint[]) = 1 THEN
+            (SELECT a.attname FROM pg_catalog.pg_attribute a
+             WHERE a.attrelid = t.tgrelid AND a.attnum = t.tgattr[0]) END,
+          'condition', substring(pg_catalog.pg_get_triggerdef(t.oid) from ' WHEN (.*) EXECUTE FUNCTION '),
+          'argumentCount', t.tgnargs,
+          'functionOwnerOid', p.proowner,
+          'runtimeCanExecute', CASE WHEN p.oid IS NULL THEN NULL
+            ELSE pg_catalog.has_function_privilege(@role, p.oid, 'EXECUTE') END,
+          'functionSource', p.prosrc,
+          'volatileInvoker', p.provolatile = 'v' AND NOT p.prosecdef,
+          'pinnedSearchPath', p.proconfig = ARRAY['search_path=pg_catalog']::text[],
+          'defaultSearchPath', p.proconfig IS NULL,
+          'typeSevenTriggers', (SELECT coalesce(jsonb_agg(other.tgname::text ORDER BY other.tgname::text COLLATE "C"), '[]'::jsonb)
+            FROM pg_catalog.pg_trigger other
+            WHERE other.tgrelid = c.oid AND NOT other.tgisinternal AND other.tgtype = 7))
+          ORDER BY expected.table_name), '[]'::jsonb)::text
+        FROM unnest(@tables, @triggers) AS expected(table_name, trigger_name)
+        LEFT JOIN pg_catalog.pg_namespace service_namespace ON service_namespace.nspname = @schema
+        LEFT JOIN pg_catalog.pg_class c
+          ON c.relnamespace = service_namespace.oid AND c.relname = expected.table_name
+        LEFT JOIN pg_catalog.pg_trigger t
+          ON t.tgrelid = c.oid AND t.tgname = expected.trigger_name
+        LEFT JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+        LEFT JOIN pg_catalog.pg_namespace function_namespace ON function_namespace.oid = p.pronamespace
+        """;
+    private const string ReservationIdentitySource = """
+        BEGIN
+            PERFORM pg_advisory_xact_lock(hashtextextended(NEW.target_id, 0));
+            IF EXISTS (
+                SELECT 1
+                FROM environment.platform_policy_apply_reservations existing
+                WHERE existing.target_id = NEW.target_id
+                  AND existing.source_epoch = NEW.source_epoch
+                  AND existing.generation = NEW.generation
+                  AND (
+                      existing.source_id IS DISTINCT FROM NEW.source_id OR
+                      existing.source_revision IS DISTINCT FROM NEW.source_revision OR
+                      existing.source_hash IS DISTINCT FROM NEW.source_hash OR
+                      existing.intent_hash IS DISTINCT FROM NEW.intent_hash OR
+                      existing.provider_request_json IS DISTINCT FROM NEW.provider_request_json
+                  )
+            ) THEN
+                RAISE EXCEPTION 'platform policy apply reservation content conflicts'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+    private const string ReservationHoldFenceSource = """
+        BEGIN
+            IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';
+            END IF;
+            PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));
+            IF EXISTS (SELECT 1 FROM environment.platform_policy_proof_holds h WHERE h.target_id = NEW.target_id) THEN
+                RAISE EXCEPTION 'target has a policy hold'
+                    USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_reservation_held';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+    private const string HoldReservationFenceSource = """
+        BEGIN
+            IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';
+            END IF;
+            PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));
+            IF NEW.reservation_id IS DISTINCT FROM (
+                SELECT r.reservation_id
+                FROM environment.platform_policy_apply_reservations r
+                WHERE r.target_id = NEW.target_id
+                ORDER BY r.source_epoch DESC, r.generation DESC, r.created_at DESC, r.reservation_id DESC
+                LIMIT 1
+            ) THEN
+                RAISE EXCEPTION 'policy hold does not match the latest reservation'
+                    USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_hold_current_reservation';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+    private const string ProofReceiptIdentitySource = """
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM environment.platform_policy_proof_holds hold
+                WHERE hold.hold_id = NEW.hold_id
+                  AND hold.target_id = NEW.target_id
+                  AND hold.reservation_id = NEW.reservation_id
+                  AND hold.profile_digest = NEW.profile_digest
+                  AND hold.guard_digest = NEW.guard_digest
+            ) THEN
+                RAISE EXCEPTION 'platform policy proof receipt does not match its hold'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
     private const string GovernanceDecisionHeadTable = "project_governance_decision_stream_heads";
     private const string GovernanceDecisionHeadInitializeFunctionSource = """
         BEGIN
@@ -285,22 +394,34 @@ internal static class InitializerChecks
                 typeSevenGuards[0].SqlState == "23514" &&
                 typeSevenGuards[0].FunctionSource is { } providerSource &&
                 NormalizeGuardSource(providerSource) == NormalizeGuardSource(providerReferenceSource);
-            var hasReservationIdentityGuard =
-                table.Table == "platform_policy_apply_reservations" &&
-                typeSevenGuards.Length == 1 &&
-                typeSevenGuards[0].Trigger == "platform_policy_apply_reservations_consistent_identity" &&
-                typeSevenGuards[0].Function == "enforce_platform_policy_apply_reservation_identity()" &&
-                typeSevenGuards[0].Message == "platform policy apply reservation content conflicts" &&
-                typeSevenGuards[0].SqlState == "23514" &&
-                !string.IsNullOrWhiteSpace(typeSevenGuards[0].FunctionSource);
+            bool HasGuard(string trigger, string function, string message, string source) =>
+                typeSevenGuards.Count(guard => guard.Trigger == trigger && guard.Function == function &&
+                    guard.Message == message && guard.SqlState == "23514" &&
+                    guard.FunctionSource is not null &&
+                    NormalizeGuardSource(guard.FunctionSource) == NormalizeGuardSource(source)) == 1;
+            var environmentReservation = service.Service == "environment" &&
+                table.Table == "platform_policy_apply_reservations";
+            var environmentHold = service.Service == "environment" &&
+                table.Table == "platform_policy_proof_holds";
+            var environmentReceipt = service.Service == "environment" &&
+                table.Table == "platform_policy_proof_receipts";
+            var hasReservationIdentityGuard = environmentReservation && typeSevenGuards.Length == 2 &&
+                HasGuard("platform_policy_apply_reservations_consistent_identity",
+                    "enforce_platform_policy_apply_reservation_identity()",
+                    "platform policy apply reservation content conflicts", ReservationIdentitySource) &&
+                HasGuard("platform_policy_apply_reservations_active_hold_fence",
+                    "enforce_platform_policy_reservation_hold_fence()", "target has a policy hold",
+                    ReservationHoldFenceSource);
+            var hasHoldReservationGuard = environmentHold && typeSevenGuards.Length == 1 &&
+                HasGuard("platform_policy_proof_holds_reservation_fence",
+                    "enforce_platform_policy_hold_reservation_fence()",
+                    "policy hold does not match the latest reservation", HoldReservationFenceSource);
             var hasProofReceiptIdentityGuard =
                 table.Table == "platform_policy_proof_receipts" &&
                 typeSevenGuards.Length == 1 &&
-                typeSevenGuards[0].Trigger == "platform_policy_proof_receipts_hold_identity" &&
-                typeSevenGuards[0].Function == "enforce_platform_policy_proof_receipt_hold()" &&
-                typeSevenGuards[0].Message == "platform policy proof receipt does not match its hold" &&
-                typeSevenGuards[0].SqlState == "23514" &&
-                !string.IsNullOrWhiteSpace(typeSevenGuards[0].FunctionSource);
+                HasGuard("platform_policy_proof_receipts_hold_identity",
+                    "enforce_platform_policy_proof_receipt_hold()",
+                    "platform policy proof receipt does not match its hold", ProofReceiptIdentitySource);
             var hasNativeAcsRevisionGuard =
                 service.Service == "projects-config" &&
                 table.Table == "native_acs_policy_artifact_files" &&
@@ -370,7 +491,7 @@ internal static class InitializerChecks
                 typeNineteenGuards[0].FunctionSource is { } advanceSource &&
                 NormalizeGuardSource(advanceSource) == NormalizeGuardSource(GovernanceDecisionHeadAdvanceFunctionSource);
             var hasKnownTypeSevenGuard =
-                hasReservationIdentityGuard || hasProofReceiptIdentityGuard ||
+                hasReservationIdentityGuard || hasHoldReservationGuard || hasProofReceiptIdentityGuard ||
                 hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
                 hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard ||
                 hasProviderReferenceGuard;
@@ -380,8 +501,11 @@ internal static class InitializerChecks
                 : table.UpdateColumns is { Length: > 0 };
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
-                guards.Length != mutationGuardCount + (hasKnownTypeSevenGuard ? 1 : 0) ||
+                guards.Length != mutationGuardCount + typeSevenGuards.Length ||
                 (table.Privileges.Contains("UPDATE") && !providerHead) ||
+                (environmentReservation && !hasReservationIdentityGuard) ||
+                (environmentHold && !hasHoldReservationGuard) ||
+                (environmentReceipt && !hasProofReceiptIdentityGuard) ||
                 (table.LockColumn is not null &&
                  mutationGuardCount != (table.MutationDenialGuards is { Length: > 0 } ? 2 : 1)) ||
                 (table.LockColumn is null && mutationGuardCount != (providerHead ? 1 : governanceDecisionHead ? 3 : 2)) ||
@@ -769,32 +893,7 @@ internal static class InitializerChecks
             .SelectMany(table => GetMutationDenialGuards(table)
                 .Select(guard => (Table: table.Table, Guard: guard))).ToArray();
         if (protectedGuards.Length == 0) return [];
-        await using var command = new NpgsqlCommand("""
-            SELECT coalesce(jsonb_agg(jsonb_build_object(
-              'table', expected.table_name, 'triggerName', t.tgname,
-              'functionSchema', function_namespace.nspname,
-              'functionName', CASE WHEN p.oid IS NULL THEN NULL ELSE p.proname || '()' END,
-              'triggerType', t.tgtype, 'enabled', t.tgenabled::text, 'isInternal', t.tgisinternal,
-              'noColumnFilter', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgattr = ''::int2vector END,
-              'noCondition', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgqual IS NULL END,
-              'columnFilter', CASE WHEN cardinality(t.tgattr::smallint[]) = 1 THEN
-                (SELECT a.attname FROM pg_catalog.pg_attribute a
-                 WHERE a.attrelid = t.tgrelid AND a.attnum = t.tgattr[0]) END,
-              'condition', substring(pg_catalog.pg_get_triggerdef(t.oid) from ' WHEN (.*) EXECUTE FUNCTION '),
-              'argumentCount', t.tgnargs, 'functionOwnerOid', p.proowner,
-              'runtimeCanExecute', CASE WHEN p.oid IS NULL THEN NULL
-                ELSE pg_catalog.has_function_privilege(@role, p.oid, 'EXECUTE') END,
-              'functionSource', p.prosrc)
-              ORDER BY expected.table_name), '[]'::jsonb)::text
-            FROM unnest(@tables, @triggers) AS expected(table_name, trigger_name)
-            LEFT JOIN pg_catalog.pg_namespace service_namespace ON service_namespace.nspname = @schema
-            LEFT JOIN pg_catalog.pg_class c
-              ON c.relnamespace = service_namespace.oid AND c.relname = expected.table_name
-            LEFT JOIN pg_catalog.pg_trigger t
-              ON t.tgrelid = c.oid AND t.tgname = expected.trigger_name
-            LEFT JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
-            LEFT JOIN pg_catalog.pg_namespace function_namespace ON function_namespace.oid = p.pronamespace
-            """, connection, transaction);
+        await using var command = new NpgsqlCommand(MutationGuardReadbackQuery, connection, transaction);
         command.Parameters.AddWithValue("tables", protectedGuards.Select(item => item.Table).ToArray());
         command.Parameters.AddWithValue("triggers", protectedGuards.Select(item => item.Guard.Trigger).ToArray());
         command.Parameters.AddWithValue("schema", service.Schema);
@@ -827,6 +926,11 @@ internal static class InitializerChecks
                         ? ", TG_TABLE_SCHEMA, TG_TABLE_NAME" : string.Empty) +
                     (expected.SqlState is null ? string.Empty : $" USING ERRCODE = '{expected.SqlState}'") +
                     "; END");
+            var proofTable = service.Service == "environment" &&
+                table is "platform_policy_apply_reservations" or "platform_policy_proof_holds" or "platform_policy_proof_receipts";
+            var expectedTypeSevenTriggers = table == "platform_policy_apply_reservations"
+                ? new[] { "platform_policy_apply_reservations_active_hold_fence", "platform_policy_apply_reservations_consistent_identity" }
+                : new[] { expected.Trigger };
             if (actual.TriggerName != expected.Trigger || actual.FunctionSchema != service.Schema ||
                 actual.FunctionName != expected.Function || actual.TriggerType != expected.TriggerType ||
                 actual.Enabled != "O" || actual.IsInternal != false ||
@@ -838,6 +942,11 @@ internal static class InitializerChecks
                 actual.ArgumentCount != 0 ||
                 actual.FunctionOwnerOid != ownerOid || actual.RuntimeCanExecute != false ||
                 actual.FunctionSource is null || NormalizeGuardSource(actual.FunctionSource) != expectedBody ||
+                (proofTable && expected.TriggerType == 7 &&
+                 (actual.VolatileInvoker != true || actual.TypeSevenTriggers is null ||
+                  !actual.TypeSevenTriggers.SequenceEqual(expectedTypeSevenTriggers, StringComparer.Ordinal) ||
+                  (expected.Trigger == "platform_policy_apply_reservations_consistent_identity"
+                      ? actual.DefaultSearchPath != true : actual.PinnedSearchPath != true))) ||
                 ownerOid == 0 || runtimeOid == 0)
                 throw new InvalidOperationException(
                     $"The {service.Service} {table} mutation-denial trigger or function changed. The grants are not committed.");
@@ -992,8 +1101,39 @@ internal static class InitializerChecks
         expected.Length == actual.Length && expected.Distinct().Count() == expected.Length &&
         actual.Distinct().Count() == actual.Length && expected.ToHashSet().SetEquals(actual);
 
-    private static string NormalizeGuardSource(string source) =>
-        string.Join(' ', source.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).TrimEnd(';');
+    private static string NormalizeGuardSource(string source)
+    {
+        var result = new StringBuilder();
+        var quote = '\0';
+        var whitespace = false;
+        for (var i = 0; i < source.Length; i++)
+        {
+            var c = source[i];
+            if (quote != '\0')
+            {
+                if (c == '\\') return source;
+                result.Append(c);
+                if (c == quote)
+                {
+                    if (i + 1 < source.Length && source[i + 1] == quote)
+                        result.Append(source[++i]);
+                    else
+                        quote = '\0';
+                }
+            }
+            else if (char.IsWhiteSpace(c))
+                whitespace = result.Length > 0;
+            else
+            {
+                if (c == '$') return source;
+                if (whitespace) result.Append(' ');
+                whitespace = false;
+                result.Append(c);
+                if (c is '\'' or '"') quote = c;
+            }
+        }
+        return result.ToString().TrimEnd(';');
+    }
 
     /// <summary>Runs preflight, mutation, readback, verification, commit, then durable receipt recording in order.</summary>
     internal static async Task RunStageAsync(Func<Task> preflight, Func<Task> mutate,
@@ -1094,7 +1234,9 @@ internal sealed record MutationGuardState(string Table, string? TriggerName, str
     bool? NoCondition, int? ArgumentCount,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint? FunctionOwnerOid,
     bool? RuntimeCanExecute,
-    string? FunctionSource, string? ColumnFilter = null, string? Condition = null);
+    string? FunctionSource, string? ColumnFilter = null, string? Condition = null,
+    bool? VolatileInvoker = null, bool? PinnedSearchPath = null,
+    bool? DefaultSearchPath = null, string[]? TypeSevenTriggers = null);
 /// <summary>One live relation in a service schema with its owner and effective runtime privileges.</summary>
 internal sealed record RelationState(string Name, string Kind, string Owner, string[]? RuntimePrivileges);
 /// <summary>Observed owner and effective ACL for one service schema.</summary>

@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Agentweaver.P1PostgresInitializer;
+using Agentweaver.Environment;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.FoundationProbe.Tests;
@@ -225,6 +228,126 @@ public sealed class P1PostgresInitializerTests
         };
         Assert.Throws<InvalidOperationException>(() =>
             InitializerChecks.AssertMutationDenialPlan(executableLedgerGuard));
+
+        foreach (var alteration in new[] { "source", "identity-source", "missing", "order" })
+        {
+            var changed = MutationServices();
+            var table = changed[1].Tables[0];
+            var guards = table.MutationDenialGuards!.ToArray();
+            var index = Array.FindIndex(guards,
+                guard => guard.Trigger == "platform_policy_apply_reservations_active_hold_fence");
+            guards = alteration switch
+            {
+                "source" => guards.Select((guard, i) => i == index
+                    ? guard with { FunctionSource = "BEGIN RETURN NEW; END" } : guard).ToArray(),
+                "identity-source" => guards.Select(guard =>
+                    guard.Trigger == "platform_policy_apply_reservations_consistent_identity"
+                        ? guard with { FunctionSource = "BEGIN RETURN NEW; END" } : guard).ToArray(),
+                "missing" => guards.Where((_, i) => i != index).ToArray(),
+                _ => guards.Select((guard, i) => i == index
+                    ? guard with { Trigger = "platform_policy_apply_reservations_z_fence" } : guard).ToArray(),
+            };
+            changed[1].Tables[0] = table with { MutationDenialGuards = guards };
+            Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(changed));
+        }
+    }
+
+    [Fact]
+    public async Task EnvironmentGuardReadbackRejectsLiveCatalogChanges()
+    {
+        var fixture = new ProbePostgresFixture();
+        await fixture.InitializeAsync();
+        try
+        {
+            var options = new DbContextOptionsBuilder<EnvironmentDbContext>()
+                .UseNpgsql(fixture.AdminDataSource, npgsql => npgsql.MigrationsHistoryTable(
+                    "__ef_migrations_history", EnvironmentDbContext.Schema)).Options;
+            await EnvironmentMigrator.MigrateAsync(fixture.AdminDataSource, options);
+            await using var connection = await fixture.AdminDataSource.OpenConnectionAsync();
+            var role = "fence_reader_" + Guid.NewGuid().ToString("N");
+            await using (var setup = new NpgsqlCommand(
+                $"""
+                CREATE ROLE "{role}" NOLOGIN;
+                REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA environment FROM PUBLIC;
+                """, connection))
+                await setup.ExecuteNonQueryAsync();
+            var service = MutationServices()[1] with { Role = role };
+            await using var idQuery = new NpgsqlCommand(
+                "SELECT (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user), (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=@role)",
+                connection);
+            idQuery.Parameters.AddWithValue("role", role);
+            await using var idReader = await idQuery.ExecuteReaderAsync();
+            await idReader.ReadAsync();
+            var owner = idReader.GetFieldValue<uint>(0);
+            var runtime = idReader.GetFieldValue<uint>(1);
+            await idReader.DisposeAsync();
+
+            async Task<MutationGuardState[]> ReadAsync(NpgsqlTransaction transaction)
+            {
+                var guards = service.Tables.SelectMany(table => InitializerChecks.GetMutationDenialGuards(table)
+                    .Select(guard => (Table: table.Table, Guard: guard))).ToArray();
+                await using var command = new NpgsqlCommand(
+                    InitializerChecks.MutationGuardReadbackQuery, connection, transaction);
+                command.Parameters.AddWithValue("tables", guards.Select(item => item.Table).ToArray());
+                command.Parameters.AddWithValue("triggers", guards.Select(item => item.Guard.Trigger).ToArray());
+                command.Parameters.AddWithValue("schema", service.Schema);
+                command.Parameters.AddWithValue("role", role);
+                return JsonSerializer.Deserialize<MutationGuardState[]>(
+                    (string)(await command.ExecuteScalarAsync())!,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            }
+
+            var mutations = new[]
+            {
+                "DROP TRIGGER platform_policy_apply_reservations_active_hold_fence ON environment.platform_policy_apply_reservations",
+                "ALTER TABLE environment.platform_policy_apply_reservations DISABLE TRIGGER platform_policy_apply_reservations_active_hold_fence",
+                "ALTER TRIGGER platform_policy_apply_reservations_active_hold_fence ON environment.platform_policy_apply_reservations RENAME TO platform_policy_apply_reservations_z_fence",
+                "CREATE OR REPLACE FUNCTION environment.enforce_platform_policy_reservation_hold_fence() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = pg_catalog AS $$ BEGIN RETURN NEW; END; $$",
+                "CREATE OR REPLACE FUNCTION environment.enforce_platform_policy_apply_reservation_identity() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$",
+                "ALTER FUNCTION environment.enforce_platform_policy_reservation_hold_fence() RESET search_path",
+                "DROP TRIGGER platform_policy_proof_holds_reservation_fence ON environment.platform_policy_proof_holds",
+                "ALTER TABLE environment.platform_policy_proof_holds DISABLE TRIGGER platform_policy_proof_holds_reservation_fence",
+                "CREATE OR REPLACE FUNCTION environment.enforce_platform_policy_hold_reservation_fence() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = pg_catalog AS $$ BEGIN RETURN NEW; END; $$",
+            };
+            foreach (var mutation in mutations)
+            {
+                await using var transaction = await connection.BeginTransactionAsync();
+                InitializerChecks.AssertMutationDenialGuards(service, await ReadAsync(transaction), owner, runtime);
+                await using (var change = new NpgsqlCommand(mutation, connection, transaction))
+                    await change.ExecuteNonQueryAsync();
+                var changed = await ReadAsync(transaction);
+                Assert.Throws<InvalidOperationException>(() =>
+                    InitializerChecks.AssertMutationDenialGuards(service, changed, owner, runtime));
+                await transaction.RollbackAsync();
+            }
+            foreach (var (before, after, accepted) in new[]
+            {
+                ("'read committed'", "'read  committed'", false),
+                ("'read committed'", "'read''  committed'", false),
+                ("IF pg_catalog.current_setting", "IF  pg_catalog.current_setting", true),
+            })
+            {
+                await using var transaction = await connection.BeginTransactionAsync();
+                await using var definition = new NpgsqlCommand(
+                    "SELECT pg_catalog.pg_get_functiondef('environment.enforce_platform_policy_reservation_hold_fence()'::regprocedure)",
+                    connection, transaction);
+                var original = (string)(await definition.ExecuteScalarAsync())!;
+                Assert.Contains(before, original);
+                await using (var change = new NpgsqlCommand(original.Replace(before, after, StringComparison.Ordinal), connection, transaction))
+                    await change.ExecuteNonQueryAsync();
+                var changed = await ReadAsync(transaction);
+                if (accepted)
+                    InitializerChecks.AssertMutationDenialGuards(service, changed, owner, runtime);
+                else
+                    Assert.Throws<InvalidOperationException>(() =>
+                        InitializerChecks.AssertMutationDenialGuards(service, changed, owner, runtime));
+                await transaction.RollbackAsync();
+            }
+        }
+        finally
+        {
+            await fixture.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -1122,6 +1245,9 @@ public sealed class P1PostgresInitializerTests
                         "enforce_platform_policy_apply_reservation_identity()", 7,
                         "platform policy apply reservation content conflicts", "23514",
                         PlatformPolicyApplyReservationIdentityFunctionSource),
+                    new("platform_policy_apply_reservations_active_hold_fence",
+                        "enforce_platform_policy_reservation_hold_fence()", 7,
+                        "target has a policy hold", "23514", ReservationHoldFenceSource),
                     new("platform_policy_apply_reservations_immutable",
                         "reject_platform_policy_apply_reservation_mutation()", 27,
                         "platform policy apply reservations are append-only", "55000"),
@@ -1131,6 +1257,9 @@ public sealed class P1PostgresInitializerTests
                 ]),
                 new("platform_policy_proof_holds", ["SELECT", "INSERT"], null, true, null,
                 [
+                    new("platform_policy_proof_holds_reservation_fence",
+                        "enforce_platform_policy_hold_reservation_fence()", 7,
+                        "policy hold does not match the latest reservation", "23514", HoldReservationFenceSource),
                     new("platform_policy_proof_holds_immutable",
                         "reject_platform_policy_proof_mutation()", 27,
                         "platform policy proof records are append-only", "55000"),
@@ -1171,6 +1300,8 @@ public sealed class P1PostgresInitializerTests
             Functions =
             [
                 new("enforce_platform_policy_apply_reservation_identity()", false),
+                new("enforce_platform_policy_reservation_hold_fence()", false),
+                new("enforce_platform_policy_hold_reservation_fence()", false),
                 new("enforce_platform_policy_proof_receipt_hold()", false),
                 new("reject_platform_policy_apply_reservation_mutation()", false),
                 new("reject_platform_policy_proof_mutation()", false),
@@ -1324,6 +1455,39 @@ public sealed class P1PostgresInitializerTests
         END;
         """;
 
+    private const string ReservationHoldFenceSource = """
+        BEGIN
+            IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';
+            END IF;
+            PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));
+            IF EXISTS (SELECT 1 FROM environment.platform_policy_proof_holds h WHERE h.target_id = NEW.target_id) THEN
+                RAISE EXCEPTION 'target has a policy hold'
+                    USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_reservation_held';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+    private const string HoldReservationFenceSource = """
+        BEGIN
+            IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';
+            END IF;
+            PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));
+            IF NEW.reservation_id IS DISTINCT FROM (
+                SELECT r.reservation_id
+                FROM environment.platform_policy_apply_reservations r
+                WHERE r.target_id = NEW.target_id
+                ORDER BY r.source_epoch DESC, r.generation DESC, r.created_at DESC, r.reservation_id DESC
+                LIMIT 1
+            ) THEN
+                RAISE EXCEPTION 'policy hold does not match the latest reservation'
+                    USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_hold_current_reservation';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+
     private const string NativeAcsPolicyFileRevisionFunctionSource =
         """
         BEGIN
@@ -1369,7 +1533,11 @@ public sealed class P1PostgresInitializerTests
                 "; END";
             return new MutationGuardState(table.Table, guard.Trigger, service.Schema, guard.Function,
                 guard.TriggerType, "O", false, guard.Column is null, guard.Condition is null, 0, Owner, false,
-                source, guard.Column, guard.Condition is null ? null : $"({guard.Condition})");
+                source, guard.Column, guard.Condition is null ? null : $"({guard.Condition})",
+                true, guard.Trigger != "platform_policy_apply_reservations_consistent_identity",
+                guard.Trigger == "platform_policy_apply_reservations_consistent_identity",
+                InitializerChecks.GetMutationDenialGuards(table).Where(item => item.TriggerType == 7)
+                    .Select(item => item.Trigger).Order(StringComparer.Ordinal).ToArray());
         }).ToArray();
     }
 

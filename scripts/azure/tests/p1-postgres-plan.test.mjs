@@ -248,6 +248,7 @@ test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
   assert.deepEqual(reservations.mutationDenialGuards.map(guard =>
     [guard.trigger, guard.function, guard.triggerType]), [
     ['platform_policy_apply_reservations_consistent_identity', 'enforce_platform_policy_apply_reservation_identity()', 7],
+    ['platform_policy_apply_reservations_active_hold_fence', 'enforce_platform_policy_reservation_hold_fence()', 7],
     ['platform_policy_apply_reservations_immutable', 'reject_platform_policy_apply_reservation_mutation()', 27],
     ['platform_policy_apply_reservations_no_truncate', 'reject_platform_policy_apply_reservation_mutation()', 34],
   ]);
@@ -262,7 +263,7 @@ test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
       [guard.trigger, guard.function, guard.triggerType]), [
       ...(name === 'platform_policy_proof_receipts'
         ? [['platform_policy_proof_receipts_hold_identity', 'enforce_platform_policy_proof_receipt_hold()', 7]]
-        : []),
+        : [['platform_policy_proof_holds_reservation_fence', 'enforce_platform_policy_hold_reservation_fence()', 7]]),
       [`${name}_immutable`, 'reject_platform_policy_proof_mutation()', 27],
       [`${name}_no_truncate`, 'reject_platform_policy_proof_mutation()', 34],
     ]);
@@ -496,7 +497,7 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
 
   assert.deepEqual(catalog, migrationIds);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
-  assert.match(source, /private const int CurrentSchemaVersion = 15;/);
+  assert.match(source, /private const int CurrentSchemaVersion = 16;/);
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 
@@ -536,8 +537,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [15, 5, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 54);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [15, 7, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 56);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });
@@ -548,6 +549,14 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     },
     {
       signature: 'enforce_platform_policy_apply_reservation_identity()',
+      execute: false,
+    },
+    {
+      signature: 'enforce_platform_policy_reservation_hold_fence()',
+      execute: false,
+    },
+    {
+      signature: 'enforce_platform_policy_hold_reservation_fence()',
       execute: false,
     },
     {

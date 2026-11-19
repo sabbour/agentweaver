@@ -757,6 +757,14 @@
               "functionSource": "BEGIN\n          PERFORM pg_advisory_xact_lock(hashtextextended(NEW.target_id, 0));\n          IF EXISTS (\n              SELECT 1\n              FROM environment.platform_policy_apply_reservations existing\n              WHERE existing.target_id = NEW.target_id\n                AND existing.source_epoch = NEW.source_epoch\n                AND existing.generation = NEW.generation\n                AND (\n                    existing.source_id IS DISTINCT FROM NEW.source_id OR\n                    existing.source_revision IS DISTINCT FROM NEW.source_revision OR\n                    existing.source_hash IS DISTINCT FROM NEW.source_hash OR\n                    existing.intent_hash IS DISTINCT FROM NEW.intent_hash OR\n                    existing.provider_request_json IS DISTINCT FROM NEW.provider_request_json\n                )\n          ) THEN\n              RAISE EXCEPTION 'platform policy apply reservation content conflicts'\n                  USING ERRCODE = '23514';\n          END IF;\n          RETURN NEW;\n        END;"
             },
             {
+              "trigger": "platform_policy_apply_reservations_active_hold_fence",
+              "function": "enforce_platform_policy_reservation_hold_fence()",
+              "triggerType": 7,
+              "message": "target has a policy hold",
+              "sqlState": "23514",
+              "functionSource": "BEGIN\n          IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN\n              RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';\n          END IF;\n          PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));\n          IF EXISTS (SELECT 1 FROM environment.platform_policy_proof_holds h WHERE h.target_id = NEW.target_id) THEN\n              RAISE EXCEPTION 'target has a policy hold'\n                  USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_reservation_held';\n          END IF;\n          RETURN NEW;\n        END;"
+            },
+            {
               "trigger": "platform_policy_apply_reservations_immutable",
               "function": "reject_platform_policy_apply_reservation_mutation()",
               "triggerType": 27,
@@ -780,6 +788,14 @@
           ],
           "mutationDenialRequired": true,
           "mutationDenialGuards": [
+            {
+              "trigger": "platform_policy_proof_holds_reservation_fence",
+              "function": "enforce_platform_policy_hold_reservation_fence()",
+              "triggerType": 7,
+              "message": "policy hold does not match the latest reservation",
+              "sqlState": "23514",
+              "functionSource": "BEGIN\n          IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN\n              RAISE EXCEPTION 'policy fence requires read committed isolation' USING ERRCODE = 'PF001';\n          END IF;\n          PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(NEW.target_id, 0));\n          IF NEW.reservation_id IS DISTINCT FROM (\n              SELECT r.reservation_id\n              FROM environment.platform_policy_apply_reservations r\n              WHERE r.target_id = NEW.target_id\n              ORDER BY r.source_epoch DESC, r.generation DESC, r.created_at DESC, r.reservation_id DESC\n              LIMIT 1\n          ) THEN\n              RAISE EXCEPTION 'policy hold does not match the latest reservation'\n                  USING ERRCODE = '23514', CONSTRAINT = 'ck_platform_policy_hold_current_reservation';\n          END IF;\n          RETURN NEW;\n        END;"
+            },
             {
               "trigger": "platform_policy_proof_holds_immutable",
               "function": "reject_platform_policy_proof_mutation()",
@@ -857,6 +873,14 @@
         },
         {
           "signature": "enforce_platform_policy_apply_reservation_identity()",
+          "execute": false
+        },
+        {
+          "signature": "enforce_platform_policy_reservation_hold_fence()",
+          "execute": false
+        },
+        {
+          "signature": "enforce_platform_policy_hold_reservation_fence()",
           "execute": false
         },
         {
@@ -1979,7 +2003,8 @@
     12,
     13,
     14,
-    15
+    15,
+    16
   ],
   "eventsVersions": [
     1,

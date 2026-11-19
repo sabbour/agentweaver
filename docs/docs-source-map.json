@@ -635,10 +635,15 @@
         "services/environment/Agentweaver.Environment/SystemOnlyPolicySetEvaluator.cs",
         "services/environment/Agentweaver.Environment/PlatformPolicyProofCoordinator.cs",
         "services/environment/Agentweaver.Environment/PlatformPolicyProofStore.cs",
+        "services/environment/Agentweaver.Environment/PlatformEgressApplyReservationStore.cs",
+        "services/environment/Agentweaver.Environment/CiliumPlatformEgressProvider.cs",
         "services/environment/Agentweaver.Environment/Migrations/20261119034552_PlatformPolicyProofReceipts.cs",
+        "services/environment/Agentweaver.Environment/Migrations/20261119050000_PlatformPolicyHoldReservationFence.cs",
         "deploy/k8s/rbac/platform-egress-proof/",
         "tests/Agentweaver.Environment.Tests/KubernetesPlatformPolicyProofTests.cs",
-        "tests/Agentweaver.Environment.Tests/PlatformPolicyProofPostgresTests.cs"
+        "tests/Agentweaver.Environment.Tests/PlatformPolicyProofPostgresTests.cs",
+        "tests/Agentweaver.Environment.Tests/PlatformEgressApplyReservationPostgresTests.cs",
+        "tests/Agentweaver.Environment.Tests/EnvironmentMigratorTests.cs"
       ],
       "required": [
         "docs/architecture/environment-egress.md",
