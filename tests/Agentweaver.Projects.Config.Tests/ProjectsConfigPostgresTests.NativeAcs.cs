@@ -217,7 +217,10 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
-    public async Task NativeAcsPolicyHeadMigrationKeepsOneExistingHeadAndRefusesDuplicateHeads()
+    public Task NativeAcsPolicyHeadMigrationKeepsOneExistingHeadAndRefusesDuplicateHeads() =>
+        RunWithIsolatedProjectsAsync(test => test.NativeAcsPolicyHeadMigrationCoreAsync());
+
+    private async Task NativeAcsPolicyHeadMigrationCoreAsync()
     {
         const string beforeHeadIndex = "20261111192724_AddNativeAcsPolicyStorage";
         const string headIndex = "20261113221434_EnforceOneNativeAcsPolicyHeadPerScope";
