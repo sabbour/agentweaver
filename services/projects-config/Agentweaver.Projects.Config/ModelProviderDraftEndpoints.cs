@@ -52,6 +52,8 @@ internal sealed record ModelProviderDraftSaveBody
     [JsonPropertyName("reference")]
     public string? Reference { get; init; }
 
+    [JsonPropertyName("targetInstallationId")]
+    public string? TargetInstallationId { get; init; }
 }
 
 internal sealed record ModelProviderDraftResponse(
@@ -338,6 +340,7 @@ internal static class ModelProviderDraftEndpoints
                 body.PromptCapacityTokens, body.RateCardId, body.RateCardVersion)
             {
                 Reference = body.Reference,
+                TargetInstallationId = body.TargetInstallationId,
             };
             var saved = await service.SaveAsync(
                 caller, scope, projectId, id, request, cancellationToken).ConfigureAwait(false);
@@ -393,6 +396,12 @@ internal static class ModelProviderDraftEndpoints
         if (document.RootElement.TryGetProperty("reference", out var reference) &&
             (!allowReference || reference.ValueKind != JsonValueKind.String ||
              reference.GetString() is not { } value || !ModelProviderDraftService.IsValidReference(value)))
+            return null;
+        var hasReference = document.RootElement.TryGetProperty("reference", out _);
+        var hasTarget = document.RootElement.TryGetProperty("targetInstallationId", out var target);
+        if (hasReference != hasTarget ||
+            (hasTarget && (!allowReference || target.ValueKind != JsonValueKind.String ||
+                !ModelProviderDraftService.IsValidInstallationId(target.GetString()))))
             return null;
         var body = JsonSerializer.Deserialize<ModelProviderDraftSaveBody>(
             document.RootElement.GetRawText(), RequestJsonOptions);
@@ -464,6 +473,8 @@ internal static class ModelProviderDraftEndpoints
             "model_provider_draft_not_found" => StatusCodes.Status404NotFound,
             "model_provider_draft_conflict" => StatusCodes.Status409Conflict,
             "reference_conflict" => StatusCodes.Status409Conflict,
+            "target_installation_mismatch" => StatusCodes.Status409Conflict,
+            "reference_reconciliation_required" => StatusCodes.Status409Conflict,
             "model_provider_draft_unavailable" => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         });

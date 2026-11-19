@@ -3636,6 +3636,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.model_provider_reference_reservations TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT ON projects_config.installation_identity TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");
 
             var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
@@ -4346,6 +4348,8 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
 
+    public bool StopBeforeInstallationIdentity { get; init; }
+    public string InstallationId { get; private set; } = null!;
     public NpgsqlDataSource DataSource { get; private set; } = null!;
     public NpgsqlDataSource MigrationDataSource { get; private set; } = null!;
     public string ConnectionString => new NpgsqlConnectionStringBuilder(_container.GetConnectionString())
@@ -4353,7 +4357,8 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
         Database = "agentweaver",
     }.ConnectionString;
 
-    public Task InitializeAsync() => InitializeToAsync(null);
+    public Task InitializeAsync() => InitializeToAsync(StopBeforeInstallationIdentity
+        ? "20261119174453_GuardModelProviderPublication" : null);
 
     internal async Task InitializeToAsync(string? target)
     {
@@ -4392,7 +4397,13 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
         if (target is null)
+        {
             await ProjectsConfigMigrator.MigrateAsync(MigrationDataSource, options);
+            await using var connection = await DataSource.OpenConnectionAsync();
+            await using var read = new NpgsqlCommand(
+                "SELECT installation_id FROM projects_config.installation_identity WHERE singleton", connection);
+            InstallationId = ((Guid)(await read.ExecuteScalarAsync())!).ToString("D");
+        }
         else
         {
             await using var db = new ProjectsConfigDbContext(options);

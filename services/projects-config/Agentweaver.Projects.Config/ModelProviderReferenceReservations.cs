@@ -28,6 +28,9 @@ public sealed partial class ModelProviderDraftService
         CancellationToken cancellationToken)
     {
         var reference = request.Reference;
+        if (reference is null ? request.TargetInstallationId is not null :
+            !IsValidInstallationId(request.TargetInstallationId))
+            throw ModelProviderDraftException.InvalidRequest("The target installation is invalid.");
         if (reference is not null &&
             (scope != ModelProviderBindingScope.Platform ||
              providerId != "byok-" + request.OperationId.ToString("N") ||
@@ -44,9 +47,12 @@ public sealed partial class ModelProviderDraftService
                 .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
             await LockProviderCreateAsync(cancellationToken).ConfigureAwait(false);
             if (reference is not null)
+            {
                 await LockReferenceAuthorityAsync(caller, cancellationToken).ConfigureAwait(false);
+                await VerifyInstallationAsync(request.TargetInstallationId!, cancellationToken).ConfigureAwait(false);
+            }
             var replay = await ReadCreateReplayAsync(
-                caller, scope, projectId, providerId, request.OperationId, fingerprint, reference, cancellationToken)
+                caller, scope, projectId, providerId, request.OperationId, fingerprint, reference, request.TargetInstallationId, cancellationToken)
                 .ConfigureAwait(false);
             if (replay is not null)
             {
@@ -94,12 +100,20 @@ public sealed partial class ModelProviderDraftService
                 {
                     Reference = reference, ReferenceFolded = FoldReference(reference), ProviderId = providerId,
                     CreationRevision = 1, OperationId = request.OperationId, Issuer = caller.Issuer,
+                    InstallationId = Guid.ParseExact(request.TargetInstallationId!, "D"),
                     TenantId = caller.TenantId, Subject = caller.ActorId, CreatedAt = now,
                 });
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             DetachTrackedProvider(providerId);
             return ToDraft(ModelProviderDraftState.Draft, revision, reference);
+        }
+        catch (Exception exception) when (reference is not null &&
+            GetPostgresException(exception) is { SqlState: PostgresErrorCodes.CheckViolation,
+                ConstraintName: "ck_provider_reference_installation_id" })
+        {
+            DetachTrackedProvider(providerId);
+            throw ModelProviderDraftException.TargetInstallationMismatch();
         }
         catch (Exception exception) when (IsCreateConflict(exception))
         {
@@ -110,9 +124,12 @@ public sealed partial class ModelProviderDraftService
                 .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
             await LockProviderCreateAsync(cancellationToken).ConfigureAwait(false);
             if (reference is not null)
+            {
                 await LockReferenceAuthorityAsync(caller, cancellationToken).ConfigureAwait(false);
+                await VerifyInstallationAsync(request.TargetInstallationId!, cancellationToken).ConfigureAwait(false);
+            }
             var replay = await ReadCreateReplayAsync(
-                caller, scope, projectId, providerId, request.OperationId, fingerprint, reference, cancellationToken)
+                caller, scope, projectId, providerId, request.OperationId, fingerprint, reference, request.TargetInstallationId, cancellationToken)
                 .ConfigureAwait(false);
             if (replay is not null)
             {
@@ -147,19 +164,26 @@ public sealed partial class ModelProviderDraftService
         Guid operationId,
         string fingerprint,
         string? reference,
+        string? targetInstallationId,
         CancellationToken cancellationToken)
     {
+        var reservation = await db.ModelProviderReferenceReservations.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OperationId == operationId, cancellationToken).ConfigureAwait(false);
+        if (reference is not null && reservation is not null &&
+            (reservation.Issuer != caller.Issuer || reservation.TenantId != caller.TenantId ||
+             reservation.Subject != caller.ActorId))
+            throw ModelProviderDraftException.Conflict();
+        if (reference is not null && reservation is not null &&
+            reservation.InstallationId != Guid.ParseExact(targetInstallationId!, "D"))
+            throw ModelProviderDraftException.ReferenceReconciliationRequired();
         var revision = await db.ModelProviderDraftRevisions.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OperationId == operationId, cancellationToken).ConfigureAwait(false);
         if (revision is null)
         {
-            if (await db.ModelProviderReferenceReservations.AsNoTracking()
-                    .AnyAsync(item => item.OperationId == operationId, cancellationToken).ConfigureAwait(false))
+            if (reservation is not null)
                 throw ModelProviderDraftException.Conflict();
             return null;
         }
-        var reservation = await db.ModelProviderReferenceReservations.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.OperationId == operationId, cancellationToken).ConfigureAwait(false);
         if (revision.ProviderId != providerId || revision.Scope != scope || revision.ProjectId != projectId ||
             revision.ProviderRevision != 1 || revision.RequestFingerprint != fingerprint ||
             (reference is null ? reservation is not null :
@@ -175,6 +199,31 @@ public sealed partial class ModelProviderDraftService
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended({ProviderCreateLock}, 0))",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static bool IsValidInstallationId(string? value) =>
+        value is not null && Guid.TryParseExact(value, "D", out var id) && id != Guid.Empty &&
+        value == id.ToString("D");
+
+    private async Task VerifyInstallationAsync(string target, CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        try
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT installation_id FROM projects_config.installation_identity WHERE singleton = true",
+                connection, transaction);
+            var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (value is not Guid id || id == Guid.Empty)
+                throw ModelProviderDraftException.Unavailable();
+            if (id != Guid.ParseExact(target, "D"))
+                throw ModelProviderDraftException.TargetInstallationMismatch();
+        }
+        catch (NpgsqlException)
+        {
+            throw ModelProviderDraftException.Unavailable();
+        }
     }
 
     private async Task LockReferenceAuthorityAsync(ProjectAuthorizationContext caller, CancellationToken cancellationToken)

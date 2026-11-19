@@ -409,7 +409,7 @@ internal static class InitializerChecks
                 END;
                 """;
             var hasProviderReferenceGuard =
-                (providerHead || providerReservation) && typeSevenGuards.Length == 1 &&
+                (providerHead || providerReservation) && typeSevenGuards.Length == (providerHead ? 1 : 2) &&
                 typeSevenGuards[0].Trigger == (providerHead
                     ? "model_providers_reference_guard" : "model_provider_reference_cross_table_guard") &&
                 typeSevenGuards[0].Function == "guard_model_provider_reference_cross_table()" &&
@@ -439,6 +439,33 @@ internal static class InitializerChecks
                 HasGuard("platform_policy_proof_holds_reservation_fence",
                     "enforce_platform_policy_hold_reservation_fence()",
                     "policy hold does not match the latest reservation", HoldReservationFenceSource);
+            const string installationSource = """
+                DECLARE
+                    current_installation uuid;
+                BEGIN
+                    PERFORM pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));
+                    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                        RAISE EXCEPTION 'provider create requires read committed isolation'
+                            USING ERRCODE = '40001';
+                    END IF;
+                    SELECT installation_id INTO current_installation
+                    FROM projects_config.installation_identity WHERE singleton = true;
+                    IF current_installation IS NULL OR NEW.installation_id IS NULL OR
+                       NEW.installation_id <> current_installation THEN
+                        RAISE EXCEPTION 'provider reference installation mismatch'
+                            USING ERRCODE = '23514', CONSTRAINT = 'ck_provider_reference_installation_id';
+                    END IF;
+                    RETURN NEW;
+                END;
+                """;
+            var hasInstallationGuard = providerReservation && typeSevenGuards.Length == 2 &&
+                typeSevenGuards[1].Trigger == "model_provider_reference_installation_guard" &&
+                typeSevenGuards[1].Function == "guard_provider_reference_installation()" &&
+                typeSevenGuards[1].Message == "provider reference installation mismatch" &&
+                typeSevenGuards[1].SqlState == "23514" &&
+                typeSevenGuards[1].FunctionSource is { } installationGuardSource &&
+                NormalizeGuardSource(installationGuardSource) == NormalizeGuardSource(installationSource);
             var hasProofReceiptIdentityGuard =
                 table.Table == "platform_policy_proof_receipts" &&
                 typeSevenGuards.Length == 1 &&
@@ -535,6 +562,7 @@ internal static class InitializerChecks
                  mutationGuardCount != (table.MutationDenialGuards is { Length: > 0 } ? 2 : 1)) ||
                 (table.LockColumn is null && mutationGuardCount != (providerHead ? 1 : governanceDecisionHead ? 3 : 2)) ||
                 ((providerHead || providerReservation) && !hasProviderReferenceGuard) ||
+                (providerReservation && !hasInstallationGuard) ||
                 (providerHead && !hasProviderIdGuard) ||
                 ((providerHead || providerRevision) && providerWriteGuards.Length != 2) ||
                 invalidColumnUpdates ||

@@ -359,6 +359,10 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("creation_revision");
 
+                    b.Property<Guid?>("InstallationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("installation_id");
+
                     b.Property<string>("Issuer")
                         .IsRequired()
                         .HasColumnType("text")

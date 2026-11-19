@@ -79,6 +79,7 @@ public sealed class ModelProviderReferenceReservationRecord
     public required string ProviderId { get; set; }
     public long CreationRevision { get; set; }
     public Guid OperationId { get; set; }
+    public Guid? InstallationId { get; set; }
     public required string Issuer { get; set; }
     public required string TenantId { get; set; }
     public required string Subject { get; set; }
@@ -100,6 +101,7 @@ public sealed record SaveModelProviderDraftRequest(
     string? RateCardVersion = null)
 {
     public string? Reference { get; init; }
+    public string? TargetInstallationId { get; init; }
 }
 
 public sealed record ModelProviderDraft(
@@ -125,6 +127,12 @@ public sealed class ModelProviderDraftException(string code, string message) : E
 
     public static ModelProviderDraftException ReferenceConflict() =>
         new("reference_conflict", "The provider reference is already in use.");
+
+    public static ModelProviderDraftException TargetInstallationMismatch() =>
+        new("target_installation_mismatch", "The target installation does not match.");
+
+    public static ModelProviderDraftException ReferenceReconciliationRequired() =>
+        new("reference_reconciliation_required", "The provider reference requires reconciliation.");
 
     public static ModelProviderDraftException Unavailable() =>
         new("model_provider_draft_unavailable", "The provider draft is unavailable.");

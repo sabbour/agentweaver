@@ -166,6 +166,46 @@ public sealed class P1PostgresInitializerTests
         var services = MutationServices();
         InitializerChecks.AssertMutationDenialPlan(services);
 
+        var changedInstallationGuard = MutationServices();
+        var reservation = changedInstallationGuard[0].Tables.Single(
+            table => table.Table == "model_provider_reference_reservations");
+        var installationGuards = reservation.MutationDenialGuards!;
+        changedInstallationGuard[0] = changedInstallationGuard[0] with
+        {
+            Tables = changedInstallationGuard[0].Tables.Select(table => table.Table == reservation.Table
+                ? table with
+                {
+                    MutationDenialGuards = installationGuards.Select(guard =>
+                        guard.Trigger == "model_provider_reference_installation_guard"
+                            ? guard with { FunctionSource = guard.FunctionSource!.Replace(
+                                "NEW.installation_id <> current_installation", "false", StringComparison.Ordinal) }
+                            : guard).ToArray(),
+                }
+                : table).ToArray(),
+        };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(changedInstallationGuard));
+
+        foreach (var literal in new[] { "'read  committed'", "'READ COMMITTED'" })
+        {
+            var changed = MutationServices();
+            var table = changed[0].Tables.Single(
+                item => item.Table == "model_provider_reference_reservations");
+            changed[0] = changed[0] with
+            {
+                Tables = changed[0].Tables.Select(item => item == table
+                    ? item with
+                    {
+                        MutationDenialGuards = item.MutationDenialGuards!.Select(guard =>
+                            guard.Trigger == "model_provider_reference_installation_guard"
+                                ? guard with { FunctionSource = guard.FunctionSource!.Replace(
+                                    "'read committed'", literal, StringComparison.Ordinal) }
+                                : guard).ToArray(),
+                    }
+                    : item).ToArray(),
+            };
+            Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(changed));
+        }
+
         // Dropping any one protected table changes the reviewed count, so the plan is rejected.
         var missingTable = MutationServices();
         missingTable[4] = missingTable[4] with { Tables = missingTable[4].Tables[..^1] };
@@ -1182,6 +1222,27 @@ public sealed class P1PostgresInitializerTests
                 [
                     new("model_provider_reference_cross_table_guard", "guard_model_provider_reference_cross_table()",
                         7, "provider reference collision", "23514", providerReferenceSource),
+                    new("model_provider_reference_installation_guard", "guard_provider_reference_installation()",
+                        7, "provider reference installation mismatch", "23514", """
+                        DECLARE
+                            current_installation uuid;
+                        BEGIN
+                            PERFORM pg_catalog.pg_advisory_xact_lock(
+                                pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));
+                            IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+                                RAISE EXCEPTION 'provider create requires read committed isolation'
+                                    USING ERRCODE = '40001';
+                            END IF;
+                            SELECT installation_id INTO current_installation
+                            FROM projects_config.installation_identity WHERE singleton = true;
+                            IF current_installation IS NULL OR NEW.installation_id IS NULL OR
+                               NEW.installation_id <> current_installation THEN
+                                RAISE EXCEPTION 'provider reference installation mismatch'
+                                    USING ERRCODE = '23514', CONSTRAINT = 'ck_provider_reference_installation_id';
+                            END IF;
+                            RETURN NEW;
+                        END;
+                        """),
                     new("model_provider_reference_reservations_immutable", "reject_immutable_record_mutation()",
                         27, "records in %.% are immutable", "55000"),
                     new("model_provider_reference_reservations_no_truncate", "reject_immutable_record_mutation()",
@@ -1235,6 +1296,7 @@ public sealed class P1PostgresInitializerTests
                 new("mark_model_provider_write()", false),
                 new("check_model_provider_pair()", false),
                 new("guard_model_provider_reference_cross_table()", false),
+                new("guard_provider_reference_installation()", false),
                 new("reject_immutable_record_mutation()", false),
                 new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
                 new("require_native_acs_policy_head_advance()", false),

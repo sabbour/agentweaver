@@ -201,6 +201,27 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             string? role,
             CancellationToken cancellationToken)
         {
+            await using (var installation = new NpgsqlCommand("""
+                SELECT p.prosrc
+                FROM pg_catalog.pg_trigger t
+                JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+                JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+                WHERE n.nspname = 'projects_config' AND c.relname = 'model_provider_reference_reservations'
+                  AND t.tgname = 'model_provider_reference_installation_guard' AND t.tgtype = 7
+                  AND t.tgenabled = 'O' AND NOT t.tgisinternal AND t.tgnargs = 0
+                  AND t.tgattr = ''::int2vector AND t.tgqual IS NULL
+                  AND pn.nspname = 'projects_config' AND p.proname = 'guard_provider_reference_installation'
+                  AND p.pronargs = 0 AND p.prokind = 'f' AND p.prorettype = 'pg_catalog.trigger'::regtype
+                  AND p.proowner = n.nspowner AND NOT p.prosecdef
+                  AND p.proconfig = ARRAY['search_path=pg_catalog']::text[]
+                """, connection, transaction))
+            {
+                var source = await installation.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+                if (source is null || NormalizeGuardSource(source) != NormalizeGuardSource(Plan.Value.InstallationGuardSource))
+                    throw new InvalidOperationException("The provider installation guard differs from the reviewed plan.");
+            }
             await using var command = new NpgsqlCommand("""
                 WITH RECURSIVE owner AS (
                     SELECT oid, nspowner FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config'
@@ -687,6 +708,15 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             RequiredString(identityGuards[0], "condition") != "((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)")
             throw new InvalidOperationException("The reviewed PostgreSQL plan requires the exact model provider identity guard.");
 
+        var reservation = service.GetProperty("tables").EnumerateArray().Single(table =>
+            table.GetProperty("table").GetString() == "model_provider_reference_reservations");
+        var installationGuard = reservation.GetProperty("mutationDenialGuards").EnumerateArray().Single(guard =>
+            guard.GetProperty("trigger").GetString() == "model_provider_reference_installation_guard");
+        if (RequiredString(installationGuard, "function") != "guard_provider_reference_installation()" ||
+            installationGuard.GetProperty("triggerType").GetInt32() != 7)
+            throw new InvalidOperationException("The reviewed PostgreSQL plan requires the installation guard.");
+        var installationGuardSource = RequiredString(installationGuard, "functionSource");
+
         // Plan values become SQL identifiers or function signatures, so validate them before building grant commands.
         var tables = service.GetProperty("tables").EnumerateArray().Select(table => new TablePlan(
             RequiredString(table, "table"),
@@ -708,7 +738,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             throw new InvalidOperationException("The reviewed Projects & Config grant plan contains an invalid object or privilege.");
 
         return new ServicePlan("projects_config", "agentweaver-id-projects-config", tables,
-            ownerOnlyTables, ownerOnlySequences, functions);
+            ownerOnlyTables, ownerOnlySequences, functions, installationGuardSource);
     }
 
     private static string RequiredString(JsonElement element, string property) =>
@@ -737,5 +767,6 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         TablePlan[] Tables,
         string[] OwnerOnlyTables,
         string[] OwnerOnlySequences,
-        FunctionPlan[] Functions);
+        FunctionPlan[] Functions,
+        string InstallationGuardSource);
 }

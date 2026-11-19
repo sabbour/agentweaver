@@ -22,9 +22,10 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     [Theory]
-    [InlineData("23505", "pk_model_provider_reference_reservations")]
-    [InlineData("23514", "ck_model_provider_reference_cross_table")]
-    public async Task PublicModelProviderDraftNamedDatabaseConflictReturns409(string sqlState, string constraint)
+    [InlineData("23505", "pk_model_provider_reference_reservations", "reference_conflict")]
+    [InlineData("23514", "ck_model_provider_reference_cross_table", "reference_conflict")]
+    [InlineData("23514", "ck_provider_reference_installation_id", "target_installation_mismatch")]
+    public async Task PublicModelProviderDraftNamedDatabaseConflictReturns409(string sqlState, string constraint, string code)
     {
         await using var db = CreateDbContext();
         var caller = await CreateReferenceAdminAsync(db);
@@ -52,13 +53,61 @@ public sealed partial class ProjectsConfigPostgresTests
             using var client = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId);
             var body = SaveDraftBody(operation, 0, "Conflict");
             using var request = SaveRequest("/api/platform/byok-providers",
-                body[..^1] + ",\"reference\":\"conflict-" + operation.ToString("N") + "\"}");
+                body[..^1] + ",\"reference\":\"conflict-" + operation.ToString("N") +
+                "\",\"targetInstallationId\":\"" + fixture.InstallationId + "\"}");
             using var response = await client.SendAsync(request);
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-            Assert.Contains("reference_conflict", await response.Content.ReadAsStringAsync());
+            var responseBody = await response.Content.ReadAsStringAsync();
+            Assert.Contains(code, responseBody);
+            Assert.DoesNotContain("injected conflict", responseBody);
             Assert.False(await db.ModelProviderDrafts.AsNoTracking().AnyAsync(item => item.ProviderId == providerId));
             Assert.False(await db.ModelProviderDraftRevisions.AsNoTracking().AnyAsync(item => item.OperationId == operation));
             Assert.False(await db.ModelProviderReferenceReservations.AsNoTracking().AnyAsync(item => item.OperationId == operation));
+        }
+        finally
+        {
+            await using var remove = new Npgsql.NpgsqlCommand($"""
+                DROP TRIGGER IF EXISTS {name} ON projects_config.model_provider_reference_reservations;
+                DROP FUNCTION IF EXISTS projects_config.{name}();
+                """, owner);
+            await remove.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public async Task OtherDatabaseCheckViolationsAreNotReportedAsInstallationMismatch()
+    {
+        await using var db = CreateDbContext();
+        var caller = await CreateReferenceAdminAsync(db);
+        var operation = Guid.NewGuid();
+        var name = "other_check_" + operation.ToString("N");
+        await using var owner = await fixture.MigrationDataSource.OpenConnectionAsync();
+        await using (var install = new Npgsql.NpgsqlCommand($"""
+            CREATE FUNCTION projects_config.{name}() RETURNS trigger LANGUAGE plpgsql AS $body$
+            BEGIN
+                IF NEW.operation_id = '{operation}'::uuid THEN
+                    RAISE EXCEPTION 'other check' USING ERRCODE = '23514', CONSTRAINT = 'other_check';
+                END IF;
+                RETURN NEW;
+            END;
+            $body$;
+            CREATE TRIGGER {name} BEFORE INSERT
+            ON projects_config.model_provider_reference_reservations
+            FOR EACH ROW EXECUTE FUNCTION projects_config.{name}();
+            """, owner))
+            await install.ExecuteNonQueryAsync();
+        try
+        {
+            var error = await Assert.ThrowsAsync<DbUpdateException>(() =>
+                ReferenceService(db).SaveAsync(caller, ModelProviderBindingScope.Platform, null,
+                    "byok-" + operation.ToString("N"),
+                    DraftRequest(operation, 0) with
+                    {
+                        Reference = "other-" + operation.ToString("N"),
+                        TargetInstallationId = fixture.InstallationId,
+                    }, CancellationToken.None));
+            Assert.Equal("other_check", Assert.IsType<Npgsql.PostgresException>(error.InnerException).ConstraintName);
+            Assert.False(await db.ModelProviderDraftRevisions.AsNoTracking().AnyAsync(row => row.OperationId == operation));
         }
         finally
         {
@@ -104,7 +153,8 @@ public sealed partial class ProjectsConfigPostgresTests
             using var invalidResponse = await client.SendAsync(invalid);
             Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
             Assert.Contains("model_provider_draft_invalid_request", await invalidResponse.Content.ReadAsStringAsync());
-            using var request = SaveRequest("/api/platform/byok-providers", body[..^1] + ",\"reference\":\"safe-reference\"}");
+            using var request = SaveRequest("/api/platform/byok-providers",
+                body[..^1] + ",\"reference\":\"safe-reference\",\"targetInstallationId\":\"" + fixture.InstallationId + "\"}");
             using var response = await client.SendAsync(request);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             var responseBody = await response.Content.ReadAsStringAsync();
@@ -130,7 +180,8 @@ public sealed partial class ProjectsConfigPostgresTests
         var operation = Guid.NewGuid();
         var reference = "Case.Reference-" + Guid.NewGuid().ToString("N");
         var body = SaveDraftBody(operation, 0, "Reference");
-        string WithReference(string field) => body[..^1] + ",\"reference\":" + field + "}";
+        string WithReference(string field) => body[..^1] + ",\"reference\":" + field +
+            ",\"targetInstallationId\":\"" + fixture.InstallationId + "\"}";
         foreach (var value in new[] { "null", "42", "\"\"", "\"_invalid\"", "\"has__gap\"" })
         {
             using var invalid = SaveRequest("/api/platform/byok-providers", WithReference(value));

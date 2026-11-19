@@ -2247,7 +2247,7 @@ else if (route.OperationId is
             ("reasoning_efforts", BoundedArray(
                 Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
             ("prompt_capacity_tokens", NullableInt())),
-        ["ModelProviderDraftPlatformCreateRequest"] = StrictObj(
+        ["ModelProviderDraftPlatformCreateRequest"] = WithReferencePin(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64", @const = 0 }),
             ("name", Str()),
@@ -2258,7 +2258,9 @@ else if (route.OperationId is
                 Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
             ("prompt_capacity_tokens", NullableInt()),
             ("reference", new { type = "string", minLength = 1, maxLength = 256,
-                pattern = "^(?!.*__)[A-Za-z0-9.-](?:[A-Za-z0-9._-]{0,254}[A-Za-z0-9.-])?(?![\\s\\S])" })),
+                pattern = "^(?!.*__)[A-Za-z0-9.-](?:[A-Za-z0-9._-]{0,254}[A-Za-z0-9.-])?(?![\\s\\S])" }),
+            ("targetInstallationId", new { type = "string", format = "uuid",
+                pattern = "^(?!00000000-0000-0000-0000-000000000000(?![\\s\\S]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])" }))),
         ["ModelProviderDraftProjectCreateRequest"] = StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64", @const = 0 }),
@@ -3700,6 +3702,16 @@ else if (route.OperationId is
                 property => property.Name, property => property.Schema, StringComparer.Ordinal),
             ["additionalProperties"] = false,
         };
+
+    private static object WithReferencePin(object schema)
+    {
+        ((Dictionary<string, object>)schema)["dependentRequired"] = new Dictionary<string, string[]>
+        {
+            ["reference"] = ["targetInstallationId"],
+            ["targetInstallationId"] = ["reference"],
+        };
+        return schema;
+    }
 
     private static object Ref(string name) =>
         new Dictionary<string, string> { ["$ref"] = "#/components/schemas/" + name };

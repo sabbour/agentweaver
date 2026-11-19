@@ -72,6 +72,34 @@ public sealed class ModelProviderDraftHttpContractTests
         Assert.Null(await ParseAsync(prefix + ",\"name\":\"duplicate\"}"));
     }
 
+    [Fact]
+    public async Task ReferenceCreateRequiresCanonicalInstallationPin()
+    {
+        const string prefix =
+            "{\"operationId\":\"ad451e41-9b48-412f-99dc-ad6a6cd4080c\",\"expectedRevision\":0,\"name\":\"Model\",\"type\":\"openai\",\"base_url\":\"https://api.openai.com/v1\",\"model\":\"test\"";
+        const string pin = "00112233-4455-4677-8899-aabbccddeeff";
+        async Task<ModelProviderDraftSaveBody?> ParsePlatformAsync(string suffix, bool allowReference = true)
+        {
+            var request = new DefaultHttpContext().Request;
+            request.ContentType = "application/json";
+            request.Body = new MemoryStream(Encoding.UTF8.GetBytes(prefix + suffix + "}"));
+            return await ModelProviderDraftEndpoints.ReadSaveBodyAsync(request, CancellationToken.None, allowReference);
+        }
+        Assert.NotNull(await ParsePlatformAsync($",\"reference\":\"Ref\",\"targetInstallationId\":\"{pin}\""));
+        foreach (var suffix in new[]
+        {
+            ",\"reference\":\"Ref\"",
+            ",\"reference\":\"Ref\",\"targetInstallationId\":null",
+            ",\"reference\":\"Ref\",\"targetInstallationId\":\"00000000-0000-0000-0000-000000000000\"",
+            ",\"reference\":\"Ref\",\"targetInstallationId\":\"00112233-4455-4677-8899-AABBCCDDEEFF\"",
+            ",\"reference\":\"Ref\",\"targetInstallationId\":\"bad\"",
+            $",\"targetInstallationId\":\"{pin}\"",
+            $",\"reference\":\"Ref\",\"targetInstallationId\":\"{pin}\",\"targetInstallationId\":\"{pin}\"",
+        })
+            Assert.Null(await ParsePlatformAsync(suffix));
+        Assert.Null(await ParsePlatformAsync($",\"reference\":\"Ref\",\"targetInstallationId\":\"{pin}\"", false));
+    }
+
     [Theory]
     [InlineData("{\"operationId\":\"ad451e41-9b48-412f-99dc-ad6a6cd4080c\",\"name\":\"Model\",\"type\":\"openai\",\"base_url\":\"https://api.openai.com/v1\",\"model\":\"test\"}")]
     [InlineData("{\"operationId\":\"ad451e41-9b48-412f-99dc-ad6a6cd4080c\",\"expectedRevision\":null,\"name\":\"Model\",\"type\":\"openai\",\"base_url\":\"https://api.openai.com/v1\",\"model\":\"test\"}")]

@@ -109,11 +109,38 @@ public sealed class ModelProviderGuardMigrationPostgresTests
             SELECT (SELECT current_revision FROM projects_config.model_providers WHERE provider_id = 'legacy-draft') = 3
                AND (SELECT state FROM projects_config.model_providers WHERE provider_id = 'legacy-available') = 'Available'
             """));
+    }
 
+    [Fact]
+    public async Task PublicationGuardDowngradeRefusesAndPreservesLegacyRows()
+    {
+        await using var fixture = await PreGuardDatabase.StartAsync();
+        await fixture.ExecuteAsync(LegacyRows);
         await using var db = new ProjectsConfigDbContext(fixture.Options);
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261119174453_GuardModelProviderPublication");
+        const string guardStillInstalled = """
+            SELECT to_regclass('projects_config.installation_identity') IS NULL
+               AND EXISTS (SELECT 1 FROM projects_config.__ef_migrations_history
+                   WHERE "MigrationId" = '20261119174453_GuardModelProviderPublication')
+               AND NOT EXISTS (SELECT 1 FROM projects_config.__ef_migrations_history
+                   WHERE "MigrationId" = '20261119175249_BindProviderInstallationIdentity')
+               AND to_regprocedure('projects_config.check_model_provider_pair()') IS NOT NULL
+               AND EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                   WHERE tgrelid = 'projects_config.model_provider_revisions'::regclass
+                     AND tgname = 'model_provider_revisions_write_pair' AND tgenabled = 'O')
+            """;
+        Assert.True(await fixture.ScalarAsync(guardStillInstalled));
+        var headsBefore = await fixture.HeadJsonAsync();
+        var revisionsBefore = await fixture.RevisionJsonAsync();
         var failure = await Record.ExceptionAsync(
-            () => db.GetService<IMigrator>().MigrateAsync("20261119132116_ReserveModelProviderReferences"));
-        Assert.Equal("55000", PostgresFailure(failure).SqlState);
+            () => migrator.MigrateAsync("20261119132116_ReserveModelProviderReferences"));
+        var postgres = PostgresFailure(failure);
+        Assert.Equal("55000", postgres.SqlState);
+        Assert.Equal("provider publication guards cannot be removed", postgres.MessageText);
+        Assert.True(await fixture.ScalarAsync(guardStillInstalled));
+        Assert.Equal(headsBefore, await fixture.HeadJsonAsync());
+        Assert.Equal(revisionsBefore, await fixture.RevisionJsonAsync());
     }
 
     [Theory]

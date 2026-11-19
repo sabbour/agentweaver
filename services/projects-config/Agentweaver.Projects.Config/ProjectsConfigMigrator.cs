@@ -113,6 +113,15 @@ public static class ProjectsConfigMigrator
                AND NOT has_any_column_privilege(current_user, 'projects_config.model_provider_reference_reservations', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'projects_config.model_provider_reference_reservations', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.model_provider_reference_reservations', 'TRUNCATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'INSERT')
+               AND NOT has_any_column_privilege(current_user, 'projects_config.installation_identity', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'UPDATE')
+               AND NOT has_any_column_privilege(current_user, 'projects_config.installation_identity', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'TRUNCATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'REFERENCES')
+               AND NOT has_any_column_privilege(current_user, 'projects_config.installation_identity', 'REFERENCES')
+               AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'TRIGGER')
                AND has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'SELECT')
                AND has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.native_acs_policy_preparations', 'UPDATE')
@@ -137,6 +146,10 @@ public static class ProjectsConfigMigrator
                    current_user,
                    'projects_config.guard_model_provider_reference_cross_table()',
                    'EXECUTE')
+               AND NOT has_function_privilege(
+                   current_user,
+                   'projects_config.guard_provider_reference_installation()',
+                   'EXECUTE')
                AND has_function_privilege(
                    current_user,
                    'projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
@@ -158,7 +171,9 @@ public static class ProjectsConfigMigrator
                        pg_catalog.to_regprocedure(
                            'projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])'),
                        pg_catalog.to_regprocedure(
-                           'projects_config.guard_model_provider_reference_cross_table()'))
+                           'projects_config.guard_model_provider_reference_cross_table()'),
+                       pg_catalog.to_regprocedure(
+                           'projects_config.guard_provider_reference_installation()'))
                      AND acl.grantee = 0
                      AND acl.privilege_type = 'EXECUTE')
             """,
