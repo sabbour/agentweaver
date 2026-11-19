@@ -162,19 +162,21 @@ sequenceDiagram
     participant V as Full policy-set evaluator
     E->>DB: Persist provider reservation
     DB-->>E: Current reservation
-    E->>E: Compare configured provider and reservation target IDs
-    E->>DB: Acquire hold for current reservation
-    DB-->>E: Atomic hold and reservation binding
+    E->>E: Check one HTTPS root origin for reader and writer
+    E->>DB: Compare complete reservation and acquire hold under target lock
+    DB-->>E: Saved current reservation and durable hold
     E->>K: List all namespaced and cluster policies
     K-->>E: Paged raw inventories and list resourceVersions
     E->>V: Substitute the exact System-only render
     V-->>E: Safe candidate or coded failure
+    E->>E: Check serialized current and candidate snapshot sizes
     E->>K: Reserved UID and resourceVersion PUT
     K-->>E: Reserved write result
     E->>K: Independent named GET and full inventory
     K-->>E: Observed object and complete snapshot
     E->>V: Evaluate the observed combined set
     V-->>E: Safe observed set or coded failure
+    E->>E: Check serialized observed snapshot size
     E->>DB: Insert immutable per-target receipt and snapshot
     DB-->>E: Durable current receipt
     Note over E,K: An inventory, readback, or epoch conflict creates no successful receipt
@@ -182,9 +184,19 @@ sequenceDiagram
 
 PostgreSQL binds a nonexpiring hold to the current reservation for one logical
 target ID. Reservation and hold inserts use the same target lock. A new
-reservation is rejected while a hold exists. An exact retry returns the saved
-reservation or hold. The coordinator compares the configured provider target ID
-with the frozen target and reservation before acquiring the hold.
+reservation is rejected while a hold exists. The coordinator compares the
+provider target ID with the frozen target and reservation before acquiring the
+hold. Under the target lock, it compares every persisted reservation field and
+the ordered policy destinations before returning a hold or replaying a receipt.
+An exact retry uses the saved reservation.
+
+The proof factory creates reader and writer clients for one HTTPS API origin
+with path `/`, using the same CA snapshot and separate token files. Both clients
+reject redirects. The factory rejects token paths that normalize to the same
+path. A non-root origin fails before hold acquisition. Historical
+receipts for non-root origins remain available through
+`ReadCurrentReceiptAsync`; a new root origin has a different target ID and
+cannot reuse the old reservation.
 
 The logical ID includes the configured Kubernetes API origin, namespace, and
 policy name. Different API origins can refer to the same physical cluster; the
@@ -193,11 +205,16 @@ namespace UID, registry revision, and preparation are supplied bindings, not a
 trusted enrollment registry. A future authenticated terminal protocol is needed
 to release a hold.
 
-The coordinator retains the preflight and
-post-write snapshots, then compares the independent named read with the policy
-list element. A lost response is retried only through the same reserved UID and
-resourceVersion. A changed set returns `policy_readback_mismatch`; a stale or
-competing hold returns `policy_fence_conflict`.
+The coordinator checks the serialized UTF-8 snapshot size for the current
+inventory and rendered candidate before the reserved PUT. The candidate size
+includes metadata retained from the named object and inventory. The limit is
+1,048,576 bytes. An oversized snapshot returns `policy_semantics_unsupported`
+and retains the hold without a PUT. The coordinator checks the independently
+captured snapshot again after the PUT and compares the named read with the
+policy list element. Growth beyond the limit retains the hold and writes no
+receipt. Retry with the identical reservation; the provider uses the reserved
+UID and resourceVersion. A changed set returns `policy_readback_mismatch`; a
+stale or competing hold returns `policy_fence_conflict`.
 
 Receipt rows are append-only and unique per hold and target. An identical retry
 returns the current receipt. A changed input, stale hold, or different snapshot

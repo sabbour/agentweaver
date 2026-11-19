@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 
@@ -40,12 +41,25 @@ public sealed record PlatformPolicyProofFrozenTarget(
             ceiling.Hash());
 }
 
-public sealed class PlatformPolicyProofCoordinator(
-    KubernetesPlatformPolicyInventoryReader inventory,
-    CiliumPlatformEgressProvider provider,
-    PlatformPolicyProofStore store,
-    TimeProvider timeProvider)
+public sealed class PlatformPolicyProofCoordinator
 {
+    private readonly KubernetesPlatformPolicyInventoryReader inventory;
+    private readonly CiliumPlatformEgressProvider provider;
+    private readonly PlatformPolicyProofStore store;
+    private readonly TimeProvider timeProvider;
+
+    internal PlatformPolicyProofCoordinator(
+        KubernetesPlatformPolicyInventoryReader inventory,
+        CiliumPlatformEgressProvider provider,
+        PlatformPolicyProofStore store,
+        TimeProvider timeProvider)
+    {
+        this.inventory = inventory;
+        this.provider = provider;
+        this.store = store;
+        this.timeProvider = timeProvider;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -77,7 +91,12 @@ public sealed class PlatformPolicyProofCoordinator(
             provider.ProofNamespace != target.Namespace)
             throw new PlatformPolicyProofException(
                 "policy_fence_conflict", "The provider and reservation targets do not agree.");
-        _ = await store.AcquireHoldAsync(
+        var readerAddress = RequireProofOrigin(inventory.BaseAddress);
+        var writerAddress = RequireProofOrigin(provider.ProofBaseAddress);
+        if (readerAddress != writerAddress)
+            throw new PlatformPolicyProofException(
+                "policy_fence_conflict", "The policy reader and writer targets do not agree.");
+        reservation = await store.AcquireProofHoldAsync(
             new(
                 target.HoldId,
                 target.TargetId,
@@ -90,7 +109,7 @@ public sealed class PlatformPolicyProofCoordinator(
                 preparation.RegistryRevision,
                 preparation.PreparationId,
                 reservation.ReservationId),
-            cancellationToken).ConfigureAwait(false);
+            reservation, cancellationToken).ConfigureAwait(false);
 
         var currentReceipt = await store.ReadCurrentReceiptAsync(
             target.TargetId, target.HoldId, cancellationToken).ConfigureAwait(false);
@@ -109,13 +128,19 @@ public sealed class PlatformPolicyProofCoordinator(
         var before = await inventory.CaptureAsync(
                 target.PhysicalTarget, target.Capture(ceiling), cancellationToken)
             .ConfigureAwait(false);
+        _ = PlatformPolicyProofSnapshot.Serialize(before);
         var named = await inventory.GetNamedAsync(
                 target.Namespace, CiliumPlatformEgressProvider.PolicyName, cancellationToken)
             .ConfigureAwait(false);
         var typedNamed = DeserializePolicy(named);
         var rendered = provider.RenderForProof(typedNamed, reservation.Policy, reservation.SourceEpoch);
         var candidate = ToRecord(rendered);
-        SystemOnlyPolicySetEvaluator.Evaluate(before.Replace(candidate), ceiling);
+        var candidateInventory = before.Replace(candidate);
+        SystemOnlyPolicySetEvaluator.Evaluate(candidateInventory, ceiling);
+        var listed = before.Policies.SingleOrDefault(policy =>
+            KubernetesPlatformPolicyInventory.SameIdentity(policy, candidate));
+        _ = PlatformPolicyProofSnapshot.Serialize(before.Replace(
+            IncludeRetainedMetadata(candidate, named, listed)));
 
         PlatformEgressStatus? status;
         try
@@ -166,29 +191,7 @@ public sealed class PlatformPolicyProofCoordinator(
             throw new PlatformPolicyProofException(
                 "policy_readback_mismatch", "The observed policy lost its reserved source and intent binding.");
 
-        var snapshotJson = JsonSerializer.Serialize(
-            new
-            {
-                schemaVersion = 1,
-                after.SnapshotId,
-                after.NamespaceUid,
-                listResourceVersions = new
-                {
-                    networkPolicies = after.NetworkPolicyListResourceVersion,
-                    ciliumNetworkPolicies = after.CiliumPolicyListResourceVersion,
-                    ciliumClusterwideNetworkPolicies = after.CiliumClusterwidePolicyListResourceVersion,
-                },
-                policies = after.Policies.Select(policy => new
-                {
-                    policy.ApiVersion,
-                    policy.Kind,
-                    policy.Namespace,
-                    policy.Name,
-                    policy.Uid,
-                    policy.ResourceVersion,
-                    policy.CanonicalContent,
-                }),
-            });
+        var snapshotJson = PlatformPolicyProofSnapshot.Serialize(after);
         var specDigest = Sha256(JsonSerializer.SerializeToUtf8Bytes(typedAfter.Spec, JsonOptions));
         return await store.PersistReceiptAsync(
             new(
@@ -230,7 +233,7 @@ public sealed class PlatformPolicyProofCoordinator(
         store.RequireAllTargetsAsync(
             registryRevision, preparationId, targetIds, cancellationToken);
 
-    private static KubernetesPlatformPolicyRecord ToRecord(CiliumNetworkPolicyDocument policy)
+    internal static KubernetesPlatformPolicyRecord ToRecord(CiliumNetworkPolicyDocument policy)
     {
         using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(policy, JsonOptions));
         return new(
@@ -243,6 +246,39 @@ public sealed class PlatformPolicyProofCoordinator(
             CanonicalJson(document.RootElement),
             document.RootElement.Clone());
     }
+
+    private static KubernetesPlatformPolicyRecord IncludeRetainedMetadata(
+        KubernetesPlatformPolicyRecord candidate,
+        KubernetesPlatformPolicyRecord named,
+        KubernetesPlatformPolicyRecord? listed)
+    {
+        var root = JsonNode.Parse(candidate.Content.GetRawText())!.AsObject();
+        var metadata = root["metadata"]!.AsObject();
+        var renderedFields = metadata.Select(property => property.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var source in new[] { named, listed })
+        {
+            if (source is null)
+                continue;
+            foreach (var property in source.Content.GetProperty("metadata").EnumerateObject())
+            {
+                if (renderedFields.Contains(property.Name))
+                    continue;
+                var value = JsonNode.Parse(property.Value.GetRawText());
+                if (!metadata.TryGetPropertyValue(property.Name, out var existing) ||
+                    EncodedSize(value) > EncodedSize(existing))
+                    metadata[property.Name] = value;
+            }
+        }
+        using var document = JsonDocument.Parse(root.ToJsonString());
+        return candidate with
+        {
+            CanonicalContent = CanonicalJson(document.RootElement),
+            Content = document.RootElement.Clone(),
+        };
+    }
+
+    private static int EncodedSize(JsonNode? value) =>
+        Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(value?.ToJsonString() ?? "null"));
 
     private static CiliumNetworkPolicyDocument DeserializePolicy(KubernetesPlatformPolicyRecord record)
     {
@@ -272,6 +308,23 @@ public sealed class PlatformPolicyProofCoordinator(
     private static string Sha256(byte[] value) =>
         Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
 
+    internal static Uri RequireProofOrigin(Uri? address)
+    {
+        try
+        {
+            var origin = EnvironmentHttpTransport.RequireTrustedHttpsBaseUri(
+                address?.OriginalString ?? string.Empty, "Kubernetes:ApiServer");
+            if (origin.AbsolutePath != "/")
+                throw new InvalidOperationException();
+            return origin;
+        }
+        catch (InvalidOperationException)
+        {
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The Kubernetes proof origin must be an absolute HTTPS root.");
+        }
+    }
+
     private static void Validate(
         PlatformPolicyProofPreparation preparation,
         PlatformPolicyProofFrozenTarget target,
@@ -293,7 +346,8 @@ public sealed class PlatformPolicyProofCoordinator(
             string.IsNullOrWhiteSpace(preparation.CompilerId) ||
             preparation.CompilerId != PlatformEgressAcsCompiler.CompilerVersion ||
             !IsSha256(preparation.SourceHash) ||
-            reservation.Policy is null)
+            reservation.Policy is null ||
+            reservation.Policy.Destinations.IsDefault)
             throw new PlatformPolicyProofException(
                 "policy_semantics_unsupported", "The preparation is not in the supported System-only profile.");
         if (preparation.RegistryRevision <= 0 ||

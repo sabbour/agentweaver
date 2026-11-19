@@ -88,15 +88,13 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
 {
     private const string Holds = "\"environment\".\"platform_policy_proof_holds\"";
     private const string Receipts = "\"environment\".\"platform_policy_proof_receipts\"";
-    private const int MaxSnapshotBytes = 1_048_576;
-
     public async Task<PlatformPolicyProofHold> AcquireHoldAsync(
         PlatformPolicyProofHoldRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await AcquireHoldCoreAsync(request, cancellationToken).ConfigureAwait(false);
+            return (await AcquireHoldCoreAsync(request, null, cancellationToken).ConfigureAwait(false)).Hold;
         }
         catch (PostgresException exception) when (
             (exception.SqlState == PostgresErrorCodes.CheckViolation &&
@@ -118,8 +116,38 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
         }
     }
 
-    private async Task<PlatformPolicyProofHold> AcquireHoldCoreAsync(
+    internal async Task<PlatformEgressApplyReservation> AcquireProofHoldAsync(
         PlatformPolicyProofHoldRequest request,
+        PlatformEgressApplyReservation reservation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await AcquireHoldCoreAsync(request, reservation, cancellationToken).ConfigureAwait(false)).Reservation!;
+        }
+        catch (PostgresException exception) when (
+            (exception.SqlState == PostgresErrorCodes.CheckViolation &&
+             exception.ConstraintName == "ck_platform_policy_hold_current_reservation") ||
+            (exception.SqlState == PostgresErrorCodes.UniqueViolation &&
+             exception.ConstraintName is "PK_platform_policy_proof_holds" or
+                "ux_environment_platform_policy_proof_holds_target" or
+                "ux_environment_platform_policy_proof_holds_reservation" or
+                "ux_environment_platform_policy_proof_holds_physical_namespace"))
+        {
+            throw new PlatformPolicyProofException(
+                "policy_fence_conflict", "Another policy proof bound this target or reservation.");
+        }
+        catch (NpgsqlException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new PlatformPolicyProofException(
+                "policy_fence_unavailable", "The policy fence store is unavailable.");
+        }
+    }
+
+    private async Task<(PlatformPolicyProofHold Hold, PlatformEgressApplyReservation? Reservation)> AcquireHoldCoreAsync(
+        PlatformPolicyProofHoldRequest request,
+        PlatformEgressApplyReservation? supplied,
         CancellationToken cancellationToken)
     {
         Validate(request);
@@ -137,23 +165,43 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
                     "policy_fence_conflict", "The target already has a different durable policy hold.");
         }
 
-        await using var latestQuery = new NpgsqlCommand(
-            """
-            SELECT reservation_id FROM environment.platform_policy_apply_reservations
-            WHERE target_id = @target_id
-            ORDER BY source_epoch DESC, generation DESC, created_at DESC, reservation_id DESC
-            LIMIT 1
-            """,
-            connection, transaction);
-        latestQuery.Parameters.AddWithValue("target_id", NpgsqlDbType.Text, request.TargetId);
-        if (await latestQuery.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not Guid latest ||
-            latest != request.ReservationId)
+        PlatformEgressApplyReservation? latest = null;
+        Guid? latestId;
+        if (supplied is null)
+        {
+            await using var latestQuery = new NpgsqlCommand(
+                """
+                SELECT reservation_id FROM environment.platform_policy_apply_reservations
+                WHERE target_id = @target_id
+                ORDER BY source_epoch DESC, generation DESC, created_at DESC, reservation_id DESC
+                LIMIT 1
+                """, connection, transaction);
+            latestQuery.Parameters.AddWithValue("target_id", NpgsqlDbType.Text, request.TargetId);
+            latestId = await latestQuery.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as Guid?;
+        }
+        else
+        {
+            try
+            {
+                latest = await PlatformEgressApplyReservationStore.ReadLatestAsync(
+                    connection, transaction, request.TargetId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or JsonException)
+            {
+                throw new PlatformPolicyProofException(
+                    "policy_fence_conflict", "The saved reservation is invalid.");
+            }
+            latestId = latest?.ReservationId;
+        }
+        if (latestId != request.ReservationId ||
+            (supplied is not null && (latest is null ||
+                !PlatformEgressApplyReservationStore.SameReservation(supplied, latest))))
             throw new PlatformPolicyProofException(
                 "policy_fence_conflict", "The hold does not match the latest reservation.");
         if (existing is not null)
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return existing with { Replayed = true };
+            return (existing with { Replayed = true }, latest);
         }
 
         var hold = new PlatformPolicyProofHold(
@@ -199,7 +247,7 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
         command.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, hold.CreatedAt);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return hold;
+        return (hold, latest);
     }
 
     public async Task<PlatformPolicyProofReceipt> PersistReceiptAsync(
@@ -532,9 +580,7 @@ public sealed class PlatformPolicyProofStore(NpgsqlDataSource dataSource, TimePr
         ValidateText(request.CeilingVersion, 128, "ceiling version");
         ValidateText(request.PostWriteResourceVersion, 256, "resource version");
         ValidateText(request.ObjectUid, 128, "object UID");
-        if (Encoding.UTF8.GetByteCount(request.SnapshotJson) > MaxSnapshotBytes)
-            throw new PlatformPolicyProofException(
-                "policy_semantics_unsupported", "The retained policy snapshot exceeds the supported bound.");
+        PlatformPolicyProofSnapshot.ValidateSize(request.SnapshotJson);
         foreach (var hash in new[]
                  {
                      request.SourceHash, request.IntentHash, request.ProfileDigest, request.GuardDigest,

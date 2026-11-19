@@ -278,7 +278,7 @@ public sealed class PlatformEgressApplyReservationStore(
             : null;
     }
 
-    private static async Task<PlatformEgressApplyReservation?> ReadLatestAsync(
+    internal static async Task<PlatformEgressApplyReservation?> ReadLatestAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string targetId,
@@ -364,6 +364,23 @@ public sealed class PlatformEgressApplyReservationStore(
         left.IntentHash == right.IntentHash &&
         left.SourceHash == right.SourceHash &&
         left.Destinations.SequenceEqual(right.Destinations);
+
+    internal static bool SameReservation(
+        PlatformEgressApplyReservation left, PlatformEgressApplyReservation right) =>
+        left.ReservationId == right.ReservationId &&
+        left.TargetId == right.TargetId &&
+        left.IdempotencyKey == right.IdempotencyKey &&
+        left.SourceEpoch == right.SourceEpoch &&
+        left.Generation == right.Generation &&
+        left.SourceRevision == right.SourceRevision &&
+        left.SourceId == right.SourceId &&
+        left.ObjectUid == right.ObjectUid &&
+        left.ResourceVersion == right.ResourceVersion &&
+        left.RequestFingerprint == right.RequestFingerprint &&
+        left.CreatedAt.UtcTicks / 10 == right.CreatedAt.UtcTicks / 10 &&
+        left.Policy is not null && right.Policy is not null &&
+        left.Policy.Generation == right.Policy.Generation &&
+        SamePolicy(left.Policy, right.Policy);
 
     private static void Validate(PlatformEgressApplyReservationRequest request)
     {

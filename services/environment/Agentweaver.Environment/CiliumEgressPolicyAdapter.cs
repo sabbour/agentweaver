@@ -817,6 +817,7 @@ public sealed class CiliumEgressPolicyAdapter(
 /// <summary>HTTP implementation of Cilium policy resource operations against the Kubernetes API.</summary>
 public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) : ICiliumPolicyResourceStore
 {
+    internal Uri? BaseAddress => httpClient.BaseAddress;
     private const string CollectionPath = "apis/cilium.io/v2/namespaces";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

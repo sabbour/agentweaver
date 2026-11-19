@@ -1,14 +1,17 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Data;
 using System.Net;
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Npgsql;
 
 namespace Agentweaver.Environment.Tests;
 
-public sealed class PlatformPolicyProofPostgresTests(EnvironmentPostgresFixture fixture)
+public sealed partial class PlatformPolicyProofPostgresTests(EnvironmentPostgresFixture fixture)
     : IClassFixture<EnvironmentPostgresFixture>
 {
     [Fact]
@@ -253,6 +256,244 @@ public sealed class PlatformPolicyProofPostgresTests(EnvironmentPostgresFixture 
                 frozen.SealEpoch, frozen.GuardDigest, frozen.ProfileDigest, preparation.RegistryRevision,
                 preparation.PreparationId, reservation.ReservationId), CancellationToken.None);
         Assert.True(replay.Replayed);
+    }
+
+    [Fact]
+    public async Task ReplayRequiresEveryPersistedReservationFieldBeforeAnyKubernetesCall()
+    {
+        var api = new CountingApi();
+        using var http = new HttpClient(api)
+        {
+            BaseAddress = new Uri("https://cluster-" + Guid.NewGuid().ToString("N") + ".test/"),
+        };
+        var resource = new KubernetesCiliumPolicyResourceStore(http);
+        var target = resource.GetTargetId("agentweaver", CiliumPlatformEgressProvider.PolicyName);
+        var reservations = new PlatformEgressApplyReservationStore(fixture.DataSource, TimeProvider.System);
+        var reservation = await reservations.ReserveAsync(Request(target, "initial", 1), CancellationToken.None);
+        var proof = new PlatformPolicyProofStore(fixture.DataSource, TimeProvider.System);
+        var coordinator = new PlatformPolicyProofCoordinator(
+            new KubernetesPlatformPolicyInventoryReader(http),
+            PlatformEgressFixtures.Cilium(resource, exactHost: true, reservationReader: reservations),
+            proof, TimeProvider.System);
+        var frozen = new PlatformPolicyProofFrozenTarget(
+            Guid.NewGuid(), target, "cluster", "agentweaver", Guid.NewGuid().ToString("N"),
+            1, Hash("guard"), Hash("profile"));
+        var preparation = new PlatformPolicyProofPreparation(
+            "preparation", 1, reservation.SourceId, reservation.SourceRevision, reservation.Policy.SourceHash,
+            PlatformEgressAcsCompiler.CompilerVersion, reservation.Policy.Destinations);
+        var request = new PlatformPolicyProofHoldRequest(
+            frozen.HoldId, target, frozen.PhysicalTarget, frozen.Namespace, frozen.NamespaceUid,
+            frozen.SealEpoch, frozen.GuardDigest, frozen.ProfileDigest, preparation.RegistryRevision,
+            preparation.PreparationId, reservation.ReservationId);
+
+        var mutations = new[]
+        {
+            reservation with { ResourceVersion = "other" },
+            reservation with { ObjectUid = "other" },
+            reservation with { IdempotencyKey = "other" },
+            reservation with { SourceEpoch = 2 },
+            reservation with { SourceRevision = 2 },
+            reservation with { SourceId = "other" },
+            reservation with { Generation = 2 },
+            reservation with { RequestFingerprint = Hash("other") },
+            reservation with { CreatedAt = reservation.CreatedAt.AddTicks(10) },
+            reservation with { ReservationId = Guid.NewGuid() },
+            reservation with { Policy = reservation.Policy with { Mode = PlatformEgressMode.PublicHttps } },
+            reservation with { Policy = reservation.Policy with { Generation = 2 } },
+            reservation with { Policy = reservation.Policy with { SourceHash = Hash("other") } },
+            reservation with { Policy = reservation.Policy with { IntentHash = Hash("other") } },
+            reservation with { Policy = reservation.Policy with { Destinations = [new("other.example.com", 443)] } },
+        };
+
+        async Task RejectAsync(PlatformEgressApplyReservation changed)
+        {
+            var input = preparation with
+            {
+                SourceId = changed.SourceId,
+                SourceRevision = changed.SourceRevision,
+                SourceHash = changed.Policy.SourceHash,
+                SystemDestinations = changed.Policy.Destinations,
+            };
+            var error = await Assert.ThrowsAsync<PlatformPolicyProofException>(() =>
+                coordinator.ProveAsync(input, frozen, changed, CancellationToken.None));
+            Assert.Equal("policy_fence_conflict", error.Code);
+        }
+
+        foreach (var changed in mutations)
+            await RejectAsync(changed);
+        await using (var query = fixture.DataSource.CreateCommand(
+            "SELECT count(*) FROM environment.platform_policy_proof_holds WHERE target_id=@target"))
+        {
+            query.Parameters.AddWithValue("target", target);
+            Assert.Equal(0L, await query.ExecuteScalarAsync());
+        }
+        var hold = await proof.AcquireHoldAsync(request, CancellationToken.None);
+        var receipt = await proof.PersistReceiptAsync(Receipt(hold) with
+        {
+            SourceEpoch = reservation.SourceEpoch,
+            SourceRevision = preparation.SourceRevision,
+            SourceId = preparation.SourceId,
+            SourceHash = preparation.SourceHash,
+            IntentHash = reservation.Policy.IntentHash,
+            PolicyGeneration = reservation.Generation,
+        }, CancellationToken.None);
+        var saved = await proof.ReadCurrentReceiptAsync(target, frozen.HoldId, CancellationToken.None);
+        foreach (var changed in mutations)
+            await RejectAsync(changed);
+        var equal = reservation with
+        {
+            Replayed = true,
+            Policy = reservation.Policy with
+            {
+                Destinations = reservation.Policy.Destinations.ToArray().ToImmutableArray(),
+            },
+        };
+        var replay = await coordinator.ProveAsync(preparation, frozen, equal, CancellationToken.None);
+        Assert.True(replay.Replayed);
+        Assert.Equal(receipt.ReceiptId, replay.ReceiptId);
+        Assert.Equal(saved?.SnapshotJson, (await proof.ReadCurrentReceiptAsync(target, frozen.HoldId, CancellationToken.None))?.SnapshotJson);
+        Assert.Equal(0, api.Calls);
+        Assert.True((await proof.AcquireHoldAsync(request, CancellationToken.None)).Replayed);
+    }
+
+    [Theory]
+    [InlineData("https://other.test/", "policy_fence_conflict")]
+    [InlineData("https://kubernetes.test:444/", "policy_fence_conflict")]
+    [InlineData("http://kubernetes.test/", "policy_fence_unavailable")]
+    [InlineData("https://kubernetes.test/base", "policy_fence_unavailable")]
+    [InlineData("https://kubernetes.test/base/", "policy_fence_unavailable")]
+    public async Task TransportMismatchFailsBeforeHoldOrHttp(string readerAddress, string code)
+    {
+        var readerApi = new CountingApi();
+        var writerApi = new CountingApi();
+        using var reader = new HttpClient(readerApi) { BaseAddress = new Uri(readerAddress) };
+        using var writer = new HttpClient(writerApi) { BaseAddress = new Uri("https://kubernetes.test/") };
+        var resource = new KubernetesCiliumPolicyResourceStore(writer);
+        var target = resource.GetTargetId("agentweaver", CiliumPlatformEgressProvider.PolicyName);
+        var reservations = new PlatformEgressApplyReservationStore(fixture.DataSource, TimeProvider.System);
+        var reservation = await reservations.ReserveAsync(
+            Request(target, Guid.NewGuid().ToString("N"), 1), CancellationToken.None);
+        var coordinator = new PlatformPolicyProofCoordinator(
+            new KubernetesPlatformPolicyInventoryReader(reader),
+            PlatformEgressFixtures.Cilium(resource, exactHost: true, reservationReader: reservations),
+            new PlatformPolicyProofStore(fixture.DataSource, TimeProvider.System), TimeProvider.System);
+        var preparation = new PlatformPolicyProofPreparation(
+            "preparation", 1, reservation.SourceId, reservation.SourceRevision, reservation.Policy.SourceHash,
+            PlatformEgressAcsCompiler.CompilerVersion, reservation.Policy.Destinations);
+        var frozen = new PlatformPolicyProofFrozenTarget(
+            Guid.NewGuid(), target, "cluster", "agentweaver", Guid.NewGuid().ToString("N"),
+            1, Hash("guard"), Hash("profile"));
+        var error = await Assert.ThrowsAsync<PlatformPolicyProofException>(() =>
+            coordinator.ProveAsync(preparation, frozen, reservation, CancellationToken.None));
+        Assert.Equal(code, error.Code);
+        Assert.Equal(0, readerApi.Calls);
+        Assert.Equal(0, writerApi.Calls);
+        await using var query = fixture.DataSource.CreateCommand(
+            "SELECT count(*) FROM environment.platform_policy_proof_holds WHERE hold_id=@hold");
+        query.Parameters.AddWithValue("hold", frozen.HoldId);
+        Assert.Equal(0L, await query.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task UnavailableProofStoreFailsBeforeKubernetes()
+    {
+        var api = new CountingApi();
+        using var http = new HttpClient(api) { BaseAddress = new Uri("https://kubernetes.test/") };
+        var resource = new KubernetesCiliumPolicyResourceStore(http);
+        var target = resource.GetTargetId("agentweaver", CiliumPlatformEgressProvider.PolicyName);
+        var reservations = new PlatformEgressApplyReservationStore(fixture.DataSource, TimeProvider.System);
+        var reservation = await reservations.ReserveAsync(
+            Request(target, Guid.NewGuid().ToString("N"), 1), CancellationToken.None);
+        await using var unavailable = NpgsqlDataSource.Create(
+            "Host=127.0.0.1;Port=1;Database=unavailable;Username=test;Timeout=1;Pooling=false");
+        var coordinator = new PlatformPolicyProofCoordinator(
+            new KubernetesPlatformPolicyInventoryReader(http),
+            PlatformEgressFixtures.Cilium(resource, exactHost: true, reservationReader: reservations),
+            new PlatformPolicyProofStore(unavailable, TimeProvider.System), TimeProvider.System);
+        var frozen = new PlatformPolicyProofFrozenTarget(
+            Guid.NewGuid(), target, "cluster", "agentweaver", Guid.NewGuid().ToString("N"),
+            1, Hash("guard"), Hash("profile"));
+        var preparation = new PlatformPolicyProofPreparation(
+            "preparation", 1, reservation.SourceId, reservation.SourceRevision, reservation.Policy.SourceHash,
+            PlatformEgressAcsCompiler.CompilerVersion, reservation.Policy.Destinations);
+        var error = await Assert.ThrowsAsync<PlatformPolicyProofException>(() =>
+            coordinator.ProveAsync(preparation, frozen, reservation, CancellationToken.None));
+        Assert.Equal("policy_fence_unavailable", error.Code);
+        Assert.Equal(0, api.Calls);
+    }
+
+    [Fact]
+    public async Task HistoricalNonRootReceiptRemainsReadableButCannotReplay()
+    {
+        Assert.Equal(HistoricalSnapshotJson, PlatformPolicyProofSnapshot.Serialize(HistoricalInventory()));
+        var api = new CountingApi();
+        using var legacy = new HttpClient(api) { BaseAddress = new Uri("https://legacy.test/base") };
+        var resource = new KubernetesCiliumPolicyResourceStore(legacy);
+        var target = resource.GetTargetId("agentweaver", CiliumPlatformEgressProvider.PolicyName);
+        var reservations = new PlatformEgressApplyReservationStore(fixture.DataSource, TimeProvider.System);
+        var reservation = await reservations.ReserveAsync(
+            Request(target, Guid.NewGuid().ToString("N"), 1) with
+            {
+                ObjectUid = "policy-uid",
+                ResourceVersion = "42",
+            }, CancellationToken.None);
+        var proof = new PlatformPolicyProofStore(fixture.DataSource, TimeProvider.System);
+        var frozen = new PlatformPolicyProofFrozenTarget(
+            Guid.NewGuid(), target, "legacy-cluster", "agentweaver", "namespace-uid",
+            1, Hash("guard"), Hash("profile"));
+        var preparation = new PlatformPolicyProofPreparation(
+            "preparation", 1, reservation.SourceId, reservation.SourceRevision, reservation.Policy.SourceHash,
+            PlatformEgressAcsCompiler.CompilerVersion, reservation.Policy.Destinations);
+        using (var baselineClient = new HttpClient(new HistoricalInventoryApi())
+        {
+            BaseAddress = new Uri("https://legacy.test/base"),
+        })
+        {
+            var baseline = await new KubernetesPlatformPolicyInventoryReader(baselineClient).CaptureAsync(
+                frozen.PhysicalTarget, frozen.Capture(SystemOnlyPolicyCeiling.Create(preparation.SystemDestinations)),
+                CancellationToken.None);
+            Assert.Equal(HistoricalSnapshotJson, PlatformPolicyProofSnapshot.Serialize(baseline));
+        }
+        var request = new PlatformPolicyProofHoldRequest(
+            frozen.HoldId, target, frozen.PhysicalTarget, frozen.Namespace, frozen.NamespaceUid,
+            frozen.SealEpoch, frozen.GuardDigest, frozen.ProfileDigest, preparation.RegistryRevision,
+            preparation.PreparationId, reservation.ReservationId);
+        var hold = await proof.AcquireHoldAsync(request, CancellationToken.None);
+        await proof.PersistReceiptAsync(Receipt(hold) with
+        {
+            SnapshotId = HistoricalSnapshotId,
+            ObjectUid = "policy-uid",
+            PostWriteResourceVersion = "42",
+            SnapshotJson = HistoricalSnapshotJson,
+        }, CancellationToken.None);
+        var saved = await proof.ReadCurrentReceiptAsync(target, frozen.HoldId, CancellationToken.None);
+        Assert.NotNull(saved);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(HistoricalSnapshotJson), JsonNode.Parse(saved.SnapshotJson)));
+        foreach (var address in new[] { "https://legacy.test/base", "https://legacy.test/base/" })
+        {
+            using var client = new HttpClient(api, disposeHandler: false) { BaseAddress = new Uri(address) };
+            var writer = new KubernetesCiliumPolicyResourceStore(client);
+            var coordinator = new PlatformPolicyProofCoordinator(
+                new KubernetesPlatformPolicyInventoryReader(client),
+                PlatformEgressFixtures.Cilium(writer, exactHost: true, reservationReader: reservations),
+                proof, TimeProvider.System);
+            var error = await Assert.ThrowsAsync<PlatformPolicyProofException>(() =>
+                coordinator.ProveAsync(preparation, frozen, reservation, CancellationToken.None));
+            Assert.Equal("policy_fence_unavailable", error.Code);
+        }
+        using var root = new HttpClient(api, disposeHandler: false) { BaseAddress = new Uri("https://legacy.test/") };
+        var rootStore = new KubernetesCiliumPolicyResourceStore(root);
+        Assert.NotEqual(target, rootStore.GetTargetId("agentweaver", CiliumPlatformEgressProvider.PolicyName));
+        var rootCoordinator = new PlatformPolicyProofCoordinator(
+            new KubernetesPlatformPolicyInventoryReader(root),
+            PlatformEgressFixtures.Cilium(rootStore, exactHost: true, reservationReader: reservations),
+            proof, TimeProvider.System);
+        var conflict = await Assert.ThrowsAsync<PlatformPolicyProofException>(() =>
+            rootCoordinator.ProveAsync(preparation, frozen, reservation, CancellationToken.None));
+        Assert.Equal("policy_fence_conflict", conflict.Code);
+        Assert.Equal(saved, await proof.ReadCurrentReceiptAsync(target, frozen.HoldId, CancellationToken.None));
+        Assert.True((await proof.AcquireHoldAsync(request, CancellationToken.None)).Replayed);
+        Assert.Equal(0, api.Calls);
     }
 
     [Theory]
@@ -781,6 +1022,74 @@ public sealed class PlatformPolicyProofPostgresTests(EnvironmentPostgresFixture 
             4,
             """{"schemaVersion":1}""",
             DateTimeOffset.UtcNow);
+
+    private const string HistoricalPolicyJson =
+        """{"apiVersion":"cilium.io/v2","kind":"CiliumNetworkPolicy","metadata":{"name":"agenthost-platform-egress","namespace":"agentweaver","resourceVersion":"42","uid":"policy-uid"},"spec":{"egress":[],"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}}}}""";
+
+    private const string HistoricalSnapshotId = "46ff2450cc1bccd3a49a138211fe8fb731d32b0da976d4c577db76ab111e3d7a";
+
+    [Fact]
+    public void HistoricalFixtureMatchesBaselineSerializer()
+    {
+        var after = HistoricalInventory();
+        var snapshotJson = JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = 1,
+                after.SnapshotId,
+                after.NamespaceUid,
+                listResourceVersions = new
+                {
+                    networkPolicies = after.NetworkPolicyListResourceVersion,
+                    ciliumNetworkPolicies = after.CiliumPolicyListResourceVersion,
+                    ciliumClusterwideNetworkPolicies = after.CiliumClusterwidePolicyListResourceVersion,
+                },
+                policies = after.Policies.Select(policy => new
+                {
+                    policy.ApiVersion,
+                    policy.Kind,
+                    policy.Namespace,
+                    policy.Name,
+                    policy.Uid,
+                    policy.ResourceVersion,
+                    policy.CanonicalContent,
+                }),
+            });
+        Assert.Equal(HistoricalSnapshotJson, snapshotJson);
+    }
+
+    // The v1 serializer at b949daea emits this exact snapshot for HistoricalInventory.
+    private const string HistoricalSnapshotJson =
+        """{"schemaVersion":1,"SnapshotId":"46ff2450cc1bccd3a49a138211fe8fb731d32b0da976d4c577db76ab111e3d7a","NamespaceUid":"namespace-uid","listResourceVersions":{"networkPolicies":"10","ciliumNetworkPolicies":"11","ciliumClusterwideNetworkPolicies":"12"},"policies":[{"ApiVersion":"cilium.io/v2","Kind":"CiliumNetworkPolicy","Namespace":"agentweaver","Name":"agenthost-platform-egress","Uid":"policy-uid","ResourceVersion":"42","CanonicalContent":"{\u0022apiVersion\u0022:\u0022cilium.io/v2\u0022,\u0022kind\u0022:\u0022CiliumNetworkPolicy\u0022,\u0022metadata\u0022:{\u0022name\u0022:\u0022agenthost-platform-egress\u0022,\u0022namespace\u0022:\u0022agentweaver\u0022,\u0022resourceVersion\u0022:\u002242\u0022,\u0022uid\u0022:\u0022policy-uid\u0022},\u0022spec\u0022:{\u0022egress\u0022:[],\u0022endpointSelector\u0022:{\u0022matchLabels\u0022:{\u0022agentweaver.io/workload\u0022:\u0022agenthost\u0022}}}}"}]}""";
+
+    private static KubernetesPlatformPolicyInventory HistoricalInventory()
+    {
+        using var document = JsonDocument.Parse(HistoricalPolicyJson);
+        return new(
+            "legacy-cluster", "agentweaver", "namespace-uid", "10", "11", "12",
+            [new("cilium.io/v2", "CiliumNetworkPolicy", "agentweaver", "agenthost-platform-egress",
+                "policy-uid", "42", HistoricalPolicyJson, document.RootElement.Clone())],
+            HistoricalSnapshotId);
+    }
+
+    private sealed class HistoricalInventoryApi : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var body = path == "/api/v1/namespaces/agentweaver"
+                ? """{"metadata":{"uid":"namespace-uid"}}"""
+                : path.EndsWith("/ciliumclusterwidenetworkpolicies", StringComparison.Ordinal)
+                    ? """{"apiVersion":"cilium.io/v2","kind":"CiliumClusterwideNetworkPolicyList","metadata":{"resourceVersion":"12"},"items":[]}"""
+                    : path.EndsWith("/ciliumnetworkpolicies", StringComparison.Ordinal)
+                        ? $$"""{"apiVersion":"cilium.io/v2","kind":"CiliumNetworkPolicyList","metadata":{"resourceVersion":"11"},"items":[{{HistoricalPolicyJson}}]}"""
+                        : """{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicyList","metadata":{"resourceVersion":"10"},"items":[]}""";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();

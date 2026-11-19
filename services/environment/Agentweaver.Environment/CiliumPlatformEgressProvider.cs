@@ -83,6 +83,7 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
 
     internal string GetProofTargetId() => _store.GetTargetId(_options.Namespace, PolicyName);
     internal string ProofNamespace => _options.Namespace;
+    internal Uri? ProofBaseAddress => (_store as KubernetesCiliumPolicyResourceStore)?.BaseAddress;
 
     public async Task<PlatformEgressStatus> ApplyAsync(
         PlatformEgressPolicy policy,

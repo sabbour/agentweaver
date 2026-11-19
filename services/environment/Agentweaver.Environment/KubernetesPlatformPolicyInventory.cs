@@ -65,6 +65,7 @@ public sealed record KubernetesPlatformPolicyCapture(
 
 public sealed class KubernetesPlatformPolicyInventoryReader(HttpClient httpClient)
 {
+    internal Uri? BaseAddress => httpClient.BaseAddress;
     internal const int MaxPagesPerCollection = 16;
     internal const int MaxObjects = 2_048;
     internal const int MaxBytes = 8 * 1024 * 1024;

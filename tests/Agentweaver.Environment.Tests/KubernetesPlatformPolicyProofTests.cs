@@ -5,11 +5,66 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Npgsql;
 
 namespace Agentweaver.Environment.Tests;
 
 public sealed class KubernetesPlatformPolicyProofTests
 {
+    [Fact]
+    public void SnapshotLimitCountsTheSerializedUtf8Representation()
+    {
+        var original = Inventory(SafePolicies());
+        var record = original.Policies[0] with { CanonicalContent = "é\"\\\n" };
+        var inventory = original with { Policies = [record] };
+        var baseline = PlatformPolicyProofSnapshot.Serialize(inventory);
+        Assert.Contains("\\u00E9", baseline);
+        Assert.Contains("\\u0022", baseline);
+        var remaining = PlatformPolicyProofSnapshot.MaxBytes - Encoding.UTF8.GetByteCount(baseline);
+        var exact = inventory with
+        {
+            Policies = [record with { CanonicalContent = record.CanonicalContent + new string('x', remaining) }],
+        };
+        var json = PlatformPolicyProofSnapshot.Serialize(exact);
+        Assert.Equal(PlatformPolicyProofSnapshot.MaxBytes, Encoding.UTF8.GetByteCount(json));
+        var over = exact with
+        {
+            Policies = [exact.Policies[0] with { CanonicalContent = exact.Policies[0].CanonicalContent + "x" }],
+        };
+        var error = Assert.Throws<PlatformPolicyProofException>(() => PlatformPolicyProofSnapshot.Serialize(over));
+        Assert.Equal("policy_semantics_unsupported", error.Code);
+    }
+
+    [Fact]
+    public void ProofCompositionDoesNotAcceptCallerOwnedTransports()
+    {
+        Assert.Empty(typeof(PlatformPolicyProofCoordinator).GetConstructors());
+        var create = Assert.Single(typeof(PlatformPolicyProofFactory).GetMethods(),
+            method => method.Name == nameof(PlatformPolicyProofFactory.Create));
+        Assert.DoesNotContain(create.GetParameters(), parameter =>
+            parameter.ParameterType == typeof(HttpClient) ||
+            typeof(HttpMessageHandler).IsAssignableFrom(parameter.ParameterType) ||
+            parameter.ParameterType == typeof(KubernetesPlatformPolicyInventoryReader) ||
+            parameter.ParameterType == typeof(ICiliumPolicyResourceStore));
+    }
+
+    [Fact]
+    public void ProofFactoryRejectsTheSameNormalizedTokenFile()
+    {
+        using var dataSource = NpgsqlDataSource.Create("Host=localhost;Database=test;Username=test");
+        var token = Path.Combine(Directory.GetCurrentDirectory(), "proof-token");
+        var equivalent = Path.Combine(Directory.GetCurrentDirectory(), "other", "..", "proof-token");
+        if (OperatingSystem.IsWindows())
+            equivalent = equivalent.ToUpperInvariant();
+        var error = Assert.Throws<PlatformPolicyProofException>(() =>
+            PlatformPolicyProofFactory.Create(
+                "https://kubernetes.test/", [], token, equivalent, dataSource,
+                new CiliumEgressProviderOptions("agentweaver", new Version(1, 0), 1, "test",
+                    ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty),
+                new CiliumPlatformEgressOptions("agentweaver", true, []), TimeProvider.System));
+        Assert.Equal("policy_fence_unavailable", error.Code);
+    }
+
     [Fact]
     public async Task InventoryCapturesAllThreeCollectionsAndStableHashes()
     {
