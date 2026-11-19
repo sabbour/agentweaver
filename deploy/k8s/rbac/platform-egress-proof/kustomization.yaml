@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentweaver
+resources:
+  - environment-platform-policy-reader.yaml
+  - environment-platform-egress-writer.yaml
+  - platform-policy-fence.yaml

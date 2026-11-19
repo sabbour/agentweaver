@@ -512,6 +512,235 @@ namespace Agentweaver.Environment.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentPlatformPolicyProofHoldRow", b =>
+                {
+                    b.Property<Guid>("HoldId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("hold_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("GuardDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("guard_digest");
+
+                    b.Property<string>("Namespace")
+                        .IsRequired()
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("namespace");
+
+                    b.Property<string>("NamespaceUid")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("namespace_uid");
+
+                    b.Property<string>("PhysicalTarget")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("physical_target");
+
+                    b.Property<string>("PreparationId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("preparation_id");
+
+                    b.Property<string>("ProfileDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("profile_digest");
+
+                    b.Property<long>("RegistryRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("registry_revision");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<Guid>("ReservationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_id");
+
+                    b.Property<long>("SealEpoch")
+                        .HasColumnType("bigint")
+                        .HasColumnName("seal_epoch");
+
+                    b.Property<string>("TargetId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("target_id");
+
+                    b.HasKey("HoldId");
+
+                    b.HasIndex("ReservationId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_environment_platform_policy_proof_holds_reservation");
+
+                    b.HasIndex("TargetId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_environment_platform_policy_proof_holds_target");
+
+                    b.HasIndex("PhysicalTarget", "NamespaceUid")
+                        .IsUnique()
+                        .HasDatabaseName("ux_environment_platform_policy_proof_holds_physical_namespace");
+
+                    b.ToTable("platform_policy_proof_holds", "environment", t =>
+                        {
+                            t.HasCheckConstraint("ck_environment_platform_policy_proof_holds_hashes", "guard_digest ~ '^[0-9a-f]{64}$' AND profile_digest ~ '^[0-9a-f]{64}$' AND request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_environment_platform_policy_proof_holds_versions", "seal_epoch > 0 AND registry_revision > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentPlatformPolicyProofReceiptRow", b =>
+                {
+                    b.Property<Guid>("ReceiptId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("receipt_id");
+
+                    b.Property<string>("CeilingVersion")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("ceiling_version");
+
+                    b.Property<string>("CompilerId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("compiler_id");
+
+                    b.Property<string>("EvaluatorVersion")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("evaluator_version");
+
+                    b.Property<DateTimeOffset>("EvidenceAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("evidence_at");
+
+                    b.Property<string>("GuardDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("guard_digest");
+
+                    b.Property<Guid>("HoldId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("hold_id");
+
+                    b.Property<string>("IntentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("intent_hash");
+
+                    b.Property<string>("ObjectUid")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("object_uid");
+
+                    b.Property<long>("PolicyGeneration")
+                        .HasColumnType("bigint")
+                        .HasColumnName("policy_generation");
+
+                    b.Property<string>("PostWriteResourceVersion")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("post_write_resource_version");
+
+                    b.Property<string>("ProfileDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("profile_digest");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<Guid>("ReservationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_id");
+
+                    b.Property<string>("SnapshotId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("snapshot_id");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("snapshot_json");
+
+                    b.Property<long>("SourceEpoch")
+                        .HasColumnType("bigint")
+                        .HasColumnName("source_epoch");
+
+                    b.Property<string>("SourceHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("source_hash");
+
+                    b.Property<string>("SourceId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("source_id");
+
+                    b.Property<long>("SourceRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("source_revision");
+
+                    b.Property<string>("SpecDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("spec_digest");
+
+                    b.Property<string>("TargetId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("target_id");
+
+                    b.HasKey("ReceiptId");
+
+                    b.HasIndex("HoldId", "TargetId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_environment_platform_policy_proof_receipts_hold");
+
+                    b.ToTable("platform_policy_proof_receipts", "environment", t =>
+                        {
+                            t.HasCheckConstraint("ck_environment_platform_policy_proof_receipts_hashes", "source_hash ~ '^[0-9a-f]{64}$' AND intent_hash ~ '^[0-9a-f]{64}$' AND profile_digest ~ '^[0-9a-f]{64}$' AND guard_digest ~ '^[0-9a-f]{64}$' AND snapshot_id ~ '^[0-9a-f]{64}$' AND spec_digest ~ '^[0-9a-f]{64}$' AND request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_environment_platform_policy_proof_receipts_snapshot", "jsonb_typeof(snapshot_json) = 'object'");
+
+                            t.HasCheckConstraint("ck_environment_platform_policy_proof_receipts_versions", "source_epoch > 0 AND source_revision > 0 AND policy_generation > 0");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Environment.EnvironmentProviderLifecycleReportRow", b =>
                 {
                     b.Property<string>("TenantId")
@@ -1311,6 +1540,15 @@ namespace Agentweaver.Environment.Migrations
                     b.HasOne("Agentweaver.Environment.EnvironmentOwnerRow", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "ProjectId", "RunId", "EnvironmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Environment.EnvironmentPlatformPolicyProofReceiptRow", b =>
+                {
+                    b.HasOne("Agentweaver.Environment.EnvironmentPlatformPolicyProofHoldRow", null)
+                        .WithMany()
+                        .HasForeignKey("HoldId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

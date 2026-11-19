@@ -1,0 +1,115 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: environment-platform-policy-sealed-epoch
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - networking.k8s.io
+        apiVersions:
+          - "*"
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - networkpolicies
+          - networkpolicies/status
+        scope: Namespaced
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - "*"
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumnetworkpolicies
+          - ciliumnetworkpolicies/status
+        scope: Namespaced
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - "*"
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumclusterwidenetworkpolicies
+          - ciliumclusterwidenetworkpolicies/status
+        scope: Cluster
+      - apiGroups:
+          - ""
+        apiVersions:
+          - "*"
+        operations:
+          - DELETE
+        resources:
+          - namespaces
+        scope: Cluster
+      - apiGroups:
+          - apiextensions.k8s.io
+        apiVersions:
+          - "*"
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - customresourcedefinitions
+        scope: Cluster
+  matchConditions:
+    - name: target-policy-boundary
+      expression: >-
+        request.namespace == 'agentweaver' ||
+        (request.resource.group == 'cilium.io' &&
+         request.resource.resource == 'ciliumclusterwidenetworkpolicies') ||
+        (request.resource.group == '' &&
+         request.resource.resource == 'namespaces' &&
+         (request.name == 'agentweaver' ||
+          (object != null && object.metadata.name == 'agentweaver') ||
+          (oldObject != null && oldObject.metadata.name == 'agentweaver'))) ||
+        (request.resource.group == 'apiextensions.k8s.io' &&
+         request.resource.resource == 'customresourcedefinitions' &&
+         (request.name in [
+           'networkpolicies.networking.k8s.io',
+           'ciliumnetworkpolicies.cilium.io',
+           'ciliumclusterwidenetworkpolicies.cilium.io'] ||
+          (object != null && object.metadata.name in [
+            'networkpolicies.networking.k8s.io',
+            'ciliumnetworkpolicies.cilium.io',
+            'ciliumclusterwidenetworkpolicies.cilium.io']) ||
+          (oldObject != null && oldObject.metadata.name in [
+            'networkpolicies.networking.k8s.io',
+            'ciliumnetworkpolicies.cilium.io',
+            'ciliumclusterwidenetworkpolicies.cilium.io'])))
+  validations:
+    - expression: >-
+        request.operation == 'UPDATE' &&
+        request.namespace == 'agentweaver' &&
+        request.resource.group == 'cilium.io' &&
+        request.resource.resource == 'ciliumnetworkpolicies' &&
+        request.subResource == '' &&
+        request.name == 'agenthost-platform-egress' &&
+        request.userInfo.username ==
+          'system:serviceaccount:agentweaver:environment-platform-egress-writer' &&
+        object != null &&
+        oldObject != null &&
+        object.metadata.uid == oldObject.metadata.uid &&
+        object.metadata.resourceVersion == oldObject.metadata.resourceVersion
+      message: >-
+        The sealed policy epoch denies policy mutation. The sole allowed update is the named
+        platform egress object by the dedicated writer with UID and resourceVersion preconditions.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: environment-platform-policy-sealed-epoch
+spec:
+  policyName: environment-platform-policy-sealed-epoch
+  validationActions:
+    - Deny

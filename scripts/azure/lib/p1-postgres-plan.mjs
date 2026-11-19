@@ -72,7 +72,7 @@ const GROUPS = {
   environment: {
     SELECT: '__ef_migrations_history',
     'SELECT,INSERT,UPDATE': 'owners owner_effects workspace_volume_cleanup sandbox_leases sandbox_provider_attempts sandbox_late_resource_cleanups remote_mcp_connections p1_creation_links',
-    'SELECT,INSERT': 'lifecycle_operations remote_mcp_connection_configurations remote_mcp_catalog_snapshots remote_mcp_connection_idempotency provider_lifecycle_reports runtime_bootstrap_profile_replacements platform_policy_apply_reservations sandbox_owner_mappings sandbox_egress_flows_attributed sandbox_egress_flows_unattributed',
+    'SELECT,INSERT': 'lifecycle_operations remote_mcp_connection_configurations remote_mcp_catalog_snapshots remote_mcp_connection_idempotency provider_lifecycle_reports runtime_bootstrap_profile_replacements platform_policy_apply_reservations platform_policy_proof_holds platform_policy_proof_receipts sandbox_owner_mappings sandbox_egress_flows_attributed sandbox_egress_flows_unattributed',
   },
   knowledge: {
     SELECT: 'knowledge_schema_migrations outbox_schema_migrations',
@@ -482,6 +482,50 @@ const APPEND_ONLY_GUARDS = {
         message: 'platform policy apply reservations are append-only', sqlState: '55000',
       },
     ],
+    platform_policy_proof_holds: [
+      {
+        trigger: 'platform_policy_proof_holds_immutable',
+        function: 'reject_platform_policy_proof_mutation()', triggerType: 27,
+        message: 'platform policy proof records are append-only', sqlState: '55000',
+      },
+      {
+        trigger: 'platform_policy_proof_holds_no_truncate',
+        function: 'reject_platform_policy_proof_mutation()', triggerType: 34,
+        message: 'platform policy proof records are append-only', sqlState: '55000',
+      },
+    ],
+    platform_policy_proof_receipts: [
+      {
+        trigger: 'platform_policy_proof_receipts_hold_identity',
+        function: 'enforce_platform_policy_proof_receipt_hold()', triggerType: 7,
+        message: 'platform policy proof receipt does not match its hold', sqlState: '23514',
+        functionSource: `BEGIN
+          IF NOT EXISTS (
+              SELECT 1
+              FROM environment.platform_policy_proof_holds hold
+              WHERE hold.hold_id = NEW.hold_id
+                AND hold.target_id = NEW.target_id
+                AND hold.reservation_id = NEW.reservation_id
+                AND hold.profile_digest = NEW.profile_digest
+                AND hold.guard_digest = NEW.guard_digest
+          ) THEN
+              RAISE EXCEPTION 'platform policy proof receipt does not match its hold'
+                  USING ERRCODE = '23514';
+          END IF;
+          RETURN NEW;
+        END;`,
+      },
+      {
+        trigger: 'platform_policy_proof_receipts_immutable',
+        function: 'reject_platform_policy_proof_mutation()', triggerType: 27,
+        message: 'platform policy proof records are append-only', sqlState: '55000',
+      },
+      {
+        trigger: 'platform_policy_proof_receipts_no_truncate',
+        function: 'reject_platform_policy_proof_mutation()', triggerType: 34,
+        message: 'platform policy proof records are append-only', sqlState: '55000',
+      },
+    ],
   },
   orchestrator: {
     maf_runtime_evidence_receipts: [
@@ -533,7 +577,9 @@ const FUNCTIONS = {
   environment: [
     'enforce_p1_creation_link_immutability()',
     'enforce_platform_policy_apply_reservation_identity()',
+    'enforce_platform_policy_proof_receipt_hold()',
     'reject_platform_policy_apply_reservation_mutation()',
+    'reject_platform_policy_proof_mutation()',
   ],
   knowledge: [
     'reject_knowledge_revision_mutation()',
@@ -664,7 +710,7 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 051 adds immutable native-child rebind receipts.
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
     // Bind each owner migration catalog into the reviewed plan hash.
-    environmentVersions: Array.from({ length: 14 }, (_, index) => index + 1),
+    environmentVersions: Array.from({ length: 15 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 12 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',

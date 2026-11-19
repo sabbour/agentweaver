@@ -108,6 +108,94 @@ The System-only candidate is input for the later admission barrier. This flow
 does not install the barrier or admit a policy. A later commit must wait until
 the barrier is installed on every affected target.
 
+## Full policy-set proof
+
+Environment can capture a source-only proof of the complete policy set that can
+affect AgentHost. The capture reads every
+`networking.k8s.io/v1` `NetworkPolicy` and `cilium.io/v2`
+`CiliumNetworkPolicy` in the AgentHost namespace, plus every
+`CiliumClusterwideNetworkPolicy`. It reads through all pages without a label or
+name filter. The capture reads the namespace UID and binds the lists to an
+attested physical target, sealed epoch, guard digest, profile digest, evaluator
+version, and System-only ceiling.
+
+The inventory hashes all listed objects, including policies whose selectors do
+not match AgentHost. Object keys are canonical, array order is retained, and
+duplicate identities or deleting objects fail the capture. A list
+`resourceVersion` is diagnostic data. The snapshot hash does not act as a
+cross-kind Kubernetes clock.
+
+The evaluator models the union of selected Kubernetes and Cilium egress allows.
+It supports exact pod and namespace identities, numeric TCP and UDP ports,
+exact Cilium endpoint and FQDN destinations, and exact Cilium denies. It treats
+omitted peers or ports as wildcards. Selected unsupported semantics stop the
+proof. Disjoint selectors are ignored only after the selector itself is
+validated.
+
+AgentHost egress must remain inside the System-only ceiling:
+
+- exact protected System destinations on TCP 443;
+- kube-dns on UDP and TCP 53;
+- Environment, Events & Sessions, Identity Broker, Orchestrator, and Projects &
+  Config on TCP 8443; and
+- Identity Broker on TCP 8444.
+
+The proof starts from unrestricted traffic when no selected policy establishes
+default-deny egress. It rejects any remaining combined allow outside the
+ceiling. DNS narrowing does not make a broader packet allow safe, and a CIDR
+deny cannot subtract an FQDN or endpoint grant. An extra exact grant in an
+ordinary input such as `agenthost-model-egress` blocks the proof.
+
+The optional proof RBAC is under
+`deploy/k8s/rbac/platform-egress-proof/`. It gives the Environment reader only
+the three policy list operations and `get` on namespace `agentweaver`. It gives
+a separate writer service account only `get` and `update` on
+`CiliumNetworkPolicy/agenthost-platform-egress`. The validating admission
+policy denies other policy mutations during a sealed epoch. The bundle is not
+part of the default Kustomize apply set.
+
+```mermaid
+sequenceDiagram
+    participant E as Environment proof coordinator
+    participant DB as Environment PostgreSQL
+    participant K as Kubernetes API
+    participant V as Full policy-set evaluator
+    E->>DB: Acquire durable target hold
+    DB-->>E: Hold bound to target and reservation
+    E->>K: List all namespaced and cluster policies
+    K-->>E: Paged raw inventories and list resourceVersions
+    E->>V: Substitute the exact System-only render
+    V-->>E: Safe candidate or coded failure
+    E->>K: Reserved UID and resourceVersion PUT
+    K-->>E: Reserved write result
+    E->>K: Independent named GET and full inventory
+    K-->>E: Observed object and complete snapshot
+    E->>V: Evaluate the observed combined set
+    V-->>E: Safe observed set or coded failure
+    E->>DB: Insert immutable per-target receipt and snapshot
+    DB-->>E: Durable current receipt
+    Note over E,K: An inventory, readback, or epoch conflict creates no successful receipt
+```
+
+PostgreSQL binds one nonexpiring hold to one physical cluster and namespace UID,
+registry revision, preparation, and reservation. A writer path does not start
+before that binding exists. The coordinator retains the preflight and
+post-write snapshots, then compares the independent named read with the policy
+list element. A lost response is retried only through the same reserved UID and
+resourceVersion. A changed set returns `policy_readback_mismatch`; a stale or
+competing hold returns `policy_fence_conflict`.
+
+Receipt rows are append-only and unique per hold and target. An identical retry
+returns the current receipt. A changed input, stale hold, or different snapshot
+does not return success. The all-target commit gate requires one current
+receipt and retained hold for every target in the frozen registry revision.
+An empty or partial target list keeps the canonical Platform Policy
+preparation uncommitted.
+
+This source slice does not register an HTTP route, install the optional fence,
+write a cluster policy, connect the all-target gate to Projects, or prove packet
+enforcement. Packet evidence and policy activation remain separate work.
+
 The existing provider capability check still requires exact-host support for
 `Allowlist`, and private-range exclusions remain a separate provider safety
 gate.

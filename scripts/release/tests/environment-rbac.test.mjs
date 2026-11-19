@@ -13,6 +13,7 @@ const manifestText = readFileSync(manifestPath, 'utf8');
 const resources = parseAllDocuments(manifestText).map(document => document.toJSON());
 const platformEgressDir = path.join(root, 'deploy', 'k8s', 'rbac', 'platform-egress');
 const platformEgressManifest = path.join(platformEgressDir, 'environment-platform-egress.yaml');
+const proofDir = path.join(root, 'deploy', 'k8s', 'rbac', 'platform-egress-proof');
 
 const expectedPlatformEgressObjects = [
   {
@@ -127,8 +128,56 @@ test('proposed RBAC stays outside the active Kustomize apply set', () => {
   const overlay = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
   assert.equal(overlay.resources.some(resource => resource.includes('proposed/environment-agent-sandbox-rbac')), false);
   assert.equal(overlay.resources.some(resource => resource.includes('rbac/platform-egress')), false);
+  assert.equal(overlay.resources.some(resource => resource.includes('rbac/platform-egress-proof')), false);
   assert.equal(resources.some(resource =>
     ['Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding'].includes(resource.kind)), true);
+});
+
+test('policy proof RBAC and fence contain only the reviewed reads and named writer exception', () => {
+  const rendered = renderKustomization(proofDir);
+  const readerRole = rendered.find(resource =>
+    resource.kind === 'Role' && resource.metadata.name === 'environment-platform-policy-reader');
+  const readerClusterRole = rendered.find(resource =>
+    resource.kind === 'ClusterRole' && resource.metadata.name === 'environment-platform-policy-reader');
+  const writerRole = rendered.find(resource =>
+    resource.kind === 'Role' && resource.metadata.name === 'environment-platform-egress-writer');
+  const fence = rendered.find(resource => resource.kind === 'ValidatingAdmissionPolicy');
+  const binding = rendered.find(resource => resource.kind === 'ValidatingAdmissionPolicyBinding');
+
+  assert.deepEqual(ruleEntries(readerRole, 'namespaced').sort(), expectedEntries('namespaced', [
+    ['networking.k8s.io', ['networkpolicies'], ['list']],
+    ['cilium.io', ['ciliumnetworkpolicies'], ['list']],
+  ]).sort());
+  assert.deepEqual(ruleEntries(readerClusterRole, 'cluster').sort(), expectedEntries('cluster', [
+    ['cilium.io', ['ciliumclusterwidenetworkpolicies'], ['list']],
+    ['', ['namespaces'], ['get'], 'agentweaver'],
+  ]).sort());
+  assert.deepEqual(ruleEntries(writerRole, 'namespaced'), expectedEntries('namespaced', [
+    ['cilium.io', ['ciliumnetworkpolicies'], ['get', 'update'], 'agenthost-platform-egress'],
+  ]));
+  assert.equal(rendered.filter(resource => resource.kind === 'ServiceAccount').length, 1);
+  assert.equal(rendered.find(resource =>
+    resource.kind === 'RoleBinding' &&
+    resource.metadata.name === writerRole.metadata.name).subjects[0].name,
+  'environment-platform-egress-writer');
+  assert.equal(fence.spec.failurePolicy, 'Fail');
+  assert.equal(binding.spec.policyName, fence.metadata.name);
+  assert.deepEqual(binding.spec.validationActions, ['Deny']);
+  assert.match(fence.spec.validations[0].expression, /resourceVersion == oldObject\.metadata\.resourceVersion/);
+  assert.match(fence.spec.validations[0].expression, /environment-platform-egress-writer/);
+  assert.match(JSON.stringify(fence), /ciliumclusterwidenetworkpolicies/);
+  assert.match(JSON.stringify(fence), /customresourcedefinitions/);
+  assert.doesNotMatch(JSON.stringify(fence), /"namespaceSelector"/);
+
+  const text = readFileSync(path.join(proofDir, 'environment-platform-policy-reader.yaml'), 'utf8') +
+    readFileSync(path.join(proofDir, 'environment-platform-egress-writer.yaml'), 'utf8');
+  assert.doesNotMatch(text, /(^|[\s\[])watch([\s,\]]|$)|\bpatch\b|\bcreate\b|\bdelete\b/);
+  assert.doesNotMatch(text, /resources:\s*\[[^\]]*\bsecrets\b/);
+
+  const workload = renderKustomization(path.join(root, 'deploy', 'k8s'));
+  assert.equal(workload.some(resource =>
+    resource.kind === 'ValidatingAdmissionPolicy' &&
+    resource.metadata.name === 'environment-platform-policy-sealed-epoch'), false);
 });
 
 test('named platform-egress bundle contains exactly the reviewed Role and RoleBinding', () => {

@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: environment-platform-egress-writer
+  namespace: agentweaver
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: environment-platform-egress-writer
+  namespace: agentweaver
+rules:
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumnetworkpolicies
+    resourceNames:
+      - agenthost-platform-egress
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: environment-platform-egress-writer
+  namespace: agentweaver
+subjects:
+  - kind: ServiceAccount
+    name: environment-platform-egress-writer
+    namespace: agentweaver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: environment-platform-egress-writer

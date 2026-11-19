@@ -505,3 +505,26 @@ For rollback after a separately approved installation:
    ```
 4. If both objects existed before installation, delete neither. Preserve both
    egress policy objects during rollback.
+
+## Review the optional policy-set proof bundle
+
+`rbac/platform-egress-proof/` is a source artifact for the reviewed sealed-epoch
+design. The default workload Kustomization does not install it.
+
+The bundle separates three authority paths:
+
+1. `environment` can list Kubernetes NetworkPolicy and namespaced and
+   cluster-wide Cilium policy collections. It can get only namespace
+   `agentweaver`.
+2. `environment-platform-egress-writer` can get and update only
+   `CiliumNetworkPolicy/agenthost-platform-egress`. It has no list, patch,
+   create, or delete permission.
+3. `environment-platform-policy-sealed-epoch` denies in-scope policy mutation,
+   collection deletion, namespace deletion, and policy CRD changes. Its only
+   update exception is the dedicated writer's compare-and-swap update of the
+   named policy.
+
+The source bundle is not an enrollment profile and does not establish that a
+cluster uses or enforces it. Do not add it to an active overlay as part of this
+source-only change. Installation, guard enrollment, credential delivery, and
+policy activation require separate reviewed target work.

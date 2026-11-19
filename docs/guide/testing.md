@@ -1011,6 +1011,21 @@ rendering and readback against a fake Kubernetes store, and the fail-closed
 reconciler. They use a fake policy source. They do not prove Cilium
 enforcement on a cluster or exact-host rules on Kata.
 
+Run the source-only full policy-set proof checks:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --filter "FullyQualifiedName~KubernetesPlatformPolicyProofTests|FullyQualifiedName~PlatformPolicyProofPostgresTests"
+node --test scripts\release\tests\environment-rbac.test.mjs
+node --test scripts\azure\tests\p1-postgres-plan.test.mjs
+```
+
+The fake Kubernetes tests cover complete, empty, malformed, forbidden, expired,
+namespaced, cluster-wide, unrelated, and combined policy sets. The PostgreSQL
+tests cover exact receipt replay, competing holds, stale revisions, append-only
+rows, and the all-target commit gate. The Node checks verify the separate RBAC,
+sealed-epoch manifest, runtime grants, and migration plan. These checks do not
+install the fence or write a cluster policy.
+
 ## Planned GitHub Canvas adapter acceptance
 
 GitHub Canvas adapter cases are unexecuted requirements, not a passing suite

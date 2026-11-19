@@ -122,6 +122,8 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             GRANT SELECT, INSERT ON environment.remote_mcp_catalog_snapshots TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.remote_mcp_connection_idempotency TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.platform_policy_apply_reservations TO {RuntimeRole};
+            GRANT SELECT, INSERT ON environment.platform_policy_proof_holds TO {RuntimeRole};
+            GRANT SELECT, INSERT ON environment.platform_policy_proof_receipts TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.sandbox_owner_mappings TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.sandbox_egress_flows_attributed TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.sandbox_egress_flows_unattributed TO {RuntimeRole};

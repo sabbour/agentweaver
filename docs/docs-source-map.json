@@ -629,6 +629,24 @@
       ]
     },
     {
+      "name": "Platform Policy complete-set proof",
+      "sourcePrefixes": [
+        "services/environment/Agentweaver.Environment/KubernetesPlatformPolicyInventory.cs",
+        "services/environment/Agentweaver.Environment/SystemOnlyPolicySetEvaluator.cs",
+        "services/environment/Agentweaver.Environment/PlatformPolicyProofCoordinator.cs",
+        "services/environment/Agentweaver.Environment/PlatformPolicyProofStore.cs",
+        "services/environment/Agentweaver.Environment/Migrations/20261119034552_PlatformPolicyProofReceipts.cs",
+        "deploy/k8s/rbac/platform-egress-proof/",
+        "tests/Agentweaver.Environment.Tests/KubernetesPlatformPolicyProofTests.cs",
+        "tests/Agentweaver.Environment.Tests/PlatformPolicyProofPostgresTests.cs"
+      ],
+      "required": [
+        "docs/architecture/environment-egress.md",
+        "docs/guide/testing.md",
+        "deploy/k8s/README.md"
+      ]
+    },
+    {
       "name": "Platform Policy preparation journal",
       "sourcePrefixes": [
         "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyRecords.cs",

@@ -312,6 +312,29 @@ public sealed class CiliumPlatformEgressProvider : IPlatformEgressProvider
     public Task<EgressTrustBundle?> GetTrustBundleAsync(CancellationToken cancellationToken) =>
         Task.FromResult<EgressTrustBundle?>(null);
 
+    internal CiliumNetworkPolicyDocument RenderForProof(
+        CiliumNetworkPolicyDocument current,
+        PlatformEgressPolicy policy,
+        long sourceEpoch)
+    {
+        if (!IsValidPolicy(policy))
+            throw new CiliumPolicyException(
+                "invalid_apply_reservation", "The proof candidate policy is invalid.");
+        var rendered = Render(current, policy, sourceEpoch);
+        if (string.IsNullOrWhiteSpace(current.Metadata.Uid) ||
+            string.IsNullOrWhiteSpace(current.Metadata.ResourceVersion))
+            throw new CiliumPolicyException(
+                "invalid_object_identity", "The proof target policy identity is incomplete.");
+        return rendered with
+        {
+            Metadata = rendered.Metadata with
+            {
+                Uid = current.Metadata.Uid,
+                ResourceVersion = current.Metadata.ResourceVersion,
+            },
+        };
+    }
+
     /// <summary>
     /// Reads the mode and hosts back from the spec, renders them again, and requires the same spec and
     /// the same intent hash as the annotations. Any difference is <c>readback_mismatch</c>.
