@@ -1088,47 +1088,6 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
                 throw new InvalidOperationException($"The {service.Service} runtime role has unexpected {privilege} authority on owner-only sequence {service.Schema}.{sequence}.");
         }
     }
-    var mutationGuards = await ReadMutationGuardStatesAsync(connection, transaction, service, cancellationToken);
+    var mutationGuards = await InitializerChecks.ReadMutationGuardStatesAsync(connection, transaction, service, cancellationToken);
     InitializerChecks.AssertMutationDenialGuards(service, mutationGuards, ownerOid, runtimeOid);
-}
-
-// Reads mutation-denial trigger metadata and source for the protected tables of one service.
-static Task<MutationGuardState[]> ReadMutationGuardStatesAsync(NpgsqlConnection connection,
-    NpgsqlTransaction transaction, ServicePlan service, CancellationToken cancellationToken)
-{
-    var protectedGuards = service.Tables.Where(table => table.MutationDenialRequired)
-        .SelectMany(table => InitializerChecks.GetMutationDenialGuards(table)
-            .Select(guard => (Table: table.Table, Guard: guard))).ToArray();
-    if (protectedGuards.Length == 0) return Task.FromResult(Array.Empty<MutationGuardState>());
-    return ReadJsonAsync<MutationGuardState[]>(connection, transaction, """
-        SELECT coalesce(jsonb_agg(jsonb_build_object(
-          'table', expected.table_name,
-          'triggerName', t.tgname,
-          'functionSchema', function_namespace.nspname,
-          'functionName', CASE WHEN p.oid IS NULL THEN NULL ELSE p.proname || '()' END,
-          'triggerType', t.tgtype,
-          'enabled', t.tgenabled::text,
-          'isInternal', t.tgisinternal,
-          'noColumnFilter', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgattr = ''::int2vector END,
-          'noCondition', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgqual IS NULL END,
-          'argumentCount', t.tgnargs,
-          'functionOwnerOid', p.proowner,
-          'runtimeCanExecute', CASE WHEN p.oid IS NULL THEN NULL
-            ELSE pg_catalog.has_function_privilege(@role, p.oid, 'EXECUTE') END,
-          'functionSource', p.prosrc)
-          ORDER BY expected.table_name), '[]'::jsonb)::text
-        FROM unnest(@tables, @triggers, @functions) AS expected(table_name, trigger_name, function_name)
-        LEFT JOIN pg_catalog.pg_namespace service_namespace ON service_namespace.nspname = @schema
-        LEFT JOIN pg_catalog.pg_class c
-          ON c.relnamespace = service_namespace.oid AND c.relname = expected.table_name
-        LEFT JOIN pg_catalog.pg_trigger t
-          ON t.tgrelid = c.oid AND t.tgname = expected.trigger_name
-        LEFT JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
-        LEFT JOIN pg_catalog.pg_namespace function_namespace ON function_namespace.oid = p.pronamespace
-        """, cancellationToken,
-        new NpgsqlParameter("tables", protectedGuards.Select(item => item.Table).ToArray()),
-        new NpgsqlParameter("triggers", protectedGuards.Select(item => item.Guard.Trigger).ToArray()),
-        new NpgsqlParameter("functions", protectedGuards.Select(item => item.Guard.Function).ToArray()),
-        new NpgsqlParameter("schema", service.Schema),
-        new NpgsqlParameter("role", service.Role));
 }

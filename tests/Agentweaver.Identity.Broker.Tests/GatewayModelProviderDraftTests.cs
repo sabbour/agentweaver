@@ -80,10 +80,49 @@ public sealed class GatewayModelProviderDraftTests
 
         Assert.False(schemas.GetProperty("ModelProviderDraftSaveRequest")
             .GetProperty("additionalProperties").GetBoolean());
+        var platformCreate = schemas.GetProperty("ModelProviderDraftPlatformCreateRequest");
+        Assert.False(platformCreate.GetProperty("additionalProperties").GetBoolean());
+        var reference = platformCreate.GetProperty("properties").GetProperty("reference");
+        Assert.Equal("string", reference.GetProperty("type").GetString());
+        Assert.Equal(1, reference.GetProperty("minLength").GetInt32());
+        Assert.Equal(256, reference.GetProperty("maxLength").GetInt32());
+        var pattern = reference.GetProperty("pattern").GetString()!;
+        foreach (var value in new[] { "A", "A_b", "A.B-1", new string('a', 256) })
+            Assert.Matches(pattern, value);
+        foreach (var value in new[] { "", "_a", "a_", "a__b", "a\n", "a:b", new string('a', 257) })
+            Assert.DoesNotMatch(pattern, value);
+        Assert.DoesNotContain("reference", platformCreate.GetProperty("required")
+            .EnumerateArray().Select(value => value.GetString()));
+        Assert.False(schemas.GetProperty("ModelProviderDraftSaveRequest")
+            .GetProperty("properties").TryGetProperty("reference", out _));
+        Assert.False(schemas.GetProperty("ModelProviderDraftProjectCreateRequest")
+            .GetProperty("properties").TryGetProperty("reference", out _));
+        Assert.Equal(0, platformCreate.GetProperty("properties").GetProperty("expectedRevision")
+            .GetProperty("const").GetInt32());
+        Assert.Equal(0, schemas.GetProperty("ModelProviderDraftProjectCreateRequest")
+            .GetProperty("properties").GetProperty("expectedRevision").GetProperty("const").GetInt32());
+        Assert.Equal(1, schemas.GetProperty("ModelProviderDraftSaveRequest")
+            .GetProperty("properties").GetProperty("expectedRevision").GetProperty("minimum").GetInt32());
+        foreach (var route in DraftRoutes.Where(item => item.Method is "POST" or "PUT"))
+        {
+            var schemaRef = paths.GetProperty(route.Path).GetProperty(route.Method.ToLowerInvariant())
+                .GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString();
+            Assert.Equal(route.OperationId switch
+            {
+                "createPlatformByokProviderDraft" => "#/components/schemas/ModelProviderDraftPlatformCreateRequest",
+                "createProjectByokProviderDraft" => "#/components/schemas/ModelProviderDraftProjectCreateRequest",
+                _ => "#/components/schemas/ModelProviderDraftSaveRequest",
+            }, schemaRef);
+        }
         Assert.True(schemas.TryGetProperty("ModelProviderDraft", out var draftSchema),
             string.Join(", ", schemas.EnumerateObject().Select(schema => schema.Name)));
         Assert.False(draftSchema
             .GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal("string", draftSchema.GetProperty("properties").GetProperty("reference")
+            .GetProperty("type").GetString());
+        Assert.DoesNotContain("reference", draftSchema.GetProperty("required")
+            .EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("hasCredential",
             draftSchema.GetProperty("properties").EnumerateObject()
                 .Select(property => property.Name));
@@ -399,6 +438,17 @@ public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixt
         Assert.Equal(HttpStatusCode.OK, created.StatusCode);
         Assert.True(created.Headers.CacheControl?.NoStore);
         using var saved = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        using var openApiResponse = await gateway.Client.GetAsync("/openapi/v1.json");
+        using var openApi = JsonDocument.Parse(await openApiResponse.Content.ReadAsStringAsync());
+        var schemas = openApi.RootElement.GetProperty("components").GetProperty("schemas");
+        var schema = schemas.GetProperty("ModelProviderDraft");
+        Assert.Equal(JsonValueKind.Null, saved.RootElement.GetProperty("rate_card_id").ValueKind);
+        Assert.Equal(JsonValueKind.Null, saved.RootElement.GetProperty("rate_card_version").ValueKind);
+        Assert.True(GatewayBacklogOpenApiTests.MatchesSchema(saved.RootElement, schema, schemas));
+        var mutated = System.Text.Json.Nodes.JsonNode.Parse(schema.GetRawText())!;
+        mutated["properties"]!.AsObject().Remove("rate_card_id");
+        using var brokenSchema = JsonDocument.Parse(mutated.ToJsonString());
+        Assert.False(GatewayBacklogOpenApiTests.MatchesSchema(saved.RootElement, brokenSchema.RootElement, schemas));
         var providerId = saved.RootElement.GetProperty("id").GetString();
         Assert.StartsWith("byok-", providerId);
         Assert.Equal(1, saved.RootElement.GetProperty("revision").GetInt64());

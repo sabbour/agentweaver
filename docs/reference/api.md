@@ -64,6 +64,12 @@ requires a positive revision. Save retries return the revision committed by
 the original operation. Delete, activation, and credential routes are not
 available through Gateway. Identity Broker publishes exact credential versions
 through the private Projects route `POST /internal/byok/credential-publications`.
+Platform create accepts an optional `reference` to reserve the exact spelling
+of a deployment-managed BYOK model. Reservations are permanent and start as
+inactive Drafts. `ProjectsConfig:ProviderReferenceReservationsEnabled`
+defaults to `false`; an authorized replay still works when it is off. See the
+[reference reservation contract](./contracts.md#model-provider-draft-metadata)
+for syntax, conflicts, and recovery.
 Public metadata requests do not accept rate-card references. The public
 response `state` is `Draft` or `Available`; the private Events read contract
 and credential-publication failure rules are in the

@@ -329,6 +329,74 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderReferenceReservationRecord", b =>
+                {
+                    b.Property<string>("ReferenceFolded")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("reference_folded")
+                        .UseCollation("C");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("CreationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("creation_revision");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("issuer");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<string>("Reference")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("reference");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("ReferenceFolded")
+                        .HasName("pk_model_provider_reference_reservations");
+
+                    b.HasAlternateKey("OperationId")
+                        .HasName("ux_model_provider_reference_reservations_operation_id");
+
+                    b.HasAlternateKey("ProviderId")
+                        .HasName("ux_model_provider_reference_reservations_provider_id");
+
+                    b.HasIndex("ProviderId", "CreationRevision");
+
+                    b.ToTable("model_provider_reference_reservations", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_provider_reference_creation_revision", "creation_revision = 1");
+
+                            t.HasCheckConstraint("ck_provider_reference_folded", "reference_folded = translate(reference COLLATE \"C\", 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')");
+
+                            t.HasCheckConstraint("ck_provider_reference_syntax", "reference COLLATE \"C\" ~ '^[A-Za-z0-9.-]([A-Za-z0-9._-]{0,254}[A-Za-z0-9.-])?$' AND position('__' in reference) = 0");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyArtifactFileRecord", b =>
                 {
                     b.Property<string>("ScopeType")
@@ -2251,6 +2319,15 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ModelProviderDraftHeadRecord", null)
                         .WithMany()
                         .HasForeignKey("ProviderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderReferenceReservationRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ModelProviderDraftRevisionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProviderId", "CreationRevision")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

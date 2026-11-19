@@ -9,6 +9,45 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     [Fact]
+    public async Task ModelProviderDraftOrdinaryCreatePreservesLegacyFingerprintGoldens()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "provider-golden-tenant-" + suffix;
+        var admin = await SeedCallerAsync(
+            db, authorityStore, "provider-golden-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var service = new ModelProviderDraftService(db, TimeProvider.System);
+        const string providerId = "byok-00000000000000000000000000000001";
+        var request = new SaveModelProviderDraftRequest(
+            Guid.Parse("00000000-0000-0000-0000-000000000001"),
+            0, "Example", "openai", "https://example.com", "model-1");
+
+        var created = await service.SaveAsync(
+            admin, ModelProviderBindingScope.Platform, null, providerId, request, CancellationToken.None);
+        var revision = await db.ModelProviderDraftRevisions.AsNoTracking()
+            .SingleAsync(item => item.ProviderId == providerId && item.ProviderRevision == 1);
+        Assert.Equal("177ac20040cdb6081c5ab040877ee5b555af2f63ae546afbfb71cd73e9132dda",
+            revision.ConfigurationHash);
+        Assert.Equal("77142077a56d8ecde6e11b557b81e6ac6848251cf7fae277467b088c0dfa50d0",
+            revision.RequestFingerprint);
+        Assert.Equal(revision.ConfigurationHash, created.Binding.ConfigurationHash);
+
+        await service.SaveAsync(
+            admin, ModelProviderBindingScope.Platform, null, providerId,
+            request with { OperationId = Guid.NewGuid(), ExpectedRevision = 1, DisplayName = "Renamed" },
+            CancellationToken.None);
+        var replay = await service.SaveAsync(
+            admin, ModelProviderBindingScope.Platform, null, providerId, request, CancellationToken.None);
+        Assert.Equal(created.Binding.ProviderRevision, replay.Binding.ProviderRevision);
+        Assert.Equal(created.Binding.ConfigurationHash, replay.Binding.ConfigurationHash);
+        Assert.Equal("Example", replay.Binding.DisplayName);
+        Assert.Equal(2, await db.ModelProviderDraftRevisions.CountAsync(item => item.ProviderId == providerId));
+    }
+
+    [Fact]
     public async Task PlatformDraftReadsAndWritesRequireBothScopes()
     {
         await using var db = CreateDbContext();

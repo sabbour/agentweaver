@@ -34,6 +34,17 @@ The save response contains the immutable revision committed by that operation.
 An exact retry returns that revision, even if a later edit has advanced the
 head. The client reloads before it makes another edit.
 
+Platform create can reserve an exact provider reference. The default-off
+`ProjectsConfig:ProviderReferenceReservationsEnabled` switch controls new
+reservations. Projects checks the local binding copy and current saved
+selectors, then commits the head, revision, and permanent reservation together.
+It locks current PlatformAdmin authority through commit. The reservation does
+not change runtime resolution or accepted run pins. Deployment-wide inventory
+and a separate activation fence are required before a later switch.
+The database insert guards require `READ COMMITTED` isolation. They reject
+`REPEATABLE READ` and `SERIALIZABLE` with a serialization failure because those
+transactions can retain a snapshot from before the create lock was acquired.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -44,7 +55,13 @@ sequenceDiagram
     Client->>Gateway: POST or PUT with operationId and expectedRevision
     Gateway->>Projects: Forward bearer, tenant selector, and bounded metadata
     Projects->>Projects: Check current scope, membership, role, and binding
-    Projects->>DB: Replay exact operation or append revision and advance head
+    alt Platform create with reference
+        Projects->>DB: Lock create and current PlatformAdmin authority
+        Projects->>DB: Replay or check local bindings and saved selectors
+        Projects->>DB: Commit head, revision, and permanent reference together
+    else Ordinary create or update
+        Projects->>DB: Replay exact operation or append revision and advance head
+    end
     DB-->>Projects: Committed immutable revision
     Projects-->>Gateway: Saved revision, no-store
     Gateway-->>Client: Save receipt

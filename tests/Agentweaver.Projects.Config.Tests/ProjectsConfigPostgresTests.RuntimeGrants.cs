@@ -7,6 +7,40 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     [Fact]
+    public async Task MigrationRejectsChangedProviderIdentityGuardBeforeCommittingGrants()
+    {
+        await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+        await ProjectsConfigRuntimeGrantPlan.VerifyRuntimeGrantsAsync(connection, CancellationToken.None);
+        const string drop = "DROP TRIGGER model_providers_id_immutable ON projects_config.model_providers";
+        const string create = """
+            CREATE TRIGGER model_providers_id_immutable
+            BEFORE UPDATE OF provider_id ON projects_config.model_providers
+            FOR EACH ROW WHEN (OLD.provider_id IS DISTINCT FROM NEW.provider_id)
+            EXECUTE FUNCTION projects_config.reject_immutable_record_mutation()
+            """;
+        foreach (var mutation in new[]
+        {
+            "ALTER TABLE projects_config.model_providers DISABLE TRIGGER model_providers_id_immutable",
+            drop,
+            drop + "; " + create.Replace("IS DISTINCT FROM", "IS NOT DISTINCT FROM", StringComparison.Ordinal),
+        })
+        {
+            await using var transaction = await connection.BeginTransactionAsync();
+            await using (var command = new NpgsqlCommand(mutation, connection, transaction))
+                await command.ExecuteNonQueryAsync();
+            await using (var revoke = new NpgsqlCommand("""
+                REVOKE UPDATE ON projects_config.model_providers FROM "agentweaver-id-projects-config"
+                """, connection, transaction))
+                await revoke.ExecuteNonQueryAsync();
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, transaction, CancellationToken.None));
+            Assert.Contains("identity guard", error.Message, StringComparison.Ordinal);
+            await transaction.RollbackAsync();
+        }
+        await ProjectsConfigRuntimeGrantPlan.VerifyRuntimeGrantsAsync(connection, CancellationToken.None);
+    }
+
+    [Fact]
     public async Task MigrationAppliesTheReviewedRuntimeGrantsAndKeepsOwnerOnlyObjectsPrivate()
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -43,6 +77,12 @@ public sealed partial class ProjectsConfigPostgresTests
                NOT has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_revisions', 'DELETE')),
               ('model provider revisions TRUNCATE denied',
                NOT has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_revisions', 'TRUNCATE')),
+              ('reference reservations SELECT and INSERT only',
+               has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_reference_reservations', 'SELECT')
+               AND has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_reference_reservations', 'INSERT')
+               AND NOT has_any_column_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_reference_reservations', 'UPDATE')
+               AND NOT has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_reference_reservations', 'DELETE')
+               AND NOT has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_reference_reservations', 'TRUNCATE')),
               ('platform runtime heads SELECT and UPDATE',
                has_table_privilege(
                  'agentweaver-id-projects-config', 'projects_config.platform_runtime_heads', 'SELECT')

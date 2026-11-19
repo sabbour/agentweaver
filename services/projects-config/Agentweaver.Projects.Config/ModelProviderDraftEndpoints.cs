@@ -48,6 +48,10 @@ internal sealed record ModelProviderDraftSaveBody
 
     [JsonPropertyName("rate_card_version")]
     public string? RateCardVersion { get; init; }
+
+    [JsonPropertyName("reference")]
+    public string? Reference { get; init; }
+
 }
 
 internal sealed record ModelProviderDraftResponse(
@@ -69,7 +73,8 @@ internal sealed record ModelProviderDraftResponse(
     [property: JsonPropertyName("rate_card_version")] string? RateCardVersion,
     [property: JsonPropertyName("has_api_key")] bool HasApiKey,
     [property: JsonPropertyName("is_active")] bool IsActive,
-    bool HasCredential);
+    bool HasCredential,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Reference);
 
 internal sealed record ModelProviderDraftPageResponse(
     IReadOnlyList<ModelProviderDraftResponse> Providers,
@@ -315,7 +320,9 @@ internal static class ModelProviderDraftEndpoints
             var caller = await ResolveCallerAsync(context, owner, cancellationToken).ConfigureAwait(false);
             if (!IsJsonContentType(context.Request.ContentType))
                 return UnsupportedMediaType();
-            var body = await ReadSaveBodyAsync(context.Request, cancellationToken).ConfigureAwait(false);
+            var body = await ReadSaveBodyAsync(
+                context.Request, cancellationToken, create && scope == ModelProviderBindingScope.Platform)
+                .ConfigureAwait(false);
             if (body is null)
                 return InvalidRequest();
             if (ValidateSaveBody(body, create) is { } invalid)
@@ -328,7 +335,10 @@ internal static class ModelProviderDraftEndpoints
                 body.OperationId, body.ExpectedRevision, body.Name, body.Type, body.BaseUrl, body.Model,
                 body.WireApi, body.AzureApiVersion,
                 body.ReasoningEfforts.IsDefault ? ImmutableArray<string>.Empty : body.ReasoningEfforts,
-                body.PromptCapacityTokens, body.RateCardId, body.RateCardVersion);
+                body.PromptCapacityTokens, body.RateCardId, body.RateCardVersion)
+            {
+                Reference = body.Reference,
+            };
             var saved = await service.SaveAsync(
                 caller, scope, projectId, id, request, cancellationToken).ConfigureAwait(false);
             return Results.Ok(Project(saved));
@@ -361,7 +371,8 @@ internal static class ModelProviderDraftEndpoints
 
     internal static async Task<ModelProviderDraftSaveBody?> ReadSaveBodyAsync(
         HttpRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowReference = false)
     {
         if (request.ContentType is null ||
             !Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType))
@@ -379,6 +390,10 @@ internal static class ModelProviderDraftEndpoints
         foreach (var property in document.RootElement.EnumerateObject())
             if (!seen.Add(property.Name))
                 return null;
+        if (document.RootElement.TryGetProperty("reference", out var reference) &&
+            (!allowReference || reference.ValueKind != JsonValueKind.String ||
+             reference.GetString() is not { } value || !ModelProviderDraftService.IsValidReference(value)))
+            return null;
         var body = JsonSerializer.Deserialize<ModelProviderDraftSaveBody>(
             document.RootElement.GetRawText(), RequestJsonOptions);
         return body;
@@ -426,7 +441,7 @@ internal static class ModelProviderDraftEndpoints
             binding.WireApi, binding.AzureApiVersion, binding.ReasoningEfforts, binding.PromptCapacityTokens,
             binding.Scope == ModelProviderBindingScope.Platform ? "platform" : "project",
             binding.ProjectId, draft.State.ToString(), binding.ProviderRevision, binding.ConfigurationHash,
-            null, null, false, false, binding.CredentialVersion is not null);
+            null, null, false, false, binding.CredentialVersion is not null, draft.Reference);
     }
 
     private static void ValidatePublicUrl(string value, string providerType, string providerId, long revision)
@@ -448,6 +463,8 @@ internal static class ModelProviderDraftEndpoints
         {
             "model_provider_draft_not_found" => StatusCodes.Status404NotFound,
             "model_provider_draft_conflict" => StatusCodes.Status409Conflict,
+            "reference_conflict" => StatusCodes.Status409Conflict,
+            "model_provider_draft_unavailable" => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         });
 

@@ -74,6 +74,14 @@ test('Only exact table DML is planned; history and memberships stay SELECT-only'
   assert.deepEqual(
     projectsConfig.tables.find(item => item.table === 'model_providers').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
+  assert.deepEqual(
+    projectsConfig.tables.find(item => item.table === 'model_providers').mutationDenialGuards[1],
+    {
+      trigger: 'model_providers_id_immutable',
+      function: 'reject_immutable_record_mutation()', triggerType: 19,
+      message: 'records in %.% are immutable', sqlState: '55000',
+      column: 'provider_id', condition: '((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)',
+    });
   const nativeHead = projectsConfig.tables.find(item => item.table === 'native_acs_policy_heads');
   assert.deepEqual(nativeHead.privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(nativeHead.updateColumns, ['current_revision', 'updated_at']);
@@ -504,7 +512,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 146);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 147);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -528,8 +536,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [14, 5, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 53);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [15, 5, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 54);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });

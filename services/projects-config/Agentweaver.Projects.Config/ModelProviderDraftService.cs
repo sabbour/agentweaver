@@ -8,7 +8,7 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
-public sealed class ModelProviderDraftService
+public sealed partial class ModelProviderDraftService
 {
     private static readonly JsonSerializerOptions RateCardPinJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -20,6 +20,8 @@ public sealed class ModelProviderDraftService
     private readonly ProjectsConfigDbContext db;
     private readonly TimeProvider timeProvider;
     private readonly IRuntimeRateCardOwnerClient? runtimeRateCardOwnerClient;
+    private readonly ModelBindingCapabilities modelBindings;
+    private readonly bool referenceReservationsEnabled;
 
     public ModelProviderDraftService(ProjectsConfigDbContext db, TimeProvider timeProvider)
         : this(db, timeProvider, null)
@@ -29,11 +31,15 @@ public sealed class ModelProviderDraftService
     internal ModelProviderDraftService(
         ProjectsConfigDbContext db,
         TimeProvider timeProvider,
-        IRuntimeRateCardOwnerClient? runtimeRateCardOwnerClient)
+        IRuntimeRateCardOwnerClient? runtimeRateCardOwnerClient,
+        ModelBindingCapabilities? modelBindings = null,
+        bool referenceReservationsEnabled = false)
     {
         this.db = db;
         this.timeProvider = timeProvider;
         this.runtimeRateCardOwnerClient = runtimeRateCardOwnerClient;
+        this.modelBindings = modelBindings ?? ModelBindingCapabilities.Unavailable;
+        this.referenceReservationsEnabled = referenceReservationsEnabled;
     }
 
     private static readonly ImmutableHashSet<string> SupportedReasoningEfforts =
@@ -51,12 +57,15 @@ public sealed class ModelProviderDraftService
                 join revision in db.ModelProviderDraftRevisions.AsNoTracking()
                     on new { head.ProviderId, Revision = head.CurrentRevision }
                     equals new { revision.ProviderId, Revision = revision.ProviderRevision }
+                join reservation in db.ModelProviderReferenceReservations.AsNoTracking()
+                    on head.ProviderId equals reservation.ProviderId into reservations
+                from reservation in reservations.DefaultIfEmpty()
                 where head.Scope == scope && head.ProjectId == projectId
                 orderby head.DisplayName, head.ProviderId
-                select new { head.State, Revision = revision })
+                select new { head.State, Revision = revision, Reference = reservation == null ? null : reservation.Reference })
             .ToArrayAsync(cancellationToken)
             .ConfigureAwait(false);
-        return drafts.Select(item => ToDraft(item.State, item.Revision)).ToArray();
+        return drafts.Select(item => ToDraft(item.State, item.Revision, item.Reference)).ToArray();
     }
 
     public async Task<ModelProviderDraftPage> ListPageAsync(
@@ -78,16 +87,19 @@ public sealed class ModelProviderDraftService
                 join revision in db.ModelProviderDraftRevisions.AsNoTracking()
                     on new { head.ProviderId, Revision = head.CurrentRevision }
                     equals new { revision.ProviderId, Revision = revision.ProviderRevision }
+                join reservation in db.ModelProviderReferenceReservations.AsNoTracking()
+                    on head.ProviderId equals reservation.ProviderId into reservations
+                from reservation in reservations.DefaultIfEmpty()
                 where head.Scope == scope && head.ProjectId == projectId &&
                     (afterProviderId == null || head.ProviderId.CompareTo(afterProviderId) > 0)
                 orderby head.ProviderId
-                select new { head.ProviderId, head.State, Revision = revision })
+                select new { head.ProviderId, head.State, Revision = revision, Reference = reservation == null ? null : reservation.Reference })
             .Take(pageSize + 1)
             .ToArrayAsync(cancellationToken)
             .ConfigureAwait(false);
         var hasNextPage = drafts.Length > pageSize;
         var providers = drafts.Take(pageSize)
-            .Select(item => ToDraft(item.State, item.Revision))
+            .Select(item => ToDraft(item.State, item.Revision, item.Reference))
             .ToArray();
         return new ModelProviderDraftPage(
             providers,
@@ -108,13 +120,16 @@ public sealed class ModelProviderDraftService
                 join revision in db.ModelProviderDraftRevisions.AsNoTracking()
                     on new { head.ProviderId, Revision = head.CurrentRevision }
                     equals new { revision.ProviderId, Revision = revision.ProviderRevision }
+                join reservation in db.ModelProviderReferenceReservations.AsNoTracking()
+                    on head.ProviderId equals reservation.ProviderId into reservations
+                from reservation in reservations.DefaultIfEmpty()
                 where head.ProviderId == providerId && head.Scope == scope && head.ProjectId == projectId
-                select new { head.State, Revision = revision })
+                select new { head.State, Revision = revision, Reference = reservation == null ? null : reservation.Reference })
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
         return draft is null
             ? throw ModelProviderDraftException.NotFound()
-            : ToDraft(draft.State, draft.Revision);
+            : ToDraft(draft.State, draft.Revision, draft.Reference);
     }
 
     public async Task<ModelProviderDraft> SaveAsync(
@@ -145,6 +160,13 @@ public sealed class ModelProviderDraftService
             metadata.RateCardVersion);
         var requestFingerprint = Hash(new SaveFingerprint(fingerprintInput, request.ExpectedRevision));
         var configurationHash = Hash(fingerprintInput);
+
+        if (request.ExpectedRevision == 0)
+            return await CreateAsync(
+                caller, scope, projectId, providerId, request, metadata, fingerprintInput,
+                configurationHash, cancellationToken).ConfigureAwait(false);
+        if (request.Reference is not null)
+            throw ModelProviderDraftException.InvalidRequest("A reference is permitted only on platform create.");
 
         // Check completed operations first so a lost response can be replayed after later edits.
         var replay = await ReadReplayAsync(
@@ -306,7 +328,8 @@ public sealed class ModelProviderDraftService
         }
 
         DetachTrackedProvider(providerId);
-        return ToDraft(ModelProviderDraftState.Draft, revisionRecord);
+        return ToDraft(ModelProviderDraftState.Draft, revisionRecord,
+            await ReadReferenceAsync(providerId, cancellationToken).ConfigureAwait(false));
     }
 
     internal async Task<ModelProviderCredentialPublicationReceipt> PublishCredentialAsync(
@@ -682,7 +705,8 @@ public sealed class ModelProviderDraftService
             replay.ProjectId != projectId ||
             replay.RequestFingerprint != requestFingerprint)
             throw ModelProviderDraftException.Conflict();
-        return ToDraft(ModelProviderDraftState.Draft, replay);
+        return ToDraft(ModelProviderDraftState.Draft, replay,
+            await ReadReferenceAsync(providerId, cancellationToken).ConfigureAwait(false));
     }
 
     internal static ModelProviderBindingRevision ToBinding(ModelProviderDraftRevisionRecord revision) =>
@@ -717,8 +741,9 @@ public sealed class ModelProviderDraftService
 
     private static ModelProviderDraft ToDraft(
         ModelProviderDraftState state,
-        ModelProviderDraftRevisionRecord revision) =>
-        new(state, ToBinding(revision));
+        ModelProviderDraftRevisionRecord revision,
+        string? reference = null) =>
+        new(state, ToBinding(revision)) { Reference = reference };
 
     private static RuntimeRateCardPin? ReadRateCardPin(ModelProviderDraftRevisionRecord revision)
     {
@@ -769,6 +794,10 @@ public sealed class ModelProviderDraftService
                      .ToArray())
             entry.State = EntityState.Detached;
         foreach (var entry in db.ChangeTracker.Entries<ModelProviderDraftRevisionRecord>()
+                     .Where(entry => entry.Entity.ProviderId == providerId)
+                     .ToArray())
+            entry.State = EntityState.Detached;
+        foreach (var entry in db.ChangeTracker.Entries<ModelProviderReferenceReservationRecord>()
                      .Where(entry => entry.Entity.ProviderId == providerId)
                      .ToArray())
             entry.State = EntityState.Detached;

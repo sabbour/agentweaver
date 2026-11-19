@@ -216,7 +216,7 @@ public sealed class GatewayBacklogOpenApiTests
             "The serialized successful backlog response must conform to the strict BacklogGraph schema.");
     }
 
-    private static bool MatchesSchema(JsonElement value, JsonElement schema, JsonElement schemas)
+    internal static bool MatchesSchema(JsonElement value, JsonElement schema, JsonElement schemas)
     {
         // This helper supports the backlog contract's schema subset, not every JSON Schema keyword.
         if (schema.TryGetProperty("$ref", out var reference))

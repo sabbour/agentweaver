@@ -2308,7 +2308,7 @@ public sealed partial class ProjectsConfigService
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, JsonOptions);
 
-    private static T Deserialize<T>(string value) =>
+    internal static T Deserialize<T>(string value) =>
         JsonSerializer.Deserialize<T>(value, JsonOptions)
         ?? throw new InvalidOperationException($"Stored Projects & Config JSON could not be read as {typeof(T).Name}.");
 

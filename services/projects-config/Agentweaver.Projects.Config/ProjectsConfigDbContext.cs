@@ -23,6 +23,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<ModelProviderDraftHeadRecord> ModelProviderDrafts => Set<ModelProviderDraftHeadRecord>();
     public DbSet<ModelProviderDraftRevisionRecord> ModelProviderDraftRevisions =>
         Set<ModelProviderDraftRevisionRecord>();
+    public DbSet<ModelProviderReferenceReservationRecord> ModelProviderReferenceReservations =>
+        Set<ModelProviderReferenceReservationRecord>();
     public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
     public DbSet<ProjectCastingGenerationRequestRecord> CastingGenerationRequests =>
@@ -232,6 +234,36 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .WithMany()
                 .HasForeignKey(configuration => configuration.HeadId)
                 .HasPrincipalKey(head => head.Id)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ModelProviderReferenceReservationRecord>(entity =>
+        {
+            entity.ToTable("model_provider_reference_reservations", table =>
+            {
+                table.HasCheckConstraint("ck_provider_reference_syntax",
+                    "reference COLLATE \"C\" ~ '^[A-Za-z0-9.-]([A-Za-z0-9._-]{0,254}[A-Za-z0-9.-])?$' AND position('__' in reference) = 0");
+                table.HasCheckConstraint("ck_provider_reference_folded",
+                    "reference_folded = translate(reference COLLATE \"C\", 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')");
+                table.HasCheckConstraint("ck_provider_reference_creation_revision", "creation_revision = 1");
+            });
+            entity.HasKey(item => item.ReferenceFolded).HasName("pk_model_provider_reference_reservations");
+            entity.Property(item => item.Reference).HasColumnName("reference").HasMaxLength(256).IsRequired();
+            entity.Property(item => item.ReferenceFolded).HasColumnName("reference_folded")
+                .HasMaxLength(256).UseCollation("C");
+            entity.Property(item => item.ProviderId).HasColumnName("provider_id").HasMaxLength(128).IsRequired();
+            entity.Property(item => item.CreationRevision).HasColumnName("creation_revision");
+            entity.Property(item => item.OperationId).HasColumnName("operation_id");
+            entity.Property(item => item.Issuer).HasColumnName("issuer").IsRequired();
+            entity.Property(item => item.TenantId).HasColumnName("tenant_id").IsRequired();
+            entity.Property(item => item.Subject).HasColumnName("subject").IsRequired();
+            entity.Property(item => item.CreatedAt).HasColumnName("created_at");
+            entity.HasAlternateKey(item => item.ProviderId)
+                .HasName("ux_model_provider_reference_reservations_provider_id");
+            entity.HasAlternateKey(item => item.OperationId)
+                .HasName("ux_model_provider_reference_reservations_operation_id");
+            entity.HasOne<ModelProviderDraftRevisionRecord>().WithMany()
+                .HasForeignKey(item => new { item.ProviderId, item.CreationRevision })
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

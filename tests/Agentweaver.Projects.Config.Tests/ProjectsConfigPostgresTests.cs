@@ -3519,6 +3519,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.model_provider_revisions TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.model_provider_reference_reservations TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");
 
             var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
@@ -3545,7 +3547,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             await ExecuteOwnerSqlAsync($"""
                 GRANT EXECUTE ON FUNCTION
                     projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint),
-                    projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)
+                    projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint),
+                    projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])
                 TO "{roleName}"
                 """);
             await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(runtimeDataSource);

@@ -72,6 +72,19 @@ public sealed class ModelProviderDraftRevisionRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+public sealed class ModelProviderReferenceReservationRecord
+{
+    public required string Reference { get; set; }
+    public required string ReferenceFolded { get; set; }
+    public required string ProviderId { get; set; }
+    public long CreationRevision { get; set; }
+    public Guid OperationId { get; set; }
+    public required string Issuer { get; set; }
+    public required string TenantId { get; set; }
+    public required string Subject { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 public sealed record SaveModelProviderDraftRequest(
     Guid OperationId,
     long ExpectedRevision,
@@ -84,11 +97,17 @@ public sealed record SaveModelProviderDraftRequest(
     ImmutableArray<string> ReasoningEfforts = default,
     int? PromptCapacityTokens = null,
     string? RateCardId = null,
-    string? RateCardVersion = null);
+    string? RateCardVersion = null)
+{
+    public string? Reference { get; init; }
+}
 
 public sealed record ModelProviderDraft(
     ModelProviderDraftState State,
-    ModelProviderBindingRevision Binding);
+    ModelProviderBindingRevision Binding)
+{
+    public string? Reference { get; init; }
+}
 
 public sealed record ModelProviderDraftPage(
     IReadOnlyList<ModelProviderDraft> Providers,
@@ -103,6 +122,12 @@ public sealed class ModelProviderDraftException(string code, string message) : E
 
     public static ModelProviderDraftException Conflict() =>
         new("model_provider_draft_conflict", "The provider draft changed or the operation ID was reused.");
+
+    public static ModelProviderDraftException ReferenceConflict() =>
+        new("reference_conflict", "The provider reference is already in use.");
+
+    public static ModelProviderDraftException Unavailable() =>
+        new("model_provider_draft_unavailable", "The provider reference reservation is unavailable.");
 
     public static ModelProviderDraftException NotFound() =>
         new("model_provider_draft_not_found", "The provider draft was not found.");

@@ -67,7 +67,7 @@ const GROUPS = {
     SELECT: 'tenant_memberships __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_skill_trust_evidence project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_skill_trust_evidence project_role_assignments authority_audit model_provider_revisions model_provider_reference_reservations native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -186,8 +186,66 @@ const LOCK_GUARDS = {
   },
 };
 
+const PROVIDER_REFERENCE_GUARD_SOURCE = `BEGIN
+    PERFORM pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtextextended('agentweaver.projects_config.model_provider_create', 0));
+    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'provider create requires read committed isolation'
+            USING ERRCODE = '40001';
+    END IF;
+    IF TG_TABLE_NAME = 'model_providers' THEN
+        IF EXISTS (
+            SELECT 1 FROM projects_config.model_provider_reference_reservations AS reservation
+            WHERE reservation.reference_folded =
+                pg_catalog.translate(NEW.provider_id COLLATE "C",
+                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+        ) THEN
+            RAISE EXCEPTION 'provider reference collision'
+                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';
+        END IF;
+    ELSE
+        IF EXISTS (
+            SELECT 1 FROM projects_config.model_providers AS provider
+            WHERE pg_catalog.translate(provider.provider_id COLLATE "C",
+                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = NEW.reference_folded
+        ) THEN
+            RAISE EXCEPTION 'provider reference collision'
+                USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_reference_cross_table';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;`;
+
+const providerReferenceGuard = trigger => ({
+  trigger, function: 'guard_model_provider_reference_cross_table()', triggerType: 7,
+  message: 'provider reference collision', sqlState: '23514',
+  functionSource: PROVIDER_REFERENCE_GUARD_SOURCE,
+});
+
 const APPEND_ONLY_GUARDS = {
   projects_config: {
+    model_providers: [
+      providerReferenceGuard('model_providers_reference_guard'),
+      {
+        trigger: 'model_providers_id_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 19,
+        message: 'records in %.% are immutable', sqlState: '55000',
+        column: 'provider_id', condition: '((old.provider_id)::text IS DISTINCT FROM (new.provider_id)::text)',
+      },
+    ],
+    model_provider_reference_reservations: [
+      providerReferenceGuard('model_provider_reference_cross_table_guard'),
+      {
+        trigger: 'model_provider_reference_reservations_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'model_provider_reference_reservations_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
     model_provider_revisions: [
       {
         trigger: 'model_provider_revisions_immutable',
@@ -559,6 +617,7 @@ const APPEND_ONLY_GUARDS = {
 
 const FUNCTIONS = {
   projects_config: [
+    'guard_model_provider_reference_cross_table()',
     'reject_immutable_record_mutation()',
     'require_native_acs_policy_file_insert_in_revision_transaction()',
     'require_native_acs_policy_head_advance()',

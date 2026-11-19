@@ -177,7 +177,9 @@ builder.Services.AddScoped<ProjectsConfigService>();
 builder.Services.AddScoped<ModelProviderDraftService>(services => new(
     services.GetRequiredService<ProjectsConfigDbContext>(),
     services.GetRequiredService<TimeProvider>(),
-    services.GetRequiredService<IRuntimeRateCardOwnerClient>()));
+    services.GetRequiredService<IRuntimeRateCardOwnerClient>(),
+    services.GetRequiredService<ModelBindingCapabilities>(),
+    builder.Configuration.GetValue<bool>("ProjectsConfig:ProviderReferenceReservationsEnabled")));
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Projects.Config");
 builder.Services.AddScoped<NativeAcsPolicyStore>();
