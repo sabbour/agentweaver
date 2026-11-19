@@ -210,6 +210,7 @@ staged proposal with the casting tools. See [AgentSuite import and export](./age
 | `requestAssembly` | Request assembly. |
 | `readDecisions` | Read decision state and pending gate. |
 | `readExecutionPlan` | Read the saved execution plan. |
+| `readCheckpointRecoveryEvents` | Read retained checkpoint recovery progress for one operation. |
 | `readSessionTree` | Read the session tree. |
 | `readSessionStatus` | Read lifecycle, activity, and blockers. |
 | `readRuntimeObservationV1` | Read current runtime evidence. |

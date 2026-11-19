@@ -657,6 +657,14 @@ public static class GatewayRouteCatalog
             "Read the saved execution plan",
             exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: 8 * 1024 * 1024);
+        Coordination(
+            "GET",
+            "/sessions/{sessionId}/checkpoint-recoveries/{operationId}/events",
+            "readCheckpointRecoveryEvents",
+            "Read checkpoint recovery events",
+            query: ["cursor", "limit"],
+            exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: 8 * 1024 * 1024);
         Coordination("POST", "/sessions/{sessionId}/actions/propose_outcome_spec",
             "proposeOutcomeSpec", "Propose an outcome specification", body: true);
         Coordination("POST", "/sessions/{sessionId}/actions/select_workflow",

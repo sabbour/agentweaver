@@ -103,6 +103,13 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             @params = new { },
         });
         var tools = list.GetProperty("result").GetProperty("tools");
+        var recoveryEventsTool = Assert.Single(tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_readCheckpointRecoveryEvents");
+        var recoveryEventsSchema = recoveryEventsTool.GetProperty("inputSchema");
+        Assert.True(recoveryEventsSchema.GetProperty("properties").TryGetProperty("cursor", out _));
+        Assert.True(recoveryEventsSchema.GetProperty("properties").TryGetProperty("limit", out _));
+        Assert.Contains("operationId", recoveryEventsSchema.GetProperty("required").EnumerateArray()
+            .Select(value => value.GetString()));
         var executionPlanTool = Assert.Single(tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_readExecutionPlan");
         var executionPlanSchema = executionPlanTool.GetProperty("inputSchema");

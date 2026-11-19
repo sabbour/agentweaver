@@ -9,6 +9,7 @@
   </PropertyGroup>
   <!-- The resolver test checks that accepted GitHub selections preserve this reviewed catalog revision. -->
   <ItemGroup>
+    <None Update="legacy-recovery-admission-567d151c.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\deploy\k8s\provider-catalogs\projects-config-provider-catalog.snapshot.json"
           Link="provider-catalog\projects-config-provider-catalog.snapshot.json"
           CopyToOutputDirectory="PreserveNewest" />

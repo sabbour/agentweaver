@@ -2403,6 +2403,36 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             selection, new MafExecutionCheckpointStore(checkpointStore, checkpointBinding),
             pending.State.PendingGate);
         Assert.Null(first.CheckpointRecovery!.DispatchHeld);
+        var firstEvents = await store.ReadCheckpointRecoveryEventsAsync(
+            _actor, root, first.OperationId, selection, 100, null, CancellationToken.None);
+        Assert.Equal("orchestrator.run.checkpoint_recovery_pending", Assert.Single(firstEvents.Events).EventType);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var mutation = new NpgsqlCommand($"""
+            UPDATE "{_schema}".outbox_events
+            SET event_type = @eventType,
+                payload = jsonb_set(payload, @path, to_jsonb(@effects::text))
+            WHERE id = @id
+            """, connection))
+        {
+            mutation.Parameters.AddWithValue("id", first.OperationId);
+            mutation.Parameters.AddWithValue("path", NpgsqlDbType.Array | NpgsqlDbType.Text,
+                new[] { "runtimeEffectsState" });
+            mutation.Parameters.AddWithValue("eventType", "");
+            mutation.Parameters.AddWithValue("effects", "");
+            foreach (var state in new[] { "blocked", "indeterminate" })
+            {
+                mutation.Parameters["eventType"].Value = "orchestrator.run.checkpoint_recovery_" + state;
+                mutation.Parameters["effects"].Value = state;
+                Assert.Equal(1, await mutation.ExecuteNonQueryAsync());
+                var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+                    store.ReadCheckpointRecoveryEventsAsync(
+                        _actor, root, first.OperationId, selection, 100, null, CancellationToken.None));
+                Assert.Equal(503, error.StatusCode);
+            }
+            mutation.Parameters["eventType"].Value = "orchestrator.run.checkpoint_recovery_pending";
+            mutation.Parameters["effects"].Value = "pending";
+            Assert.Equal(1, await mutation.ExecuteNonQueryAsync());
+        }
         Assert.Equal(first.OperationId, first.CheckpointRecovery.OperationId);
         Assert.Equal("idle", first.PreviousState);
         Assert.Equal("active", first.State);

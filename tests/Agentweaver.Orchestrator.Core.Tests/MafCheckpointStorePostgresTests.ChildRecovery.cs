@@ -46,6 +46,15 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal("pending", recovered.CheckpointRecovery!.Phase);
         Assert.Equal("childJoin", recovered.CheckpointRecovery.BoundaryKind);
         Assert.Equal(true, recovered.CheckpointRecovery.DispatchHeld);
+        var eventPage = await fixture.Owner.ReadCheckpointRecoveryEventsAsync(
+            _actor, _binding.Identity, recovered.OperationId, _selection, 100, null, CancellationToken.None);
+        var admissionEvent = Assert.Single(eventPage.Events);
+        Assert.Equal(recovered.OperationId, admissionEvent.EventId);
+        Assert.Equal("pending", admissionEvent.Status.Phase);
+        Assert.Equal(nativeState == "sending"
+                ? "orchestrator.run.checkpoint_recovery_indeterminate"
+                : "orchestrator.run.checkpoint_recovery_blocked",
+            admissionEvent.EventType);
         var restarted = new CoordinationOwnerStore(
             _fixture.DataSource, _schema, TimeProvider.System, fixture.Decisions);
         var replay = await restarted.RecoverRunExecutionAsync(
@@ -789,6 +798,11 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(first.ExecutionFence + 1, second.ExecutionFence);
         Assert.Equal(first.OperationId, second.CheckpointRecovery!.SupersedesOperationId);
         Assert.NotNull(second.CheckpointRecovery.SupersessionReceiptId);
+        var oldHistory = await restartedOwner.ReadCheckpointRecoveryEventsAsync(
+            _actor, _binding.Identity, first.OperationId, _selection, 200, null, CancellationToken.None);
+        Assert.Equal(first.OperationId, oldHistory.Events[0].EventId);
+        Assert.Contains(oldHistory.Events, item => item.Status.Phase == "blocked");
+        Assert.All(oldHistory.Events, item => Assert.Equal(first.ExecutionFence, item.Status.ExecutionFence));
         var secondCheckpointStore = new MafExecutionCheckpointStore(
             new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
             _binding with { ExecutionFence = second.ExecutionFence });
@@ -818,6 +832,31 @@ public sealed partial class MafCheckpointStorePostgresTests
         AssertCheckpointRecoveryReady(ready);
         Assert.False(ready.CheckpointRecovery!.DispatchHeld);
         Assert.False(await IsChildRecoveryHeldAsync());
+        await AssertRecoveryEventsHttpDenialsAsync(
+            restartedOwner, first.OperationId, second.OperationId, fixture.Child.SessionId);
+        var readyHistory = await restartedOwner.ReadCheckpointRecoveryEventsAsync(
+            _actor, _binding.Identity, second.OperationId, _selection, 200, null, CancellationToken.None);
+        var readyEvent = Assert.Single(readyHistory.Events, item => item.Status.Phase == "ready");
+        Assert.False(readyEvent.Status.DispatchHeld);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var mutation = new NpgsqlCommand($"""
+            UPDATE "{_schema}".outbox_events
+            SET payload = jsonb_set(payload, @path, to_jsonb(@held))
+            WHERE id = @id
+            """, connection))
+        {
+            mutation.Parameters.AddWithValue("path", NpgsqlDbType.Array | NpgsqlDbType.Text,
+                new[] { "status", "dispatchHeld" });
+            mutation.Parameters.AddWithValue("held", true);
+            mutation.Parameters.AddWithValue("id", readyEvent.EventId);
+            Assert.Equal(1, await mutation.ExecuteNonQueryAsync());
+            var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+                restartedOwner.ReadCheckpointRecoveryEventsAsync(
+                    _actor, _binding.Identity, second.OperationId, _selection, 200, null, CancellationToken.None));
+            Assert.Equal(503, error.StatusCode);
+            mutation.Parameters["held"].Value = false;
+            Assert.Equal(1, await mutation.ExecuteNonQueryAsync());
+        }
         var finalReplay = await restartedOwner.RecoverRunExecutionAsync(
             _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
             CancellationToken.None, _selection, _executionStore);
@@ -3015,7 +3054,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         var association = new ConfirmedWorkPlanItemAssociation(item.Id, decision.StateVersion, selectionHash);
         var spawned = await owner.SpawnSessionAsync(
             _actor, _binding.Identity,
-            new SpawnSessionRequest(childId, CoordinationSessionKind.ChildWork, "spawn-child", item.Task,
+            new SpawnSessionRequest(childId, CoordinationSessionKind.ChildWork, $"spawn-child-{fixtureId}", item.Task,
                 WorkPlanItemId: item.Id),
             100, 32, CancellationToken.None, association,
             persistSpawnedInTransaction: async (connection, transaction, child, token) =>

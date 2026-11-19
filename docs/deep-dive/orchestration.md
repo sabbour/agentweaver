@@ -821,8 +821,10 @@ causes the owner to answer the gate or start a fresh execution.
 
 The legacy owner-state recovery path and ordinary completed-turn Host
 replacement remain separate. `readRunStatus` and `readSessionStatus` show the
-recovery step and result; `replayRunEvents` reports committed progress. Reads
-do not continue a pending recovery.
+recovery step and result. `readCheckpointRecoveryEvents` reads retained
+Orchestrator outbox progress for one operation with current owner authority.
+`replayRunEvents` reads the separate session journal. Reads do not continue a
+pending recovery.
 
 ### Understand readiness evaluation
 

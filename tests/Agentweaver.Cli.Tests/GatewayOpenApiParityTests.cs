@@ -59,6 +59,21 @@ public sealed class GatewayOpenApiParityTests
         Assert.Equal("#/components/schemas/RecoverRunExecutionRequest",
             recoverRun["requestBody"]?["content"]?["application/json"]?["schema"]?["$ref"]?.GetValue<string>());
         JsonObject schemas = Assert.IsType<JsonObject>(discovered["components"]?["schemas"]);
+        var recoveryEvents = FindOperation(discovered, "readCheckpointRecoveryEvents");
+        Assert.Equal("#/components/schemas/CheckpointRecoveryEventPage",
+            recoveryEvents["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?.GetValue<string>());
+        Assert.NotNull(recoveryEvents["responses"]?["200"]?["headers"]?["Cache-Control"]);
+        Assert.NotNull(recoveryEvents["responses"]?["503"]?["content"]?["application/json"]?["schema"]?["properties"]?["error"]);
+        var eventParameters = Assert.IsType<JsonArray>(recoveryEvents["parameters"]);
+        var limitParameter = eventParameters.Single(value => value?["name"]?.GetValue<string>() == "limit");
+        Assert.Equal(200, limitParameter?["schema"]?["maximum"]?.GetValue<int>());
+        Assert.Equal(100, limitParameter?["schema"]?["default"]?.GetValue<int>());
+        var eventStatus = Assert.IsType<JsonObject>(schemas["CheckpointRecoveryEventStatus"]);
+        var requiredEventFields = Assert.IsType<JsonArray>(eventStatus["required"])
+            .Select(value => value!.GetValue<string>()).ToArray();
+        Assert.Contains("sourceCheckpointId", requiredEventFields);
+        Assert.DoesNotContain("currentStep", requiredEventFields);
+        Assert.DoesNotContain("decisionStateVersion", requiredEventFields);
         Assert.Equal("#/components/schemas/CheckpointRecoveryRequest",
             schemas["RecoverRunExecutionRequest"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());
         Assert.NotNull(schemas["CheckpointRecoveryStatus"]?["properties"]?["currentStep"]);
