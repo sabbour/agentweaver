@@ -303,7 +303,7 @@ public sealed class IdentityBrokerDbContext : DbContext
                     "vault_source IN ('Existing', 'Byok')");
                 table.HasCheckConstraint(
                     "ck_model_provider_credential_write_claims_state",
-                    "state IN ('Claimed', 'Quarantined', 'Completed')");
+                    "state IN ('Claimed', 'Quarantined', 'Completed', 'PublicationPending', 'Published')");
                 table.HasCheckConstraint(
                     "ck_model_provider_credential_write_claims_revision",
                     "expected_revision >= 0");
@@ -317,10 +317,22 @@ public sealed class IdentityBrokerDbContext : DbContext
                     "ck_model_provider_credential_write_claims_byok_name",
                     "vault_source <> 'Byok' OR secret_name = 'byok-' || lower(scope) || '-' || provider_id");
                 table.HasCheckConstraint(
+                    "ck_model_provider_credential_write_claims_publication_identity",
+                    "(expected_provider_revision IS NULL AND purpose IS NULL AND issuer IS NULL AND tenant IS NULL) OR " +
+                    "(expected_provider_revision IS NOT NULL AND expected_provider_revision > 0 AND expected_provider_revision < 9223372036854775807 AND " +
+                    "purpose IS NOT NULL AND purpose = 'credential-publication' AND issuer IS NOT NULL AND octet_length(issuer) = length(issuer) AND issuer COLLATE \"C\" ~ '^[!-~]+$' AND " +
+                    "tenant IS NOT NULL AND octet_length(tenant) = length(tenant) AND tenant COLLATE \"C\" ~ '^[A-Za-z0-9._:-]+$')");
+                table.HasCheckConstraint(
                     "ck_model_provider_credential_write_claims_outcome",
-                    "(state = 'Claimed' AND quarantined_at IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR " +
+                    "((state = 'Claimed' AND quarantined_at IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR " +
                     "(state = 'Quarantined' AND quarantined_at IS NOT NULL AND completed_revision IS NULL AND completed_at IS NULL) OR " +
-                    "(state = 'Completed' AND quarantined_at IS NULL AND completed_revision IS NOT NULL AND completed_at IS NOT NULL)");
+                    "(state IN ('Completed', 'PublicationPending', 'Published') AND quarantined_at IS NULL AND completed_revision IS NOT NULL AND completed_at IS NOT NULL AND " +
+                    "CASE WHEN expected_revision < 9223372036854775807 THEN completed_revision = expected_revision + 1 ELSE FALSE END AND " +
+                    "((state = 'Completed' AND expected_provider_revision IS NULL) OR (state IN ('PublicationPending', 'Published') AND expected_provider_revision IS NOT NULL)))) AND " +
+                    "((state <> 'Published' AND published_provider_revision IS NULL AND published_configuration_hash IS NULL AND published_at IS NULL) OR " +
+                    "(state = 'Published' AND published_provider_revision IS NOT NULL AND published_configuration_hash IS NOT NULL AND published_at IS NOT NULL AND " +
+                    "CASE WHEN expected_provider_revision IS NOT NULL AND expected_provider_revision < 9223372036854775807 THEN published_provider_revision = expected_provider_revision + 1 ELSE FALSE END AND " +
+                    "published_configuration_hash COLLATE \"C\" ~ '^[0-9A-Fa-f]{64}$'))");
             });
             entity.HasKey(claim => claim.OperationId);
             entity.Property(claim => claim.OperationId).HasColumnName("operation_id");
@@ -337,15 +349,22 @@ public sealed class IdentityBrokerDbContext : DbContext
                 .HasMaxLength(64).IsRequired();
             entity.Property(claim => claim.ActorId).HasColumnName("actor_id").HasMaxLength(256).IsRequired();
             entity.Property(claim => claim.State).HasColumnName("state")
-                .HasConversion<string>().HasMaxLength(16);
+                .HasConversion<string>().HasMaxLength(18);
             entity.Property(claim => claim.ClaimedAt).HasColumnName("claimed_at");
             entity.Property(claim => claim.QuarantinedAt).HasColumnName("quarantined_at");
             entity.Property(claim => claim.CompletedRevision).HasColumnName("completed_revision");
             entity.Property(claim => claim.CompletedAt).HasColumnName("completed_at");
+            entity.Property(claim => claim.ExpectedProviderRevision).HasColumnName("expected_provider_revision");
+            entity.Property(claim => claim.Purpose).HasColumnName("purpose").HasMaxLength(32);
+            entity.Property(claim => claim.Issuer).HasColumnName("issuer").HasMaxLength(2048);
+            entity.Property(claim => claim.Tenant).HasColumnName("tenant").HasMaxLength(256);
+            entity.Property(claim => claim.PublishedProviderRevision).HasColumnName("published_provider_revision");
+            entity.Property(claim => claim.PublishedConfigurationHash).HasColumnName("published_configuration_hash").HasMaxLength(64);
+            entity.Property(claim => claim.PublishedAt).HasColumnName("published_at");
             entity.HasIndex(claim => claim.CredentialSlotId).IsUnique()
-                .HasFilter("state IN ('Claimed', 'Quarantined')");
+                .HasFilter("state IN ('Claimed', 'Quarantined', 'PublicationPending')");
             entity.HasIndex(claim => claim.ProviderId).IsUnique()
-                .HasFilter("state IN ('Claimed', 'Quarantined')");
+                .HasFilter("state IN ('Claimed', 'Quarantined', 'PublicationPending')");
             entity.HasOne<ModelProviderCredentialRevision>()
                 .WithMany()
                 .HasForeignKey(claim => new { claim.CredentialSlotId, claim.CompletedRevision })

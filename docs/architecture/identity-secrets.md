@@ -140,11 +140,24 @@ may write to Key Vault. An exact replay of an unresolved claim returns no write
 permission. A process crash can leave the row in `Claimed`; replay treats that
 claim as quarantined. When a timeout leaves the outcome uncertain, the caller
 can move the claim to `Quarantined`. Neither state permits a retry, a reference
-write, or reuse of the provider slot. Completion stores the exact version
-returned by Key Vault, advances the head, appends the history row, and marks the
-claim `Completed` in one PostgreSQL transaction. A quarantined claim rejects
-late completion. No API resolves a quarantined claim; an operator must resolve
-the Key Vault outcome before another write can use the slot.
+write, disable, or reuse of the provider slot. Legacy completion stores the
+exact version, advances the head, appends the history row, and marks the claim
+`Completed` in one PostgreSQL transaction. A quarantined claim rejects late
+completion.
+
+The internal publication-bound claim also binds the original Projects provider
+revision, issuer, tenant, actor and publication purpose. Completion commits the
+exact version to the ledger as `PublicationPending`. The slot and provider stay
+reserved until a trusted caller records the matching Projects receipt and the
+claim becomes `Published`. Replays do not grant another write. The internal
+store has no caller that writes a secret or publishes a receipt. A pending
+ledger reference is not proof of Projects publication or authorization for a
+new run. The current and pinned ledger reads can return the pending version.
+An unresolved claim has no automatic expiry or release.
+Quiesce old Broker writers before applying the migration, then start the new
+runtime. Mixed-version writers do not enforce the same reservations. The down
+migration rejects rollback after any publication-bound claim exists; use a
+forward fix instead.
 
 The store does not authenticate users or check Projects authority. A future
 management caller must obtain fresh Projects authority before a mutation.
@@ -163,7 +176,8 @@ after redemption.
 
 The Broker has a private Projects client for credential publication. It sends
 the operation ID, expected provider revision, scope, project ID, provider ID,
-and exact credential version. It sends no key, secret name, or vault URI. A
+credential slot identity, secret identifier, and exact credential version as
+private metadata. It sends no credential value or vault URI. A
 30-second signed token binds the actor and every request field to the
 `credential-publication` purpose. The client uses the pinned Projects TLS
 channel and accepts only a bounded no-store receipt for the same operation.
@@ -174,24 +188,25 @@ currently exposes publication. A retry sends the same operation ID and body.
 ```mermaid
 sequenceDiagram
     participant Owner as Trusted owner
-    participant Vault as Key Vault
     participant Ledger as Identity Broker credential ledger
-    Owner->>Ledger: Claim provider slot and expected revision
+    Owner->>Ledger: Claim provider slot and expected ledger revision
     Ledger->>Ledger: Persist durable write claim
     Ledger-->>Owner: Acquired
-    Owner->>Vault: Write secret
-    alt Exact version returned
-        Vault-->>Owner: Exact version
+    alt Exact version supplied by trusted caller
         Owner->>Ledger: Complete claim with exact version
-        Ledger->>Ledger: Commit head, history, and claim completion atomically
+        Ledger->>Ledger: Commit head, history, and legacy Completed or PublicationPending
         Ledger-->>Owner: Return reference metadata
-    else Timeout
+        opt Publication-bound claim
+            Owner->>Ledger: Record matching Projects receipt
+            Ledger->>Ledger: Mark Published and release reservation
+        end
+    else Uncertain write outcome
         Owner->>Ledger: Mark outcome uncertain
         Ledger->>Ledger: Quarantine claim
     else Process stops
         Note over Ledger: Persisted Claimed row also blocks replay and reuse
     end
-    Note over Owner,Ledger: Operator resolves the Key Vault outcome before another write
+    Note over Owner,Ledger: Unresolved claims retain the slot and provider reservation
     Owner->>Ledger: Read current reference
     Ledger-->>Owner: Deny current use when Disabled
     Owner->>Ledger: Read exact historical reference
