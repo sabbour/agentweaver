@@ -532,6 +532,18 @@ SDK and owner responses. Neither test proves a native AKS journey.
 
 ## Test checkpoint recovery
 
+Run the controlled Source Control response-loss regression:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~RealOwnerResponseLossReconcilesCommittedPullRequest
+```
+
+The test uses the production pull-request executor and authenticated Source
+Control owner with disposable PostgreSQL, a local Git repository, and fake
+GitHub. It drops a committed owner response and checks that concurrent retries
+retain one pull-request receipt. The test uses stub dispatch callbacks; it does
+not prove full dispatch or recovery after a real Host loss.
+
 Use the
 [checkpoint recovery observation case](./checkpoint-recovery-observation-acceptance.md)
 to compare a retained before-capture with normal status after recovery. Its

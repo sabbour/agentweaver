@@ -34,6 +34,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -100,6 +101,558 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+
+    [Fact]
+    public async Task RealOwnerResponseLossReconcilesCommittedPullRequest()
+    {
+        await AssertOwnerResponseLossPassThroughAsync();
+        var secrets = new RecordingSecretRedemption();
+        await RestartBrokerForSourceControlAsync(secrets);
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath, _signingCertificate.Password, X509KeyStorageFlags.EphemeralKeySet);
+        var signingKey = new X509SecurityKey(certificate);
+        var catalog = CreateSourceControlProviderCatalog();
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString, signingKey, providerCatalog: catalog);
+        var adminToken = await IssueTokenAsync(
+            "projects.admin", [TenantId], "coordination-admin", null, null, ["platform_admin"]);
+        var admin = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(adminToken).Claims, "sub");
+        var adminMembership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, admin, TenantId);
+        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, adminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant, TenantId, ProjectAuthorityRole.TenantAdmin);
+        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, adminMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        using var createProject = new HttpRequestMessage(HttpMethod.Post, "/api/projects/")
+        {
+            Content = JsonContent.Create(new CreateProjectRequest { Name = "Response loss" })
+        };
+        AddBearerAndTenant(createProject, adminToken, TenantId);
+        using var createdProject = await projects.Client.SendAsync(createProject);
+        await AssertStatusAsync(createdProject, HttpStatusCode.Created);
+        var project = (await createdProject.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions))!;
+        using var copilot = new ControlledCopilotConnection();
+        var connection = await LinkRuntimeCopilotConnectionAsync(projects, adminToken, copilot);
+        var selectionToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "coordination-runner", null, null, ["orchestrator"]);
+        var runner = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(selectionToken).Claims, "sub");
+        var runnerMembership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, runner, TenantId);
+        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, runnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Orchestrator);
+        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, runnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        await CreateSourceControlSecretGrantAsync(runner, project.ProjectId, RunId,
+            new SecretRef("github-checkout", "checkout-v1"), SourceControlSecretPurposes.Checkout);
+        await CreateSourceControlSecretGrantAsync(runner, project.ProjectId, RunId,
+            new SecretRef("github-api", "api-v1"), SourceControlSecretPurposes.Api);
+        using var defaultsRequest = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
+        {
+            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
+            {
+                ExpectedRevision = 0,
+                Defaults = new PlatformRuntimeDefaults
+                {
+                    ModelSelection = new ModelSelectionSettings(
+                        "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
+                        ConnectionId: connection.ConnectionId),
+                    ModelTaskDefaults = [],
+                    EgressBaseline = [],
+                    RunLimits = new CopilotRunLimits
+                    {
+                        MaxModelTurns = 12, MaxToolCalls = 100, MaxChildren = 7,
+                        MaxConcurrentChildren = 2, MaxWallTimeSeconds = 3600
+                    }
+                }
+            })
+        };
+        AddBearerAndTenant(defaultsRequest, adminToken, TenantId);
+        using var defaults = await projects.Client.SendAsync(defaultsRequest);
+        await AssertStatusAsync(defaults, HttpStatusCode.OK);
+        using var configurationRequest = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
+        {
+            Content = JsonContent.Create(new UpdateProjectConfigurationRequest
+            {
+                ExpectedRevision = project.ConfigurationRevision,
+                Configuration = new ProjectConfiguration
+                {
+                    AgentCharters = [new ProjectAgentCharter(
+                        "test-agent", "Test agent", "implementer", "Implements the accepted work item.")],
+                    Casting = [new ProjectAgentCast("test-agent", "implementer", 0)],
+                    SourceControl = new SourceControlProjectSettings(
+                        new SourceControlRepositoryIdentity("octo", "agentweaver"),
+                        new SecretRef("github-api", "api-v1"),
+                        checkoutSecretReference: new SecretRef("github-checkout", "checkout-v1"))
+                }
+            })
+        };
+        AddBearerAndTenant(configurationRequest, adminToken, TenantId);
+        using var configurationResponse = await projects.Client.SendAsync(configurationRequest);
+        await AssertStatusAsync(configurationResponse, HttpStatusCode.OK);
+        var configuration = (await configurationResponse.Content
+            .ReadFromJsonAsync<VersionedProjectConfiguration>(AuthorizationJsonOptions))!;
+        var selectionRequest = new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = configuration.Revision,
+            ExpectedPlatformRuntimeRevision = 1,
+            Context = new RunSelectionContext
+            {
+                Revision = "provider-catalog-v1",
+                AvailableModelSelectionReferences = ImmutableHashSet.Create(
+                    StringComparer.Ordinal, "platform-model"),
+                ProviderRequirements =
+                [
+                    CreateSourceControlSandboxRequirement(),
+                    new ProviderRequirement
+                    {
+                        Seam = ProviderSeam.SourceControl,
+                        RequiredAdapterVersion = "1.0.0",
+                        RequiredOptionsSchemaVersion = GitHubSourceControlAdapter.CurrentOptionsSchemaVersion,
+                        RequiredCapabilities = ImmutableHashSet.Create(StringComparer.Ordinal,
+                            SourceControlCapabilities.RepositoryRead, SourceControlCapabilities.IssueWrite,
+                            SourceControlCapabilities.PullRequestWrite, SourceControlCapabilities.ReviewRead,
+                            SourceControlCapabilities.RepositoryCheckout, SourceControlCapabilities.Merge)
+                    },
+                    new ProviderRequirement
+                    {
+                        Seam = ProviderSeam.Policy,
+                        RequiredAdapterVersion = AgtPolicyProvider.AdapterVersion.ToString(),
+                        RequiredOptionsSchemaVersion = AgtPolicyProvider.OptionsSchemaVersion,
+                        RequiredCapabilities = PolicyProviderCapabilities.All
+                    },
+                    CreateSourceControlNetworkPolicyRequirement()
+                ]
+            }
+        };
+        using var select = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
+        {
+            Content = JsonContent.Create(selectionRequest)
+        };
+        AddBearerAndTenant(select, selectionToken, TenantId);
+        using var selected = await projects.Client.SendAsync(select);
+        await AssertStatusAsync(selected, HttpStatusCode.OK);
+        await CreateRunBindingGrantAsync(runner, project.ProjectId, RunId);
+        var token = await IssueTokenAsync("projects.orchestrator", [TenantId], "coordination-runner",
+            project.ProjectId, RunId, ["platform_admin"]);
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
+        Assert.Equal(runner, SingleClaim(jwt.Claims, "sub"));
+        Assert.Contains(jwt.Audiences, audience => audience == "https://api.test");
+        Assert.Contains(jwt.Audiences, audience => audience == "https://broker-redemption.test");
+
+        var ownerSchema = "response_loss_" + Guid.NewGuid().ToString("N");
+        var eventsSchema = "response_loss_events_" + Guid.NewGuid().ToString("N");
+        using var serviceEnvironment = new TemporaryEnvironment(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings__Orchestrator"] = _connectionString,
+            ["Orchestrator__Database__WorkloadIdentity__TenantId"] = Guid.NewGuid().ToString(),
+            ["Orchestrator__Database__WorkloadIdentity__ClientId"] = Guid.NewGuid().ToString(),
+            ["Orchestrator__Database__WorkloadIdentity__TokenFilePath"] = TestTokenFile,
+            ["Orchestrator__Schema"] = ownerSchema,
+            ["ConnectionStrings__EventsAndSessions"] = _connectionString,
+            ["EventsAndSessions__Database__WorkloadIdentity__TenantId"] = Guid.NewGuid().ToString(),
+            ["EventsAndSessions__Database__WorkloadIdentity__ClientId"] = Guid.NewGuid().ToString(),
+            ["EventsAndSessions__Database__WorkloadIdentity__TokenFilePath"] = TestTokenFile,
+            ["EventsAndSessions__Provider__ResourceId"] = "postgres-test",
+            ["EventsAndSessions__Provider__DatabaseName"] = new NpgsqlConnectionStringBuilder(_connectionString).Database,
+            ["EventsAndSessions__Provider__ResourceGeneration"] = "1",
+            ["EventsAndSessions__Provider__Schema"] = eventsSchema,
+            ["EventsAndSessions__Provider__OptionsRevision"] = "integration-v1",
+            ["EventsAndSessions__Messaging__OptionsRevision"] = "integration-messaging-v1",
+            ["ProjectsConfig__AuthorizationContext__OwnerBaseAddress"] = "https://projects.test/",
+            ["ProjectsConfig__AuthorizationContext__Audience"] = "https://api.test",
+            ["EventsAndSessions__Authorization__OwnerBaseAddress"] = "https://events.test/",
+            ["EventsAndSessions__Authorization__Audience"] = "https://api.test",
+            ["EventsAndSessions__OrchestratorOwner__OwnerBaseAddress"] = "https://orchestrator.test/",
+            ["EventsAndSessions__OrchestratorOwner__Audience"] = "https://api.test",
+            ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
+            ["Identity__Audience"] = "https://api.test",
+            ["Identity__SecretRedemption__Audience"] = "https://broker-redemption.test",
+            ["Identity__SecretRedemption__OwnerBaseAddress"] = "https://broker.test.local/"
+        });
+        await using var dataSource = NpgsqlDataSource.Create(_connectionString);
+        await using var schemaCleanup = new ResponseLossSchemaCleanup(dataSource, ownerSchema, eventsSchema);
+        await CoordinationOwnerMigrator.MigrateAsync(dataSource, ownerSchema);
+        await EventsAndSessionsMigrator.MigrateAsync(dataSource, eventsSchema);
+        using var workspaceFiles = new SourceControlTemporaryDirectory();
+        var origin = Path.Combine(workspaceFiles.Path, "origin");
+        var baseSha = await CreateGitRepositoryAsync(origin, isolate: true);
+        var workspaceManager = new GitWorkspaceManager(
+            Path.Combine(workspaceFiles.Path, "workspaces"), new LocalGitRepositoryRemote(new Uri(origin)));
+        var github = new ControlledGitHubApi(secrets.Value);
+        var path = $"/api/projects/{project.ProjectId}/runs/{RunId}/source-control/sessions/root";
+        var controls = new OwnerResponseLossControls(path + "/pull-requests");
+        OrchestratorIntegrationFactory? ownerReference = null;
+        EventsIntegrationFactory? eventsReference = null;
+        await using var owner = new OrchestratorIntegrationFactory(
+            _connectionString, ownerSchema, signingKey, projects.CreateHandler,
+            () => eventsReference!.Server.CreateHandler(),
+            sandboxProvider: new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId),
+            brokerHandler: () => _brokerFactory.Server.CreateHandler(),
+            sourceControlHandler: github.CreateHandler, providerCatalog: catalog,
+            policyOptions: SourceControlMergePolicyOptions(), gitWorkspaceManager: workspaceManager,
+            ownerHandler: () => new OwnerResponseLossHandler(ownerReference!.Server.CreateHandler(), controls));
+        ownerReference = owner;
+        await using var events = new EventsIntegrationFactory(
+            _connectionString, eventsSchema, signingKey, projects.CreateHandler,
+            () => owner.Server.CreateHandler());
+        eventsReference = events;
+        using var client = owner.CreateClient(new() { BaseAddress = new Uri("https://orchestrator.test/") });
+        using var eventsClient = events.CreateClient(new() { BaseAddress = new Uri("https://events.test/") });
+        using var rootResponse = await SendJsonAsync(client, HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/root", token, new AcceptRootRequest("root"));
+        await AssertStatusAsync(rootResponse, HttpStatusCode.Created);
+        var root = await ReadJsonAsync<AcceptedRoot>(rootResponse);
+        using var pinResponse = await SendAsync(client, HttpMethod.Post, path + "/pin", token, [TenantId]);
+        await AssertStatusAsync(pinResponse, HttpStatusCode.Accepted);
+
+        await ExerciseRealOwnerResponseLossAsync(client, owner, dataSource, ownerSchema, project.ProjectId,
+            token, jwt, runner, root.ExecutionFence, path, baseSha, github, controls);
+    }
+
+    private static async Task AssertOwnerResponseLossPassThroughAsync()
+    {
+        var controls = new OwnerResponseLossControls("/pull-requests");
+        using var client = new HttpClient(new OwnerResponseLossHandler(new ResponseLossPassThroughHandler(), controls))
+        {
+            BaseAddress = new Uri("https://orchestrator.test/")
+        };
+        using var unrelated = await client.PostAsync("/other", null);
+        Assert.Equal(HttpStatusCode.NoContent, unrelated.StatusCode);
+        using var failure = await client.PostAsync("/pull-requests", null);
+        Assert.Equal(HttpStatusCode.Conflict, failure.StatusCode);
+        Assert.Equal(0, controls.Drops);
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.PostAsync("/pull-requests", null));
+        Assert.Equal(1, controls.Drops);
+
+        var paused = new OwnerResponseLossControls("/pull-requests");
+        paused.Arm();
+        using var bounded = new HttpClient(new OwnerResponseLossHandler(new ResponseLossPassThroughHandler(), paused))
+        {
+            BaseAddress = new Uri("https://orchestrator.test/"),
+            Timeout = TimeSpan.FromMilliseconds(500)
+        };
+        try
+        {
+            var pending = bounded.PostAsync("/pull-requests", null);
+            await paused.WaitForFirstArrivalAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            Assert.Equal(0, paused.Drops);
+        }
+        finally
+        {
+            paused.Release();
+        }
+    }
+
+    private static async Task AssertControlledGitHubQueriesAsync(
+        ControlledGitHubApi github, MafExecutionOpenPullRequestIntent intent)
+    {
+        using var client = new HttpClient(github.CreateHandler())
+        {
+            BaseAddress = new Uri("https://api.github.test/")
+        };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", github.Credential);
+        var head = Uri.EscapeDataString("octo:" + intent.Request.HeadBranch);
+        var branch = Uri.EscapeDataString(intent.Request.BaseBranch);
+        var valid = $"base={branch}&head={head}&page=1&per_page=100&state=all";
+        string[] invalid =
+        [
+            valid.Replace("state=all", "state=all-invalid"),
+            valid.Replace($"head={head}", "head=octo%3Awrong"),
+            valid.Replace($"base={branch}", "base=wrong"),
+            valid.Replace("&page=1&", "&page=2&"),
+            valid + "&state=all",
+            valid + "&extra=1",
+            valid.Replace("&page=1", "")
+        ];
+        foreach (var query in invalid)
+        {
+            using var response = await client.GetAsync("/repos/octo/agentweaver/pulls?" + query);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Contains("GET /repos/octo/agentweaver/pulls?" + query, github.Requests);
+        }
+        using var accepted = await client.GetAsync("/repos/octo/agentweaver/pulls?" + valid);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal("[]", await accepted.Content.ReadAsStringAsync());
+        Assert.Contains("GET /repos/octo/agentweaver/pulls?" + valid, github.Requests);
+    }
+
+    [Fact]
+    public async Task ResponseLossFixtureGitIgnoresHostileConfiguration()
+    {
+        using var files = new SourceControlTemporaryDirectory();
+        var repository = Path.Combine(files.Path, "repository");
+        await CreateGitRepositoryAsync(repository, isolate: true);
+        var hooks = Path.Combine(files.Path, "hooks");
+        Directory.CreateDirectory(hooks);
+        await File.WriteAllTextAsync(Path.Combine(hooks, "pre-commit"), "#!/bin/sh\necho hostile-hook >&2\nexit 1\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(Path.Combine(hooks, "pre-commit"),
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var config = Path.Combine(files.Path, "hostile.gitconfig");
+        var signing = "[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = agentweaver-missing-signing-program\n";
+        await File.WriteAllTextAsync(config,
+            "[core]\n\thooksPath = \"" + hooks.Replace("\\", "\\\\") + "\"\n" + signing);
+        await File.WriteAllTextAsync(Path.Combine(repository, "change.txt"), "fixture change\n");
+        await RunFixtureGitAsync(repository, ["add", "--", "change.txt"], isolate: true);
+        var hookError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RunFixtureGitAsync(repository, ["commit", "-m", "change"], inheritedConfig: config));
+        Assert.Contains("hostile-hook", hookError.Message);
+        await File.WriteAllTextAsync(config, signing);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RunFixtureGitAsync(repository, ["commit", "-m", "change"], inheritedConfig: config));
+        await File.WriteAllTextAsync(config,
+            "[core]\n\thooksPath = \"" + hooks.Replace("\\", "\\\\") + "\"\n" + signing);
+        await RunFixtureGitAsync(repository, ["config", "--local", "core.hooksPath", hooks], isolate: true);
+        await RunFixtureGitAsync(repository, ["commit", "-m", "change"], isolate: true, inheritedConfig: config);
+        var head = await RunFixtureGitAsync(repository, ["log", "-1", "--format=%s"], isolate: true);
+        Assert.Equal("change", head.Trim());
+        await RunFixtureGitAsync(repository, ["config", "--local", "alias.fixture-wait", "!sleep 10"], isolate: true);
+        await Assert.ThrowsAsync<TimeoutException>(() => RunFixtureGitAsync(
+            repository, ["fixture-wait"], isolate: true, processTimeout: TimeSpan.FromSeconds(1)));
+    }
+
+    private async Task ExerciseRealOwnerResponseLossAsync(
+        HttpClient client,
+        OrchestratorIntegrationFactory owner,
+        NpgsqlDataSource dataSource,
+        string schema,
+        string projectId,
+        string token,
+        JwtSecurityToken jwt,
+        string runner,
+        long fence,
+        string sourcePath,
+        string baseSha,
+        ControlledGitHubApi github,
+        OwnerResponseLossControls controls)
+    {
+        var rootPath = $"/api/projects/{projectId}/runs/{RunId}/coordination/sessions/root";
+        long version = 1;
+        async Task DecideAsync(string path, object request)
+        {
+            using var response = await SendJsonAsync(client, HttpMethod.Post, rootPath + path, token, request);
+            await AssertStatusAsync(response, HttpStatusCode.OK);
+            var result = await ReadJsonAsync<CoordinatorDecisionOperationResponse>(response);
+            Assert.True(result.Accepted, JsonSerializer.Serialize(result.Issues));
+            version = result.StateVersion;
+        }
+
+        await DecideAsync("/actions/propose_outcome_spec", new ProposeCoordinatorOutcomeRequest(
+            version, "outcome", "outcome-gate",
+            new CoordinatorOutcomeSpecification("outcome", "Publish the change", "A change is ready",
+                "Use the accepted plan", "Keep current authority", [])));
+        await DecideAsync("/decisions/gates/outcome-gate/answer",
+            new AnswerCoordinatorGateRequest(version, "outcome-answer", "approve", null));
+        var workflow = new WorkflowDefinition("response-loss", "1.0.0", "generated-catalog-v1",
+            WorkflowDefinitionOrigin.Generated, 2,
+            [
+                new WorkflowStepDefinition("implement", "Implement the change", WorkflowStepMode.Open, 0,
+                    new WorkflowCardinality(1, 1), [], ["implementer"], ["implementation"],
+                    ["isolated-worktree"], [], null, null),
+                new WorkflowStepDefinition("publish", "Publish the change", WorkflowStepMode.Platform, 1,
+                    new WorkflowCardinality(1, 1), ["implement"], [], [], [], [], null,
+                    WorkflowPlatformGate.OpenPullRequest)
+            ]);
+        await DecideAsync("/actions/select_workflow",
+            new SelectCoordinatorWorkflowRequest(version, "workflow", "workflow-gate", workflow.Id, workflow));
+        await DecideAsync("/decisions/gates/workflow-gate/answer",
+            new AnswerCoordinatorGateRequest(version, "workflow-answer", "approve", null));
+        var plan = new WorkPlan("response-loss-plan", workflow.Id, workflow.Revision, workflow.CatalogVersion,
+            [new WorkPlanItem("implement-1", "implement", "Implement the change", "Implement the change",
+                "implementer", "test-agent", "implementation", "platform-model",
+                AgentSandboxProviderMetadata.ProviderId, "isolated-worktree", [], [])]);
+        await DecideAsync("/actions/propose_work_plan",
+            new ProposeCoordinatorWorkPlanRequest(version, "plan", "plan-gate", plan));
+        await DecideAsync("/decisions/gates/plan-gate/answer",
+            new AnswerCoordinatorGateRequest(version, "plan-answer", "approve", null));
+
+        const string workspaceId = "response-loss-workspace";
+        const string branch = "agent/response-loss";
+        using var prepared = await SendJsonAsync(client, HttpMethod.Post, sourcePath + "/workspaces", token,
+            new PrepareSourceControlWorkspaceRequest(workspaceId, baseSha, branch));
+        await AssertStatusAsync(prepared, HttpStatusCode.Accepted);
+        var workspace = await ReadJsonAsync<SourceControlWorkspaceView>(prepared);
+        await RunFixtureGitAsync(workspace.WorkspacePath, ["config", "--local", "user.name", "SourceControl Integration"], isolate: true);
+        await RunFixtureGitAsync(workspace.WorkspacePath, ["config", "--local", "user.email",
+            "source-control-integration@example.invalid"], isolate: true);
+        await File.WriteAllTextAsync(Path.Combine(workspace.WorkspacePath, "change.txt"), "fixture change\n");
+        await RunFixtureGitAsync(workspace.WorkspacePath, ["add", "--", "change.txt"], isolate: true);
+        await RunFixtureGitAsync(workspace.WorkspacePath, ["commit", "-m", "fixture change"], isolate: true);
+        using var diffResponse = await SendJsonAsync(client, HttpMethod.Post,
+            sourcePath + "/workspaces/" + workspaceId + "/diff", token,
+            new PrepareSourceControlWorkspaceRevisionRequest(baseSha, branch) { IncludePatch = false });
+        await AssertStatusAsync(diffResponse, HttpStatusCode.OK);
+        var diff = await ReadJsonAsync<SourceControlWorkspaceDiffView>(diffResponse);
+        var principal = new System.Security.Claims.ClaimsPrincipal(
+            new System.Security.Claims.ClaimsIdentity(jwt.Claims, "fixture"));
+        var context = new DefaultHttpContext { User = principal };
+        context.Request.Headers.Authorization = "Bearer " + token;
+        context.Request.Headers["X-Agentweaver-Tenant"] = TenantId;
+        var identity = new SessionIdentity(projectId, RunId, "root");
+        var actor = new CoordinationActor(jwt.Issuer, runner);
+        var selection = await owner.Services.GetRequiredService<ProjectsRunSelectionClient>()
+            .ReadAcceptedSelectionWithAuthorityAsync(context, projectId, RunId, default);
+        var pin = await owner.Services.GetRequiredService<SourceControlOwnerStore>()
+            .ReadRepositoryPinAsync(actor, identity, selection, default);
+        var hash = CoordinationOwnerStore.HashSelection(selection.Selection);
+        var execution = new MafExecutionCheckpointStore(
+            owner.Services.GetRequiredService<PostgresMafCheckpointStore>(),
+            new MafCheckpointBinding(identity, actor, fence, MafExecutionCheckpointStore.CurrentSdkVersion,
+                PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot), null));
+        var initial = await execution.AppendAsync("initial", null,
+            new MafExecutionCheckpoint(1, plan.Id, version, MafExecutionProgress.Empty with
+            {
+                NonModelSteps = MafExecutionProgress.Empty.NonModelSteps.Add("publish", MafExecutionTaskStatus.Pending)
+            }), default);
+        var locator = new SourceControlPullRequestWorkspaceLocator(workspaceId,
+            diff.WorkspaceIncarnationId, diff.BaseSha, branch, diff.HeadSha, pin.DefaultBranch);
+        var intent = MafOpenPullRequestContract.CreateIntent(Guid.NewGuid(), identity, "intent", 2,
+            plan.Id, "publish", version, fence, hash, pin, locator, 1);
+        var running = await execution.AppendAsync(intent.CheckpointId, initial.Info,
+            CoordinationEndpoints.PrepareOpenPullRequestCheckpoint(initial, intent)!, default);
+        github.EnableCreate(intent);
+        await AssertControlledGitHubQueriesAsync(github, intent);
+        var requestOffset = github.Requests.Count;
+        using var configuredOwnerClient = owner.Services.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(typeof(MafSourceControlOwnerClient).Name);
+        Assert.Equal(TimeSpan.FromSeconds(90), configuredOwnerClient.Timeout);
+        var executor = new MafOpenPullRequestExecutor(execution,
+            owner.Services.GetRequiredService<MafSourceControlOwnerClient>(), dataSource,
+            _ => Task.FromResult(new RuntimeActorAuthorization(
+                new SecretCredential(token, new DateTimeOffset(jwt.ValidTo)), TenantId)),
+            (current, _) =>
+            {
+                MafOpenPullRequestContract.RequireCurrentSource(current, actor, identity, TenantId,
+                    version, fence, hash, pin);
+                return Task.FromResult(current);
+            },
+            (_, _, _) => Task.CompletedTask, () => false, () => { }, _ => { });
+        var error = await Assert.ThrowsAsync<CoordinationException>(() => executor.ExecuteAsync(intent, default));
+        Assert.Equal("source_control_owner_unavailable", error.Code);
+        Assert.Equal(502, error.StatusCode);
+        Assert.Equal(1, controls.Drops);
+        Assert.Equal(1, github.PullRequestCreateCount);
+        var expectedLookup = "GET /repos/octo/agentweaver/pulls?state=all&per_page=100&page=1&head=" +
+            Uri.EscapeDataString("octo:" + intent.Request.HeadBranch) +
+            "&base=" + Uri.EscapeDataString(intent.Request.BaseBranch);
+        Assert.Single(github.Requests.Skip(requestOffset), request => request == expectedLookup);
+        Assert.Single(github.Requests.Skip(requestOffset),
+            request => request == "POST /repos/octo/agentweaver/pulls");
+        var committedRow = await ReadResponseLossOperationAsync(dataSource, schema, intent);
+        var pullRequest = new SourceControlPullRequest(17,
+            new Uri("https://github.com/octo/agentweaver/pull/17"), "open", branch, diff.HeadSha,
+            pin.DefaultBranch, diff.BaseSha, false, SourceControlPullRequestDisposition.Created);
+        Assert.Equal(TenantId, committedRow.Tenant);
+        Assert.Equal(pin.PinId, committedRow.Pin);
+        Assert.Equal(MafOpenPullRequestContract.OwnerRequestFingerprint(identity, intent.Request), committedRow.Request);
+        Assert.Equal(MafOpenPullRequestContract.EffectRequestFingerprint(identity, intent.Request), committedRow.Effect);
+        Assert.Equal(MafOpenPullRequestContract.OriginalAuthorizationFingerprint(identity,
+            TenantId, actor.Issuer, actor.Subject, intent.Request.ExecutionBinding!), committedRow.Authorization);
+        Assert.Equal("committed", committedRow.State);
+        Assert.Equal(17, committedRow.Number);
+        Assert.Equal(MafOpenPullRequestContract.EffectResultFingerprint(identity, intent.Request.ExecutionBinding!,
+            pin.Repository, pullRequest), committedRow.Result);
+        var pending = (await execution.ReadLatestAsync(default))!;
+        Assert.Equal(running.Info.CheckpointId, pending.Info.CheckpointId);
+        Assert.Equal(MafExecutionTaskStatus.Running, pending.State.Progress.NonModelSteps["publish"]);
+        Assert.True(MafExecutionCheckpointContract.OpenPullRequestIntentsMatch(intent,
+            pending.State.OpenPullRequestIntents["publish"]));
+        Assert.Empty(pending.State.OpenPullRequestReceipts);
+
+        using var changed = await SendJsonAsync(client, HttpMethod.Post, sourcePath + "/pull-requests", token,
+            intent.Request with { Title = intent.Request.Title + " changed" });
+        Assert.Equal(HttpStatusCode.Conflict, changed.StatusCode);
+        Assert.Equal("source_control_run_binding_changed",
+            (await ReadJsonAsync<JsonElement>(changed)).GetProperty("error").GetString());
+        Assert.Equal(committedRow, await ReadResponseLossOperationAsync(dataSource, schema, intent));
+        Assert.Equal(running.Info.CheckpointId, (await execution.ReadLatestAsync(default))!.Info.CheckpointId);
+        Assert.Equal(1, github.PullRequestCreateCount);
+
+        controls.Arm();
+        Task<bool>[] retries = [];
+        try
+        {
+            var first = executor.ExecuteAsync(intent, default);
+            retries = [first];
+            await controls.WaitForFirstArrivalAsync();
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            retries = [first, executor.ExecuteAsync(intent, default)];
+            await controls.WaitForArrivalsAsync();
+        }
+        finally
+        {
+            controls.Release();
+            await Task.WhenAll(retries);
+        }
+        Assert.All(await Task.WhenAll(retries), Assert.True);
+        Assert.Equal(2, github.Requests.Count(request => request == "GET /repos/octo/agentweaver/pulls/17"));
+        Assert.Single(github.Requests.Skip(requestOffset), request => request == expectedLookup);
+        Assert.Single(github.Requests.Skip(requestOffset),
+            request => request == "POST /repos/octo/agentweaver/pulls");
+        Assert.Equal(1, github.PullRequestCreateCount);
+        var completed = (await execution.ReadLatestAsync(default))!;
+        Assert.Equal(running.State.Revision + 1, completed.State.Revision);
+        Assert.Equal(MafExecutionTaskStatus.Succeeded, completed.State.Progress.NonModelSteps["publish"]);
+        var receipt = Assert.Single(completed.State.OpenPullRequestReceipts).Value;
+        Assert.Equal(intent.OperationId, receipt.OperationId);
+        Assert.Equal(17, receipt.PullRequestNumber);
+        Assert.Equal("https://github.com/octo/agentweaver/pull/17", receipt.HtmlUrl);
+        Assert.Equal(diff.HeadSha, receipt.HeadSha);
+        Assert.Equal(MafOpenPullRequestContract.Fingerprint(intent),
+            receipt.RequestFingerprint);
+        var ownerPosts = controls.Posts;
+        Assert.Equal(3, ownerPosts);
+        Assert.Equal(committedRow, await ReadResponseLossOperationAsync(dataSource, schema, intent));
+        Assert.False(await executor.ExecuteAsync(intent, default));
+        Assert.Equal(ownerPosts, controls.Posts);
+        Assert.Equal(1, github.PullRequestCreateCount);
+        Assert.Equal(receipt, (await execution.ReadLatestAsync(default))!.State.OpenPullRequestReceipts["publish"]);
+    }
+
+    private sealed record ResponseLossOperation(
+        string Tenant, string Pin, string Request, string Effect, string Authorization,
+        string State, long Number, string Result, DateTime Completed);
+
+    private sealed class ResponseLossSchemaCleanup(NpgsqlDataSource dataSource, params string[] schemas)
+        : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await using var connection = await dataSource.OpenConnectionAsync();
+            foreach (var schema in schemas)
+            {
+                await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", connection);
+                await command.ExecuteNonQueryAsync();
+            }
+        }
+    }
+
+    private static async Task<ResponseLossOperation> ReadResponseLossOperationAsync(
+        NpgsqlDataSource dataSource, string schema, MafExecutionOpenPullRequestIntent intent)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT tenant_id, pin_id, request_fingerprint, effect_fingerprint,
+                   original_authorization_fingerprint, effect_state, pull_request_number,
+                   result_fingerprint, completed_at
+            FROM "{schema}".source_control_pull_request_operations
+            WHERE project_id = @project AND run_id = @run AND session_id = @session AND operation_id = @operation
+            """, connection);
+        command.Parameters.AddWithValue("project", intent.Identity.ProjectId);
+        command.Parameters.AddWithValue("run", intent.Identity.RunId);
+        command.Parameters.AddWithValue("session", intent.Identity.SessionId);
+        command.Parameters.AddWithValue("operation", intent.OperationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var row = new ResponseLossOperation(reader.GetString(0), reader.GetString(1), reader.GetString(2).TrimEnd(),
+            reader.GetString(3).TrimEnd(), reader.GetString(4).TrimEnd(), reader.GetString(5),
+            reader.GetInt64(6), reader.GetString(7).TrimEnd(), reader.GetDateTime(8));
+        Assert.False(await reader.ReadAsync());
+        return row;
+    }
 
     [Fact]
     public Task CopilotConnectionRotationPreservesAcceptedSelectionThroughNativeSdkAccounting() =>
@@ -6277,22 +6830,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await authority.ReplaceAsync(grant, 0, $"source-control-grant-{Guid.NewGuid():N}");
     }
 
-    private static async Task<string> CreateGitRepositoryAsync(string path)
+    private static async Task<string> CreateGitRepositoryAsync(string path, bool isolate = false)
     {
         Directory.CreateDirectory(path);
-        await RunFixtureGitAsync(path, ["init", "--initial-branch=main"]);
-        await RunFixtureGitAsync(path, ["config", "--local", "user.name", "SourceControl Integration"]);
+        await RunFixtureGitAsync(path, ["init", "--initial-branch=main"], isolate);
+        await RunFixtureGitAsync(path, ["config", "--local", "user.name", "SourceControl Integration"], isolate);
         await RunFixtureGitAsync(
-            path, ["config", "--local", "user.email", "source-control-integration@example.invalid"]);
+            path, ["config", "--local", "user.email", "source-control-integration@example.invalid"], isolate);
         await File.WriteAllTextAsync(Path.Combine(path, "README.md"), "initial repository content\n");
-        await RunFixtureGitAsync(path, ["add", "--", "README.md"]);
-        await RunFixtureGitAsync(path, ["commit", "-m", "initial"]);
-        var head = (await RunFixtureGitAsync(path, ["rev-parse", "--verify", "HEAD^{commit}"])).Trim();
+        await RunFixtureGitAsync(path, ["add", "--", "README.md"], isolate);
+        await RunFixtureGitAsync(path, ["commit", "-m", "initial"], isolate);
+        var head = (await RunFixtureGitAsync(path, ["rev-parse", "--verify", "HEAD^{commit}"], isolate)).Trim();
         Assert.Equal(40, head.Length);
         return head;
     }
 
-    private static async Task<string> RunFixtureGitAsync(string workingDirectory, string[] arguments)
+    private static async Task<string> RunFixtureGitAsync(
+        string workingDirectory, string[] arguments, bool isolate = false, string? inheritedConfig = null,
+        TimeSpan? processTimeout = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -6307,6 +6862,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                      .Where(key => key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase))
                      .ToArray())
             startInfo.Environment.Remove(key);
+        if (inheritedConfig is not null)
+        {
+            startInfo.Environment["GIT_CONFIG_GLOBAL"] = inheritedConfig;
+            startInfo.Environment["GIT_CONFIG_SYSTEM"] = inheritedConfig;
+        }
+        if (isolate)
+        {
+            startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+            startInfo.Environment["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+            startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add("core.hooksPath=" + Path.Combine(workingDirectory, ".git", "agentweaver-no-hooks"));
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add("commit.gpgSign=false");
+        }
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
@@ -6314,7 +6884,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ?? throw new InvalidOperationException("Git fixture process did not start.");
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        if (isolate)
+        {
+            using var deadline = new CancellationTokenSource(processTimeout ?? TimeSpan.FromSeconds(30));
+            try
+            {
+                await process.WaitForExitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException) when (process.HasExited) { }
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                throw new TimeoutException($"Git fixture command '{arguments[0]}' timed out.");
+            }
+        }
+        else
+            await process.WaitForExitAsync();
         var output = await outputTask;
         var error = await errorTask;
         if (process.ExitCode != 0)
@@ -6954,6 +7543,85 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 builder.PrimaryHandler = handlerFactory());
         });
 
+    private sealed class OwnerResponseLossControls(string path)
+    {
+        private readonly TaskCompletionSource _firstArrival = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _drop = 1;
+        private int _drops;
+        private int _armed;
+        private int _arrivals;
+        private int _posts;
+
+        public int Drops => Volatile.Read(ref _drops);
+        public int Posts => Volatile.Read(ref _posts);
+        public bool Matches(HttpRequestMessage request) =>
+            request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == path;
+        public void Arm() => Volatile.Write(ref _armed, 1);
+        public Task WaitForFirstArrivalAsync() => _firstArrival.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        public Task WaitForArrivalsAsync() => _arrived.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        public void Release() => _release.TrySetResult();
+
+        public async Task BeforeAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _posts);
+            if (Volatile.Read(ref _armed) == 0)
+                return;
+            var arrivals = Interlocked.Increment(ref _arrivals);
+            if (arrivals == 1)
+                _firstArrival.TrySetResult();
+            if (arrivals == 2)
+                _arrived.TrySetResult();
+            await _release.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        }
+
+        public bool Drop(HttpResponseMessage response)
+        {
+            if (!response.IsSuccessStatusCode || Interlocked.CompareExchange(ref _drop, 0, 1) != 1)
+                return false;
+            Interlocked.Increment(ref _drops);
+            return true;
+        }
+    }
+
+    private sealed class OwnerResponseLossHandler : DelegatingHandler
+    {
+        private readonly OwnerResponseLossControls _controls;
+
+        public OwnerResponseLossHandler(HttpMessageHandler innerHandler, OwnerResponseLossControls controls)
+        {
+            InnerHandler = innerHandler;
+            _controls = controls;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var matches = _controls.Matches(request);
+            if (matches)
+                await _controls.BeforeAsync(cancellationToken);
+            var response = await base.SendAsync(request, cancellationToken);
+            if (matches && _controls.Drop(response))
+            {
+                response.Dispose();
+                throw new HttpRequestException("Controlled owner response loss.");
+            }
+            return response;
+        }
+    }
+
+    private sealed class ResponseLossPassThroughHandler : HttpMessageHandler
+    {
+        private int _matches;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(request.RequestUri!.AbsolutePath != "/pull-requests"
+                ? HttpStatusCode.NoContent
+                : Interlocked.Increment(ref _matches) == 1 ? HttpStatusCode.Conflict : HttpStatusCode.Created));
+    }
+
     private sealed class OrchestratorIntegrationFactory(
         string connectionString,
         string schema,
@@ -6970,13 +7638,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<HttpMessageHandler>? environmentHandler = null,
         Func<HttpMessageHandler>? runtimeUsageHandler = null,
         ILoggerProvider? loggerProvider = null,
-        Func<HttpMessageHandler>? runtimeHostHandler = null)
+        Func<HttpMessageHandler>? runtimeHostHandler = null,
+        Func<HttpMessageHandler>? ownerHandler = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             if (loggerProvider is not null)
                 builder.ConfigureLogging(logging => logging.AddProvider(loggerProvider));
+            if (ownerHandler is not null)
+                builder.UseSetting("Orchestrator:SourceControlOwner:OwnerBaseAddress", "https://orchestrator.test/");
             builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -7018,6 +7689,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         brokerHandler);
                 if (sourceControlHandler is not null)
                     ConfigureTestHttpClient(services, nameof(GitHubSourceControlAdapter), sourceControlHandler);
+                if (ownerHandler is not null)
+                {
+                    ConfigureTestHttpClient(services,
+                        typeof(OrchestratorHost::Agentweaver.Orchestrator.MafSourceControlOwnerClient).Name,
+                        ownerHandler);
+                    services.PostConfigure<HttpClientFactoryOptions>(typeof(MafSourceControlOwnerClient).Name,
+                        options => options.HttpClientActions.Add(client => client.Timeout = TimeSpan.FromSeconds(90)));
+                }
                 if (policyOptions is not null)
                     services.AddSingleton(policyOptions);
                 if (gitWorkspaceManager is not null)
@@ -7053,6 +7732,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         private readonly List<string> _requests = [];
         private int _mergeRequestCount;
         private string? _lastMergeRequestBody;
+        private MafExecutionOpenPullRequestIntent? _createIntent;
+        private string? _createdPullRequest;
+        private int _pullRequestCreateCount;
+
+        public string Credential => credential;
+        public int PullRequestCreateCount => Volatile.Read(ref _pullRequestCreateCount);
+        public void EnableCreate(MafExecutionOpenPullRequestIntent intent) => _createIntent = intent;
 
         public IReadOnlyList<string> Requests
         {
@@ -7104,13 +7790,70 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (BeforeResponseAsync is { } beforeResponse)
                 await beforeResponse(request, cancellationToken).ConfigureAwait(false);
 
+            if (_createIntent is { } intent &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/pulls")
+            {
+                var query = QueryHelpers.ParseQuery(uri.Query);
+                var expected = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["state"] = "all",
+                    ["per_page"] = "100",
+                    ["page"] = "1",
+                    ["head"] = "octo:" + intent.Request.HeadBranch,
+                    ["base"] = intent.Request.BaseBranch
+                };
+                if (request.Method == HttpMethod.Get && query.Count == expected.Count &&
+                    query.All(pair => expected.TryGetValue(pair.Key, out var value) &&
+                        pair.Value.Count == 1 && pair.Value[0] == value))
+                {
+                    lock (_requests)
+                        return Json(HttpStatusCode.OK, _createdPullRequest is null
+                            ? "[]" : "[" + _createdPullRequest + "]");
+                }
+                if (request.Method == HttpMethod.Post && uri.Query.Length == 0)
+                {
+                    using var document = JsonDocument.Parse(requestBody!);
+                    var body = document.RootElement;
+                    Assert.Equal(intent.Request.Title, body.GetProperty("title").GetString());
+                    Assert.Equal(intent.Request.Body + "\n\n" +
+                        $"<!-- agentweaver-open-pr-operation:{intent.OperationId:N} -->",
+                        body.GetProperty("body").GetString());
+                    Assert.Equal("octo:" + intent.Request.HeadBranch, body.GetProperty("head").GetString());
+                    Assert.Equal(intent.Request.BaseBranch, body.GetProperty("base").GetString());
+                    Assert.Equal(intent.Request.Draft, body.GetProperty("draft").GetBoolean());
+                    lock (_requests)
+                    {
+                        Interlocked.Increment(ref _pullRequestCreateCount);
+                        _createdPullRequest = JsonSerializer.Serialize(new
+                        {
+                            number = 17,
+                            html_url = "https://github.com/octo/agentweaver/pull/17",
+                            state = "open",
+                            merged = false,
+                            title = intent.Request.Title,
+                            body = body.GetProperty("body").GetString(),
+                            head = new { @ref = intent.Request.HeadBranch, sha = intent.Request.ExpectedHeadSha,
+                                repo = new { full_name = "octo/agentweaver" } },
+                            @base = new { @ref = intent.Request.BaseBranch, sha = intent.Request.ExpectedBaseSha,
+                                repo = new { full_name = "octo/agentweaver" } }
+                        });
+                        return Json(HttpStatusCode.Created, _createdPullRequest);
+                    }
+                }
+                return Json(HttpStatusCode.NotFound, "{\"message\":\"Unexpected controlled GitHub request\"}");
+            }
+
             if (request.Method == HttpMethod.Get &&
-                uri.AbsolutePath == "/repos/octo/agentweaver")
+                uri.AbsolutePath == "/repos/octo/agentweaver" &&
+                (_createIntent is null || uri.Query.Length == 0))
                 return Json(HttpStatusCode.OK,
                     "{\"id\":12345,\"full_name\":\"octo/agentweaver\",\"default_branch\":\"main\"," +
                     "\"private\":false,\"created_at\":\"2020-01-01T00:00:00Z\"," +
                     "\"has_issues\":true," +
                     "\"permissions\":{\"pull\":true,\"push\":true}}");
+
+            if (_createIntent is not null && uri.AbsolutePath != "/repos/octo/agentweaver/pulls/17")
+                return Json(HttpStatusCode.NotFound, "{\"message\":\"Unexpected controlled GitHub request\"}");
 
             if (request.Method == HttpMethod.Post &&
                 uri.AbsolutePath == "/repos/octo/agentweaver/issues")
@@ -7128,8 +7871,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 return Json(HttpStatusCode.OK, "[" + PullRequestJson() + "]");
 
             if (request.Method == HttpMethod.Get &&
-                uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17")
-                return Json(HttpStatusCode.OK, PullRequestJson());
+                uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17" &&
+                (_createIntent is null || uri.Query.Length == 0))
+            {
+                lock (_requests)
+                    return _createIntent is not null && _createdPullRequest is null
+                        ? Json(HttpStatusCode.NotFound, "{\"message\":\"Pull request not found\"}")
+                        : Json(HttpStatusCode.OK, _createIntent is null ? PullRequestJson() : _createdPullRequest!);
+            }
 
             if (request.Method == HttpMethod.Get &&
                 uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17/reviews")
