@@ -442,6 +442,11 @@ public static class GatewayRouteCatalog
         const long ModelProviderDraftSaveLimit = 32 * 1024;
         const long ModelProviderDraftRowLimit = 32 * 1024;
         const long ModelProviderDraftPageLimit = 4 * 1024 * 1024;
+        Add("GET", GatewayOwner.Projects, "/platform/byok-deployment-bindings",
+            "/api/platform/byok-deployment-bindings", "readPlatformByokDeploymentBindings",
+            "Read the Projects deployment BYOK binding snapshot", forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftPageLimit,
+            excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/platform/byok-providers", "/api/platform/byok-providers",
             "listPlatformByokProviderDrafts", "List platform BYOK provider drafts",
             ["pageSize", "afterProviderId"], forwardTenantSelector: true,

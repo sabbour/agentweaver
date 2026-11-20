@@ -201,6 +201,8 @@ vi.mock('./AuthContext', () => {
       binding: null,
     },
     authSessionGeneration: 0,
+    authSessionEpoch: 0,
+    isActiveSession: () => true,
     unboundSessionGeneration: 0,
     apiCall: mocks.apiCall,
     authorize: (binding: unknown) => mocks.authorize(binding),

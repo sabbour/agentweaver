@@ -9,6 +9,9 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using GatewayHost::Agentweaver.Gateway;
 using ProjectsConfig::Agentweaver.Projects.Config;
@@ -23,6 +26,7 @@ public sealed class GatewayModelProviderDraftTests
 {
     private static readonly (string Method, string Path, string OperationId, string OwnerPath)[] DraftRoutes =
     [
+        ("GET", "/api/v1/platform/byok-deployment-bindings", "readPlatformByokDeploymentBindings", "/api/platform/byok-deployment-bindings"),
         ("GET", "/api/v1/platform/byok-providers", "listPlatformByokProviderDrafts", "/api/platform/byok-providers"),
         ("GET", "/api/v1/platform/byok-providers/{providerId}", "readPlatformByokProviderDraft", "/api/platform/byok-providers/{providerId}"),
         ("POST", "/api/v1/platform/byok-providers", "createPlatformByokProviderDraft", "/api/platform/byok-providers"),
@@ -184,6 +188,7 @@ public sealed class GatewayModelProviderDraftTests
     }
 
     [Theory]
+    [InlineData("/api/v1/platform/byok-deployment-bindings", "/api/platform/byok-deployment-bindings")]
     [InlineData("/api/v1/platform/byok-providers?pageSize=1", "/api/platform/byok-providers?pageSize=1")]
     [InlineData("/api/v1/platform/byok-providers/provider-a", "/api/platform/byok-providers/provider-a")]
     [InlineData("/api/v1/projects/project-a/byok-providers?afterProviderId=one", "/api/projects/project-a/byok-providers?afterProviderId=one")]
@@ -232,6 +237,7 @@ public sealed class GatewayModelProviderDraftTests
     }
 
     [Theory]
+    [InlineData("/api/v1/platform/byok-deployment-bindings")]
     [InlineData("/api/v1/platform/byok-providers")]
     [InlineData("/api/v1/platform/byok-providers/provider-a")]
     [InlineData("/api/v1/projects/project-a/byok-providers")]
@@ -329,6 +335,58 @@ public sealed class GatewayModelProviderDraftTests
     }
 
     [Theory]
+    [InlineData(4 * 1024 * 1024, HttpStatusCode.OK)]
+    [InlineData(4 * 1024 * 1024 + 1, HttpStatusCode.BadGateway)]
+    public async Task DeploymentBindingsBuffersActualChunkedOwnerResponseBeforeHeaders(int size, HttpStatusCode status)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Logging.ClearProviders();
+        await using var owner = builder.Build();
+        owner.Run(async context =>
+        {
+            context.Response.ContentType = "application/json";
+            var chunk = new byte[16 * 1024];
+            Array.Fill(chunk, (byte)'x');
+            for (var sent = 0; sent < size;)
+            {
+                var count = Math.Min(chunk.Length, size - sent);
+                await context.Response.Body.WriteAsync(chunk.AsMemory(0, count));
+                await context.Response.Body.FlushAsync();
+                sent += count;
+            }
+        });
+        await owner.StartAsync();
+        var address = new Uri(owner.Urls.Single());
+        var chunked = false;
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key, () => new ObservedChunkedHandler(() => chunked = true),
+            (_, _, _) => throw new InvalidOperationException("The read must call Projects."),
+            projectsOwner: address);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/platform/byok-deployment-bindings");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", CreateToken(key));
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+
+        using var response = await gateway.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(chunked);
+        Assert.Equal(status, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        if (status == HttpStatusCode.BadGateway)
+        {
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            using var problem = JsonDocument.Parse(body);
+            Assert.Equal("owner_response_too_large", problem.RootElement.GetProperty("title").GetString());
+        }
+        else
+        {
+            Assert.Equal(new string('x', size), body);
+        }
+    }
+
+    [Theory]
     [InlineData(HttpStatusCode.NotFound, "model_provider_draft_not_found")]
     [InlineData(HttpStatusCode.UnsupportedMediaType, "model_provider_draft_unsupported_media_type")]
     [InlineData(HttpStatusCode.ServiceUnavailable, "model_provider_draft_unavailable")]
@@ -417,6 +475,19 @@ public sealed class GatewayModelProviderDraftTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken) => send(request, cancellationToken);
+    }
+
+    private sealed class ObservedChunkedHandler(Action observed) : DelegatingHandler(new HttpClientHandler())
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await base.SendAsync(request, cancellationToken);
+            Assert.True(response.Headers.TransferEncodingChunked);
+            Assert.Null(response.Content.Headers.ContentLength);
+            observed();
+            return response;
+        }
     }
 }
 

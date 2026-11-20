@@ -104,6 +104,7 @@ internal static partial class GatewayOpenApi
             ["writePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyWriteRequest", "NativeAcsPolicyWriteReceipt", "200"),
             ["listPlatformByokProviderDrafts"] = C(null, "ModelProviderDraftPage", "200"),
+            ["readPlatformByokDeploymentBindings"] = C(null, "ByokDeploymentBindingSnapshot", "200"),
             ["readPlatformByokProviderDraft"] = C(null, "ModelProviderDraft", "200"),
             ["createPlatformByokProviderDraft"] = C("ModelProviderDraftPlatformCreateRequest", "ModelProviderDraft", "200"),
             ["updatePlatformByokProviderDraft"] = C("ModelProviderDraftSaveRequest", "ModelProviderDraft", "200"),
@@ -1304,7 +1305,7 @@ else if (route.OperationId is
     }
 
     private static bool IsModelProviderDraftRoute(string operationId) =>
-        operationId is "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
+        operationId is "readPlatformByokDeploymentBindings" or "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
             "createPlatformByokProviderDraft" or "updatePlatformByokProviderDraft" or
             "listProjectByokProviderDrafts" or "readProjectByokProviderDraft" or
             "createProjectByokProviderDraft" or "updateProjectByokProviderDraft";
@@ -2369,6 +2370,12 @@ else if (route.OperationId is
         ["ModelProviderDraftPage"] = Obj(
             ["providers", "nextAfterProviderId"],
             ("providers", Arr(Ref("ModelProviderDraft"))), ("nextAfterProviderId", NullableStr())),
+        ["ByokDeploymentBindingSnapshot"] = Obj(
+            ["revision", "bindings"],
+            ("revision", Str()), ("bindings", Arr(Ref("ByokDeploymentBinding")))),
+        ["ByokDeploymentBinding"] = Obj(
+            ["reference", "enabled", "reasoningEfforts"],
+            ("reference", Str()), ("enabled", Bool()), ("reasoningEfforts", Arr(Str()))),
         ["ModelProviderDraftError"] = Obj(
             ["code"], ("code", Str()), ("id", NullableStr()), ("revision", NullableInt())),
         // Platform component report: identities, versions, and readiness only; no options or endpoints.

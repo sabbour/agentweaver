@@ -49,10 +49,10 @@ public sealed partial class GatewayOwnerClient(
 
     private static bool IsModelProviderDraftGet(GatewayRoute route) =>
         route.Method == "GET" && route.OperationId is
-            "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
+            "readPlatformByokDeploymentBindings" or "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
             "listProjectByokProviderDrafts" or "readProjectByokProviderDraft";
     private static bool IsModelProviderDraftRoute(GatewayRoute route) =>
-        route.OperationId is "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
+        route.OperationId is "readPlatformByokDeploymentBindings" or "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
             "createPlatformByokProviderDraft" or "updatePlatformByokProviderDraft" or
             "listProjectByokProviderDrafts" or "readProjectByokProviderDraft" or
             "createProjectByokProviderDraft" or "updateProjectByokProviderDraft";
@@ -221,6 +221,13 @@ public sealed partial class GatewayOwnerClient(
                 return;
             }
 
+            byte[]? bufferedBody = null;
+            if (route.OperationId == "readPlatformByokDeploymentBindings" &&
+                !HttpMethods.IsHead(context.Request.Method) &&
+                response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.NotModified)
+                bufferedBody = await ReadBoundedAsync(response.Content, MaximumResponseBytes(route), timeout.Token)
+                    .ConfigureAwait(false);
+
             context.Response.StatusCode = (int)response.StatusCode;
             context.Response.Headers.CacheControl = "no-store";
             context.Response.Headers.XContentTypeOptions = "nosniff";
@@ -228,10 +235,14 @@ public sealed partial class GatewayOwnerClient(
             CopyExposedResponseHeaders(context, response, route);
             if (response.Content.Headers.ContentType is { } contentType)
                 context.Response.ContentType = contentType.ToString();
-            if (response.Content.Headers.ContentLength is { } contentLength)
+            if (bufferedBody is not null)
+                context.Response.ContentLength = bufferedBody.Length;
+            else if (response.Content.Headers.ContentLength is { } contentLength)
                 context.Response.ContentLength = contentLength;
 
-            if (!HttpMethods.IsHead(context.Request.Method) &&
+            if (bufferedBody is not null)
+                await context.Response.Body.WriteAsync(bufferedBody, timeout.Token).ConfigureAwait(false);
+            else if (!HttpMethods.IsHead(context.Request.Method) &&
                 response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.NotModified)
                 await CopyBoundedAsync(
                     await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),

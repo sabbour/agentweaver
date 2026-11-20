@@ -21,6 +21,85 @@ namespace Agentweaver.Projects.Config.Tests;
 
 public sealed partial class ProjectsConfigPostgresTests
 {
+    [Fact]
+    public async Task DeploymentBindingsReadRequiresUnboundPlatformAdminAndReturnsOnlyByokSnapshot()
+    {
+        await using var db = CreateDbContext();
+        var caller = await CreateReferenceAdminAsync(db);
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["AgentHost:ModelBindingsRevision"] = "snapshot-r1",
+            ["AgentHost:ModelBindings:enabled:SourceMode"] = "Byok",
+            ["AgentHost:ModelBindings:enabled:Enabled"] = "true",
+            ["AgentHost:ModelBindings:enabled:SupportedReasoningEfforts:0"] = "high",
+            ["AgentHost:ModelBindings:disabled:SourceMode"] = "Byok",
+            ["AgentHost:ModelBindings:disabled:Enabled"] = "false",
+            ["AgentHost:ModelBindings:hosted:SourceMode"] = "HostedCopilot",
+            ["AgentHost:ModelBindings:hosted:Enabled"] = "true",
+        }).Build();
+        using var host = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs(),
+            bindingsOverride: ModelBindingCapabilities.FromConfiguration(configuration));
+        using var admin = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId);
+        const string path = "/api/platform/byok-deployment-bindings";
+        using var response = await admin.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("snapshot-r1", json.RootElement.GetProperty("revision").GetString());
+        var bindings = json.RootElement.GetProperty("bindings").EnumerateArray().ToArray();
+        Assert.Equal(["disabled", "enabled"], bindings.Select(item => item.GetProperty("reference").GetString()));
+        Assert.False(bindings[0].GetProperty("enabled").GetBoolean());
+        Assert.True(bindings[1].GetProperty("enabled").GetBoolean());
+        Assert.Equal("high", Assert.Single(bindings[1].GetProperty("reasoningEfforts").EnumerateArray()).GetString());
+        Assert.All(bindings, binding => Assert.Equal(
+            ["enabled", "reasoningEfforts", "reference"],
+            binding.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal)));
+
+        using var bound = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId, "project-1");
+        using var boundResponse = await bound.GetAsync(path);
+        Assert.Equal(HttpStatusCode.Forbidden, boundResponse.StatusCode);
+        bound.DefaultRequestHeaders.Add("X-Test-Bound-Run", "run-1");
+        using var runResponse = await bound.GetAsync(path);
+        Assert.Equal(HttpStatusCode.Forbidden, runResponse.StatusCode);
+        using var insufficient = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId, scopes: "api.read");
+        using var insufficientResponse = await insufficient.GetAsync(path);
+        Assert.Equal(HttpStatusCode.Forbidden, insufficientResponse.StatusCode);
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var tenantAdmin = await SeedCallerAsync(db, authority, "bindings-tenant-" + Guid.NewGuid().ToString("N"),
+            caller.TenantId, ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            caller.TenantId, ProjectAuthorityRole.TenantAdmin);
+        using var tenantClient = CreateDraftEndpointClient(host, tenantAdmin.ActorId, tenantAdmin.TenantId);
+        using var tenantResponse = await tenantClient.GetAsync(path);
+        Assert.Equal(HttpStatusCode.Forbidden, tenantResponse.StatusCode);
+        using var badQuery = await admin.GetAsync(path + "?unexpected=1");
+        Assert.Equal(HttpStatusCode.BadRequest, badQuery.StatusCode);
+
+        var hostedOnly = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["AgentHost:ModelBindingsRevision"] = "hosted-r1",
+            ["AgentHost:ModelBindings:hosted:SourceMode"] = "HostedCopilot",
+            ["AgentHost:ModelBindings:hosted:Enabled"] = "true",
+        }).Build();
+        using var emptyHost = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs(),
+            bindingsOverride: ModelBindingCapabilities.FromConfiguration(hostedOnly));
+        using var emptyClient = CreateDraftEndpointClient(emptyHost, caller.ActorId, caller.TenantId);
+        using var empty = await emptyClient.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, empty.StatusCode);
+        using var emptyJson = JsonDocument.Parse(await empty.Content.ReadAsStringAsync());
+        Assert.Empty(emptyJson.RootElement.GetProperty("bindings").EnumerateArray());
+
+        using var unavailableHost = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs());
+        using var unavailableClient = CreateDraftEndpointClient(unavailableHost, caller.ActorId, caller.TenantId);
+        using var unavailable = await unavailableClient.GetAsync(path);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
+        Assert.Equal("no-store", unavailable.Headers.CacheControl?.ToString());
+
+        var grant = Assert.Single(caller.Grants, item => item.Role == ProjectAuthorityRole.PlatformAdmin);
+        await authority.RevokeRoleAssignmentAsync(grant.AssignmentId, grant.Revision, "fixture");
+        using var revoked = await admin.GetAsync(path);
+        Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+    }
+
     [Theory]
     [InlineData("23505", "pk_model_provider_reference_reservations", "reference_conflict")]
     [InlineData("23514", "ck_model_provider_reference_cross_table", "reference_conflict")]
@@ -631,7 +710,8 @@ public sealed partial class ProjectsConfigPostgresTests
     private static async Task<IHost> StartDraftEndpointHostAsync(
         Npgsql.NpgsqlDataSource dataSource,
         ILoggerProvider loggerProvider,
-        bool enableReferences = false) =>
+        bool enableReferences = false,
+        ModelBindingCapabilities? bindingsOverride = null) =>
         await new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -651,7 +731,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     services.AddSingleton(TimeProvider.System);
                     services.AddSingleton(new ProjectsConfigIdentityOptions(TestIssuer));
                     services.AddScoped<ProjectAuthorizationOwner>();
-                    if (enableReferences)
+                    if (enableReferences || bindingsOverride is not null)
                     {
                         var configuration = new ConfigurationBuilder().AddInMemoryCollection(
                             new Dictionary<string, string?>
@@ -660,10 +740,10 @@ public sealed partial class ProjectsConfigPostgresTests
                                 ["AgentHost:ModelBindings:fixture-binding:SourceMode"] = "Byok",
                                 ["AgentHost:ModelBindings:fixture-binding:Enabled"] = "false",
                             }).Build();
-                        var bindings = ModelBindingCapabilities.FromConfiguration(configuration);
+                        var bindings = bindingsOverride ?? ModelBindingCapabilities.FromConfiguration(configuration);
                         services.AddScoped<ModelProviderDraftService>(sp => new(
                             sp.GetRequiredService<ProjectsConfigDbContext>(),
-                            TimeProvider.System, bindings, true));
+                            TimeProvider.System, bindings, enableReferences));
                     }
                     else
                         services.AddScoped<ModelProviderDraftService>();

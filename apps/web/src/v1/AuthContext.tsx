@@ -78,6 +78,8 @@ export interface PlatformPolicyRefreshResult {
 interface AuthContextValue {
   session: AuthSession | null;
   authSessionGeneration: number;
+  authSessionEpoch: number;
+  isActiveSession: (session: AuthSession) => boolean;
   unboundSessionGeneration: number;
   authorizationContext: ConfirmedAuthorizationContext | null;
   authorizationContextLoading: boolean;
@@ -228,6 +230,7 @@ interface PlatformPolicySilentAttempt {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<AuthSession | null>(null);
   const [authSessionGeneration, setAuthSessionGeneration] = useState(0);
+  const [authSessionEpoch, setAuthSessionEpoch] = useState(0);
   const [unboundSessionGeneration, setUnboundSessionGeneration] = useState(0);
   const [authorizationContext, setAuthorizationContextState] =
     useState<ConfirmedAuthorizationContext | null>(null);
@@ -306,8 +309,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** Makes `next` the active session without changing the held sessions. */
-  const setActiveSession = useCallback((next: AuthSession | null) => {
+  const setActiveSession = useCallback((next: AuthSession | null, refreshed = false) => {
     const current = sessionRef.current;
+    // Refresh keeps the activation epoch; replacing or switching sessions changes it.
+    if (current !== next && !refreshed)
+      setAuthSessionEpoch((epoch) => epoch + 1);
     // A different token or binding means a new identity for the page. Bump the generation
     // and drop the cached tenant context so no answer from the old session is reused.
     if (current?.accessToken !== next?.accessToken || !sameBinding(current?.binding ?? null, next?.binding ?? null)) {
@@ -327,6 +333,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionRef.current = next;
     setSessionState(next);
   }, [cancelPolicyAuthorization]);
+  const isActiveSession = useCallback((expected: AuthSession) => sessionRef.current === expected, []);
 
   /** Replaces every held session with `next` (or none) and activates it. */
   const setSession = useCallback((next: AuthSession | null) => {
@@ -904,7 +911,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
       sessionsRef.current.set(key, next);
       if (!next.binding) notifyUnboundSessionChange();
-      if (sessionRef.current === current) setActiveSession(next);
+      if (sessionRef.current === current) setActiveSession(next, true);
       return next;
     });
     const activeRefresh = { session: current, promise };
@@ -1321,6 +1328,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(() => ({
     session,
     authSessionGeneration,
+    authSessionEpoch,
+    isActiveSession,
     unboundSessionGeneration,
     busy,
     restoringSession,
@@ -1344,6 +1353,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }), [
     apiCall,
     authSessionGeneration,
+    authSessionEpoch,
     authorizationContext,
     authorizationContextError,
     authorizationContextLoading,
@@ -1356,6 +1366,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     establishPlatformPolicyAccess,
     error,
     getPlatformPolicyRevisionHistory,
+    isActiveSession,
     readPlatformPolicyRevision,
     validatePlatformPolicyArtifact,
     resolveAuthorizationContext,

@@ -42,6 +42,13 @@ public sealed partial class ModelProviderDraftService
     private static readonly ImmutableHashSet<string> SupportedReasoningEfforts =
         ImmutableHashSet.Create(StringComparer.Ordinal, "none", "minimal", "low", "medium", "high", "xhigh");
 
+    internal async Task<ModelBindingCapabilities> ReadDeploymentBindingsAsync(
+        ProjectAuthorizationContext caller, CancellationToken cancellationToken)
+    {
+        await AuthorizeAsync(caller, ModelProviderBindingScope.Platform, null, cancellationToken).ConfigureAwait(false);
+        return modelBindings;
+    }
+
     public async Task<IReadOnlyList<ModelProviderDraft>> ListAsync(
         ProjectAuthorizationContext caller,
         ModelProviderBindingScope scope,
