@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { EventEmitter } from 'node:events';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { EventEmitter, once } from 'node:events';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { parse, stringify } from 'yaml';
 import {
   assertTargetContext,
+  BYOK_SMOKE_LOOP,
   deleteContainerNetworkLog,
   deployKustomize,
   ENVIRONMENT_RBAC_REQUIREMENTS,
@@ -26,6 +29,7 @@ import {
 } from '../model-bindings-overlay.mjs';
 import { applyTargetValues, targetValuePairs } from '../target-values.mjs';
 import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
+import { classify } from '../../ci/v1-changes.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const REGISTRY = 'ghcr.io/sabbour';
@@ -1416,6 +1420,657 @@ test('install smoke check probes one keyless URL per configured BYOK host', () =
     assert.throws(() => byokEndpointProbeUrls(render({ a: byok(baseUrl) })),
       /BYOK model binding a must use an HTTPS BaseUrl/, baseUrl);
   }
+});
+
+// Header lines captured from Git 2.43/libcurl 8.5 in the AgentHost image with a loopback proxy.
+const imageHttp1Trace = `05:16:08.176628 http.c:804 => Send header: CONNECT byok.invalid:443 HTTP/1.1
+05:16:08.177866 http.c:804 <= Recv header: HTTP/1.1 200 Connection established
+05:16:08.890802 http.c:804 => Send header: GET /openai/v1/models HTTP/1.1
+05:16:08.890805 http.c:804 => Send header: Host: byok.invalid
+05:16:08.934741 http.c:804 <= Recv header: HTTP/1.1 401 Unauthorized`;
+const imageHttp2Trace = `05:17:06.487120 http.c:804 => Send header: CONNECT byok.invalid:443 HTTP/1.1
+05:17:06.488400 http.c:804 <= Recv header: HTTP/1.1 200 Connection established
+05:17:06.611972 http.c:804 => Send header: GET /openai/v1/models HTTP/2
+05:17:06.611978 http.c:804 => Send header: Host: byok.invalid
+05:17:06.849316 http.c:804 <= Recv header: HTTP/2 403`;
+const imageProxy403Trace = `05:15:05.608193 http.c:804 => Send header: CONNECT byok.invalid:443 HTTP/1.1
+05:15:05.609301 http.c:804 <= Recv header: HTTP/1.1 403 Forbidden`;
+const imageProxy407Trace = `05:15:21.770152 http.c:804 => Send header: CONNECT byok.invalid:443 HTTP/1.1
+05:15:21.771518 http.c:804 <= Recv header: HTTP/1.1 407 Proxy Authentication Required`;
+const imageProxyCloseTrace = `05:15:36.593820 http.c:804 => Send header: CONNECT byok.invalid:443 HTTP/1.1
+05:15:36.595251 http.c:804 <= Recv header: HTTP/1.1 200 Connection established
+fatal: unable to access endpoint: TLS connection terminated`;
+const retryTrace = `${imageHttp2Trace.split('\n').slice(0, -1).join('\n')}
+05:17:06.849300 http.c:804 == Info: HTTP/2 stream 1 was not closed cleanly: REFUSED_STREAM
+05:17:06.849310 http.c:804 => Send header: CONNECT byok.invalid:443 HTTP/1.1`;
+
+function timeoutShim(bin) {
+  const file = path.join(bin, 'timeout');
+  writeFileSync(file, '#!/bin/sh\n[ "$1" = 30 ] || exit 1\nshift\nexec "$@"\n');
+  chmodSync(file, 0o755);
+}
+
+function probeTools() {
+  const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
+  assert.equal(git.status, 0, git.error?.message ?? git.stderr);
+  if (process.platform !== 'win32') return { bash: 'bash', path: process.env.PATH };
+  const gitRoot = path.resolve(git.stdout.trim(), '..', '..', '..');
+  return {
+    bash: path.join(gitRoot, 'bin', 'bash.exe'),
+    path: [path.join(gitRoot, 'bin'), path.join(gitRoot, 'usr', 'bin'),
+      path.join(gitRoot, 'cmd'), path.join(process.env.SystemRoot, 'System32')].join(path.delimiter),
+  };
+}
+
+function probeEnvironment(directory, tools, extra = {}) {
+  return {
+    PATH: tools.path,
+    HOME: directory,
+    GIT_CEILING_DIRECTORIES: path.dirname(directory),
+    ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}),
+    ...extra,
+  };
+}
+
+async function emittedByokLoop(directory) {
+  const calls = [];
+  await deployKustomize({ imageTag: selectedTag }, {
+    root: directory, exec: fakeExec(calls), log() {},
+  });
+  const smoke = parse(calls.find(call => call.args[0] === 'create' &&
+    parse(call.options.input).kind === 'List').options.input).items[1];
+  const script = smoke.spec.containers[0].command[2];
+  assert.equal(script.split(BYOK_SMOKE_LOOP).length, 2);
+  const fail = script.split('\n').find(line => line.startsWith('fail() '));
+  assert.ok(fail);
+  return `${fail}\n${BYOK_SMOKE_LOOP}\n`;
+}
+
+function processGroup(pid) {
+  const result = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8' });
+  assert.equal(result.status, 0, `Cannot find process group for ${pid}: ${result.stderr}`);
+  const group = Number(result.stdout.trim());
+  assert.ok(Number.isInteger(group) && group > 0);
+  return group;
+}
+
+function assertTerminated(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error.code === 'ESRCH') return;
+    throw error;
+  }
+  const result = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+  if (result.status !== 0 && !result.stdout.trim()) {
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    return;
+  }
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout.trim(), /^Z/, `Process ${pid} is still running`);
+}
+
+async function waitForTermination(pid) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      assertTerminated(pid);
+      return;
+    } catch (error) {
+      if (!(error instanceof assert.AssertionError) || attempt === 99) throw error;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+}
+
+async function supervisedShell(tools, directory, env, script, args = [], milliseconds = 10000) {
+  const bootstrap = `sentinel=
+cleanup() { if [ -n "$sentinel" ]; then kill "$sentinel" 2>/dev/null || :; wait "$sentinel" 2>/dev/null || :; sentinel=; fi; }
+trap 'cleanup; exit 125' TERM
+trap cleanup EXIT
+sleep 60 </dev/null >/dev/null 2>&1 3>&- &
+sentinel=$!
+printf '%s\\n' "$sentinel" >&3
+IFS= read -r ready || exit 125
+[ "$ready" = go ] || exit 125
+trap - EXIT TERM
+`;
+  const child = spawn(tools.bash, ['--noprofile', '--norc', '-c', bootstrap + script, 'smoke', ...args], {
+    cwd: directory, env, detached: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', value => { stdout += value; });
+  child.stderr.setEncoding('utf8').on('data', value => { stderr += value; });
+  const closed = once(child, 'close');
+  let sentinel;
+  let timer;
+  let startupTimer;
+  let timedOut = false;
+  let timerError;
+  let released = false;
+  let group;
+  const killGroup = () => {
+    assert.equal(group, child.pid);
+    assert.notEqual(processGroup(process.pid), group);
+    assert.equal(processGroup(sentinel), group);
+    const state = spawnSync('ps', ['-o', 'stat=', '-p', String(sentinel)], { encoding: 'utf8' });
+    assert.equal(state.status, 0, `Cannot find sentinel ${sentinel}: ${state.stderr}`);
+    assert.match(state.stdout.trim(), /^[^Z]/, 'Sentinel is not alive');
+    process.kill(-group, 'SIGKILL');
+  };
+  try {
+    const [data] = await Promise.race([
+      once(child.stdio[3], 'data'),
+      closed.then(() => { throw new Error('Shell closed before the sentinel was ready'); }),
+      new Promise((_, reject) => {
+        startupTimer = setTimeout(() => reject(new Error('Sentinel did not start')), 10000);
+      }),
+    ]);
+    clearTimeout(startupTimer);
+    sentinel = Number(data.toString().trim());
+    assert.ok(Number.isInteger(sentinel) && sentinel > 0);
+    group = processGroup(child.pid);
+    assert.equal(group, child.pid);
+    assert.notEqual(group, processGroup(process.pid));
+    assert.equal(processGroup(sentinel), group);
+    timer = setTimeout(() => {
+      try {
+        killGroup();
+        timedOut = true;
+      } catch (error) {
+        timerError = error;
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.stdio[3].destroy();
+      }
+    }, milliseconds);
+    child.stdin.end('go\n');
+    released = true;
+    const [code, signal] = await closed;
+    if (timerError) throw timerError;
+    return { code, signal, stdout, stderr, timedOut };
+  } finally {
+    clearTimeout(startupTimer);
+    clearTimeout(timer);
+    if (!released && child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGTERM');
+      await closed.catch(() => {});
+    }
+    if (released && !timedOut && !timerError) killGroup();
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }
+}
+
+test('emitted BYOK loop selects endpoint responses from image traces', async () => {
+  const directory = scratch();
+  try {
+    const script = await emittedByokLoop(directory);
+    const tools = probeTools();
+    const bin = path.join(directory, 'fake-bin');
+    mkdirSync(bin);
+    const git = path.join(bin, 'git');
+    writeFileSync(git, `#!/bin/sh
+[ "$#" = 2 ] && [ "$1" = ls-remote ] || exit 2
+[ "$GIT_TRACE_CURL" = 1 ] && [ "$GIT_TRACE_CURL_NO_DATA" = 1 ] || exit 2
+[ "$GIT_TERMINAL_PROMPT" = 0 ] && [ "$GIT_ASKPASS" = /bin/false ] || exit 2
+[ "$GIT_CONFIG_NOSYSTEM" = 1 ] && [ "$GIT_CONFIG_GLOBAL" = /dev/null ] || exit 2
+printf '%s\\n' "$1" "$2" >> "$ARG_LOG"
+case "$2" in *two.invalid*) printf '%s\\n' "$TRACE_TWO" >&2 ;; *) printf '%s\\n' "$TRACE" >&2 ;; esac
+exit 1
+`);
+    chmodSync(git, 0o755);
+    timeoutShim(bin);
+    writeFileSync(path.join(bin, 'awk'), '#!/bin/sh\nexec "$AWK_PATH" "$@"\n');
+    chmodSync(path.join(bin, 'awk'), 0o755);
+    const fixturePath = process.platform === 'win32'
+      ? 'FIXTURE_BIN="$(cygpath -u "$FIXTURE_BIN")"\n' : '';
+    const setup = `${fixturePath}AWK_PATH="$(command -v awk)"; export AWK_PATH
+ARG_LOG="$FIXTURE_BIN/arguments"; export ARG_LOG
+PATH="$FIXTURE_BIN"; export PATH
+`;
+    const run = (trace, urls = ['https://byok.invalid/openai/v1/models'], traceTwo = '', loop = script) =>
+      spawnSync(tools.bash, ['--noprofile', '--norc', '-c', setup + loop, 'smoke', ...urls], {
+        cwd: directory,
+        env: probeEnvironment(directory, tools, {
+          FIXTURE_BIN: bin, TRACE: trace, TRACE_TWO: traceTwo,
+        }),
+        encoding: 'utf8', timeout: 10000,
+      });
+
+    const cases = [
+      [imageHttp1Trace, 0, 'SMOKE_BYOK byok.invalid 401\n'],
+      [imageHttp2Trace, 0, 'SMOKE_BYOK byok.invalid 403\n'],
+      [imageHttp1Trace.replace('401 Unauthorized', '404 Not Found'), 0, 'SMOKE_BYOK byok.invalid 404\n'],
+      [imageProxy403Trace, 1, 'SMOKE_FAIL byok:byok.invalid\n'],
+      [imageProxy407Trace, 1, 'SMOKE_FAIL byok:byok.invalid\n'],
+      [imageProxyCloseTrace, 1, 'SMOKE_FAIL byok:byok.invalid\n'],
+      ...['403 Forbidden', '407 Proxy Authentication Required', '200 Connection established'].map(response =>
+        [`${retryTrace}\n05:17:06.849320 http.c:804 <= Recv header: HTTP/1.1 ${response}`,
+          1, 'SMOKE_FAIL byok:byok.invalid\n']),
+      [`${retryTrace}\n05:17:06.849320 http.c:804 <= Recv header: HTTP/1.1 200 Connection established\n` +
+        '05:17:06.849330 http.c:804 => Send header: GET /openai/v1/models HTTP/2\n' +
+        '05:17:06.849340 http.c:804 <= Recv header: HTTP/2 401', 0, 'SMOKE_BYOK byok.invalid 401\n'],
+      [imageHttp1Trace.replace('05:16:08.934741 http.c:804 <=',
+        '05:16:08.934740 http.c:804 => Send header: POST /openai/v1/models HTTP/1.1\n' +
+        '05:16:08.934741 http.c:804 <='), 1, 'SMOKE_FAIL byok:byok.invalid\n'],
+      [imageHttp1Trace.replace('05:16:08.934741 http.c:804 <=',
+        '05:16:08.934738 http.c:804 => Send header: POST /openai/v1/models HTTP/1.1\n' +
+        '05:16:08.934739 http.c:804 => Send header: GET /openai/v1/models HTTP/1.1\n' +
+        '05:16:08.934740 http.c:804 => Send header: GET /openai/v1/models HTTP/1.1\n' +
+        '05:16:08.934741 http.c:804 <='), 0, 'SMOKE_BYOK byok.invalid 401\n'],
+      [imageProxyCloseTrace.replace('fatal: unable to access endpoint: TLS connection terminated', ''), 1,
+        'SMOKE_FAIL byok:byok.invalid\n'],
+      [imageProxyCloseTrace.replace('TLS connection terminated', 'operation timed out'), 1,
+        'SMOKE_FAIL byok:byok.invalid\n'],
+      [imageHttp1Trace.replace('HTTP/1.1 401 Unauthorized', 'HTTP/1.1 invalid'), 1,
+        'SMOKE_FAIL byok:byok.invalid\n'],
+      [imageHttp1Trace.replace('05:16:08.934741 http.c:804 <= Recv header: HTTP/1.1 401',
+        '05:16:08.934740 http.c:804 <= Recv header: HTTP/1.1 100 Continue\n' +
+        '05:16:08.934741 http.c:804 <= Recv header: HTTP/1.1 401'), 0, 'SMOKE_BYOK byok.invalid 401\n'],
+      [imageHttp1Trace.replace('401 Unauthorized', '302 Found') + '\n' + imageHttp2Trace,
+        0, 'SMOKE_BYOK byok.invalid 302\n'],
+      [imageProxyCloseTrace + '\n05:15:36.595300 http.c:804 <= Recv header: X-A: x 1 => Send header: GET / HTTP/1.1' +
+        '\n05:15:36.595301 http.c:804 <= Recv header: X-B: <= Recv header: HTTP/1.1 401 Unauthorized',
+      1, 'SMOKE_FAIL byok:byok.invalid\n'],
+      [imageHttp1Trace.replace('05:16:08.934741 http.c:804 <= Recv header: HTTP/1.1 401 Unauthorized',
+        '05:16:08.934741 http.c:804 <= Recv header: X-B: <= Recv header: HTTP/1.1 401 Unauthorized'),
+      1, 'SMOKE_FAIL byok:byok.invalid\n'],
+    ];
+    for (const [trace, status, output] of cases) {
+      const result = run(`${trace}\n05:16:08.934900 http.c:804 <= Recv header: X-Fixture: trace-sensitive-fixture`);
+      assert.equal(result.error, undefined, result.error?.message);
+      assert.equal(result.status, status, trace);
+      assert.equal(result.stdout, output, trace);
+      assert.equal(result.stderr, '');
+    }
+
+    const multiple = run(imageHttp1Trace,
+      ['https://byok.invalid/openai/v1/models', 'https://two.invalid/openai/v1/models'], imageHttp2Trace);
+    assert.equal(multiple.status, 0);
+    assert.equal(multiple.stdout, 'SMOKE_BYOK byok.invalid 401\nSMOKE_BYOK two.invalid 403\n');
+    assert.equal(run('', []).stdout, '');
+    const argumentLog = path.join(bin, 'arguments');
+    const assertArguments = loop => {
+      for (const url of ['https://byok.invalid/openai/v1/models', 'https://byok.invalid/openai/v1/models;probe']) {
+        writeFileSync(argumentLog, '');
+        const result = run(imageHttp1Trace, [url], '', loop);
+        assert.equal(result.status, 0);
+        assert.equal(result.stdout, 'SMOKE_BYOK byok.invalid 401\n');
+        assert.equal(readFileSync(argumentLog, 'utf8'), `ls-remote\n${url}#\n`);
+      }
+    };
+    assertArguments(script);
+    const noFragment = script.replace('git ls-remote "$url#"', 'git ls-remote "$url"');
+    assert.notEqual(noFragment, script);
+    assert.throws(() => assertArguments(noFragment), assert.AssertionError);
+
+    const currentRule = String.raw`$3 == "=>" && $4 == "Send" && $5 == "header:" && $NF ~ /^HTTP\/[0-9.]+$/ && $6 ~ /^[A-Z]+$/ { get = ($6 == "GET"); next }`;
+    const oldRule = '$3 == "=>" && $4 == "Send" && $5 == "header:" && $6 == "GET" { get = 1; next }';
+    const oldParser = script.replace(currentRule, oldRule);
+    assert.notEqual(oldParser, script);
+    const assertRetryResults = loop => {
+      for (const response of ['403 Forbidden', '407 Proxy Authentication Required', '200 Connection established']) {
+        const trace = `${retryTrace}\n05:17:06.849320 http.c:804 <= Recv header: HTTP/1.1 ${response}`;
+        const result = run(trace, undefined, '', loop);
+        assert.equal(result.status, 1, response);
+        assert.equal(result.stdout, 'SMOKE_FAIL byok:byok.invalid\n');
+      }
+    };
+    assertRetryResults(script);
+    assert.throws(() => assertRetryResults(oldParser), assert.AssertionError);
+
+    const messages = [];
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory,
+      exec: fakeExec([], { smokeLogs: `${multiple.stdout}SMOKE_OK\n` }),
+      log: message => messages.push(message),
+    });
+    assert.ok(messages.some(message => /BYOK endpoint byok\.invalid answered HTTP 401/.test(message)));
+    assert.ok(messages.some(message => /BYOK endpoint two\.invalid answered HTTP 403/.test(message)));
+    assert.equal(messages.some(message => /Warning: BYOK endpoint/.test(message)), false);
+    const warning = [];
+    const status404 = run(imageHttp1Trace.replace('401 Unauthorized', '404 Not Found'));
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory,
+      exec: fakeExec([], { smokeLogs: `${status404.stdout}SMOKE_OK\n` }),
+      log: message => warning.push(message),
+    });
+    assert.ok(warning.some(message => /Warning: BYOK endpoint byok\.invalid answered HTTP 404/.test(message)));
+    const calls = [];
+    const failed = run(imageProxy403Trace);
+    await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls, {
+        smokePod: { status: { phase: 'Failed' } }, smokeLogs: failed.stdout,
+      }), log() {},
+    }), /no HTTPS response from BYOK endpoint byok\.invalid \(DNS, proxy, connection, or TLS failure/);
+    assert.ok(calls.some(call => call.args[0] === 'delete' &&
+      call.args[1]?.startsWith('pod/agentweaver-install-smoke-') &&
+      call.args[2]?.startsWith('persistentvolumeclaim/agentweaver-install-smoke-')));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('emitted BYOK loop rejects real Git proxy CONNECT responses offline', {
+  skip: process.platform === 'win32' ? 'AgentHost runs on Linux; offline fixtures run on Windows' : false,
+}, async () => {
+  const directory = scratch();
+  const poisoned = ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy', 'ALL_PROXY', 'all_proxy',
+    'HTTP_PROXY', 'http_proxy', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+    'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_PARAMETERS', 'GIT_DIR', 'GIT_WORK_TREE'];
+  const saved = new Map(poisoned.map(name => [name, process.env[name]]));
+  try {
+    const script = await emittedByokLoop(directory);
+    const tools = probeTools();
+    const bin = path.join(directory, 'real-git-bin');
+    mkdirSync(bin);
+    timeoutShim(bin);
+    tools.path = [bin, tools.path].join(path.delimiter);
+    for (const name of poisoned) process.env[name] = name.includes('PROXY') || name.includes('proxy')
+      ? 'http://127.0.0.1:9' : 'poison';
+    process.env.GIT_CONFIG_COUNT = '1';
+    process.env.GIT_CONFIG_KEY_0 = 'http.proxy';
+    process.env.GIT_CONFIG_VALUE_0 = 'http://127.0.0.1:9';
+    for (const response of ['403 Forbidden', '407 Proxy Authentication Required', '200 Connection established']) {
+      const requests = [];
+      const server = createServer(socket => {
+        let request = '';
+        let responded = false;
+        socket.on('data', chunk => {
+          if (responded) return;
+          request += chunk.toString('latin1');
+          if (!request.includes('\r\n\r\n')) return;
+          responded = true;
+          requests.push(request.split('\r\n')[0]);
+          socket.end(`HTTP/1.1 ${response}\r\nContent-Length: 0\r\n\r\n`);
+        });
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      try {
+        const proxy = `http://127.0.0.1:${server.address().port}`;
+        const env = probeEnvironment(directory, tools, {
+          HTTPS_PROXY: proxy, https_proxy: proxy, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+        });
+        assert.equal(env.HTTPS_PROXY, proxy);
+        assert.equal(env.https_proxy, proxy);
+        for (const name of poisoned.filter(name => !['HTTPS_PROXY', 'https_proxy'].includes(name))) {
+          assert.equal(Object.hasOwn(env, name), false, name);
+        }
+        assert.deepEqual(Object.keys(env).filter(name => name.startsWith('GIT_')).sort(),
+          ['GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM']);
+        const git = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+          cwd: directory, env, encoding: 'utf8',
+        });
+        assert.notEqual(git.status, 0, 'Git must not discover the parent worktree');
+
+        const result = await supervisedShell(tools, directory, env, script,
+          ['https://byok.invalid/openai/v1/models']);
+        assert.equal(result.timedOut, false);
+        assert.equal(result.code, 1, result.stderr);
+        assert.equal(result.stdout, 'SMOKE_FAIL byok:byok.invalid\n');
+        assert.equal(result.stderr, '');
+        assert.deepEqual(requests, ['CONNECT byok.invalid:443 HTTP/1.1']);
+      } finally {
+        await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      }
+    }
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('BYOK supervision closes a stuck descendant without affecting another process', {
+  skip: process.platform === 'win32' ? 'Unix process groups are required' : false,
+}, async () => {
+  const directory = scratch();
+  const tools = probeTools();
+  const other = spawn('sleep', ['60'], { stdio: 'ignore' });
+  const otherClosed = once(other, 'close');
+  try {
+    assert.equal(processGroup(other.pid), processGroup(process.pid));
+    const started = Date.now();
+    const result = await supervisedShell(tools, directory, probeEnvironment(directory, tools),
+      'sleep 60 &\nprintf "STUCK %s\\n" "$!"\nexit 0\n', [], 1000);
+    assert.equal(result.timedOut, true);
+    assert.equal(result.code, 0);
+    assert.equal(result.signal, null);
+    assert.ok(Date.now() - started < 10000, 'Stuck descendant did not close in time');
+    const match = /^STUCK (\d+)\n$/.exec(result.stdout);
+    assert.ok(match, result.stdout);
+    const pid = Number(match[1]);
+    await waitForTermination(pid);
+    assert.throws(() => assertTerminated(other.pid), /still running/);
+    process.kill(other.pid, 0);
+  } finally {
+    other.kill('SIGKILL');
+    await otherClosed;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('BYOK supervision cleans a detached-stream descendant on normal exit', {
+  skip: process.platform === 'win32' ? 'Unix process groups are required' : false,
+}, async () => {
+  const directory = scratch();
+  const tools = probeTools();
+  const other = spawn('sleep', ['60'], { stdio: 'ignore' });
+  const otherClosed = once(other, 'close');
+  try {
+    assert.equal(processGroup(other.pid), processGroup(process.pid));
+    const result = await supervisedShell(tools, directory, probeEnvironment(directory, tools),
+      'sleep 60 </dev/null >/dev/null 2>&1 3>&- &\nprintf "DETACHED %s\\n" "$!"\nexit 0\n');
+    assert.equal(result.timedOut, false);
+    assert.equal(result.code, 0);
+    const match = /^DETACHED (\d+)\n$/.exec(result.stdout);
+    assert.ok(match, result.stdout);
+    await waitForTermination(Number(match[1]));
+    assert.throws(() => assertTerminated(other.pid), /still running/);
+    process.kill(other.pid, 0);
+  } finally {
+    other.kill('SIGKILL');
+    await otherClosed;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function zombieFixture(stalled = false) {
+  const parent = spawn(process.execPath, ['-e', `
+const { spawn } = require('node:child_process');
+const { readSync, writeSync } = require('node:fs');
+// The child's pipe closes if this parent is killed, so it exits without a signal.
+const child = spawn(process.execPath, ['-e', ${JSON.stringify(stalled
+    ? "require('node:fs').readSync(0, Buffer.alloc(1))" : '')}], { stdio: ['pipe', 'ignore', 'ignore'] });
+child.on('error', () => { process.exitCode = 1; });
+child.on('close', (code, signal) => {
+  if (code !== 0 || signal !== null) process.exitCode = 1;
+  writeSync(1, 'REAPED\\n');
+});
+writeSync(1, String(child.pid) + '\\n');
+readSync(0, Buffer.alloc(1));
+${stalled ? 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);' : ''}
+`], { stdio: ['pipe', 'pipe', 'ignore'] });
+  return { parent, closed: once(parent, 'close') };
+}
+
+function fixtureProcess(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    assert.match(fields[0], /^[A-Za-z]$/);
+    assert.match(fields[1], /^\d+$/);
+    assert.match(fields[19], /^\d+$/);
+    return { state: fields[0], parent: Number(fields[1]), started: fields[19] };
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ESRCH') return null;
+    throw error;
+  }
+}
+
+async function bounded(promise, milliseconds, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function finishZombieFixture(parent, closed, child, milliseconds = 10000) {
+  parent.stdin.end('\n');
+  try {
+    const [code, signal] = await bounded(closed, milliseconds, 'Zombie fixture did not reap its child');
+    assert.equal(code, 0);
+    assert.equal(signal, null);
+  } catch (error) {
+    try {
+      const state = fixtureProcess(parent.pid);
+      if (state && state.state !== 'Z' && parent.exitCode === null && parent.signalCode === null) {
+        assert.equal(state.parent, process.pid, 'Zombie fixture parent is no longer owned');
+        if (child) {
+          const current = fixtureProcess(child.pid);
+          if (current && current.started === child.started && current.state !== 'Z') {
+            assert.equal(current.parent, parent.pid, 'Zombie fixture child is no longer owned');
+          }
+        }
+        assert.equal(parent.kill('SIGKILL'), true);
+      }
+      await bounded(closed, 3000, 'Zombie fixture parent did not close after cleanup');
+      if (child) {
+        for (let attempt = 0; ; attempt++) {
+          const current = fixtureProcess(child.pid);
+          if (!current || current.started !== child.started || current.state === 'Z') break;
+          assert.ok(attempt < 299, 'Zombie fixture child did not exit after cleanup');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      }
+    } catch (cleanupError) {
+      parent.stdin.destroy();
+      parent.stdout.destroy();
+      parent.unref();
+      throw new AggregateError([error, cleanupError], error.message);
+    }
+    throw error;
+  }
+}
+
+test('BYOK termination check accepts an owned zombie but rejects a live process', {
+  skip: process.platform !== 'linux' ? 'Zombie state is checked through Linux /proc' : false,
+}, async () => {
+  const { parent, closed } = zombieFixture();
+  let output = '';
+  parent.stdout.on('data', data => { output += data; });
+  let pid;
+  let child;
+  let failure;
+  try {
+    assert.throws(() => assertTerminated(parent.pid), /still running/);
+    const [data] = await Promise.race([
+      once(parent.stdout, 'data', { signal: AbortSignal.timeout(10000) }),
+      closed.then(() => { throw new Error('Zombie fixture exited before reporting its child'); }),
+    ]);
+    pid = Number(data.toString().trim());
+    assert.ok(Number.isInteger(pid) && pid > 0);
+    const state = fixtureProcess(pid);
+    assert.ok(state);
+    assert.equal(state.parent, parent.pid);
+    child = { pid, ...state };
+    let status;
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      status = readFileSync(`/proc/${pid}/status`, 'utf8');
+      if (/^State:\s+Z\b/m.test(status)) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.match(status, /^State:\s+Z\b/m);
+    assert.match(status, new RegExp(`^PPid:\\s+${parent.pid}$`, 'm'));
+    process.kill(pid, 0);
+    assertTerminated(pid);
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try {
+      await finishZombieFixture(parent, closed, child);
+    } catch (error) {
+      if (failure) throw new AggregateError([failure, error], failure.message);
+      throw error;
+    }
+  }
+  assert.equal(output, `${pid}\nREAPED\n`);
+});
+
+test('BYOK zombie fixture timeout cleans its owned processes without affecting another process', {
+  skip: process.platform !== 'linux' ? 'Zombie state is checked through Linux /proc' : false,
+}, async () => {
+  const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const otherClosed = once(other, 'close');
+  const { parent, closed } = zombieFixture(true);
+  let child;
+  let finishStarted = false;
+  try {
+    const [data] = await bounded(once(parent.stdout, 'data'), 10000, 'Zombie fixture did not report its child');
+    const pid = Number(data.toString().trim());
+    assert.ok(Number.isInteger(pid) && pid > 0);
+    const state = fixtureProcess(pid);
+    assert.ok(state);
+    assert.equal(state.parent, parent.pid);
+    assert.notEqual(state.state, 'Z');
+    child = { pid, ...state };
+    finishStarted = true;
+    await assert.rejects(finishZombieFixture(parent, closed, child, 100), error => {
+      assert.equal(error.constructor, Error);
+      assert.equal(error.message, 'Zombie fixture did not reap its child');
+      return true;
+    });
+    assert.equal(fixtureProcess(parent.pid), null);
+    const current = fixtureProcess(child.pid);
+    assert.ok(!current || current.started !== child.started || current.state === 'Z');
+    const independent = fixtureProcess(other.pid);
+    assert.ok(independent);
+    assert.match(independent.state, /^[RSDITt]$/);
+    assert.equal(independent.parent, process.pid);
+    process.kill(other.pid, 0);
+  } finally {
+    try {
+      if (!finishStarted) {
+        await finishZombieFixture(parent, closed, child, 100).catch(error => {
+          if (error.constructor !== Error || error.message !== 'Zombie fixture did not reap its child') throw error;
+        });
+      }
+    } finally {
+      const state = fixtureProcess(other.pid);
+      if (state && state.state !== 'Z' && other.exitCode === null && other.signalCode === null) {
+        assert.equal(state.parent, process.pid, 'Independent process is no longer owned');
+        assert.equal(other.kill('SIGKILL'), true);
+      }
+      await bounded(otherClosed, 3000, 'Independent process did not close');
+    }
+  }
+});
+
+test('BYOK changes select the Linux release test job', () => {
+  for (const file of ['scripts/release/deploy-kustomize.mjs', 'scripts/release/tests/simple-workflows.test.mjs']) {
+    assert.equal(classify([file]).node, true, file);
+  }
+  const workflow = readYaml('.github/workflows/v1-ci.yml');
+  assert.equal(workflow.on.pull_request.paths, undefined);
+  assert.ok(workflow.on.pull_request.branches.includes('v1'));
+  const job = workflow.jobs.node;
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  assert.equal(job.if, "${{ !cancelled() && needs.changes.result == 'success' }}");
+  const step = job.steps.find(item => item.name === 'Test release and Azure tooling without coverage');
+  assert.equal(step.if, "${{ !cancelled() && env.COLLECT_COVERAGE != 'true' && needs.changes.outputs.node == 'true' }}");
+  assert.match(step.run, /node --test scripts\/release\/tests\/\*\.test\.mjs/);
+  assert.ok(workflow.jobs.foundation.needs.includes('node'));
+  assert.match(workflow.jobs.foundation.steps[0].run, /\bnode: true\b/);
 });
 
 test('v1 image workflow builds the ten existing Kustomize images from exact source commits', () => {
@@ -3759,7 +4414,7 @@ test('install smoke check failures name the cause and clean up', async () => {
     [{ smokePod: { status: { phase: 'Failed' } }, smokeLogs: 'SMOKE_FAIL storage-symlink\n' },
       /mfsymlinks mount option is missing/],
     [{ smokePod: { status: { phase: 'Failed' } }, smokeLogs: 'SMOKE_FAIL byok:demo.openai.azure.com\n' },
-      /no HTTPS response from BYOK endpoint demo\.openai\.azure\.com \(DNS, connection, or TLS failure/],
+      /no HTTPS response from BYOK endpoint demo\.openai\.azure\.com \(DNS, proxy, connection, or TLS failure/],
     [{ smokePod: { status: { phase: 'Succeeded' } }, smokeLogs: '' }, /without a result/],
     [{ smokePod: { status: { phase: 'Pending', conditions: [{ type: 'PodScheduled', status: 'False',
       reason: 'Unschedulable', message: '0/3 nodes are available' }] } } },

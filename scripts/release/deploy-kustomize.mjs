@@ -763,6 +763,18 @@ export function byokEndpointProbeUrls(resources) {
   return [...urls.values()];
 }
 
+// The fragment removes the suffix git adds, so libcurl sends GET <url>.
+export const BYOK_SMOKE_LOOP = [
+  'for url in "$@"; do',
+  '  host="${url#https://}"; host="${host%%/*}"',
+  '  status="$(GIT_TRACE_CURL=1 GIT_TRACE_CURL_NO_DATA=1 GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false ' +
+    'GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null timeout 30 git ls-remote "$url#" 2>&1 >/dev/null ' +
+    String.raw`| awk '$3 == "=>" && $4 == "Send" && $5 == "header:" && $NF ~ /^HTTP\/[0-9.]+$/ && $6 ~ /^[A-Z]+$/ { get = ($6 == "GET"); next } get && $3 == "<=" && $4 == "Recv" && $5 == "header:" && $6 ~ /^HTTP\/[0-9.]+$/ && $7 ~ /^[2-5][0-9][0-9]$/ { print $7; exit }')"`,
+  '  [ -n "$status" ] || fail "byok:$host"',
+  '  echo "SMOKE_BYOK $host $status"',
+  'done',
+].join('\n');
+
 /**
  * Starts a short-lived pod with the AgentHost labels, sandbox RuntimeClass, and a workspace volume.
  * The pod uses the same network policies as real AgentHost pods. It has no token, Secret, or settings.
@@ -791,17 +803,7 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, p
       `echo "SMOKE_EGRESS_PROBE ${SMOKE_OWNER_LABEL} 192.0.2.1:443"`,
       'timeout 5 bash -c ": </dev/tcp/192.0.2.1/443" >/dev/null 2>&1 && fail egress-deny',
     ]),
-    // Keyless HTTPS GET for each BYOK URL (positional arguments). git has no credential or prompt here.
-    // The trailing "#" makes libcurl drop the "/info/refs?service=..." suffix that git appends,
-    // so libcurl sends GET <url>; any HTTP response confirms DNS, egress, and TLS.
-    'for url in "$@"; do',
-    '  host="${url#https://}"; host="${host%%/*}"',
-    '  status="$(GIT_TRACE_CURL=1 GIT_TRACE_CURL_NO_DATA=1 GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false ' +
-      'GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null timeout 30 git ls-remote "$url#" 2>&1 >/dev/null ' +
-      '| sed -n -E \'s#.*Recv header: HTTP/[0-9.]+ ([0-9]{3}).*#\\1#p\' | head -n 1)"',
-    '  [ -n "$status" ] || fail "byok:$host"',
-    '  echo "SMOKE_BYOK $host $status"',
-    'done',
+    BYOK_SMOKE_LOOP,
     'echo SMOKE_OK',
   ].join('\n');
   const manifest = {
@@ -898,8 +900,8 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, p
     const byokHost = reason?.startsWith('byok:') ? reason.slice(5) : undefined;
     fail(`Install smoke check failed: the AgentHost-labelled sandbox pod ` +
       (byokHost
-        ? `got no HTTPS response from BYOK endpoint ${byokHost} (DNS, connection, or TLS failure, or a ` +
-          '30-second timeout); check DNS for the host, the AgentHost model egress policy, and TLS.'
+        ? `got no HTTPS response from BYOK endpoint ${byokHost} (DNS, proxy, connection, or TLS failure, or a ` +
+          '30-second timeout); check DNS for the host, the proxy, the AgentHost model egress policy, and TLS.'
         : `${SMOKE_FAILURES[reason] ?? `stopped in phase ${phase} without a result`}.`));
   } finally {
     const cleanup = exec('kubectl', ['delete', `pod/${name}`, `persistentvolumeclaim/${name}`,
