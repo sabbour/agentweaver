@@ -654,14 +654,24 @@ see [Manage project BYOK provider metadata](./manage-project-byok-provider-metad
 
 ## Configure a BYOK model binding
 
-`models byok` plans an Azure OpenAI BYOK model binding. It does not need a
-target or a sign-in.
+`models byok` plans an Azure OpenAI BYOK model binding. The `prices`, `plan`,
+and `apply` commands do not need a target or sign-in.
 
 ```text
 agentweaver models byok prices --region <azure-region> --search <meter-text>
 agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan-file> [--overlay-output <new-model-bindings-file>]
 agentweaver models byok apply --plan <plan-file>
+agentweaver models byok import-context --output <new-context-file> [target options]
+agentweaver models byok import --model-bindings <file> --file-sha256 <digest> --expected-context <context-file> [target options]
 ```
+
+`import-context` captures the selected account and owner-issued installation ID
+in a new file. Compare the ID with the intended installation ID from a trusted
+independent source before importing. `import` creates inactive platform Drafts
+and returns each exact reference and provider ID. Keep the context file,
+bindings file, digest, account, and target options for retry. For the complete
+procedure and recovery steps, see
+[Import model bindings as drafts](./manage-model-providers.md#import-model-bindings-as-drafts).
 
 `prices` lists Azure Retail Prices meters in USD per million tokens. `plan`
 reads the input file and the runtime maps, and writes a new plan file. With

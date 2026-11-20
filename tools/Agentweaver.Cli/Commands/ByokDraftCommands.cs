@@ -418,7 +418,7 @@ internal static class ByokDraftCommands
             throw UnexpectedResponse();
         }
 
-        return new JsonObject
+        var result = new JsonObject
         {
             ["providerId"] = providerId,
             ["name"] = RequiredString(provider, "name"),
@@ -431,6 +431,14 @@ internal static class ByokDraftCommands
             ["promptCapacityTokens"] = promptCapacityTokens?.DeepClone(),
             ["revision"] = PositiveInt64(provider, "revision"),
         };
+        if (provider.ContainsKey("reference"))
+        {
+            var reference = RequiredString(provider, "reference");
+            if (expectedScope != "platform" || !ByokImportOverlay.ValidReference(reference))
+                throw UnexpectedResponse();
+            result["reference"] = reference;
+        }
+        return result;
     }
 
     private static string RequiredString(JsonObject value, string name) =>

@@ -308,6 +308,19 @@ public static class PlatformEgressHostValidator
         label.All(character => char.IsAsciiLetterLower(character) || char.IsAsciiDigit(character) || character == '-');
 }
 
+/// <summary>Validates a public model provider URL.</summary>
+public static class ModelProviderPublicUrl
+{
+    /// <summary>Returns whether the URL is allowed for the provider type.</summary>
+    public static bool IsSafe(string value, string providerType) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps && uri.UserInfo.Length == 0 &&
+        uri.Query.Length == 0 && uri.Fragment.Length == 0 && uri.Port == 443 &&
+        uri.HostNameType == UriHostNameType.Dns &&
+        PlatformEgressHostValidator.Validate(uri.IdnHost.ToLowerInvariant(), 443) is null &&
+        (providerType != "azure" || string.IsNullOrEmpty(uri.AbsolutePath.Trim('/')));
+}
+
 /// <summary>Address ranges that AgentHost egress never reaches, in both modes.</summary>
 public static class PlatformEgressExcludedRanges
 {

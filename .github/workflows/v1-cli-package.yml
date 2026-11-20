@@ -36,10 +36,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        if: matrix.rid == 'osx-arm64'
+        with:
+          node-version: '24'
       - name: Require native Apple Silicon for osx-arm64
         if: matrix.rid == 'osx-arm64'
         shell: bash
         run: test "$(uname -m)" = arm64
+      - name: Test native macOS CLI import inputs
+        if: matrix.rid == 'osx-arm64'
+        shell: bash
+        run: |
+          methods=(
+            Agentweaver.Cli.Tests.ByokImportTests.ValidImportReturnsExactDraftMappings
+            Agentweaver.Cli.Tests.ByokImportTests.ImportRejectsSymbolicLinksAndPipesWithoutWaiting
+          )
+          dotnet test tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj --configuration Release \
+            -p:RestoreLockedMode=true --filter "FullyQualifiedName=${methods[0]}|FullyQualifiedName=${methods[1]}" \
+            --logger 'trx;LogFileName=import.trx' --results-directory artifacts/cli-import-tests
+          node --input-type=module -e 'import { readFileSync } from "node:fs"; import { verifyTrx, verifyRequiredMethods } from "./scripts/ci/v1-test-plan.mjs"; const xml = readFileSync(0, "utf8"); verifyTrx(xml); verifyRequiredMethods(xml, process.argv.slice(1));' "${methods[@]}" < artifacts/cli-import-tests/import.trx
       - name: Test packaging helpers
         run: python scripts/cli-dotnet/package.py test
       - name: Build, archive, and smoke-test the native CLI

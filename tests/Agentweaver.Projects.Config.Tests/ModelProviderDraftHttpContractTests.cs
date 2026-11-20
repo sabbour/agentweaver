@@ -19,6 +19,8 @@ public sealed class ModelProviderDraftHttpContractTests
     [InlineData("https://api.openai.com/v1/CaseSensitive", "openai", true)]
     [InlineData("https://api.anthropic.com/v1/messages", "anthropic", true)]
     [InlineData("https://my-resource.openai.azure.com/", "azure", true)]
+    [InlineData("https://my-resource.openai.azure.com////", "azure", true)]
+    [InlineData("https://bücher.example/v1", "openai", true)]
     [InlineData("https://api.openai.com/v1?api_key=secret", "openai", false)]
     [InlineData("https://user:pass@api.openai.com/v1", "openai", false)]
     [InlineData("https://api.openai.com/v1#fragment", "openai", false)]

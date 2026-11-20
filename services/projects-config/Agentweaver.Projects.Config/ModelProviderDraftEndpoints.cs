@@ -460,12 +460,7 @@ internal static class ModelProviderDraftEndpoints
     }
 
     internal static bool IsSafePublicUrl(string value, string providerType) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        uri.Scheme == Uri.UriSchemeHttps && uri.UserInfo.Length == 0 &&
-        uri.Query.Length == 0 && uri.Fragment.Length == 0 && uri.Port == 443 &&
-        uri.HostNameType == UriHostNameType.Dns &&
-        PlatformEgressHostValidator.Validate(uri.IdnHost.ToLowerInvariant(), 443) is null &&
-        (providerType != "azure" || string.IsNullOrEmpty(uri.AbsolutePath.Trim('/')));
+        ModelProviderPublicUrl.IsSafe(value, providerType);
 
     private static IResult DraftError(ModelProviderDraftException exception) =>
         Results.Json(new { code = exception.Code }, statusCode: exception.Code switch
