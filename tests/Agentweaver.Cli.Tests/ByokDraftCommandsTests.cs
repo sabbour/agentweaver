@@ -91,7 +91,52 @@ public sealed class ByokDraftCommandsTests
         var result = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
         Assert.Equal(ProviderId, result["providerId"]!.GetValue<string>());
         Assert.Equal("Mutable display name", result["name"]!.GetValue<string>());
+        Assert.False(result.ContainsKey("reference"));
         Assert.DoesNotContain("response-secret-canary", fixture.Output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("show")]
+    [InlineData("add")]
+    [InlineData("update")]
+    public async Task PlatformCommandsProjectAnExactReservedReference(string command)
+    {
+        var provider = Provider(ProviderId, "display");
+        provider["reference"] = "Prod.Model-1";
+        using var fixture = new Fixture
+        {
+            Respond = _ => command == "list" ? JsonResponse(Page([provider], null)) : JsonResponse(provider),
+        };
+        var args = command switch
+        {
+            "list" => new[] { "list" },
+            "show" => ["show", ProviderId],
+            "add" => ["add", "--name", "display", "--type", "openai", "--base-url",
+                "https://models.example/", "--model", "deployment-a"],
+            _ => new[] { "update", ProviderId, "--expected-revision", "1", "--name", "display",
+                "--type", "openai", "--base-url", "https://models.example/", "--model", "deployment-a" },
+        };
+        Assert.Equal(0, await fixture.Run(args));
+        var result = JsonNode.Parse(fixture.Output.ToString())!;
+        var projected = command == "list" ? result["providers"]![0]! : result;
+        Assert.Equal("Prod.Model-1", projected["reference"]!.GetValue<string>());
+        Assert.Equal(ProviderId, projected["providerId"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("_private")]
+    [InlineData("bad__reference")]
+    [InlineData("secret-canary\n")]
+    public async Task PlatformShowRejectsInvalidReferenceWithoutEcho(string reference)
+    {
+        var provider = Provider(ProviderId, "display");
+        provider["reference"] = reference;
+        using var fixture = new Fixture { Respond = _ => JsonResponse(provider) };
+        Assert.Equal(1, await fixture.Run("show", ProviderId));
+        Assert.Empty(fixture.Output.ToString());
+        Assert.DoesNotContain("secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

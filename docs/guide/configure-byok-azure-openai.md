@@ -280,6 +280,10 @@ schema.
 
 ## Result
 
+To create runtime provider Drafts from the bindings file, see
+[Import model bindings as drafts](./manage-model-providers.md#import-model-bindings-as-drafts).
+Import preserves each reference and does not remove the deployment binding.
+
 New runs in the project use the BYOK deployment. The Identity Broker reads the
 exact Key Vault secret version for each run. Events & Sessions prices the
 `byok.tokens` usage in USD, and Orchestrator stops a new model turn when the

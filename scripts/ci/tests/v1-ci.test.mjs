@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { parse } from 'yaml';
@@ -55,7 +56,7 @@ test('source, lockfile, Docker, browser and harness changes select all dependent
   assert.equal(classify(['scripts/release/validate.mjs']).web, true);
 });
 
-test('CLI archive validation follows only the CLI project and consumed SDK inputs', () => {
+test('CLI archive validation follows the CLI project and macOS import test inputs', () => {
   for (const path of [
     'tools/Agentweaver.Cli/Agentweaver.Cli.csproj',
     'tools/Agentweaver.Cli/packages.lock.json',
@@ -67,10 +68,53 @@ test('CLI archive validation follows only the CLI project and consumed SDK input
     'tools/Directory.Packages.props',
     'NuGet.Config',
     'global.json',
+    'tests/Agentweaver.Cli.Tests/ByokImportTests.cs',
+    'tests/Agentweaver.Cli.Tests/ImportGatewayFixture.cs',
+    'tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj',
+    'tests/Agentweaver.Cli.Tests/packages.lock.json',
   ]) {
     assert.equal(classify([path]).cli, true, path);
   }
-  assert.equal(classify(['tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj']).cli, false);
+  assert.equal(classify(['tests/Agentweaver.Cli.Tests/UnrelatedTests.cs']).cli, false);
+});
+
+test('macOS packaging runs and verifies both native CLI import tests', () => {
+  const packageWorkflow = parse(readFileSync(new URL('../../../.github/workflows/v1-cli-package.yml', import.meta.url), 'utf8'));
+  const job = packageWorkflow.jobs.package;
+  assert.deepEqual(job.strategy.matrix.include.find((entry) => entry.rid === 'osx-arm64'),
+    { rid: 'osx-arm64', runner: 'macos-26' });
+  const step = job.steps.find((entry) => entry.name === 'Test native macOS CLI import inputs');
+  assert.equal(step.if, "matrix.rid == 'osx-arm64'");
+  assert.equal(step.shell, 'bash');
+  assert.equal(step['continue-on-error'], undefined);
+  const archStep = job.steps.find((entry) => entry.name === 'Require native Apple Silicon for osx-arm64');
+  assert.equal(archStep.if, step.if);
+  assert.equal(archStep.run, 'test "$(uname -m)" = arm64');
+  assert.ok(job.steps.indexOf(archStep) < job.steps.indexOf(step));
+  const nodeStep = job.steps.find((entry) => entry.uses === 'actions/setup-node@v4');
+  assert.equal(nodeStep.if, step.if);
+  assert.equal(nodeStep.with['node-version'], '24');
+  assert.ok(job.steps.indexOf(nodeStep) < job.steps.indexOf(step));
+  const methods = [
+    'Agentweaver.Cli.Tests.ByokImportTests.ValidImportReturnsExactDraftMappings',
+    'Agentweaver.Cli.Tests.ByokImportTests.ImportRejectsSymbolicLinksAndPipesWithoutWaiting',
+  ];
+  assert.deepEqual([...step.run.matchAll(/^\s+(Agentweaver\.Cli\.Tests\.ByokImportTests\.\w+)$/gm)].map((match) => match[1]), methods);
+  assert.match(step.run, /dotnet test tests\/Agentweaver\.Cli\.Tests\/Agentweaver\.Cli\.Tests\.csproj --configuration Release/);
+  assert.match(step.run, /--filter "FullyQualifiedName=\$\{methods\[0\]\}\|FullyQualifiedName=\$\{methods\[1\]\}"/);
+  assert.match(step.run, /--logger 'trx;LogFileName=import\.trx' --results-directory artifacts\/cli-import-tests/);
+  assert.match(step.run, /"\$\{methods\[@\]\}" < artifacts\/cli-import-tests\/import\.trx/);
+  const code = step.run.match(/node --input-type=module -e '([^']+)'/)[1];
+  const definition = (id, method) => `<UnitTest id="${id}"><TestMethod className="Agentweaver.Cli.Tests.ByokImportTests" name="${method.split('.').at(-1)}" /></UnitTest>`;
+  const result = (id, outcome) => `<UnitTestResult testId="${id}" outcome="${outcome}" />`;
+  const counters = (total, passed, failed) => `<Counters total="${total}" executed="${total}" passed="${passed}" failed="${failed}" />`;
+  const check = (xml) => spawnSync(process.execPath, ['--input-type=module', '-e', code, ...methods], { input: xml, encoding: 'utf8' }).status;
+  const definitions = methods.map((method, index) => definition(index, method)).join('');
+  assert.equal(check(counters(2, 2, 0) + definitions + result(0, 'Passed') + result(1, 'Passed')), 0);
+  assert.notEqual(check(counters(0, 0, 0)), 0);
+  assert.notEqual(check(counters(1, 1, 0) + definitions + result(0, 'Passed')), 0);
+  assert.notEqual(check(counters(2, 1, 1) + definitions + result(0, 'Passed') + result(1, 'Failed')), 0);
+  assert.notEqual(check(counters(2, 2, 0) + definitions + result(0, 'Passed') + result(1, 'NotExecuted')), 0);
 });
 
 test('matrix includes every suite and exactly four unique Broker shards', () => {

@@ -103,6 +103,65 @@ If `list` or `show` reports `model_provider_draft_metadata_requires_update`,
 use the provider ID and revision from the error with `update`. Supply complete
 corrected metadata. The API does not return the rejected metadata.
 
+## Import model bindings as drafts
+
+Import a model bindings file created by `models byok plan --overlay-output`.
+The command creates a platform Draft for each binding and returns its exact
+`reference`, `providerId`, creation revision, and operation ID. The Draft does
+not contain a key or price. Import does not activate a provider or remove a
+deployment binding.
+
+The target Gateway must support authorized target context and provider
+reference reservations. Your account needs current unbound PlatformAdmin
+authority and the `projects.admin` scope. The Projects service must allow new
+reference reservations.
+
+1. Keep the original bindings file and choose a new private context-file path.
+   Obtain the intended installation ID from the installation owner through a
+   trusted independent channel. The ID is a lowercase UUID.
+2. In PowerShell, replace the paths and trusted ID, and capture the context:
+
+   ```powershell
+   $file = 'C:\path\bindings.json'
+   $context = 'C:\path\import-context.json'
+   $trustedInstallationId = '<trusted-installation-id>'
+   agentweaver models byok import-context --output $context
+   if ($LASTEXITCODE -ne 0) { throw 'The target context was not saved.' }
+   $capturedInstallationId = (Get-Content -Raw -LiteralPath $context -ErrorAction Stop |
+       ConvertFrom-Json -ErrorAction Stop).installationId
+   if ($capturedInstallationId -cne $trustedInstallationId) {
+       throw 'The routed installation differs from the intended installation.'
+   }
+   $digest = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+   $digest
+   ```
+
+3. Save the displayed digest, the original context file, the bindings file,
+   and the target options. Append the same target options to both commands.
+   Run the import:
+
+   ```powershell
+   agentweaver models byok import --model-bindings $file --file-sha256 $digest --expected-context $context
+   ```
+
+The CLI validates the complete file before creating a Draft. The output lists
+confirmed Drafts in `completed` and reports the first stopped row in `stop`.
+An `unknown` outcome means the write result needs recovery. Keep the original
+context, bindings file, digest, account, and target options. Retry the same
+command. The owner returns the original receipt and the CLI continues.
+
+If the context file or digest is lost or uncertain, stop and reconcile with
+the original installation. Do not replace the context with a new capture to
+recover an uncertain write. A changed context, digest, or file is a new import
+attempt. A reference already reserved by another operation returns
+`reference_conflict`.
+
+For incorrect metadata on a confirmed Draft, read its current revision and use
+`platform byok update` with complete corrected metadata and a new operation ID.
+Recover unknown rows first. To import remaining rows, make a new bindings file
+without confirmed references and with matching model rates, then calculate its
+new digest.
+
 ## Next step
 
 For command syntax, metadata fields, and API error behavior, see the

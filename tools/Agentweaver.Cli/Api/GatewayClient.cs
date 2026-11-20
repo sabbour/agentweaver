@@ -156,6 +156,68 @@ public sealed partial class GatewayClient : IGatewayClient
         return context;
     }
 
+    internal async Task<ImportTargetContext> ReadImportTargetContextAsync(CancellationToken ct)
+    {
+        var bearer = await GetBearerAsync(Identity, ct).ConfigureAwait(false);
+        return await ReadImportTargetContextAsync(bearer, ct).ConfigureAwait(false);
+    }
+
+    private async Task<ImportTargetContext> ReadImportTargetContextAsync(string bearer, CancellationToken ct)
+    {
+        var operations = await EnsureDiscoveredAsync(ct).ConfigureAwait(false);
+        if (Identity.ProjectId is not null || Identity.RunId is not null ||
+            !operations.TryGetValue("getAuthorizationTargetContext", out var operation) ||
+            operation.Method != "GET" || operation.Path != "/api/v1/authorization/target-context")
+            throw ByokImportContract.Invalid();
+        var caller = await ReadAuthorizationContextAsync(Identity, bearer, ct, recordEvidence: false).ConfigureAwait(false);
+        var response = await InvokeCoreAsync(operation, new GatewayInvocation(), Identity, bearer,
+            projectBearer: null, skipAuthorizationPreflight: true, ct, recordEvidence: false).ConfigureAwait(false);
+        if (response.Status != (int)HttpStatusCode.OK || response.Body is not JsonObject target ||
+            !response.Headers.TryGetValue("Cache-Control", out var cache) ||
+            !CacheControlHeaderValue.TryParse(cache, out var cacheControl) || !cacheControl.NoStore ||
+            target.Count != 9 || !target.ContainsKey("installationId") ||
+            GatewayContract.String(target, "installationId") is not { } installation ||
+            !Guid.TryParseExact(installation, "D", out var id) || id == Guid.Empty ||
+            installation != id.ToString("D"))
+            throw ByokImportContract.Invalid();
+        if (GatewayContract.String(target, "actorId") != GatewayContract.String(caller, "actorId"))
+            throw new ImportTargetMismatchException();
+        var context = (JsonObject)target.DeepClone();
+        context.Remove("installationId");
+        try { ValidateContext(context, Identity); }
+        catch (UnauthorizedAccessException) { throw new ImportTargetMismatchException(); }
+        return new ImportTargetContext(
+            new Uri(GatewayContract.String(target, "issuer")!, UriKind.Absolute).AbsoluteUri.TrimEnd('/'),
+            GatewayContract.String(target, "tenantId")!,
+            GatewayContract.String(target, "actorId")!, id);
+    }
+
+    internal async Task<GatewayResponse> InvokeImportCreateAsync(
+        JsonObject body, ImportTargetContext expected, Action onDispatch, CancellationToken ct)
+    {
+        var operations = await EnsureDiscoveredAsync(ct).ConfigureAwait(false);
+        if (!operations.TryGetValue("createPlatformByokProviderDraft", out var operation) ||
+            operation.Method != "POST" || operation.Path != "/api/v1/platform/byok-providers" ||
+            GatewayContract.String(body, "targetInstallationId") != expected.InstallationId.ToString("D"))
+            throw ByokImportContract.Invalid();
+        var invocation = new GatewayInvocation(Body: body);
+        var (path, query, headers, bytes) = PrepareRequest(operation, invocation);
+        var bearer = await GetBearerAsync(Identity, ct).ConfigureAwait(false);
+        var actual = await ReadImportTargetContextAsync(bearer, ct).ConfigureAwait(false);
+        if (actual != expected) throw new ImportTargetMismatchException();
+        return await InvokeCoreAsync(operation, invocation with { Query = query, Headers = headers },
+            Identity, bearer, projectBearer: null, skipAuthorizationPreflight: true, ct,
+            pathOverride: path, bodyBytesOverride: bytes, onDispatch: onDispatch, recordEvidence: false).ConfigureAwait(false);
+    }
+
+    internal void ValidateImportRequests(IEnumerable<JsonObject> bodies)
+    {
+        if (!_operations.TryGetValue("createPlatformByokProviderDraft", out var operation))
+            throw ByokImportContract.Invalid();
+        foreach (var body in bodies)
+            _ = PrepareRequest(operation, new GatewayInvocation(Body: body));
+    }
+
     public async Task<GatewayResponse> InvokeAsync(
         string operationId,
         GatewayInvocation invocation,
@@ -386,7 +448,9 @@ public sealed partial class GatewayClient : IGatewayClient
         bool skipAuthorizationPreflight,
         CancellationToken ct,
         string? pathOverride = null,
-        byte[]? bodyBytesOverride = null)
+        byte[]? bodyBytesOverride = null,
+        Action? onDispatch = null,
+        bool recordEvidence = true)
     {
         if (!skipAuthorizationPreflight)
             await ValidateAuthorizationContextAsync(ct).ConfigureAwait(false);
@@ -409,7 +473,9 @@ public sealed partial class GatewayClient : IGatewayClient
             requestHeaders,
             projectBearer,
             operation.MaximumRequestBytes,
-            operation.OperationId).ConfigureAwait(false);
+            operation.OperationId,
+            onDispatch: onDispatch,
+            recordEvidence: recordEvidence).ConfigureAwait(false);
     }
 
     private static readonly IReadOnlyDictionary<string, string> EmptyParameters =
@@ -433,7 +499,8 @@ public sealed partial class GatewayClient : IGatewayClient
     private async Task<JsonObject> ReadAuthorizationContextAsync(
         CliIdentity identity,
         string bearer,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool recordEvidence = true)
     {
         var operations = await EnsureDiscoveredAsync(ct).ConfigureAwait(false);
         if (!operations.TryGetValue("getAuthorizationContext", out var operation))
@@ -445,7 +512,7 @@ public sealed partial class GatewayClient : IGatewayClient
             bearer,
             projectBearer: null,
             skipAuthorizationPreflight: true,
-            ct).ConfigureAwait(false);
+            ct, recordEvidence: recordEvidence).ConfigureAwait(false);
         if (result.Status != (int)HttpStatusCode.OK || result.Body is not JsonObject context)
             throw new UnauthorizedAccessException("The Gateway authorization-context request was denied or invalid.");
         ValidateContext(context, identity);
@@ -786,7 +853,9 @@ public sealed partial class GatewayClient : IGatewayClient
         string? operationId = null,
         bool opaqueUnknownMediaTypes = false,
         bool acceptAnyMediaType = false,
-        bool requireOpaqueResponse = false)
+        bool requireOpaqueResponse = false,
+        Action? onDispatch = null,
+        bool recordEvidence = true)
     {
         var requestId = Guid.NewGuid();
         var started = Stopwatch.GetTimestamp();
@@ -797,7 +866,7 @@ public sealed partial class GatewayClient : IGatewayClient
             ["method"] = method,
             ["path"] = pathAndQuery.Split('?', 2)[0],
             ["query"] = RedactQuery(ParseQuery(pathAndQuery)),
-            ["requestBody"] = body is null ? null : hidePolicyRequest ? "[REDACTED]" : RedactJson(ParseJson(body)),
+            ["requestBody"] = body is null || !recordEvidence ? null : hidePolicyRequest ? "[REDACTED]" : RedactJson(ParseJson(body)),
             ["status"] = null,
             ["traceId"] = null,
             ["responseBody"] = null,
@@ -864,6 +933,8 @@ public sealed partial class GatewayClient : IGatewayClient
             timeout.CancelAfter(operationId == "dispatchCoordinatorExecution"
                 ? DispatchRequestTimeout
                 : _requestTimeout);
+            timeout.Token.ThrowIfCancellationRequested();
+            onDispatch?.Invoke();
             using var response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -908,7 +979,7 @@ public sealed partial class GatewayClient : IGatewayClient
                 if (bytes.Length > 0 || !opaqueUnknownMediaTypes)
                 {
                     binaryBody = bytes;
-                    if (!hidePolicyEvidence)
+                    if (recordEvidence && !hidePolicyEvidence)
                         evidence["responseBody"] = new JsonObject
                         {
                             ["mediaType"] = contentType,
@@ -922,7 +993,7 @@ public sealed partial class GatewayClient : IGatewayClient
                 if (contentType is "application/json" or "application/problem+json")
                 {
                     responseBody = ParseJson(bytes);
-                    if (!hidePolicyEvidence)
+                    if (recordEvidence && !hidePolicyEvidence)
                         evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
                             ? "[REDACTED]"
                             : RedactJson(responseBody);
@@ -930,7 +1001,7 @@ public sealed partial class GatewayClient : IGatewayClient
                 else
                 {
                     responseBody = JsonValue.Create(textBody);
-                    if (!hidePolicyEvidence)
+                    if (recordEvidence && !hidePolicyEvidence)
                         evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
                             ? "[REDACTED]"
                             : RedactText(textBody);
@@ -969,7 +1040,7 @@ public sealed partial class GatewayClient : IGatewayClient
         finally
         {
             evidence["elapsedMs"] = Math.Max(0, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-            AddCall(evidence);
+            if (recordEvidence) AddCall(evidence);
         }
     }
 

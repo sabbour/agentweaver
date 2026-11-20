@@ -51,8 +51,20 @@ public static class CliApplication
             if (args[0] == "auth")
                 return await RunAuthAsync(args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
             if (args[0] == "models")
+            {
+                if (args.Length >= 3 && args[1] == "byok" && args[2] is "import" or "import-context")
+                {
+                    var actualRuntime = runtime ?? new CliRuntimeOptions();
+                    using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                    return args[2] == "import-context"
+                        ? await ByokImportCommands.CaptureContextAsync(args[3..], actualRuntime,
+                            actualRuntime.HttpClient ?? ownedClient!, output, error, ct).ConfigureAwait(false)
+                        : await ByokImportCommands.RunAsync(args[3..], actualRuntime,
+                            actualRuntime.HttpClient ?? ownedClient!, output, error, ct).ConfigureAwait(false);
+                }
                 return await ByokModelCommands.RunAsync(
                     args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
+            }
             if (args[0] == "platform")
             {
                 var actualRuntime = runtime ?? new CliRuntimeOptions();
@@ -550,6 +562,9 @@ public static class CliApplication
           agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan.json>
               [--overlay-output <new-model-bindings.json>]
           agentweaver models byok apply --plan <plan.json>
+          agentweaver models byok import-context --output <new-context-file> [target options]
+          agentweaver models byok import --model-bindings <file> --file-sha256 <digest>
+              --expected-context <context-file> [target options]
         """;
 }
 

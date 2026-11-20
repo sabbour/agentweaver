@@ -19,6 +19,7 @@ export function classify(paths, full = false) {
       if (/^(?:tools\/Agentweaver\.Cli\/(?:Agentweaver\.Cli\.csproj|packages\.lock\.json)|(?:tools\/)?Directory\.Build\.(?:props|targets)|(?:tools\/)?Directory\.Packages\.props|NuGet\.Config|global\.json)$/.test(path)) {
         result.cli = true;
       }
+      if (/^tests\/Agentweaver\.Cli\.Tests\/(?:ByokImportTests\.cs|ImportGatewayFixture\.cs|Agentweaver\.Cli\.Tests\.csproj|packages\.lock\.json)$/.test(path)) result.cli = true;
       if (/^(deploy\/|services\/agenthost\/)/.test(path) ||
           /(^|\/)([^/]+\.(csproj|props|targets|slnx)|packages\.lock\.json)$/.test(path) ||
           /^(global\.json|[Nn]u[Gg]et\.[Cc]onfig)$/.test(path)) result.node = true;

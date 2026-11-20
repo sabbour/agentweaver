@@ -95,6 +95,23 @@ public sealed class ByokModelCommandsTests : IDisposable
     }
 
     [Fact]
+    public async Task ImportParsesARealPlanOverlay()
+    {
+        var input = Input("openai", V1Endpoint, "responses", null);
+        input["reasoningEfforts"] = new JsonArray("high", "low");
+        input["defaultReasoningEffort"] = "low";
+        var inputPath = Path.Combine(_directory, "byok.json");
+        await File.WriteAllTextAsync(inputPath, input.ToJsonString());
+        var result = await RunAsync(["models", "byok", "plan", "--input", inputPath,
+            "--source", Path.Combine(_directory, "k8s"), "--output", PlanPath, "--overlay-output", OverlayPath]);
+        Assert.True(result.Code == 0, result.Error);
+        var imported = ByokImportOverlay.Parse(await File.ReadAllBytesAsync(OverlayPath));
+        var row = Assert.Single(imported);
+        Assert.Equal("azure-gpt", row.Reference);
+        Assert.Equal("gpt-5.4", row.Model);
+    }
+
+    [Fact]
     public async Task PlanWritesAModelBindingsFileForDeploymentWithoutChangingTheSource()
     {
         var agentHostPath = Path.Combine(_directory, "k8s", ByokModelCommands.AgentHostFile);
