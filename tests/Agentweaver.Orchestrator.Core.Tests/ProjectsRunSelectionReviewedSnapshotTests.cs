@@ -223,6 +223,43 @@ public sealed class ProjectsRunSelectionReviewedSnapshotTests
             events);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.OK, null, 200)]
+    [InlineData(HttpStatusCode.Conflict, "run_selection_conflict", StatusCodes.Status409Conflict)]
+    [InlineData(HttpStatusCode.Forbidden, "run_selection_permission_denied", StatusCodes.Status403Forbidden)]
+    public async Task CreateInteractiveSelectionMapsAcceptedAndDeniedResponsesWithoutFallback(
+        HttpStatusCode statusCode, string? expectedErrorCode, int expectedHttpStatus)
+    {
+        var events = new List<string>();
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                statusCode == HttpStatusCode.OK
+                    ? JsonSerializer.Serialize(new { projectId = ProjectId, runId = RunId })
+                    : "{}"),
+        };
+        if (statusCode == HttpStatusCode.OK)
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+        var handler = new ResponseSequenceHandler(events, [response]);
+        using var httpClient = new HttpClient(handler);
+        var client = new ProjectsRunSelectionClient(
+            httpClient, Options(), new RecordingResolver((_, _) => Task.FromResult<ReviewedRemoteToolSnapshot?>(null)));
+
+        if (expectedErrorCode is null)
+        {
+            await client.CreateInteractiveSelectionAsync(RequestContext(), ProjectId, RunId, 7, CancellationToken.None);
+        }
+        else
+        {
+            var ex = await Assert.ThrowsAsync<CoordinationException>(() =>
+                client.CreateInteractiveSelectionAsync(RequestContext(), ProjectId, RunId, 7, CancellationToken.None));
+            Assert.Equal(expectedErrorCode, ex.Code);
+            Assert.Equal(expectedHttpStatus, ex.StatusCode);
+        }
+
+        Assert.Equal([$"/api/projects/{ProjectId}/runs/{RunId}/interactive-selection"], handler.RequestPaths);
+    }
+
     private static OrchestratorOptions Options() =>
         new(Issuer, "orchestrator-api", "https://projects.test/", "projects-api", string.Empty, string.Empty);
 

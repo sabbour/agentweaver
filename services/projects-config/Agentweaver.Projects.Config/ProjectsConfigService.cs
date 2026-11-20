@@ -731,6 +731,8 @@ public sealed partial class ProjectsConfigService
             Context = new RunSelectionContext { Revision = "interactive-v1" }
         }, true, cancellationToken);
 
+    private const int MaxRunSelectionAttempts = 3;
+
     /// <summary>Shares the same authority locks, replay checks and selection transaction for both admission contracts.</summary>
     private async Task<EffectiveRunSelection> AcceptRunSelectionCoreAsync(
         ProjectAuthorizationContext caller, string projectId, string runId,
@@ -742,22 +744,62 @@ public sealed partial class ProjectsConfigService
         ValidateIdentifier(runId, "runId");
         ArgumentNullException.ThrowIfNull(request);
         ValidateSelectionContext(request.Context);
-        await using var transaction = await db.Database
+        var originalRequest = request;
+
+        for (var attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (dbContextFactory is null)
+                    return await AcceptRunSelectionAttemptAsync(
+                        db, caller, projectId, runId, originalRequest, interactive, cancellationToken)
+                        .ConfigureAwait(false);
+
+                await using var attemptDb = await dbContextFactory.CreateDbContextAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                return await AcceptRunSelectionAttemptAsync(
+                    attemptDb, caller, projectId, runId, originalRequest, interactive, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                !cancellationToken.IsCancellationRequested &&
+                exception is not OperationCanceledException &&
+                (IsSerializationFailure(exception) || IsRunSelectionPrimaryKeyViolation(exception)))
+            {
+                if (dbContextFactory is null || attempt + 1 >= MaxRunSelectionAttempts)
+                    throw ProjectConfigException.Conflict(
+                        "The run selection conflicted with a concurrent update. Retry the request.");
+            }
+        }
+    }
+
+    private async Task<EffectiveRunSelection> AcceptRunSelectionAttemptAsync(
+        ProjectsConfigDbContext context,
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string runId,
+        AcceptRunSelectionRequest originalRequest,
+        bool interactive,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await context.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
         // Lock mutable authority and revision heads before computing the snapshot, and serialize all writers for this run ID.
-        await LockRunSelectionInputsAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        await LockRunSelectionInputsAsync(context, caller, projectId, runId, cancellationToken).ConfigureAwait(false);
         if (!await HasCurrentRoleAsync(
+            context,
             caller,
             ProjectAuthorityResourceType.Project,
             projectId,
             ProjectAuthorityRole.Orchestrator,
             cancellationToken).ConfigureAwait(false))
             throw ProjectConfigException.Forbidden();
-        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken)
+        var project = await FindTenantProjectAsync(context, caller, projectId, runId, cancellationToken)
             .ConfigureAwait(false);
-        var fingerprint = Fingerprint(project.ProjectId, runId, request);
-        var existing = await db.RunSelections.AsNoTracking()
+        var fingerprint = Fingerprint(project.ProjectId, runId, originalRequest);
+        var existing = await context.RunSelections.AsNoTracking()
             .SingleOrDefaultAsync(selection => selection.RunId == runId, cancellationToken)
             .ConfigureAwait(false);
         if (existing is not null)
@@ -770,17 +812,17 @@ public sealed partial class ProjectsConfigService
         if (project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.Conflict("Archived projects cannot start runs.");
 
-        if (project.ConfigurationRevision != request.ExpectedProjectConfigRevision)
+        if (project.ConfigurationRevision != originalRequest.ExpectedProjectConfigRevision)
             throw ProjectConfigException.Conflict("The project configuration revision has changed.");
 
-        var projectVersion = await db.ProjectConfigurationRevisions.AsNoTracking()
+        var projectVersion = await context.ProjectConfigurationRevisions.AsNoTracking()
             .SingleAsync(item => item.ProjectId == project.ProjectId &&
                 item.Revision == project.ConfigurationRevision, cancellationToken)
             .ConfigureAwait(false);
         var projectConfiguration = ProjectConfigurationValidator.Validate(
             Deserialize<ProjectConfiguration>(projectVersion.ConfigurationJson));
         await SkillContentService.ValidateConfigurationAsync(
-            db,
+            context,
             project.ProjectId,
             projectConfiguration,
             projectConfiguration,
@@ -789,30 +831,31 @@ public sealed partial class ProjectsConfigService
             cancellationToken)
             .ConfigureAwait(false);
 
-        var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
+        var platformHead = await GetPlatformHeadAsync(context, cancellationToken).ConfigureAwait(false);
         if (platformHead.CurrentRevision == 0)
             throw new ProjectConfigException(
                 "platform_runtime_unconfigured",
                 "Platform runtime defaults must be configured before accepting a run.",
                 StatusCodes.Status409Conflict);
-        if (!interactive && platformHead.CurrentRevision != request.ExpectedPlatformRuntimeRevision)
+        if (!interactive && platformHead.CurrentRevision != originalRequest.ExpectedPlatformRuntimeRevision)
             throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
-        var platformVersion = await db.PlatformRuntimeRevisions.AsNoTracking()
+        var platformVersion = await context.PlatformRuntimeRevisions.AsNoTracking()
             .SingleAsync(item => item.Revision == platformHead.CurrentRevision, cancellationToken)
             .ConfigureAwait(false);
         var defaults = Deserialize<PlatformRuntimeDefaults>(platformVersion.ConfigurationJson);
-        if (interactive)
-            request = request with { Context = CreateInteractiveRunContext(projectConfiguration, defaults) };
+        var effectiveRequest = interactive
+            ? originalRequest with { Context = CreateInteractiveRunContext(projectConfiguration, defaults) }
+            : originalRequest;
 
         var modelSelections = ResolveModelSelections(
-            projectConfiguration, defaults, request.Context, project.ProjectId);
+            projectConfiguration, defaults, effectiveRequest.Context, project.ProjectId);
         modelSelections = await BindProviderBindingRevisionsAsync(
-            project.ProjectId, modelSelections, cancellationToken).ConfigureAwait(false);
-        var providers = ResolveProviders(request.Context);
+            context, project.ProjectId, modelSelections, cancellationToken).ConfigureAwait(false);
+        var providers = ResolveProviders(effectiveRequest.Context);
         var egress = ProjectConfigurationValidator.ResolveEgress(
             defaults.EgressBaseline,
             projectConfiguration.EgressNarrowing,
-            request.Context.RequiredEgress);
+            effectiveRequest.Context.RequiredEgress);
         var limits = ProjectConfigurationValidator.ResolveLimits(defaults, projectConfiguration.RunLimits);
         var effective = new EffectiveRunSelection(
             project.ProjectId,
@@ -820,7 +863,7 @@ public sealed partial class ProjectsConfigService
             project.Revision,
             project.ConfigurationRevision,
             platformHead.CurrentRevision,
-            request.Context.Revision,
+            effectiveRequest.Context.Revision,
             modelSelections.PrimarySelection,
             providers,
             egress,
@@ -828,7 +871,7 @@ public sealed partial class ProjectsConfigService
             projectConfiguration,
             defaults.EgressBaseline,
             projectConfiguration.EgressNarrowing,
-            ProjectConfigurationValidator.ValidateEgressRules(request.Context.RequiredEgress))
+            ProjectConfigurationValidator.ValidateEgressRules(effectiveRequest.Context.RequiredEgress))
         {
             ModelSelections = modelSelections.EffectiveSelections,
             ModelTaskSelections = modelSelections.TaskSelections
@@ -840,48 +883,35 @@ public sealed partial class ProjectsConfigService
             ProjectRevision = project.Revision,
             ProjectConfigurationRevision = project.ConfigurationRevision,
             PlatformRuntimeRevision = platformHead.CurrentRevision,
-            ContextRevision = request.Context.Revision,
+            ContextRevision = effectiveRequest.Context.Revision,
             RequestFingerprint = fingerprint,
             SnapshotJson = Serialize(effective),
             CreatedAt = timeProvider.GetUtcNow(),
         };
-        db.RunSelections.Add(record);
-        try
-        {
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            if (!await HasCurrentRoleAsync(
-                caller,
-                ProjectAuthorityResourceType.Project,
-                projectId,
-                ProjectAuthorityRole.Orchestrator,
-                cancellationToken).ConfigureAwait(false))
-                throw ProjectConfigException.Forbidden();
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return effective;
-        }
-        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
-        {
-            // A concurrent accept may win the run-ID insert; replay only its exact fingerprint after rollback.
-            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-            await transaction.DisposeAsync().ConfigureAwait(false);
-            db.Entry(record).State = EntityState.Detached;
-            var concurrent = await db.RunSelections.AsNoTracking()
-                .SingleOrDefaultAsync(selection => selection.RunId == runId, cancellationToken)
-                .ConfigureAwait(false);
-            if (concurrent is null) throw;
-            return ReadExistingSelection(concurrent, project.ProjectId, fingerprint);
-        }
+        context.RunSelections.Add(record);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        if (!await HasCurrentRoleAsync(
+            context,
+            caller,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Orchestrator,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return effective;
     }
 
     /// <summary>Locks project and platform heads and obtains a transaction-scoped advisory lock for the run ID.</summary>
-    private async Task LockRunSelectionInputsAsync(
+    private static async Task LockRunSelectionInputsAsync(
+        ProjectsConfigDbContext context,
         ProjectAuthorizationContext caller,
         string projectId,
         string runId,
         CancellationToken cancellationToken)
     {
-        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
-        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)context.Database.CurrentTransaction!.GetDbTransaction();
 
         await using (var projectLock = new NpgsqlCommand(
             """
@@ -1210,18 +1240,26 @@ public sealed partial class ProjectsConfigService
         throw ProjectConfigException.NotFound();
     }
 
+    private Task<ProjectRecord> FindTenantProjectAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string? runId,
+        CancellationToken cancellationToken) =>
+        FindTenantProjectAsync(db, caller, projectId, runId, cancellationToken);
+
     /// <summary>Loads a tenant-owned project without disclosing foreign-project existence.</summary>
-    private async Task<ProjectRecord> FindTenantProjectAsync(
+    private static async Task<ProjectRecord> FindTenantProjectAsync(
+        ProjectsConfigDbContext context,
         ProjectAuthorizationContext caller,
         string projectId,
         string? runId,
         CancellationToken cancellationToken)
     {
         caller.RequireResourceBinding(projectId, runId);
-        await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
+        await EnsureCurrentMembershipAsync(context, caller, cancellationToken).ConfigureAwait(false);
         if (!Guid.TryParseExact(projectId, "N", out _))
             throw ProjectConfigException.NotFound();
-        var project = await db.Projects.AsNoTracking()
+        var project = await context.Projects.AsNoTracking()
             .SingleOrDefaultAsync(item => item.ProjectId == projectId, cancellationToken)
             .ConfigureAwait(false);
         if (project is null || project.TenantId != caller.TenantId)
@@ -1257,8 +1295,13 @@ public sealed partial class ProjectsConfigService
         _ = ProjectConfigurationValidator.ResolveLimits(defaults.Defaults, limits);
     }
 
-    private async Task<PlatformRuntimeHeadRecord> GetPlatformHeadAsync(CancellationToken cancellationToken) =>
-        await db.PlatformRuntimeHeads.SingleOrDefaultAsync(
+    private Task<PlatformRuntimeHeadRecord> GetPlatformHeadAsync(CancellationToken cancellationToken) =>
+        GetPlatformHeadAsync(db, cancellationToken);
+
+    private static async Task<PlatformRuntimeHeadRecord> GetPlatformHeadAsync(
+        ProjectsConfigDbContext context,
+        CancellationToken cancellationToken) =>
+        await context.PlatformRuntimeHeads.SingleOrDefaultAsync(
             head => head.Id == PlatformRuntimeHeadRecord.SingletonId, cancellationToken).ConfigureAwait(false)
         ?? throw new InvalidOperationException("The platform runtime head row is missing from the Projects & Config schema.");
 
@@ -1502,11 +1545,16 @@ public sealed partial class ProjectsConfigService
         ImmutableArray<EffectiveModelSelection> EffectiveSelections,
         ImmutableArray<ModelTaskSelectionReference> TaskSelections);
 
-    private async Task<ResolvedModelSelections> BindProviderBindingRevisionsAsync(
+    private static async Task<ResolvedModelSelections> BindProviderBindingRevisionsAsync(
+        ProjectsConfigDbContext context,
         string projectId,
         ResolvedModelSelections selections,
         CancellationToken cancellationToken)
     {
+        var providerIds = CollectOrderedByokProviderIds(projectId, selections);
+        if (providerIds.Length > 0)
+            await LockModelProviderHeadsAsync(context, providerIds, cancellationToken).ConfigureAwait(false);
+
         async Task<ModelSelectionSettings> BindAsync(ModelSelectionSettings selection)
         {
             if (selection.SourceMode != ModelSourceMode.Byok || selection.CredentialIdentity is not { } identity)
@@ -1518,8 +1566,8 @@ public sealed partial class ProjectsConfigService
                 throw ProviderBindingUnavailable();
 
             var current = await (
-                    from head in db.ModelProviderDrafts.AsNoTracking()
-                    join revision in db.ModelProviderDraftRevisions.AsNoTracking()
+                    from head in context.ModelProviderDrafts.AsNoTracking()
+                    join revision in context.ModelProviderDraftRevisions.AsNoTracking()
                         on new { head.ProviderId, Revision = head.CurrentRevision }
                         equals new { revision.ProviderId, Revision = revision.ProviderRevision }
                     where head.ProviderId == identity.ProviderId &&
@@ -1567,6 +1615,51 @@ public sealed partial class ProjectsConfigService
             PrimarySelection = primary,
             EffectiveSelections = effective.MoveToImmutable()
         };
+    }
+
+    private static string[] CollectOrderedByokProviderIds(
+        string projectId,
+        ResolvedModelSelections selections)
+    {
+        var providerIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var selection in new[] { selections.PrimarySelection }
+                     .Concat(selections.EffectiveSelections.Select(item => item.Selection)))
+        {
+            if (selection.SourceMode != ModelSourceMode.Byok || selection.CredentialIdentity is not { } identity)
+                continue;
+            if (selection.CredentialReference is null ||
+                selection.ModelBindingPin is null ||
+                identity.ProviderId != selection.Reference ||
+                identity.Scope == ModelProviderBindingScope.Project && identity.ProjectId != projectId)
+                throw ProviderBindingUnavailable();
+            providerIds.Add(identity.ProviderId);
+        }
+
+        return providerIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+    }
+
+    private static async Task LockModelProviderHeadsAsync(
+        ProjectsConfigDbContext context,
+        string[] providerIds,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)context.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT provider_id
+            FROM projects_config.model_providers
+            WHERE provider_id = ANY(@provider_ids)
+            ORDER BY provider_id COLLATE "C"
+            FOR SHARE
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("provider_ids", providerIds);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+        }
     }
 
     private static ProjectConfigException ProviderBindingUnavailable() =>
@@ -2101,6 +2194,16 @@ public sealed partial class ProjectsConfigService
     private static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
+    private static bool IsRunSelectionPrimaryKeyViolation(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+            if (current is PostgresException postgres &&
+                postgres.SqlState == PostgresErrorCodes.UniqueViolation &&
+                string.Equals(postgres.ConstraintName, "PK_project_run_selections", StringComparison.Ordinal))
+                return true;
+        return false;
+    }
+
     /// <summary>Requires ordinary API/admin scopes and a current platform-admin assignment.</summary>
     private async Task EnsurePlatformAdminAsync(
         ProjectAuthorizationContext caller,
@@ -2162,12 +2265,18 @@ public sealed partial class ProjectsConfigService
             throw ProjectConfigException.Forbidden();
     }
 
+    private Task EnsureCurrentMembershipAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken) =>
+        EnsureCurrentMembershipAsync(db, caller, cancellationToken);
+
     /// <summary>Rejects stale or revoked membership revisions before project operations.</summary>
-    private async Task EnsureCurrentMembershipAsync(
+    private static async Task EnsureCurrentMembershipAsync(
+        ProjectsConfigDbContext context,
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
     {
-        var isCurrent = await db.TenantMemberships.AsNoTracking().AnyAsync(
+        var isCurrent = await context.TenantMemberships.AsNoTracking().AnyAsync(
             membership =>
                 membership.MembershipId == caller.MembershipId &&
                 membership.Issuer == caller.Issuer &&
@@ -2180,15 +2289,24 @@ public sealed partial class ProjectsConfigService
             throw ProjectConfigException.Forbidden();
     }
 
-    private async Task<bool> HasCurrentRoleAsync(
+    private Task<bool> HasCurrentRoleAsync(
+        ProjectAuthorizationContext caller,
+        ProjectAuthorityResourceType resourceType,
+        string resourceId,
+        ProjectAuthorityRole role,
+        CancellationToken cancellationToken) =>
+        HasCurrentRoleAsync(db, caller, resourceType, resourceId, role, cancellationToken);
+
+    private static async Task<bool> HasCurrentRoleAsync(
+        ProjectsConfigDbContext context,
         ProjectAuthorizationContext caller,
         ProjectAuthorityResourceType resourceType,
         string resourceId,
         ProjectAuthorityRole role,
         CancellationToken cancellationToken) =>
         await (
-            from membership in db.TenantMemberships.AsNoTracking()
-            join assignment in db.RoleAssignments.AsNoTracking()
+            from membership in context.TenantMemberships.AsNoTracking()
+            join assignment in context.RoleAssignments.AsNoTracking()
                 on membership.MembershipId equals assignment.MembershipId
             where membership.MembershipId == caller.MembershipId &&
                 membership.Issuer == caller.Issuer &&
