@@ -38,17 +38,18 @@ commands, authorization, and current distribution status, see the
 ## Model-provider Draft and Available metadata
 
 These routes expose provider metadata through the Gateway. New providers have
-state `Draft`. Projects sets state to `Available` after it verifies the saved
-credential and exact Events-owned rate card and provenance. `Available` does
-not select a provider or change deployment-owned model eligibility. Projects
+state `Draft`. Credential publication and activation are unavailable.
+Existing `Available` revisions remain readable. `Available` does not select a
+provider or change deployment-owned model eligibility. Projects
 & Config owns the records and checks current authority on every request.
 Platform operations require an unbound current PlatformAdmin. Project
 operations require the exact project binding, no run binding, and a current
 project Owner or PlatformAdmin. Every operation requires `api.read` and
-`projects.admin`. All eight operations are excluded from MCP.
+`projects.admin`. These operations are excluded from MCP.
 
 | Gateway route | Native owner | Operation ID |
 | --- | --- | --- |
+| `GET /api/v1/platform/byok-deployment-bindings` | Projects `GET /api/platform/byok-deployment-bindings` | `readPlatformByokDeploymentBindings` |
 | `GET /api/v1/platform/byok-providers` | Projects `GET /api/platform/byok-providers` | `listPlatformByokProviderDrafts` |
 | `GET /api/v1/platform/byok-providers/{providerId}` | Projects `GET /api/platform/byok-providers/{providerId}` | `readPlatformByokProviderDraft` |
 | `POST /api/v1/platform/byok-providers` | Projects `POST /api/platform/byok-providers` | `createPlatformByokProviderDraft` |
@@ -75,6 +76,11 @@ Public metadata requests do not accept rate-card references. The public
 response `state` is `Draft` or `Available`; the provider revision rules are in the
 [service contract](./contracts.md#customer-provided-model-provider-draft-contract).
 See the [contract details](./contracts.md#customer-provided-model-provider-draft-contract).
+
+The deployment-binding read takes no query or request body. It returns the
+responding Projects process's startup `revision` and BYOK `bindings`. Each
+binding has a `reference`, `enabled`, and `reasoningEfforts`. A missing
+startup copy returns `503`. The response is not a deployment-wide inventory.
 
 ## Periodic issue sync
 

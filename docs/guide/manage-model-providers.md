@@ -5,6 +5,14 @@ metadata. This procedure does not set a key or activate a provider.
 For a Project's provider drafts, see
 [Manage project BYOK provider metadata](./manage-project-byok-provider-metadata.md).
 
+## View deployment-managed bindings
+
+Sign in to the web app with a platform session. Open **Platform settings**,
+enter your tenant ID under **Deployment-managed BYOK bindings**, and select
+**Load bindings**. The list shows the responding Projects service's startup
+copy and revision. It shows enabled and disabled BYOK references as
+**Managed by deployment**. To refresh the copy, select **Load bindings** again.
+
 ## Before you begin
 
 Use the Agentweaver CLI with a configured Gateway, Broker, API audience, and

@@ -1842,6 +1842,11 @@ export interface ProjectModelChoice {
   reasoningEfforts: ReasoningEffort[];
 }
 
+export interface ByokDeploymentBindingSnapshot {
+  revision: string;
+  bindings: Array<{ reference: string; enabled: boolean; reasoningEfforts: string[] }>;
+}
+
 /** A model reference and the owner-held configuration sources that contain it. */
 export interface ProjectModelReferenceChoice {
   reference: string;

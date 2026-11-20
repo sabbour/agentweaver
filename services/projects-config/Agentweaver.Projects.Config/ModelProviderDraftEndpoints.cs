@@ -102,6 +102,7 @@ internal static class ModelProviderDraftEndpoints
 
     private static readonly HashSet<string> EndpointNames = new(StringComparer.Ordinal)
     {
+        "readPlatformByokDeploymentBindings",
         "listPlatformByokProviderDrafts", "readPlatformByokProviderDraft",
         "createPlatformByokProviderDraft", "updatePlatformByokProviderDraft",
         "listProjectByokProviderDrafts", "readProjectByokProviderDraft",
@@ -110,6 +111,8 @@ internal static class ModelProviderDraftEndpoints
 
     public static IEndpointRouteBuilder MapModelProviderDraftEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/platform/byok-deployment-bindings", ReadDeploymentBindingsAsync)
+            .RequireAuthorization().WithName("readPlatformByokDeploymentBindings");
         var platform = app.MapGroup("/api/platform/byok-providers").RequireAuthorization();
         platform.MapGet("", (HttpContext context, ProjectAuthorizationOwner owner,
             ModelProviderDraftService service, CancellationToken cancellationToken) =>
@@ -244,6 +247,7 @@ internal static class ModelProviderDraftEndpoints
             var providers = page.Providers.Select(Project).ToArray();
             return Results.Ok(new ModelProviderDraftPageResponse(providers, page.NextAfterProviderId));
         }
+
         catch (ModelProviderDraftUnsafeMetadataException exception)
         {
             return UnsafeMetadata(exception);
@@ -251,6 +255,45 @@ internal static class ModelProviderDraftEndpoints
         catch (ModelProviderDraftException exception)
         {
             return DraftError(exception);
+        }
+        catch (ProjectConfigException exception)
+        {
+            return OwnerError(exception);
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return Unavailable();
+        }
+    }
+
+    private static async Task<IResult> ReadDeploymentBindingsAsync(
+        HttpContext context, ProjectAuthorizationOwner owner, ModelProviderDraftService service,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (context.Request.Query.Count != 0)
+                return InvalidRequest();
+            var caller = await ResolveCallerAsync(context, owner, cancellationToken).ConfigureAwait(false);
+            var snapshot = await service.ReadDeploymentBindingsAsync(caller, cancellationToken).ConfigureAwait(false);
+            if (!snapshot.IsAvailable)
+                return Unavailable();
+            return Results.Ok(new
+            {
+                revision = snapshot.Revision,
+                bindings = snapshot.Bindings
+                    .Where(binding => binding.SourceMode == "Byok")
+                    .Select(binding => new
+                    {
+                        binding.Reference,
+                        binding.Enabled,
+                        reasoningEfforts = binding.SupportedReasoningEfforts,
+                    }).ToArray(),
+            });
         }
         catch (ProjectConfigException exception)
         {

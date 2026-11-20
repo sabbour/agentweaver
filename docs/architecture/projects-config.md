@@ -28,6 +28,12 @@ exact project. That binding selects the project but does not grant a role;
 Projects checks current membership and the Owner or PlatformAdmin role on each
 request.
 
+Platform Settings reads deployment-managed BYOK references from the responding
+Projects process's startup capability copy. The read requires an unbound
+current PlatformAdmin and returns the copy's revision, enabled state, and
+reasoning levels. It does not report AgentHost readiness or deployment-wide
+convergence.
+
 The save response contains the immutable revision committed by that operation.
 An exact retry returns that revision, even if a later edit has advanced the
 head. The client reloads before it makes another edit.

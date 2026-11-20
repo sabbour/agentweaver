@@ -49,14 +49,15 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
         Action<HttpRequestMessage>? observeProjectsRequest = null,
         TimeSpan? ownerRequestTimeout = null,
         Uri? environmentOwner = null,
-        ILoggerProvider? loggerProvider = null)
+        ILoggerProvider? loggerProvider = null,
+        Uri? projectsOwner = null)
     {
         var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer);
         var audience = "https://api.test";
         var options = new GatewayOptions(
             issuer,
             audience,
-            new Uri("https://projects.test/"),
+            projectsOwner ?? new Uri("https://projects.test/"),
             new Uri("https://orchestrator.test/"),
             new Uri("https://knowledge.test/"),
             new Uri("https://events.test/"),

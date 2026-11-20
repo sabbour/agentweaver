@@ -55,6 +55,19 @@ grants. They use fixture receipts and do not write to Key Vault or call Projects
 
 ## Test model-provider Draft routes
 
+Run the deployment-binding snapshot regressions:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter FullyQualifiedName~DeploymentBindingsReadRequiresUnboundPlatformAdminAndReturnsOnlyByokSnapshot
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~GatewayModelProviderDraftTests
+Push-Location apps\web
+.\node_modules\.bin\vitest.cmd run src\v1\DeploymentByokBindings.test.tsx src\v1\PlatformSettingsPage.test.tsx --maxWorkers=2 --config vitest.config.ts
+Pop-Location
+```
+
+The Projects test uses disposable PostgreSQL. The Gateway test uses a local
+owner handler. The web tests use mocked responses.
+
 Run the target-context authorization, PostgreSQL race, schema, and proxy tests:
 
 ```powershell

@@ -32,6 +32,13 @@ operation continues to check current owner authority.
 
 ## Model-provider Draft metadata
 
+`GET /api/v1/platform/byok-deployment-bindings` reads the responding Projects
+process's startup copy. It requires an unbound current PlatformAdmin with
+`api.read` and `projects.admin`. The no-store response contains the copy's
+revision and each BYOK reference, enabled state, and reasoning levels. It returns
+`503` when the copy is unavailable. The copy is not a deployment-wide
+inventory and does not report AgentHost readiness.
+
 The public Gateway supports Draft list, read, create, and update operations for
 platform and project scopes. Every route requires `api.read` and
 `projects.admin`. Platform routes require an unbound current PlatformAdmin.

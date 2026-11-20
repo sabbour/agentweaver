@@ -64,6 +64,7 @@ vi.mock('./config', () => ({
 
 import { AuthProvider, useAuth } from './AuthContext';
 import { ProjectModelProviderDrafts } from './ProjectModelProviderDrafts';
+import { DeploymentByokBindings } from './DeploymentByokBindings';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -257,6 +258,7 @@ function Harness() {
         Abort first Policy check
       </button>
       <button type="button" onClick={auth.signOut}>Sign out</button>
+      <button type="button" onClick={() => { void auth.ensureSession(null); }}>Ensure platform session</button>
       <button
         type="button"
         onClick={() => {
@@ -822,6 +824,75 @@ describe('Broker refresh coordination', () => {
     });
     await screen.findByText('access-2');
     expect(mocks.refreshBrokerToken).toHaveBeenCalledOnce();
+  });
+
+  it('restarts the bindings read when its 401 refreshes the active session', async () => {
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('access-2', 'refresh-2'));
+    const getBindings = vi.spyOn(gatewayClient, 'getByokDeploymentBindings')
+      .mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'expired'))
+      .mockResolvedValueOnce({ revision: 'refreshed', bindings: [] });
+    render(<AuthProvider><Harness /><DeploymentByokBindings /></AuthProvider>);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sign in' })[0]);
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), { target: { value: 'tenant-a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load bindings' }));
+    await screen.findByText('Projects startup revision: refreshed');
+    expect(getBindings.mock.calls).toEqual([['access-1', 'tenant-a'], ['access-2', 'tenant-a']]);
+    expect(mocks.refreshBrokerToken).toHaveBeenCalledOnce();
+  });
+
+  it('does not restart a bindings read after sign-out and a new sign-in', async () => {
+    const old = deferred<{ revision: string; bindings: [] }>();
+    const getBindings = vi.spyOn(gatewayClient, 'getByokDeploymentBindings').mockReturnValueOnce(old.promise);
+    render(<AuthProvider><Harness /><DeploymentByokBindings /></AuthProvider>);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sign in' })[0]);
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), { target: { value: 'tenant-a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load bindings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('other', 'refresh-other'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sign in' })[0]);
+    await completePopupSignIn();
+    await screen.findByText('other');
+    await act(async () => old.resolve({ revision: 'old', bindings: [] }));
+    expect(screen.queryByText('Projects startup revision: old')).toBeNull();
+    expect(getBindings).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not restart a bindings read when another unbound sign-in replaces the active identity', async () => {
+    const identity = (accessToken: string, subject: string) => ({
+      ...token(accessToken, `refresh-${subject}`),
+      id_token: `e30.${btoa(JSON.stringify({ sub: subject, name: subject }))}.sig`,
+    });
+    const replacement = deferred<ReturnType<typeof identity>>();
+    mocks.exchangeAuthorizationCode
+      .mockReturnValueOnce(replacement.promise)
+      .mockResolvedValueOnce(identity('access-1', 'first-user'));
+    const old = deferred<{ revision: string; bindings: [] }>();
+    const getBindings = vi.spyOn(gatewayClient, 'getByokDeploymentBindings').mockReturnValue(old.promise);
+    render(<AuthProvider><Harness /><DeploymentByokBindings /></AuthProvider>);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sign in' })[0]);
+    await completePopupSignIn('replacement-code');
+    await waitFor(() => expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledTimes(1));
+    // Keep the first exchange pending while a second sign-in becomes active.
+    fireEvent.click(screen.getByRole('button', { name: 'Ensure platform session' }));
+    await completeSilentSignIn({ code: 'active-code' });
+    await screen.findByText('access-1');
+    expect(screen.getByText('name:first-user')).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), { target: { value: 'tenant-a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load bindings' }));
+    expect(getBindings.mock.calls).toEqual([['access-1', 'tenant-a']]);
+
+    await act(async () => replacement.resolve(identity('other', 'second-user')));
+    await screen.findByText('other');
+    expect(screen.getByText('name:second-user')).toBeTruthy();
+    expect(getBindings).toHaveBeenCalledTimes(1);
+    await act(async () => old.resolve({ revision: 'old', bindings: [] }));
+    expect(screen.queryByText('Projects startup revision: old')).toBeNull();
+    expect(getBindings.mock.calls).toEqual([['access-1', 'tenant-a']]);
   });
 
   it('does not restore a session after sign-out while refresh is in flight', async () => {

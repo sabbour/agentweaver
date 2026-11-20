@@ -27,6 +27,7 @@ import type {
   CreateProjectCastingProposalRequest,
   ImportProjectCastingTransferRequest,
   PlatformComponentReport,
+  ByokDeploymentBindingSnapshot,
   ProjectCastingUniverseList,
   ProjectCastingProposal,
   ProjectCastingRoleDefinition,
@@ -2686,6 +2687,10 @@ export class AgentweaverGatewayClient {
    */
   getPlatformComponents(token: string, tenantSelector?: string | null): Promise<PlatformComponentReport> {
     return this.request(token, '/platform/components', {}, this.baseUrl, tenantSelector);
+  }
+
+  getByokDeploymentBindings(token: string, tenantSelector: string): Promise<ByokDeploymentBindingSnapshot> {
+    return this.request(token, '/platform/byok-deployment-bindings', {}, this.baseUrl, tenantSelector);
   }
 
   /** Lists the built-in team templates that a casting proposal can start from. */
