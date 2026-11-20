@@ -2,12 +2,16 @@ namespace Agentweaver.Projects.Config;
 
 internal sealed class PlatformPolicyReadLoggerFactory(ILoggerFactory inner) : ILoggerFactory
 {
-    private static readonly AsyncLocal<bool> ProtectedRead = new();
+    private static readonly AsyncLocal<string?> ProtectedRead = new();
 
-    internal static IDisposable BeginProtectedRead()
+    internal static IDisposable BeginProtectedRead() => BeginProtectedRead("Platform Policy");
+
+    internal static IDisposable BeginTargetContextRead() => BeginProtectedRead("Target-context");
+
+    private static IDisposable BeginProtectedRead(string name)
     {
         var previous = ProtectedRead.Value;
-        ProtectedRead.Value = true;
+        ProtectedRead.Value = name;
         return new ReadScope(previous);
     }
 
@@ -15,7 +19,7 @@ internal sealed class PlatformPolicyReadLoggerFactory(ILoggerFactory inner) : IL
     public void AddProvider(ILoggerProvider provider) => inner.AddProvider(provider);
     public void Dispose() { }
 
-    private sealed class ReadScope(bool previous) : IDisposable
+    private sealed class ReadScope(string? previous) : IDisposable
     {
         public void Dispose() => ProtectedRead.Value = previous;
     }
@@ -23,8 +27,8 @@ internal sealed class PlatformPolicyReadLoggerFactory(ILoggerFactory inner) : IL
     private sealed class SafeLogger(ILogger innerLogger) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull =>
-            ProtectedRead.Value
-                ? innerLogger.BeginScope("Platform Policy read database scope.")
+            ProtectedRead.Value is { } name
+                ? innerLogger.BeginScope($"{name} read database scope.")
                 : innerLogger.BeginScope(state);
 
         public bool IsEnabled(LogLevel logLevel) => innerLogger.IsEnabled(logLevel);
@@ -33,8 +37,8 @@ internal sealed class PlatformPolicyReadLoggerFactory(ILoggerFactory inner) : IL
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            if (ProtectedRead.Value)
-                innerLogger.Log(logLevel, eventId, "Platform Policy read database event.", null,
+            if (ProtectedRead.Value is { } name)
+                innerLogger.Log(logLevel, eventId, $"{name} read database event.", null,
                     static (message, _) => message);
             else
                 innerLogger.Log(logLevel, eventId, state, exception, formatter);

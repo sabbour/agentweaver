@@ -3,6 +3,7 @@ extern alias GatewayHost;
 using GatewayOwner = GatewayHost::Agentweaver.Gateway.GatewayOwner;
 using GatewayOptions = GatewayHost::Agentweaver.Gateway.GatewayOptions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Metadata;
@@ -47,7 +48,8 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
         Func<GatewayOwner, HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> ownerHandler,
         Action<HttpRequestMessage>? observeProjectsRequest = null,
         TimeSpan? ownerRequestTimeout = null,
-        Uri? environmentOwner = null)
+        Uri? environmentOwner = null,
+        ILoggerProvider? loggerProvider = null)
     {
         var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer);
         var audience = "https://api.test";
@@ -66,6 +68,11 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders();
+        if (loggerProvider is not null)
+            builder.Logging.AddProvider(loggerProvider);
+        var requestContext = new HttpContextAccessor();
+        builder.Services.AddSingleton<IHttpContextAccessor>(requestContext);
+        GatewayHost::Agentweaver.Gateway.GatewayEndpoints.SuppressTargetContextRequestLogs(builder.Services, requestContext);
         builder.Services.AddSingleton(options);
         GatewayHost::Agentweaver.Gateway.GatewayWebCors.AddGatewayWebCors(builder.Services, options);
         builder.Services.AddHttpClient(nameof(GatewayOwner.Projects), client =>
@@ -104,9 +111,12 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
                 };
             });
         builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler,
+            GatewayHost::Agentweaver.Gateway.GatewayAuthorizationResultHandler>();
 
         var app = builder.Build();
         app.UseRouting();
+        GatewayHost::Agentweaver.Gateway.GatewayEndpoints.UseTargetContextGuard(app);
         app.UseCors();
         app.UseAuthentication();
         app.UseAuthorization();

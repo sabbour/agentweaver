@@ -371,6 +371,7 @@ var dbOptions = app.Services.GetRequiredService<DbContextOptions<ProjectsConfigD
 await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
 await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 app.UseRouting();
+app.UseTargetContextNoStore();
 app.UseModelProviderDraftNoStore();
 app.UseModelProviderCredentialPublicationNoStore();
 if (platformPolicySourceEnabled)

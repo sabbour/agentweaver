@@ -1,0 +1,225 @@
+{
+  "baselineCommit": "8a86c5fd2705730415a41890499fba402ac57c5f",
+  "operation": {
+    "operationId": "getAuthorizationContext",
+    "summary": "Read the caller's current authorization context",
+    "description": "Owner: Projects. The Gateway forwards the validated bearer and does not infer identity from request bodies or caller-controlled identity headers. Owner authorization and JSON contracts remain authoritative.",
+    "security": [
+      {
+        "Bearer": []
+      }
+    ],
+    "parameters": [
+      {
+        "name": "X-Agentweaver-Tenant",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ],
+    "requestBody": null,
+    "responses": {
+      "default": {
+        "description": "Owner-defined status and response are passed through unchanged, including structured errors."
+      },
+      "401": {
+        "description": "The access token is missing, invalid, or expired.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "403": {
+        "description": "The Gateway or owning service denied the request.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "502": {
+        "description": "The owner is unavailable, redirected, or returned an invalid contract.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "504": {
+        "description": "The finite owner request timed out.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "200": {
+        "description": "Owner response; returned by the owning service.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProjectAuthorizationContext"
+            }
+          }
+        }
+      }
+    },
+    "x-agentweaver-owner": "Projects",
+    "x-agentweaver-owner-path": "/api/authorization/context",
+    "x-agentweaver-accepted-only": false,
+    "x-agentweaver-stream": null,
+    "x-agentweaver-max-request-body-bytes": null,
+    "x-agentweaver-max-response-bytes": null,
+    "x-agentweaver-mcp-excluded": false
+  },
+  "schemas": {
+    "Problem": {
+      "type": "object",
+      "required": [
+        "title",
+        "status",
+        "code"
+      ],
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        }
+      }
+    },
+    "ProjectAuthorizationContext": {
+      "type": "object",
+      "required": [
+        "contractVersion",
+        "issuer",
+        "actorId",
+        "tenantId",
+        "membershipRevision",
+        "boundProjectId",
+        "boundRunId",
+        "effectiveAuthority"
+      ],
+      "properties": {
+        "contractVersion": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "actorId": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "membershipRevision": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "boundProjectId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "boundRunId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effectiveAuthority": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/EffectiveProjectAuthorization"
+          }
+        }
+      }
+    },
+    "EffectiveProjectAuthorization": {
+      "type": "object",
+      "required": [
+        "resourceType",
+        "resourceId",
+        "permissions"
+      ],
+      "properties": {
+        "resourceType": {
+          "type": "string",
+          "enum": [
+            "platform",
+            "tenant",
+            "project"
+          ]
+        },
+        "resourceId": {
+          "type": "string"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ProjectAuthorizationPermissionGrant"
+          }
+        }
+      }
+    },
+    "ProjectAuthorizationPermissionGrant": {
+      "type": "object",
+      "required": [
+        "permission",
+        "roleRevision"
+      ],
+      "properties": {
+        "permission": {
+          "type": "string",
+          "enum": [
+            "readProjects",
+            "writeProjects",
+            "createProjects",
+            "readRunSelection",
+            "acceptRunSelection",
+            "accessPrivateKnowledge",
+            "readPlatformRuntimeDefaults",
+            "writePlatformRuntimeDefaults"
+          ]
+        },
+        "roleRevision": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
+  }
+}

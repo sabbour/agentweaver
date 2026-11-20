@@ -55,6 +55,13 @@ grants. They use fixture receipts and do not write to Key Vault or call Projects
 
 ## Test model-provider Draft routes
 
+Run the target-context authorization, PostgreSQL race, schema, and proxy tests:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayTargetContext"
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayOpenApiParityTests"
+```
+
 Run the reference reservation, authority-race, and migration tests with the
 disposable PostgreSQL fixture:
 
@@ -90,13 +97,14 @@ disposable PostgreSQL:
 
 ```powershell
 dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~InstallationIdentity|FullyQualifiedName~InstallationPinRejects|FullyQualifiedName~LegacyReservationDoesNotAcquire|FullyQualifiedName~MissingInstallationBlocks|FullyQualifiedName~UnreadableInstallation|FullyQualifiedName~InternalDraftCallsCannotBypassInstallationPinValidation|FullyQualifiedName~RuntimeCannotInsertMissingOrForeign|FullyQualifiedName~RuntimeGrantPlanRejectsMutatedInstallationGuardSource|FullyQualifiedName~InstallationRekeyAndCreate|FullyQualifiedName~ConflictRetryRechecksInstallation|FullyQualifiedName~NewOwnerRejectsPreIdentitySchema|FullyQualifiedName~FailedIdentityMigrationRollsBack|FullyQualifiedName~ModelProviderDraftReference|FullyQualifiedName~PublicModelProviderDraftNamedDatabaseConflict|FullyQualifiedName~OtherDatabaseCheckViolations"
-dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayRawReferencePin|FullyQualifiedName~GatewayForwardsThePinToTheS1StrictRequestContract"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayRawReferencePin|FullyQualifiedName~GatewayS1OwnerRejectsPinsAndPreservesReplayAndAccessChecks"
 ```
 
 These tests check migration retention and rollback, restricted runtime grants,
 reference pins through the Gateway, legacy and fork receipts, restore snapshots,
-rekey lock ordering, and owner restart without singleton read access. The S1 request-contract fixture checks forwarding
-against the earlier strict JSON shape.
+rekey lock ordering, and owner restart without singleton read access. The S1
+compatibility test runs the historical Projects owner through the production
+Gateway and checks reference creation and replay.
 
 The local database-free tests do not prove owner persistence or current
 authorization against PostgreSQL.

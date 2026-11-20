@@ -51,6 +51,7 @@ public static class ProjectConfigEndpoints
         this IEndpointRouteBuilder app,
         bool enableBrokerRunBinding = false)
     {
+        app.MapTargetContext();
         var authorization = app.MapGroup("/api/authorization").RequireAuthorization();
         authorization.MapGet("/context", async (
             HttpContext context,

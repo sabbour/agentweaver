@@ -35,6 +35,11 @@ head. The client reloads before it makes another edit.
 Platform create can reserve an exact provider reference. The default-off
 `ProjectsConfig:ProviderReferenceReservationsEnabled` switch controls new
 reservations. Every reference create pins the Projects database namespace UUID.
+An authorized unbound PlatformAdmin reads that UUID through the separate
+target-context route. The read locks current membership and PlatformAdmin
+authority, then projects freshly read role assignments and reads the namespace
+in the same transaction. The UUID identifies the Projects database, not a
+tenant or deployment, and the read grants no later write authority.
 Under the provider-create advisory lock, Projects locks current PlatformAdmin
 authority and reads the UUID before it checks a receipt. A matching new
 reservation stores that UUID with the head and revision in one transaction.
@@ -53,6 +58,13 @@ sequenceDiagram
     participant Gateway
     participant Projects as Projects & Config
     participant DB as PostgreSQL
+    Client->>Gateway: GET authorized target context
+    Gateway->>Projects: Forward bearer and tenant selector
+    Projects->>DB: Lock and recheck membership and PlatformAdmin
+    Projects->>DB: Read current grants and database namespace
+    Projects-->>Gateway: Commit and return no-store context
+    Gateway->>Gateway: Validate context and caller binding
+    Gateway-->>Client: Return namespace ID
     Client->>Gateway: POST or PUT with operationId and expectedRevision
     Gateway->>Projects: Forward bearer, tenant selector, metadata, and pin
     Projects->>Projects: Check current scope, membership, role, and binding
@@ -361,6 +373,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
+| `GET /api/authorization/target-context` | Return the Projects database namespace and fresh effective authority to a current unbound PlatformAdmin with `api.read`. |
 | `GET /api/authorization/projects/{projectId}/model-pricing-search` | Check `api.read`, reject conflicting project or run bindings, and allow only current PlatformAdmin or exact Owner authority for the requested project. Returns `204` with `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}/skill-marketplaces/definitions` | List suggested marketplaces and the matching active source, if any. |
 | `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |

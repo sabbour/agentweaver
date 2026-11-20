@@ -967,6 +967,45 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         var runClaims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims;
         Assert.Contains(runClaims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
         Assert.Contains(runClaims, claim => claim.Type == "run_id" && claim.Value == RunId);
+        using (var ownerHandler = new HttpMessageInvoker(projects.CreateHandler()))
+        {
+            var forwarded = 0;
+            await using var targetGateway = GatewayProductionResourceServer.Start(
+                new X509SecurityKey(certificate), (request, cancellationToken) =>
+                {
+                    Interlocked.Increment(ref forwarded);
+                    return ownerHandler.SendAsync(request, cancellationToken);
+                }, identityAudience: "https://api.test");
+            const string targetPath = "/api/v1/authorization/target-context";
+            using var target = await SendAsync(targetGateway.Client, HttpMethod.Get, targetPath,
+                platformReadOnlyToken, [TenantId]);
+            Assert.Equal(HttpStatusCode.OK, target.StatusCode);
+            AssertNoStore(target);
+            using var targetBody = JsonDocument.Parse(await target.Content.ReadAsStringAsync());
+            Assert.Equal(platformReadOnlySubject, targetBody.RootElement.GetProperty("actorId").GetString());
+            Assert.NotEqual(Guid.Empty, targetBody.RootElement.GetProperty("installationId").GetGuid());
+            Assert.Equal(1, forwarded);
+
+            var targetWrongAudience = await IssueTokenForAudienceBrokerAsync(
+                "https://other-api.test/", "target-context-wrong-audience");
+            foreach (var (token, status, code) in new[]
+            {
+                (runToken, HttpStatusCode.Forbidden, "target_context_forbidden"),
+                (targetWrongAudience, HttpStatusCode.Unauthorized, "authentication_required"),
+            })
+            {
+                using var denied = await SendAsync(targetGateway.Client, HttpMethod.Get, targetPath,
+                    token, [TenantId]);
+                Assert.Equal(status, denied.StatusCode);
+                AssertNoStore(denied);
+                Assert.Equal("nosniff", denied.Headers.GetValues("X-Content-Type-Options").Single());
+                Assert.Equal($"{{\"type\":\"about:blank\",\"title\":\"{code}\",\"status\":{(int)status},\"code\":\"{code}\"}}",
+                    await denied.Content.ReadAsStringAsync());
+                if (status == HttpStatusCode.Unauthorized)
+                    Assert.Equal("Bearer", denied.Headers.WwwAuthenticate.Single().Scheme);
+            }
+            Assert.Equal(1, forwarded);
+        }
         using var runContextResponse = await SendAsync(
             projects.Client, HttpMethod.Get, "/api/authorization/context", runToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, runContextResponse.StatusCode);
