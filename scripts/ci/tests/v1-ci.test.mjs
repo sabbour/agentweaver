@@ -10,6 +10,51 @@ import { suites } from '../../coverage/dotnet.mjs';
 
 const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
 
+test('image CI restores the Projects Config Linux lock exactly as its Dockerfile does', () => {
+  const ci = workflow.replace(/\r\n/g, '\n');
+  const dockerfile = readFileSync(new URL('../../../services/projects-config/Agentweaver.Projects.Config/Dockerfile', import.meta.url), 'utf8');
+  const command = 'dotnet restore services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj --runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true';
+  const guard = '      - name: Restore locked Projects Config Linux dependencies\n        run: ' + command + '\n';
+  const build = '      - name: Build foundation\n        run: dotnet build Agentweaver.slnx --no-restore --configuration Release\n';
+  const verify = (ci, docker) => {
+    const steps = parse(ci).jobs.images.steps;
+    const index = steps.findIndex((step) => step.name === 'Build foundation');
+    assert.ok(index >= 0);
+    assert.equal(steps[index].run, 'dotnet build Agentweaver.slnx --no-restore --configuration Release');
+    assert.deepEqual(steps[index + 1], { name: 'Restore locked Projects Config Linux dependencies', run: command });
+    assert.equal(steps[index + 2].name, 'Build unpublished Foundation Probe image and source receipt');
+    const restore = docker.match(/^RUN (dotnet restore .+) && \\$/m);
+    assert.ok(restore);
+    assert.equal(restore[1], command);
+  };
+  verify(ci, dockerfile);
+  const mutate = (source, before, after) => {
+    assert.ok(source.includes(before), before);
+    assert.notEqual(before, after);
+    return source.replace(before, after);
+  };
+  for (const [before, after] of [
+    [guard, ''],
+    [command, command.replace('--runtime linux-x64', '--runtime linux-arm64')],
+    [command, command.replace('--locked-mode', '')],
+    [command, command.replace('-p:AgentweaverUseLinuxX64LockFile=true', '')],
+    [command, command.replace('Agentweaver.Projects.Config.csproj', 'Other.csproj')],
+    [build + guard, guard + build],
+  ]) {
+    const changedWorkflow = mutate(ci, before, after);
+    assert.throws(() => verify(changedWorkflow, dockerfile));
+  }
+  for (const changed of [
+    command.replace('--runtime linux-x64', '--runtime linux-arm64'),
+    command.replace('--locked-mode', ''),
+    command.replace('-p:AgentweaverUseLinuxX64LockFile=true', ''),
+    command.replace('Agentweaver.Projects.Config.csproj', 'Other.csproj'),
+  ]) {
+    const changedDockerfile = mutate(dockerfile, command, changed);
+    assert.throws(() => verify(ci, changedDockerfile));
+  }
+});
+
 test('v1 required workflows retain their PR triggers and job gates', () => {
   const foundation = parse(workflow);
   const docs = parse(readFileSync(new URL('../../../.github/workflows/v1-docs-ci.yml', import.meta.url), 'utf8'));
@@ -46,6 +91,9 @@ test('source, lockfile, Docker, browser and harness changes select all dependent
     assert.equal(result.web, true, path);
     assert.equal(result.images, true, path);
   }
+  const projectsLinuxLock = classify(['services/projects-config/Agentweaver.Projects.Config/packages.linux-x64.lock.json']);
+  assert.equal(projectsLinuxLock.images, true);
+  assert.equal(projectsLinuxLock.dotnet, true);
   assert.equal(classify(['apps/web/src/v1/test.ts']).dotnet, true);
   assert.equal(classify(['apps/web/src/v1/test.ts']).node, true);
   assert.equal(classify(['services/agenthost/Agentweaver.AgentHost/BuildTestOutputCollectorProgram.cs']).node, true);
