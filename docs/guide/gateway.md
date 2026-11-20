@@ -135,6 +135,14 @@ owner response, and returns it with `Cache-Control: no-store`. Treat the
 response as current display context, not a grant. Owners recheck authorization
 for each protected operation.
 
+An unbound current PlatformAdmin with `api.read` can read the Projects database
+namespace through `GET /api/v1/authorization/target-context`. The Gateway
+forwards the same bearer and optional tenant selector, validates the response,
+and returns a no-store context. Projects rechecks authority and the namespace
+pin when a client later creates a reference-bearing Draft. Keep reference
+traffic fenced until every reachable Projects owner enforces the pin and the
+Gateway forwards it.
+
 ## Read project configuration choices
 
 Use

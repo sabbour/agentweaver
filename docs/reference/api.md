@@ -361,6 +361,7 @@ Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 | GET | `/openapi/v1.json` | Public | OpenAPI 3.1 route and schema catalog. |
 | GET | `/agents/agentweaver.agent.md` | Public | Operator agent definition as `text/markdown`; excluded from OpenAPI and the MCP catalog. |
 | GET | `/api/v1/authorization/context` | Bearer; `api.read`, non-purpose token | Fresh Projects actor, tenant, binding, and effective authority. |
+| GET | `/api/v1/authorization/target-context` | Bearer; `api.read`, unbound current PlatformAdmin | Read the authorized Projects database namespace ID and current effective authority. |
 | GET | `/health/live` | Public | Process liveness. |
 | GET | `/health/ready` | Public | Gateway host readiness. |
 
@@ -677,6 +678,7 @@ revision, actor, and timestamp. They never include access tokens or secrets.
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/api/authorization/context` | Bearer; `api.read`, non-purpose token | Read current authority. | `/api/v1/authorization/context` |
+| GET | `/api/authorization/target-context` | Bearer; `api.read`, unbound current PlatformAdmin | Read the Projects database namespace ID and current effective authority. | `/api/v1/authorization/target-context` |
 | GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | `/api/v1/casting/templates` |
 | GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
 | GET | `/api/blueprints` | Bearer; any signed-in caller | List built-in blueprints with their availability. | No |

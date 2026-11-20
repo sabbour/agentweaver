@@ -19,6 +19,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 internal sealed class GatewayProductionResourceServer : IAsyncDisposable
 {
+    private static readonly object ConfigurationLock = new();
     private readonly ProductionGatewayFactory _factory;
 
     private GatewayProductionResourceServer(ProductionGatewayFactory factory, HttpClient client)
@@ -47,21 +48,25 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? orchestratorOwner = null,
         string identityAudience = "https://api.test/")
     {
-        var factory = new ProductionGatewayFactory(
-            signingKey, projectsOwner, eventsOwner, knowledgeOwner, ownerRequestTimeoutSeconds, observeSseData,
-            orchestratorOwner, identityAudience);
-        try
+        lock (ConfigurationLock)
         {
-            var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+            var factory = new ProductionGatewayFactory(
+                signingKey, projectsOwner, eventsOwner, knowledgeOwner, ownerRequestTimeoutSeconds, observeSseData,
+                orchestratorOwner, identityAudience);
+            try
             {
-                BaseAddress = new Uri("https://gateway.test"),
-            });
-            return new GatewayProductionResourceServer(factory, client);
-        }
-        catch
-        {
-            factory.Dispose();
-            throw;
+                var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+                {
+                    BaseAddress = new Uri("https://gateway.test"),
+                });
+                factory.RestoreEnvironment();
+                return new GatewayProductionResourceServer(factory, client);
+            }
+            catch
+            {
+                factory.Dispose();
+                throw;
+            }
         }
     }
 

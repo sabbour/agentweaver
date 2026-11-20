@@ -82,6 +82,7 @@ internal static partial class GatewayOpenApi
             ["readWorkspaceRepositoryTree"] = C(null, "SourceControlWorkspaceTree", "200"),
             ["readWorkspaceRepositoryFile"] = C(null, "SourceControlWorkspaceFile", "200"),
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
+            ["getAuthorizationTargetContext"] = C(null, "AuthorizationTargetContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
             ["generateProjectWorkflow"] = C(
@@ -425,6 +426,24 @@ internal static partial class GatewayOpenApi
             responses["502"] = DraftErrorResponse("Projects & Config is unavailable or returned an invalid response.");
             responses["504"] = DraftErrorResponse("The Projects & Config request timed out.");
         }
+        if (route.OperationId == "getAuthorizationTargetContext")
+        {
+            responses.Remove("default");
+            foreach (var status in new[] { "400", "401", "403", "502", "503", "504" })
+                responses[status] = new
+                {
+                    description = "Static target-context error.",
+                    content = new Dictionary<string, object>
+                    {
+                        ["application/problem+json"] = new { schema = Ref("AuthorizationTargetContextError") },
+                    },
+                    headers = new Dictionary<string, object>
+                    {
+                        ["Cache-Control"] = new { schema = new { type = "string", example = "no-store" } },
+                        ["X-Content-Type-Options"] = new { schema = new { type = "string", example = "nosniff" } },
+                    },
+                };
+        }
         foreach (var status in contract.SuccessStatuses)
         {
             responses[status] = status == "204"
@@ -453,6 +472,7 @@ internal static partial class GatewayOpenApi
                         "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                         "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
+                        route.OperationId == "getAuthorizationTargetContext" ||
                         IsModelProviderDraftRoute(route.OperationId)) && status == "200")
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
@@ -464,6 +484,8 @@ internal static partial class GatewayOpenApi
                                         {
                                             "readExecutionPlan" =>
                                                 "Execution-plan responses are not cacheable.",
+                                            "getAuthorizationTargetContext" =>
+                                                "Target-context responses are not cacheable.",
                                             "getProjectAgentHistory" =>
                                                 "Private project agent history responses are not cacheable.",
                                             "getProjectConfigurationChoices" =>
@@ -879,7 +901,13 @@ else if (route.OperationId is
             $"Owner: {route.Owner}. The Gateway forwards the validated bearer and does not infer identity " +
             "from request bodies or caller-controlled identity headers. Owner authorization and JSON " +
             "contracts remain authoritative.";
-        if (route.OperationId is "listRunEnvironments" or "listEnvironmentWorkspaceVolumes")
+        if (route.OperationId == "getAuthorizationTargetContext")
+        {
+            description +=
+                " Requires api.read and an unbound current PlatformAdmin. Returns the Projects database namespace " +
+                "and fresh effective authority. Rejects a query or body and returns static errors.";
+        }
+        else if (route.OperationId is "listRunEnvironments" or "listEnvironmentWorkspaceVolumes")
         {
             description +=
                 " Discovery requires current Projects WriteProjects authority and the " +
@@ -1698,6 +1726,30 @@ else if (route.OperationId is
             ("contractVersion", Int()), ("issuer", Str()), ("actorId", Str()), ("tenantId", Str()),
             ("membershipRevision", Int()), ("boundProjectId", NullableStr()), ("boundRunId", NullableStr()),
             ("effectiveAuthority", Arr(Ref("EffectiveProjectAuthorization")))),
+        ["AuthorizationTargetContext"] = StrictObj(
+            ["contractVersion", "issuer", "actorId", "tenantId", "membershipRevision", "boundProjectId",
+                "boundRunId", "effectiveAuthority", "installationId"],
+            ("contractVersion", new { type = "integer", @const = 1 }),
+            ("issuer", new { type = "string", minLength = 1 }),
+            ("actorId", new { type = "string", minLength = 1 }),
+            ("tenantId", new { type = "string", minLength = 1 }),
+            ("membershipRevision", new { type = "integer", format = "int64", minimum = 1 }),
+            ("boundProjectId", new { type = "null" }), ("boundRunId", new { type = "null" }),
+            ("effectiveAuthority", Arr(Ref("TargetContextEffectiveAuthority"))),
+            ("installationId", new { type = "string", format = "uuid", pattern = "^(?!00000000-0000-0000-0000-000000000000(?![\\s\\S]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])" })),
+        ["TargetContextEffectiveAuthority"] = StrictObj(
+            ["resourceType", "resourceId", "permissions"],
+            ("resourceType", Enum("platform", "tenant", "project")),
+            ("resourceId", new { type = "string", minLength = 1 }),
+            ("permissions", Arr(Ref("TargetContextPermission")))),
+        ["TargetContextPermission"] = StrictObj(["permission", "roleRevision"],
+            ("permission", Enum("readProjects", "writeProjects", "createProjects", "readRunSelection",
+                "acceptRunSelection", "accessPrivateKnowledge", "readPlatformRuntimeDefaults",
+                "writePlatformRuntimeDefaults", "cancelRun")),
+            ("roleRevision", new { type = "integer", format = "int64", minimum = 1 })),
+        ["AuthorizationTargetContextError"] = StrictObj(["type", "title", "status", "code"],
+            ("type", new { type = "string", @const = "about:blank" }),
+            ("title", Str()), ("status", Int()), ("code", Str())),
         ["EffectiveProjectAuthorization"] = Obj(
             ["resourceType", "resourceId", "permissions"],
             ("resourceType", Enum("platform", "tenant", "project")), ("resourceId", Str()),

@@ -3,12 +3,89 @@ using System.Collections.Immutable;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Gateway;
 
 /// <summary>Maps the Gateway's health checks, auth flows, versioned proxies, and route fallback.</summary>
 public static class GatewayEndpoints
 {
+    private static bool IsTargetContextPath(PathString path) => string.Equals(
+        path.Value?.TrimEnd('/'), "/api/v1/authorization/target-context", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Excludes target-context request paths from hosting diagnostics.</summary>
+    public static void SuppressTargetContextRequestLogs(IServiceCollection services, IHttpContextAccessor accessor) =>
+        services.PostConfigure<LoggerFilterOptions>(options =>
+        {
+            bool Allowed(string? category) =>
+                category != "Microsoft.AspNetCore.Hosting.Diagnostics" ||
+                accessor.HttpContext is not { } context || !IsTargetContextPath(context.Request.Path);
+            for (var index = 0; index < options.Rules.Count; index++)
+            {
+                var rule = options.Rules[index];
+                var original = rule.Filter;
+                options.Rules[index] = new LoggerFilterRule(rule.ProviderName, rule.CategoryName, rule.LogLevel,
+                    (provider, category, level) =>
+                        Allowed(category) && (original is null || original(provider, category, level)));
+            }
+            options.Rules.Insert(0, new LoggerFilterRule(null, null, null,
+                (_, category, _) => Allowed(category)));
+        });
+
+    /// <summary>Protects target-context responses before authentication and routing failures.</summary>
+    public static IApplicationBuilder UseTargetContextGuard(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            if (!IsTargetContextPath(context.Request.Path))
+            {
+                await next(context).ConfigureAwait(false);
+                return;
+            }
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            try
+            {
+                var preflight = HttpMethods.IsOptions(context.Request.Method) &&
+                    context.Request.Headers.ContainsKey("Origin") &&
+                    context.Request.Headers.ContainsKey("Access-Control-Request-Method");
+                if ((!HttpMethods.IsGet(context.Request.Method) && !preflight) ||
+                    context.Request.Query.Count != 0 ||
+                    context.Request.ContentLength is > 0 ||
+                    context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true)
+                {
+                    await Results.Json(new
+                    {
+                        type = "about:blank",
+                        title = "request_shape_invalid",
+                        status = 400,
+                        code = "request_shape_invalid",
+                    }, statusCode: 400, contentType: "application/problem+json").ExecuteAsync(context)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                await next(context).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                if (context.Response.HasStarted)
+                    context.Abort();
+                else
+                    await Results.Json(new
+                    {
+                        type = "about:blank",
+                        title = "owner_unavailable",
+                        status = 502,
+                        code = "owner_unavailable",
+                    }, statusCode: 502, contentType: "application/problem+json").ExecuteAsync(context)
+                        .ConfigureAwait(false);
+            }
+        });
+
     /// <summary>Maps explicit routes from the public surface to their authoritative owner APIs.</summary>
     public static IEndpointRouteBuilder MapGatewayEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -269,7 +346,12 @@ public static class GatewayEndpoints
             }
             else
             {
-                endpoint = route.OperationId == "getAuthorizationContext"
+                endpoint = route.OperationId == "getAuthorizationTargetContext"
+                    ? endpoints.MapGet(
+                        route.PublicPath,
+                        (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                            owner.ProxyAuthorizationTargetContextAsync(context, route, cancellationToken))
+                    : route.OperationId == "getAuthorizationContext"
                     ? endpoints.MapGet(
                         route.PublicPath,
                         (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
@@ -294,10 +376,12 @@ public static class GatewayEndpoints
                 .WithName(route.OperationId)
                 .WithSummary(route.Summary)
                 .WithDescription(
-                    $"Delegates to the {route.Owner} owner API without changing its response status or JSON body. " +
-                    (route.AcceptsOnly
-                        ? "An accepted response means the owner accepted work; it does not mean that work completed."
-                        : "The owner remains authoritative for request validation and current resource authorization."));
+                    route.OperationId == "getAuthorizationTargetContext"
+                        ? "Validates the Projects database identity and returns static errors."
+                        : $"Delegates to the {route.Owner} owner API without changing its response status or JSON body. " +
+                          (route.AcceptsOnly
+                            ? "An accepted response means the owner accepted work; it does not mean that work completed."
+                            : "The owner remains authoritative for request validation and current resource authorization."));
             if (route.MaximumRequestBodyBytes is { } maximumRequestBodyBytes)
                 endpoint.WithMetadata(new RequestSizeLimitAttribute(maximumRequestBodyBytes));
         }
@@ -336,7 +420,11 @@ public sealed class GatewayAuthorizationResultHandler : IAuthorizationMiddleware
         var statusCode = authorizeResult.Challenged
             ? StatusCodes.Status401Unauthorized
             : StatusCodes.Status403Forbidden;
-        var code = authorizeResult.Challenged ? "unauthenticated" : "forbidden";
+        var targetContext = context.GetEndpoint()?.Metadata.GetMetadata<IEndpointNameMetadata>()?.EndpointName ==
+            "getAuthorizationTargetContext";
+        var code = targetContext
+            ? authorizeResult.Challenged ? "authentication_required" : "target_context_forbidden"
+            : authorizeResult.Challenged ? "unauthenticated" : "forbidden";
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/problem+json";
         context.Response.Headers.CacheControl = "no-store";

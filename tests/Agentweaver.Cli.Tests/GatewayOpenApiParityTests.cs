@@ -46,6 +46,13 @@ public sealed class GatewayOpenApiParityTests
         JsonObject discovered = await api.DiscoverAsync(CancellationToken.None);
 
         Assert.True(JsonNode.DeepEquals(emitted, discovered));
+        JsonObject targetContext = FindOperation(discovered, "getAuthorizationTargetContext");
+        Assert.True(JsonNode.DeepEquals(targetContext,
+            discovered["paths"]?["/api/v1/authorization/target-context"]?["get"]));
+        Assert.Equal("#/components/schemas/AuthorizationTargetContext",
+            targetContext["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                .GetValue<string>());
+        Assert.True(targetContext["x-agentweaver-mcp-excluded"]?.GetValue<bool>());
         Assert.Equal(4096, CursorMaximum(FindOperation(discovered, "listProjectNativeAcsPolicies")));
         Assert.Equal(2048, CursorMaximum(FindOperation(discovered, "listProjectNativeAcsPolicyRevisions")));
         Assert.Equal(2048, CursorMaximum(FindOperation(discovered, "listPlatformNativeAcsPolicyRevisions")));
