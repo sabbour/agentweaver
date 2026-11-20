@@ -143,6 +143,8 @@ jobs:
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation
         run: dotnet build Agentweaver.slnx --no-restore --configuration Release
+      - name: Restore locked Projects Config Linux dependencies
+        run: dotnet restore services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj --runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true
       - name: Build unpublished Foundation Probe image and source receipt
         run: node scripts/azure/build-foundation-probe-image.mjs
       - name: Render Foundation Probe acceptance Job and egress policy

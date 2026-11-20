@@ -697,6 +697,18 @@ prompt-capacity verification; no images are published by this workflow.
 Web, AgentHost, deployment and .NET build/lock inputs also select Node tooling
 because its executable Linux contracts consume those inputs.
 
+The image job checks the Projects & Config Linux x64 lock after the foundation
+build. To regenerate and verify the lock from the repository root, run:
+
+```powershell
+dotnet restore services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj --runtime linux-x64 --force-evaluate -p:AgentweaverUseLinuxX64LockFile=true
+dotnet restore services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj --runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true
+dotnet restore Agentweaver.slnx --locked-mode
+```
+
+Inspect every changed lock file after regeneration. Keep unrelated lock changes
+out of the change.
+
 Each .NET project runs on its own runner. The Broker suite has four
 deterministic method shards, derived from the built assembly's VSTest
 discovery. All theory cases for a method stay together, including methods in
