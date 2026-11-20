@@ -600,6 +600,11 @@ Gateway request bodies are limited to 64 KiB by default. The Knowledge import
 endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
 3 MiB.
 
+Platform and project BYOK provider draft list GET responses are limited to
+4 MiB; individual draft GET responses are limited to 32 KiB. The Gateway reads
+each response before sending it to the caller. If the response exceeds its
+limit, the Gateway returns `502` with `owner_response_too_large`.
+
 The canonical Platform Policy validation and write routes accept request
 bodies up to 5 MiB. All five Policy routes have a 5 MiB response limit. They
 forward the optional tenant selector, expose `Cache-Control`, and are not

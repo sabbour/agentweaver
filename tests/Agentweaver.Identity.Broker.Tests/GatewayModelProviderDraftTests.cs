@@ -335,10 +335,21 @@ public sealed class GatewayModelProviderDraftTests
     }
 
     [Theory]
-    [InlineData(4 * 1024 * 1024, HttpStatusCode.OK)]
-    [InlineData(4 * 1024 * 1024 + 1, HttpStatusCode.BadGateway)]
-    public async Task DeploymentBindingsBuffersActualChunkedOwnerResponseBeforeHeaders(int size, HttpStatusCode status)
+    [InlineData("/api/v1/platform/byok-deployment-bindings", 4 * 1024 * 1024, HttpStatusCode.OK)]
+    [InlineData("/api/v1/platform/byok-deployment-bindings", 4 * 1024 * 1024 + 1, HttpStatusCode.BadGateway)]
+    [InlineData("/api/v1/platform/byok-providers", 4 * 1024 * 1024, HttpStatusCode.OK)]
+    [InlineData("/api/v1/platform/byok-providers", 4 * 1024 * 1024 + 1, HttpStatusCode.BadGateway)]
+    [InlineData("/api/v1/platform/byok-providers/provider-a", 32 * 1024, HttpStatusCode.OK)]
+    [InlineData("/api/v1/platform/byok-providers/provider-a", 32 * 1024 + 1, HttpStatusCode.BadGateway)]
+    [InlineData("/api/v1/projects/project-a/byok-providers", 4 * 1024 * 1024, HttpStatusCode.OK)]
+    [InlineData("/api/v1/projects/project-a/byok-providers", 4 * 1024 * 1024 + 1, HttpStatusCode.BadGateway)]
+    [InlineData("/api/v1/projects/project-a/byok-providers/provider-a", 32 * 1024, HttpStatusCode.OK)]
+    [InlineData("/api/v1/projects/project-a/byok-providers/provider-a", 32 * 1024 + 1, HttpStatusCode.BadGateway)]
+    public async Task DraftGetsBufferActualChunkedOwnerResponseBeforeHeaders(string path, int size, HttpStatusCode status)
     {
+        var expectedBody = "{\"value\":\"" + new string('x', size - 12) + "\"}";
+        var bytes = Encoding.UTF8.GetBytes(expectedBody);
+        Assert.Equal(size, bytes.Length);
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
@@ -346,12 +357,10 @@ public sealed class GatewayModelProviderDraftTests
         owner.Run(async context =>
         {
             context.Response.ContentType = "application/json";
-            var chunk = new byte[16 * 1024];
-            Array.Fill(chunk, (byte)'x');
             for (var sent = 0; sent < size;)
             {
-                var count = Math.Min(chunk.Length, size - sent);
-                await context.Response.Body.WriteAsync(chunk.AsMemory(0, count));
+                var count = Math.Min(16 * 1024, size - sent);
+                await context.Response.Body.WriteAsync(bytes.AsMemory(sent, count));
                 await context.Response.Body.FlushAsync();
                 sent += count;
             }
@@ -365,15 +374,15 @@ public sealed class GatewayModelProviderDraftTests
             key, () => new ObservedChunkedHandler(() => chunked = true),
             (_, _, _) => throw new InvalidOperationException("The read must call Projects."),
             projectsOwner: address);
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/platform/byok-deployment-bindings");
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", CreateToken(key));
         request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
 
         using var response = await gateway.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        var body = await response.Content.ReadAsStringAsync();
         Assert.True(chunked);
         Assert.Equal(status, response.StatusCode);
         Assert.True(response.Headers.CacheControl?.NoStore);
+        var body = await response.Content.ReadAsStringAsync();
         if (status == HttpStatusCode.BadGateway)
         {
             Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
@@ -382,7 +391,7 @@ public sealed class GatewayModelProviderDraftTests
         }
         else
         {
-            Assert.Equal(new string('x', size), body);
+            Assert.Equal(expectedBody, body);
         }
     }
 

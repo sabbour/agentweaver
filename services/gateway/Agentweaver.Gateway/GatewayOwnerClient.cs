@@ -222,7 +222,7 @@ public sealed partial class GatewayOwnerClient(
             }
 
             byte[]? bufferedBody = null;
-            if (route.OperationId == "readPlatformByokDeploymentBindings" &&
+            if (IsModelProviderDraftGet(route) &&
                 !HttpMethods.IsHead(context.Request.Method) &&
                 response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.NotModified)
                 bufferedBody = await ReadBoundedAsync(response.Content, MaximumResponseBytes(route), timeout.Token)
