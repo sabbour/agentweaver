@@ -425,6 +425,9 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/authorization/context", "/api/authorization/context",
             "getAuthorizationContext", "Read the caller's current authorization context",
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/authorization/target-context", "/api/authorization/target-context",
+            "getAuthorizationTargetContext", "Read the authorized Projects database identity",
+            forwardTenantSelector: true, maximumResponseBytes: 64 * 1024, excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/platform/runtime-defaults",
             "/api/platform/runtime-defaults/",
             "getPlatformRuntimeDefaults", "Read platform runtime defaults",

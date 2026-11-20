@@ -34,6 +34,14 @@
     <ProjectReference Include="..\..\tools\Agentweaver.Cli\Agentweaver.Cli.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="Agentweaver.Projects.Config.S1">
+      <HintPath>Fixtures\Agentweaver.Projects.Config.S1.dll</HintPath>
+      <Aliases>OldProjectsConfig</Aliases>
+    </Reference>
+    <None Update="Fixtures\Agentweaver.Projects.Config.S1.deps.json"
+          TargetPath="Agentweaver.Projects.Config.S1.deps.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures\authorization-context-8a86c5fd.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures\S1-owner-provenance.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\deploy\k8s\runtime-configs\identity-broker-runtime-config.json"
           Link="runtime-configs\identity-broker-runtime-config.json"
           CopyToOutputDirectory="PreserveNewest" />

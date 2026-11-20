@@ -1,0 +1,18 @@
+{
+  "sourceCommit": "2d8606fa825e8e2d52f8d95e2f4066b148b78289",
+  "sourceTree": "6753d68e91a769ca26812c55ec7f4cc8a8d70028",
+  "sourceArchiveSha256": "C7FCD73BAA02F44DF1CA63AF4BD2D360D039E9DDF6586E379F141CE68BD7E23E",
+  "sourceArchiveContents": "All 5084 tracked files from the source tree.",
+  "sourceProject": "services\\projects-config\\Agentweaver.Projects.Config",
+  "sdk": "10.0.404",
+  "git": "2.56.0.windows.4",
+  "configuration": "Release",
+  "rebuild": "tests\\Agentweaver.Identity.Broker.Tests\\Fixtures\\rebuild-s1-owner.ps1",
+  "rebuildArgument": "BuildDirectory must name a new directory outside a Git worktree.",
+  "sourceLink": "Disabled; the source archive is built outside a Git worktree.",
+  "pathMap": "<extracted source directory>=/_/",
+  "assemblyName": "Agentweaver.Projects.Config.S1",
+  "assemblyNameChange": "Isolates the historical owner from the current owner in the test process.",
+  "assemblySha256": "2CD5DC42783273C48E2EE7BAC980CA727D8C1DDDFA1BD88E6CBCEEFAF533A3E4",
+  "dependenciesSha256": "D22722DE66978A5666432F4326A09072796339C9526D0923F214961E6873A31D"
+}

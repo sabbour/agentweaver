@@ -23,7 +23,8 @@ internal static class ModelProviderCredentialPublicationEndpoints
         {
             bool Allowed(string? category) =>
                 category != "Microsoft.AspNetCore.Hosting.Diagnostics" ||
-                accessor.HttpContext is not { } context || !IsLegacyPath(context.Request.Path);
+                accessor.HttpContext is not { } context ||
+                (!IsLegacyPath(context.Request.Path) && !AuthorizationTargetContext.IsPath(context.Request.Path));
             for (var index = 0; index < options.Rules.Count; index++)
             {
                 var rule = options.Rules[index];

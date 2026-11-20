@@ -3,6 +3,7 @@ extern alias GatewayHost;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Orchestrator.Core;
 using GatewayHost::Agentweaver.Gateway;
@@ -15,6 +16,57 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class GatewayBacklogOpenApiTests
 {
+    [Fact]
+    public async Task LegacyAuthorizationContextMatchesPreChangeEmittedContract()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call an owner."));
+        var document = JsonNode.Parse(await gateway.Client.GetStringAsync("/openapi/v1.json"))!;
+        var expected = JsonNode.Parse(await File.ReadAllTextAsync(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "authorization-context-8a86c5fd.json")))!;
+
+        JsonObject Contract(JsonNode source)
+        {
+            var operation = source["paths"]!["/api/v1/authorization/context"]!["get"]!;
+            var allSchemas = source["components"]!["schemas"]!;
+            var schemas = new JsonObject();
+            void Visit(JsonNode? node)
+            {
+                if (node is JsonObject obj)
+                {
+                    if (obj["$ref"]?.GetValue<string>() is { } reference &&
+                        reference.StartsWith("#/components/schemas/", StringComparison.Ordinal))
+                    {
+                        var name = reference["#/components/schemas/".Length..];
+                        if (!schemas.ContainsKey(name))
+                        {
+                            schemas[name] = allSchemas[name]!.DeepClone();
+                            Visit(allSchemas[name]);
+                        }
+                    }
+                    foreach (var item in obj) Visit(item.Value);
+                }
+                else if (node is JsonArray array)
+                    foreach (var item in array) Visit(item);
+            }
+            Visit(operation);
+            return new JsonObject { ["operation"] = operation.DeepClone(), ["schemas"] = schemas };
+        }
+
+        var baseline = new JsonObject
+        {
+            ["operation"] = expected["operation"]!.DeepClone(),
+            ["schemas"] = expected["schemas"]!.DeepClone(),
+        };
+        Assert.True(JsonNode.DeepEquals(baseline, Contract(document)),
+            "The emitted getAuthorizationContext operation or a referenced schema changed from 8a86c5fd.");
+        document["components"]!["schemas"]!["ProjectAuthorizationPermissionGrant"]!["properties"]!
+            ["permission"]!["enum"]!.AsArray().Add("changed");
+        Assert.False(JsonNode.DeepEquals(baseline, Contract(document)));
+    }
+
     [Fact]
     public async Task IssueSyncRoutesExposeSafeTypedSettingsAndGrantReceiptsNotTokens()
     {
@@ -261,9 +313,17 @@ public sealed class GatewayBacklogOpenApiTests
             case "string":
                 return value.ValueKind == JsonValueKind.String &&
                     (!schema.TryGetProperty("enum", out var values) ||
-                     values.EnumerateArray().Any(candidate => candidate.GetString() == value.GetString()));
+                     values.EnumerateArray().Any(candidate => candidate.GetString() == value.GetString())) &&
+                    (!schema.TryGetProperty("const", out var stringConstant) ||
+                     stringConstant.GetString() == value.GetString()) &&
+                    (!schema.TryGetProperty("minLength", out var minimumLength) ||
+                     value.GetString()!.Length >= minimumLength.GetInt32()) &&
+                    (!schema.TryGetProperty("pattern", out var pattern) ||
+                     System.Text.RegularExpressions.Regex.IsMatch(value.GetString()!, pattern.GetString()!));
             case "integer":
-                return value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out _);
+                return value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number) &&
+                    (!schema.TryGetProperty("const", out var integerConstant) || integerConstant.GetInt64() == number) &&
+                    (!schema.TryGetProperty("minimum", out var minimum) || number >= minimum.GetInt64());
             case "number":
                 return value.ValueKind == JsonValueKind.Number;
             case "boolean":

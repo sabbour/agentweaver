@@ -154,6 +154,9 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             }
             web.ConfigureServices(services =>
             {
+                var requestContext = new Microsoft.AspNetCore.Http.HttpContextAccessor();
+                services.AddSingleton<Microsoft.AspNetCore.Http.IHttpContextAccessor>(requestContext);
+                ModelProviderCredentialPublicationEndpoints.SuppressLegacyRequestLogs(services, requestContext);
                 services.AddRouting();
                 services.ConfigureHttpJsonOptions(json =>
                 {
@@ -164,9 +167,11 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                             System.Text.Json.JsonNamingPolicy.CamelCase));
                 });
                 services.AddSingleton(serviceDataSource);
-                services.AddDbContextFactory<ProjectsConfigDbContext>((_, options) =>
-                    options.UseNpgsql(serviceDataSource, npgsql => npgsql.MigrationsHistoryTable(
-                        "__ef_migrations_history", ProjectsConfigDbContext.Schema)));
+                services.AddSingleton<PlatformPolicyReadLoggerFactory>();
+                services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options) =>
+                    options.UseLoggerFactory(provider.GetRequiredService<PlatformPolicyReadLoggerFactory>())
+                        .UseNpgsql(serviceDataSource, npgsql => npgsql.MigrationsHistoryTable(
+                            "__ef_migrations_history", ProjectsConfigDbContext.Schema)));
                 services.AddSingleton(catalog);
                 services.AddSingleton(TimeProvider.System);
                 services.AddPlatformComponentCollector(new ConfigurationBuilder().Build());
@@ -267,6 +272,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             web.Configure(app =>
             {
                 app.UseRouting();
+                app.UseTargetContextNoStore();
                 app.UseModelProviderDraftNoStore();
                 app.UseAuthentication();
                 app.UseAuthorization();

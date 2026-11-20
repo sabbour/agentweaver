@@ -10,6 +10,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Limit each request body to 64 KiB. A route can set a different limit with RequestSizeLimit metadata.
 builder.WebHost.ConfigureKestrel(server => server.Limits.MaxRequestBodySize = 64 * 1024);
 var options = GatewayOptions.Read(builder.Configuration);
+var requestContext = new HttpContextAccessor();
+builder.Services.AddSingleton<IHttpContextAccessor>(requestContext);
+GatewayEndpoints.SuppressTargetContextRequestLogs(builder.Services, requestContext);
 
 builder.Logging.AddFilter("OpenIddict", LogLevel.Warning);
 builder.Logging.AddFilter("OpenIddict.Validation.OpenIddictValidationDispatcher", LogLevel.Warning);
@@ -53,6 +56,7 @@ builder.Services.AddAuthorization();
 // Authentication and authorization run before the explicit public route map.
 var app = builder.Build();
 app.UseRouting();
+app.UseTargetContextGuard();
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();

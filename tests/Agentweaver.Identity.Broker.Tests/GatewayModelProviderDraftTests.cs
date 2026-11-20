@@ -9,7 +9,6 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using GatewayHost::Agentweaver.Gateway;
 using ProjectsConfig::Agentweaver.Projects.Config;
@@ -182,81 +181,6 @@ public sealed class GatewayModelProviderDraftTests
         Assert.True(response.Headers.CacheControl?.NoStore);
         using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("Available", result.RootElement.GetProperty("state").GetString());
-    }
-
-    [Fact]
-    public async Task GatewayForwardsThePinToTheS1StrictRequestContract()
-    {
-        using var rsa = RSA.Create(2048);
-        var key = new RsaSecurityKey(rsa);
-        var operation = Guid.NewGuid();
-        var pin = Guid.NewGuid().ToString("D");
-        var bearer = CreateToken(key);
-        var seen = new List<string>();
-        await using var gateway = await GatewayResourceServer.StartAsync(
-            key, () => new DraftOwnerHandler(async (request, token) =>
-            {
-                var json = await request.Content!.ReadAsStringAsync(token);
-                seen.Add(json);
-                try
-                {
-                    var value = JsonSerializer.Deserialize<S1SaveBody>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web)
-                    {
-                        PropertyNameCaseInsensitive = false,
-                        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-                        MaxDepth = 16,
-                    });
-                    return new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(
-                            $$"""{"id":"byok-{{value!.OperationId:N}}","revision":1,"reference":"{{value.Reference}}"}""",
-                            Encoding.UTF8, "application/json"),
-                    };
-                }
-                catch (JsonException)
-                {
-                    return new HttpResponseMessage(HttpStatusCode.BadRequest)
-                    {
-                        Content = new StringContent(
-                            """{"code":"model_provider_draft_invalid_request"}""", Encoding.UTF8, "application/json"),
-                    };
-                }
-            }), (_, _, _) => throw new InvalidOperationException());
-        var prefix = $$"""{"operationId":"{{operation:D}}","expectedRevision":0,"name":"Model","type":"openai","base_url":"https://api.openai.com/v1","model":"test","reference":"Stable"}""";
-        async Task<HttpStatusCode> SendAsync(string body)
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/platform/byok-providers")
-            {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
-            request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
-            using var response = await gateway.Client.SendAsync(request);
-            return response.StatusCode;
-        }
-        var pinned = prefix[..^1] + $",\"targetInstallationId\":\"{pin}\"}}";
-        Assert.Equal(HttpStatusCode.BadRequest, await SendAsync(pinned));
-        Assert.Equal(pinned, Assert.Single(seen));
-        Assert.Equal(HttpStatusCode.OK, await SendAsync(prefix));
-        Assert.Equal(prefix, seen[1]);
-    }
-
-    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-    private sealed record S1SaveBody
-    {
-        public required Guid OperationId { get; init; }
-        public required long ExpectedRevision { get; init; }
-        public required string Name { get; init; }
-        public required string Type { get; init; }
-        [JsonPropertyName("base_url")] public required string BaseUrl { get; init; }
-        public required string Model { get; init; }
-        [JsonPropertyName("wire_api")] public string? WireApi { get; init; }
-        [JsonPropertyName("azure_api_version")] public string? AzureApiVersion { get; init; }
-        [JsonPropertyName("reasoning_efforts")] public string[]? ReasoningEfforts { get; init; }
-        [JsonPropertyName("prompt_capacity_tokens")] public int? PromptCapacityTokens { get; init; }
-        [JsonPropertyName("rate_card_id")] public string? RateCardId { get; init; }
-        [JsonPropertyName("rate_card_version")] public string? RateCardVersion { get; init; }
-        public string? Reference { get; init; }
     }
 
     [Theory]
@@ -497,7 +421,7 @@ public sealed class GatewayModelProviderDraftTests
 }
 
 [Collection("IdentityBrokerPostgres")]
-public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixture postgres)
+public sealed partial class GatewayModelProviderDraftPostgresTests(PostgresContainerFixture postgres)
 {
     [Fact]
     public async Task GatewayRawReferencePinSurvivesProxyAndRejectsAnotherProjectsDatabase()
@@ -536,6 +460,22 @@ public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixt
             signingKey, first.CreateHandler, (_, _, _) => throw new InvalidOperationException());
         await using var gatewayB = await GatewayResourceServer.StartAsync(
             signingKey, second.CreateHandler, (_, _, _) => throw new InvalidOperationException());
+        string readTarget;
+        using (var contextRequest = OwnerRequest(
+            HttpMethod.Get, "/api/v1/authorization/target-context", bearer, tenant))
+        using (var contextResponse = await gatewayA.Client.SendAsync(contextRequest))
+        {
+            Assert.Equal(HttpStatusCode.OK, contextResponse.StatusCode);
+            Assert.True(contextResponse.Headers.CacheControl?.NoStore);
+            using var context = JsonDocument.Parse(await contextResponse.Content.ReadAsStringAsync());
+            readTarget = context.RootElement.GetProperty("installationId").GetString()!;
+            Assert.Equal(a.Id, readTarget);
+        }
+        await using (var db = new ProjectsConfigDbContext(a.Options))
+        {
+            Assert.Equal(0, await db.ModelProviderDrafts.CountAsync());
+            Assert.Equal(0, await db.ModelProviderReferenceReservations.CountAsync());
+        }
         var operation = Guid.NewGuid();
         var id = "byok-" + operation.ToString("N");
         var reference = "Gateway-" + operation.ToString("N");
@@ -568,7 +508,7 @@ public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixt
         })
             await AssertReplyAsync(gatewayA, HttpMethod.Post, platformPath, body[..^1] + suffix,
                 HttpStatusCode.BadRequest, "model_provider_draft_invalid_request");
-        await AssertReplyAsync(gatewayB, HttpMethod.Post, platformPath, Pinned(a.Id),
+        await AssertReplyAsync(gatewayB, HttpMethod.Post, platformPath, Pinned(readTarget),
             HttpStatusCode.Conflict, "target_installation_mismatch");
         await using (var db = new ProjectsConfigDbContext(a.Options))
         {
@@ -582,7 +522,7 @@ public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixt
             Assert.False(await db.ModelProviderDraftRevisions.AnyAsync(row => row.OperationId == operation));
             Assert.False(await db.ModelProviderReferenceReservations.AnyAsync(row => row.OperationId == operation));
         }
-        using (var create = OwnerRequest(HttpMethod.Post, platformPath, bearer, tenant, Pinned(a.Id)))
+        using (var create = OwnerRequest(HttpMethod.Post, platformPath, bearer, tenant, Pinned(readTarget)))
         using (var response = await gatewayA.Client.SendAsync(create))
         {
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -1127,7 +1067,8 @@ public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixt
         string audience = "https://api.test",
         string? projectId = null,
         string? runId = null,
-        string? purpose = null)
+        string? purpose = null,
+        string? tenantAssertion = null)
     {
         var claims = new List<Claim>
         {
@@ -1140,6 +1081,8 @@ public sealed class GatewayModelProviderDraftPostgresTests(PostgresContainerFixt
             claims.Add(new Claim("run_id", runId));
         if (purpose is not null)
             claims.Add(new Claim("purpose", purpose));
+        if (tenantAssertion is not null)
+            claims.Add(new Claim("tenant_id", tenantAssertion));
         var token = new JwtSecurityToken(
             new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
             audience,

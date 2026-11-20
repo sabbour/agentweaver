@@ -64,6 +64,10 @@ pin with the Projects database namespace before it reads a receipt. A different
 pin returns `409 target_installation_mismatch`; a missing or unreadable
 namespace returns `503 model_provider_draft_unavailable`.
 
+The authorized target-context read returns this namespace as `installationId`.
+See [Projects & Config authorization context](#projects-config-authorization-context)
+for the read contract. The read does not authorize a later create.
+
 `ProjectsConfig:ProviderReferenceReservationsEnabled` defaults to `false`.
 When it is off, a new reference-bearing create returns
 `503 model_provider_draft_unavailable`; authorized, namespace-bound replays
@@ -705,6 +709,7 @@ returns `400`.
 | `GET /openapi/v1.json` | Anonymous live OpenAPI 3.1 route and error discovery. |
 | `GET /agents/agentweaver.agent.md` | Anonymous `text/markdown; charset=utf-8` download of the operator agent definition embedded in the Gateway. It is excluded from OpenAPI, so it is not an MCP tool, and it calls no owner. |
 | `GET /api/v1/authorization/context` | Fresh no-store Projects & Config context for the validated Broker bearer and optional tenant selector; no query parameters. The context is informational, not an authorization grant. |
+| `GET /api/v1/authorization/target-context` | Authorized Projects database namespace ID and fresh effective authority for an unbound current PlatformAdmin. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events` | Bounded replay from the committed Events journal. The owner remains responsible for current run authorization. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events/live` | SSE fan-out from committed Events pages. The Gateway rechecks exact run-bound `ReadProjects` authority before writing each event; each `id` is the Events journal cursor and is accepted on reconnect through `Last-Event-ID` or `cursor`. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/backlog/promotions/preview?rootSessionId={rootSessionId}` and `POST /api/v1/projects/{projectId}/runs/{runId}/backlog/promotions` | Orchestrator-owned confirmed work-plan preview and promotion. Both require current Coordination authority and the accepted run selection. These Gateway routes are not MCP tools; see [Plan promotion and task origin](./api.md#plan-promotion-and-task-origin). |
@@ -1887,12 +1892,42 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | Method and path | Contract |
 | --- | --- |
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
+| `GET /api/authorization/target-context` | Current unbound PlatformAdmin context and Projects database namespace ID. Requires `api.read` and an active selected tenant membership. |
 | `GET /api/authorization/projects/{projectId}/model-pricing-search` | Events-only current role check. Requires `api.read`, rejects conflicting project and run bindings, and returns `204` only for current PlatformAdmin or exact Owner authority on the requested project. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and matching run selection. After it confirms current membership and project visibility, a missing Orchestrator role returns `403 orchestrator_role_required`; a missing run selection returns `404 run_selection_not_found` after current membership, project visibility, and Orchestrator role checks. Other project and membership denials retain generic error codes. |
 | `GET /api/projects/{projectId}/runs/{runId}/spend-budgets` | Orchestrator-only read of `CurrentProjectSpendBudgets`. Requires `api.read`, the Orchestrator scope and current role, an exact project/run binding, and an accepted run selection. Resolves project-scope budgets from the current project and platform revisions, so a changed project budget applies to the next dispatch of every run. Returns `Cache-Control: no-store`. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
+
+The target-context route accepts no query parameters or request body. It selects
+the sole active membership, or the active membership named by a single
+`X-Agentweaver-Tenant` header. Signed tenant assertions must match the selected
+tenant. The route rejects purpose-, project-, and run-bound tokens.
+`projects.admin` is not required for this read.
+
+The version 1 response contains `issuer`, `actorId`, `tenantId`,
+`membershipRevision`, null `boundProjectId` and `boundRunId`,
+`effectiveAuthority`, and a nonempty lowercase UUID `installationId`.
+`installationId` identifies the Projects database namespace, not a tenant,
+cluster, deployment, OAuth client, or GitHub App. Tenants and clusters that
+share a Projects database share the namespace. Effective permissions reflect
+the caller's scopes; the list can be empty.
+
+Projects locks and rechecks the membership and PlatformAdmin assignment, then
+reads current grants and the namespace in the same transaction. The Gateway
+validates the bounded response against the caller's identity and tenant. Both
+routes return `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+Errors use a fixed `application/problem+json` body with `type`, `title`,
+`status`, and `code`. Unsupported methods, query parameters, and request bodies
+return `400 request_shape_invalid` before authentication;
+authentication failures return `401 authentication_required`; access failures
+return `403 target_context_forbidden`; an unavailable namespace returns
+`503 target_context_unavailable`. Gateway contract failures return
+`502 owner_contract_invalid`, transport failures return `502 owner_unavailable`,
+and timeouts return `504 owner_timeout`. The Gateway does not relay owner error
+bodies. Target-context request queries and database exception details are not
+logged.
 
 ## Platform components report
 
