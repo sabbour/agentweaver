@@ -1868,6 +1868,16 @@ Caller configure JSON cannot set these fields.
 
 An accepted revision-backed BYOK selection also carries its
 `ModelProviderBindingRevision` and immutable Events `RuntimeRateCardPin`.
+Both `PUT /api/projects/{projectId}/runs/{runId}/selection` and
+`PUT /api/projects/{projectId}/runs/{runId}/interactive-selection` lock the
+distinct slot-backed BYOK provider heads used by the primary and task selections
+in `provider_id` order (`FOR SHARE`) through commit. On a confirmed
+serialization failure (`40001`) or run-selection primary-key collision
+(`PK_project_run_selections`), Projects retries up to three attempts in a fresh
+transaction and rechecks current project, tenant, role, and binding authority
+before returning an exact-fingerprint replay; exhausting three attempts returns
+`409 Conflict`, and cancellation, unrelated errors, or unknown commit outcomes
+propagate without replaying the write.
 Orchestrator requests one `RuntimeRateCardAdmission` for each effective
 provider/model/effort pair before first dispatch. Events verifies the exact
 provider revision, model pin, and card content and provenance. The runtime

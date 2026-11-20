@@ -200,26 +200,40 @@ immutable revision saved by the original operation. See the
 
 ### Accept a run selection
 
-Before acceptance, you need an active project, current Orchestrator authority,
-configured platform defaults, and the current configuration revisions. The
-selection request is made by Orchestrator with a run ID and revisioned selection
-context.
+Both interactive and workflow run starts use the same serializable Projects &
+Config transaction. Before acceptance, you need an active project, current
+Orchestrator authority, configured platform defaults, and the current
+configuration revisions.
 
 1. The service starts a serializable transaction and locks current authority,
    project and platform heads, and the run ID.
-2. It rechecks the Orchestrator role. A new run requires an active project and
-   configured platform defaults.
-3. It selects the project model or platform default and checks that the
+2. It rechecks the Orchestrator role and current tenant membership. If a
+   selection already exists for the run ID, the service commits and returns the
+   saved snapshot only when the project and request fingerprint match.
+3. A new run requires an active project and configured platform defaults.
+4. It selects the project model or platform default and checks that the
    reference is available in the supplied context.
-4. `ProviderResolver` resolves candidates from the enabled platform catalog.
+5. `ProviderResolver` resolves candidates from the enabled platform catalog.
    Project-supplied provider override fields do not participate in resolution.
-   For a slot-backed BYOK selection, Projects reads the exact current provider
-   revision and checks its credential identity, `SecretRef`, model pin, and
-   rate-card pin. A changed slot or secret reference stops acceptance.
-5. Egress requirements must fit the platform baseline and project narrowing.
+   For slot-backed BYOK selections, Projects locks the distinct provider heads
+   used by the primary and task selections in `provider_id` order (`FOR SHARE`)
+   and holds those locks through commit. It then reads each exact current
+   provider revision and checks its availability, credential identity,
+   `SecretRef`, model pin, and rate-card pin. Hosted Copilot and
+   deployment-managed bindings keep their existing behavior. A stale or
+   unavailable selection fails without saving a Projects run selection.
+6. Egress requirements must fit the platform baseline and project narrowing.
    Project run limits cannot widen platform limits.
-6. The service writes the immutable effective selection and request fingerprint,
-   then rechecks authority before commit.
+7. The service writes the immutable effective selection and request fingerprint,
+   rechecks Orchestrator authority before commit, and commits.
+
+On a confirmed PostgreSQL serialization failure (`40001`) or a collision on
+the run-selection primary key (`PK_project_run_selections`), the service starts
+a fresh transaction on a new database context with the original request and
+rechecks current project, tenant, role, and binding authority before returning
+an exact-fingerprint replay. It retries at most three attempts and returns
+`409 Conflict` when that limit is reached. Cancellation, unrelated errors, and
+unknown commit outcomes propagate without replaying the write.
 
 An exact retry returns the saved snapshot without reopening mutable settings. A
 different request for the same run ID conflicts. Archiving blocks new
