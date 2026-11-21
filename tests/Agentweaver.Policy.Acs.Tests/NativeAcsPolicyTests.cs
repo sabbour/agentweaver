@@ -451,6 +451,116 @@ public sealed class NativeAcsPolicyTests
     }
 
     [Fact]
+    public void ProjectProfilesRequireExactFilesAndPreserveSubmittedHash()
+    {
+        var actions = """{"allowed_action_ids":[]}""";
+        var projectV1 = NativeAcsComposableDomainsProfile.CreateProjectArtifact(actions);
+        var projectV2 = NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+            actions, """{"rules":[]}""", """{"required_checks":[],"blocked_findings":[]}""");
+        var validator = new NativeAcsArtifactValidator(Path.Combine(AppContext.BaseDirectory, "missing-opa"));
+
+        foreach (var artifact in new[] { projectV1, projectV2 })
+        {
+            Assert.Equal(artifact.ContentSha256, NativeAcsArtifactHash.Compute(artifact));
+            Assert.DoesNotContain(artifact.Files, file => file.RelativePath == "policy/data.json");
+            Assert.Equal(NativeAcsValidationDependencyFailure.OpaUnavailable,
+                validator.ValidateComposedProject(artifact).DependencyFailure);
+            Assert.False(validator.ValidateComposed(artifact).IsValid);
+
+            var withNetwork = Rehash(artifact with
+            {
+                Files = artifact.Files.Add(new NativeAcsArtifactFile(
+                    "policy/data.json", Encoding.UTF8.GetBytes(ComposedNetworkData).ToImmutableArray()))
+            });
+            var emptyNetwork = Rehash(artifact with
+            {
+                Files = artifact.Files.Add(new NativeAcsArtifactFile("policy/data.json", []))
+            });
+            var missingActions = Rehash(artifact with
+            {
+                Files = artifact.Files.Where(file => file.RelativePath != "policy/actions/data.json").ToImmutableArray()
+            });
+            var duplicatePath = Rehash(artifact with
+            {
+                Files = artifact.Files.SetItem(0, artifact.Files[1])
+            });
+            var changedModule = ReplaceComposedFile(
+                artifact, "policy/actions.rego", ReadComposedFile(artifact, "policy/actions.rego") + "\n# modified");
+            var mixedData = ReplaceComposedFile(
+                artifact, "policy/actions/data.json",
+                """{"allowed_action_ids":[],"agentweaver":{"shared":"value"}}""");
+            var changedHash = artifact with { ContentSha256 = new string('0', 64) };
+            foreach (var invalid in new[]
+                { withNetwork, emptyNetwork, missingActions, duplicatePath, changedModule, mixedData, changedHash })
+            {
+                var result = validator.ValidateComposedProject(invalid);
+                Assert.False(result.IsValid);
+                Assert.Null(result.DependencyFailure);
+            }
+            Assert.Contains(validator.ValidateComposedProject(changedHash).Diagnostics,
+                diagnostic => diagnostic.Code == "artifact_hash");
+        }
+
+        var inspectionV1 = NativeAcsComposableDomainsProfile.InspectProject(projectV1);
+        Assert.True(inspectionV1.IsValid);
+        Assert.Null(inspectionV1.NetworkPolicy);
+        Assert.Equal([NativeAcsDomainId.Actions], inspectionV1.Domains.ToArray());
+        var inspectionV2 = NativeAcsUnifiedPolicyProfile.InspectProject(projectV2);
+        Assert.True(inspectionV2.IsValid);
+        Assert.Null(inspectionV2.NetworkPolicy);
+        Assert.DoesNotContain(NativeAcsDomainId.PlatformNetwork, inspectionV2.Domains);
+        Assert.True(NativeAcsComposableDomainsProfile.Inspect(CreateComposedArtifact()).IsValid);
+        Assert.True(NativeAcsUnifiedPolicyProfile.Inspect(CreateUnifiedArtifact()).IsValid);
+    }
+
+    [NativeAcsFact]
+    public async Task ProjectNativeValidationUsesExactArtifactWithoutNetworkData()
+    {
+        var validator = new NativeAcsArtifactValidator(RequireNativeRuntime());
+        var v1 = NativeAcsComposableDomainsProfile.CreateProjectArtifact(
+            """{"allowed_action_ids":["merge"]}""");
+        var v2 = NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+            """{"allowed_action_ids":["merge"]}""",
+            """{"rules":[]}""", """{"required_checks":[],"blocked_findings":[]}""");
+        foreach (var artifact in new[] { v1, v2 })
+        {
+            var result = validator.ValidateComposedProject(artifact);
+            Assert.True(result.IsValid,
+                string.Join("; ", result.Diagnostics.Select(item => $"{item.Code}:{item.Message}")));
+            var evaluator = new NativeAcsPolicyEvaluator(validator, WorkRoot);
+            var network = await evaluator.EvaluateComposedAsync(
+                artifact, NativeAcsDomainId.PlatformNetwork, InterventionPoint.PreModelCall, Snapshot("merge"));
+            Assert.Equal(PolicyEvaluationOutcome.Error, network.Outcome);
+
+            var directory = Path.Combine(WorkRoot, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                await File.WriteAllBytesAsync(Path.Combine(directory, "manifest.yaml"), artifact.ManifestBytes.ToArray());
+                foreach (var file in artifact.Files)
+                {
+                    var path = Path.Combine(directory, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    await File.WriteAllBytesAsync(path, file.Bytes.ToArray());
+                }
+                using var snapshot = JsonDocument.Parse("""
+                    {"model_request":{"domain_id":"agentweaver_platform_network",
+                    "network":{"check_kind":"packet","protocol":"TCP","port":443,
+                    "destination":{"kind":"dns","value":"example.com"}}}}
+                    """);
+                var raw = await AgentControl.FromPath(Path.Combine(directory, "manifest.yaml"))
+                    .EvaluateInterventionPointAsync(
+                        InterventionPoint.PreModelCall, snapshot.RootElement, EnforcementMode.Enforce);
+                Assert.NotEqual(Decision.Allow, raw.Verdict.Decision);
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void ComposedProfileClassifiesDomainDataEditsAndRejectsUnownedChanges()
     {
         var original = CreateComposedArtifact();

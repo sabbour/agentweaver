@@ -267,7 +267,7 @@ test('native ACS tests use the locked Linux runtime and must execute in CI', () 
       new URL(`../../../tests/Agentweaver.Policy.Acs.Tests/${name}.cs`, import.meta.url), 'utf8'))
     .join('\n');
   const coverageSettings = readFileSync(new URL('../../../coverage.runsettings', import.meta.url), 'utf8');
-  assert.equal(nativeAcsRequiredMethods.length, 8);
+  assert.equal(nativeAcsRequiredMethods.length, 9);
   for (const method of nativeAcsRequiredMethods)
     assert.ok(source.includes(`Task ${method.split('.').at(-1)}()`) || source.includes(`void ${method.split('.').at(-1)}()`), method);
   assert.match(runner, /entry\.name === 'native-acs'[\s\S]*--runtime', 'linux-x64'[\s\S]*AgentweaverUseLinuxX64LockFile=true/);
@@ -293,7 +293,7 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.equal(jobs.foundation.if, '${{ always() }}');
   assert.equal(jobs.dotnet.strategy['fail-fast'], false);
   const nativeOpa = jobs.dotnet.steps.find((step) => step.name === 'Download and verify pinned OPA for native ACS tests');
-  assert.equal(nativeOpa.if, "matrix.name == 'native-acs'");
+  assert.equal(nativeOpa.if, "matrix.name == 'native-acs' || matrix.name == 'projects-config'");
   assert.match(nativeOpa.run, /opa_linux_amd64_static/);
   assert.match(nativeOpa.run, /00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084/);
   const testBuild = jobs.dotnet.steps.find((step) => step.name === 'Restore and build test project');

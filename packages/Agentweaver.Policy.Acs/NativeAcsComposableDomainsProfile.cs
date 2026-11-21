@@ -57,7 +57,13 @@ public static class NativeAcsComposableDomainsProfile
         }
     }
 
-    public static NativeAcsComposableDomainsInspection Inspect(NativeAcsArtifact artifact)
+    public static NativeAcsComposableDomainsInspection Inspect(NativeAcsArtifact artifact) =>
+        InspectCore(artifact, projectScope: false);
+
+    public static NativeAcsComposableDomainsInspection InspectProject(NativeAcsArtifact artifact) =>
+        InspectCore(artifact, projectScope: true);
+
+    private static NativeAcsComposableDomainsInspection InspectCore(NativeAcsArtifact artifact, bool projectScope)
     {
         ArgumentNullException.ThrowIfNull(artifact);
         var diagnostics = ImmutableArray.CreateBuilder<NativeAcsDiagnostic>();
@@ -72,7 +78,7 @@ public static class NativeAcsComposableDomainsProfile
             return Invalid(diagnostics);
         }
 
-        if (artifact.Files.IsDefault || artifact.Files.Length != 5)
+        if (artifact.Files.IsDefault || artifact.Files.Length != (projectScope ? 4 : 5))
         {
             diagnostics.Add(new NativeAcsDiagnostic(
                 "composed_file_closure",
@@ -106,7 +112,7 @@ public static class NativeAcsComposableDomainsProfile
                 NetworkModulePath,
                 SelectorModulePath,
                 ActionsDataPath,
-                NetworkDataPath
+                .. projectScope ? [] : new[] { NetworkDataPath }
             ]))
         {
             diagnostics.Add(new NativeAcsDiagnostic(
@@ -153,32 +159,35 @@ public static class NativeAcsComposableDomainsProfile
             return Invalid(diagnostics);
         }
 
-        NativeAcsFiniteNetworkPolicy? networkPolicy;
-        try
+        NativeAcsFiniteNetworkPolicy? networkPolicy = null;
+        if (!projectScope)
         {
-            var networkJson = StrictUtf8.GetString(files[NetworkDataPath].Bytes.AsSpan());
-            var networkArtifact = NativeAcsFiniteNetworkProfile.CreateArtifact(networkJson);
-            var networkResult = NativeAcsFiniteNetworkProfile.Validate(networkArtifact);
-            if (!networkResult.IsValid || networkResult.Policy is null)
+            try
             {
-                diagnostics.AddRange(networkResult.Diagnostics);
+                var networkJson = StrictUtf8.GetString(files[NetworkDataPath].Bytes.AsSpan());
+                var networkArtifact = NativeAcsFiniteNetworkProfile.CreateArtifact(networkJson);
+                var networkResult = NativeAcsFiniteNetworkProfile.Validate(networkArtifact);
+                if (!networkResult.IsValid || networkResult.Policy is null)
+                {
+                    diagnostics.AddRange(networkResult.Diagnostics);
+                    return Invalid(diagnostics);
+                }
+
+                networkPolicy = networkResult.Policy;
+            }
+            catch (DecoderFallbackException)
+            {
+                diagnostics.Add(new NativeAcsDiagnostic(
+                    "network_data_encoding",
+                    "The network domain data must use valid UTF-8.",
+                    NetworkDataPath));
                 return Invalid(diagnostics);
             }
-
-            networkPolicy = networkResult.Policy;
-        }
-        catch (DecoderFallbackException)
-        {
-            diagnostics.Add(new NativeAcsDiagnostic(
-                "network_data_encoding",
-                "The network domain data must use valid UTF-8.",
-                NetworkDataPath));
-            return Invalid(diagnostics);
         }
 
         return new NativeAcsComposableDomainsInspection(
             true,
-            [NativeAcsDomainId.Actions, NativeAcsDomainId.PlatformNetwork],
+            projectScope ? [NativeAcsDomainId.Actions] : [NativeAcsDomainId.Actions, NativeAcsDomainId.PlatformNetwork],
             networkPolicy,
             []);
     }
@@ -209,8 +218,16 @@ public static class NativeAcsComposableDomainsProfile
 
     public static NativeAcsArtifact CreateArtifact(string actionsDataJson, string networkDataJson)
     {
-        ArgumentNullException.ThrowIfNull(actionsDataJson);
         ArgumentNullException.ThrowIfNull(networkDataJson);
+        return CreateArtifactCore(actionsDataJson, networkDataJson);
+    }
+
+    public static NativeAcsArtifact CreateProjectArtifact(string actionsDataJson) =>
+        CreateArtifactCore(actionsDataJson, null);
+
+    private static NativeAcsArtifact CreateArtifactCore(string actionsDataJson, string? networkDataJson)
+    {
+        ArgumentNullException.ThrowIfNull(actionsDataJson);
         var artifact = new NativeAcsArtifact(
             ManifestBytes.ToImmutableArray(),
             [
@@ -218,7 +235,8 @@ public static class NativeAcsComposableDomainsProfile
                 new NativeAcsArtifactFile(ActionsDataPath, StrictUtf8.GetBytes(actionsDataJson).ToImmutableArray()),
                 new NativeAcsArtifactFile(SelectorModulePath, SelectorModuleBytes.ToImmutableArray()),
                 new NativeAcsArtifactFile(NetworkModulePath, NetworkModuleBytes.ToImmutableArray()),
-                new NativeAcsArtifactFile(NetworkDataPath, StrictUtf8.GetBytes(networkDataJson).ToImmutableArray())
+                .. networkDataJson is null ? [] :
+                    new[] { new NativeAcsArtifactFile(NetworkDataPath, StrictUtf8.GetBytes(networkDataJson).ToImmutableArray()) }
             ],
             string.Empty);
         return artifact with

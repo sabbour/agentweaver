@@ -298,6 +298,7 @@ public sealed class GatewayWorkspaceReadRegressionTests
             ("GET", "/api/v1/policies/projects/{projectId}/revisions", "listProjectNativeAcsPolicyRevisions"),
             ("GET", "/api/v1/policies/projects/{projectId}/revisions/{revision}",
                 "readProjectNativeAcsPolicyRevision"),
+            ("POST", "/api/v1/policies/projects/{projectId}/validate", "validateProjectNativeAcsPolicy"),
         };
 
         foreach (var (method, path, operationId) in routes)
@@ -310,8 +311,11 @@ public sealed class GatewayWorkspaceReadRegressionTests
             Assert.True(route.ExcludeFromMcp);
             Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
             Assert.Equal(5 * 1024 * 1024, route.MaximumResponseBytes);
-            Assert.False(route.HasJsonBody);
-            Assert.Null(route.MaximumRequestBodyBytes);
+            Assert.Equal(method != "GET", route.HasJsonBody);
+            Assert.True(route.ForwardRequestHeaders.IsDefaultOrEmpty);
+            Assert.Equal(
+                method == "GET" ? null : 5 * 1024 * 1024,
+                route.MaximumRequestBodyBytes);
         }
         Assert.Equal(
             new[] { "pageSize", "cursor" },
@@ -325,6 +329,8 @@ public sealed class GatewayWorkspaceReadRegressionTests
             item.OperationId == "readProjectNativeAcsPolicy").QueryParameters);
         Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
             item.OperationId == "readProjectNativeAcsPolicyRevision").QueryParameters);
+        Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "validateProjectNativeAcsPolicy").QueryParameters);
     }
 
     [Fact]
@@ -399,6 +405,55 @@ public sealed class GatewayWorkspaceReadRegressionTests
     }
 
     [Fact]
+    public async Task ProjectPolicyValidationForwardsBoundedBodyAndRejectsQueries()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var bearer = CreateBearer(signingKey);
+        var calls = 0;
+        Task<HttpResponseMessage> RespondAsync(GatewayOwner owner, HttpRequestMessage request, CancellationToken _)
+        {
+            Assert.Equal(GatewayOwner.Projects, owner);
+            Assert.Equal("/api/policies/projects/project-one/validate", request.RequestUri!.PathAndQuery);
+            Assert.Equal("tenant-a", request.Headers.GetValues("X-Agentweaver-Tenant").Single());
+            Assert.False(request.Headers.Contains("Idempotency-Key"));
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"isValid\":true,\"diagnostics\":[]}", Encoding.UTF8, "application/json"),
+            });
+        }
+
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new CallbackHttpMessageHandler((request, cancellationToken) =>
+                RespondAsync(GatewayOwner.Projects, request, cancellationToken)),
+            RespondAsync);
+        var route = Assert.Single(GatewayRouteCatalog.Routes, item => item.OperationId == "validateProjectNativeAcsPolicy");
+        Assert.Equal(5 * 1024 * 1024, route.MaximumRequestBodyBytes);
+        Assert.Equal(5 * 1024 * 1024, route.MaximumResponseBytes);
+        Assert.True(route.ExcludeFromMcp);
+        Assert.True(route.HasJsonBody);
+
+        using var request = CreateRequest(bearer, "/api/v1/policies/projects/project-one/validate");
+        request.Method = HttpMethod.Post;
+        request.Headers.Remove("X-Agentweaver-Tenant");
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+        request.Headers.Add("Idempotency-Key", "not-forwarded");
+        request.Content = new StringContent("{\"artifact\":{}}", Encoding.UTF8, "application/json");
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+
+        using var query = CreateRequest(bearer, "/api/v1/policies/projects/project-one/validate?scope=platform");
+        query.Method = HttpMethod.Post;
+        query.Content = new StringContent("{\"artifact\":{}}", Encoding.UTF8, "application/json");
+        using var denied = await gateway.Client.SendAsync(query);
+        Assert.Equal(HttpStatusCode.BadRequest, denied.StatusCode);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task ProjectPolicyReadsPublishTypedOpenApiContracts()
     {
         using var rsa = RSA.Create(2048);
@@ -434,6 +489,14 @@ public sealed class GatewayWorkspaceReadRegressionTests
         var exact = paths.GetProperty("/api/v1/policies/projects/{projectId}/revisions/{revision}")
             .GetProperty("get");
         Assert.Equal("readProjectNativeAcsPolicyRevision", exact.GetProperty("operationId").GetString());
+        var validate = paths.GetProperty("/api/v1/policies/projects/{projectId}/validate").GetProperty("post");
+        Assert.Equal("validateProjectNativeAcsPolicy", validate.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/NativeAcsPolicyValidationRequest",
+            validate.GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal("#/components/schemas/NativeAcsPolicyValidationResponse",
+            validate.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         Assert.Contains(
             exact.GetProperty("responses").GetProperty("200").GetProperty("headers").EnumerateObject(),
             header => header.Name == "Cache-Control");

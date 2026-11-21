@@ -726,6 +726,7 @@ revision, actor, and timestamp. They never include access tokens or secrets.
 | GET | `/api/policies/projects/{projectId}` | `api.read`, active membership, current TenantAdmin or project Owner, Contributor, or Viewer; unbound or bound to this project | Read the current hash-verified Project Policy artifact. Returns `404` when no head exists. | `/api/v1/policies/projects/{projectId}` |
 | GET | `/api/policies/projects/{projectId}/revisions?pageSize={n}&cursor={token}` | Same Project Policy read authority | Read newest-first revision metadata. An authorized project with no head returns an empty page. | `/api/v1/policies/projects/{projectId}/revisions` |
 | GET | `/api/policies/projects/{projectId}/revisions/{revision}` | Same Project Policy read authority | Read the exact revision's complete artifact after a hash check. `revision` must be a canonical positive decimal Int64. | `/api/v1/policies/projects/{projectId}/revisions/{revision}` |
+| POST | `/api/policies/projects/{projectId}/validate` | `api.read`, `projects.admin`, active membership, unbound; current TenantAdmin or project Owner with `WriteProjects` | Validate a Project artifact without reading or changing Policy state. | `/api/v1/policies/projects/{projectId}/validate` |
 | POST | `/api/policies/platform/validate` | `api.read`, active membership, unbound PlatformAdmin | Validate a complete artifact without changing policy state. | `/api/v1/policies/platform/validate` |
 | PUT | `/api/policies/platform/` | `api.read`, `projects.admin`, active membership, unbound PlatformAdmin with `WritePlatformRuntimeDefaults` | Store an immutable pending preparation at its expected revision. Off by default: new writes return `503` unless `NativeAcsPolicy:HeadWritesEnabled` is true. Exact retries check current authority and head state. | `/api/v1/policies/platform` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
@@ -744,8 +745,8 @@ Project listing returns only existing heads visible to the caller; it does not
 include Platform Policy or an inherited view. Its protected cursor is bound to
 the caller's current read grants. A grant change invalidates the cursor, and
 the caller must restart the list. The cursor does not pin a cross-page
-snapshot or expose Project IDs as clear text. Each artifact contains every
-policy domain. History returns revision, stored hash, and creation time without
+snapshot or expose Project IDs as clear text. Project validation accepts the
+same native profiles with Platform network data omitted. History returns revision, stored hash, and creation time without
 loading artifact files. Exact-revision reads return all retained bytes only
 after a hash check. The API does not activate ACS or change the v4 Policy
 path. See the

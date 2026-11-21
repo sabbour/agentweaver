@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Net.Sockets;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Policy.Acs;
@@ -33,6 +34,10 @@ public sealed record NativeAcsPolicyValidationResponse(
 public static class NativeAcsPolicyEndpoints
 {
     private const long MaximumRequestBodyBytes = 5L * 1024 * 1024;
+    private static readonly JsonSerializerOptions ProjectValidationJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        AllowDuplicateProperties = false,
+    };
     // Used only when the scope has no head yet. An existing head keeps its own stable ID.
     private const string NewPolicyId = "canonical";
     // Head-advancing writes stay off until every included domain has a proven enforcer and profile check.
@@ -328,6 +333,65 @@ public static class NativeAcsPolicyEndpoints
             }
         }).WithName("ListProjectNativeAcsPolicies");
 
+        projects.MapPost("/{projectId}/validate", async (
+            string projectId,
+            JsonElement requestJson,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            [FromServices] NativeAcsArtifactValidator? validator,
+            [FromServices] NativeAcsPolicyRequestGate requestGate,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                EnsureNoQuery(context, rejectEmptyQuery: true);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (HasAmbiguousProperties(requestJson))
+                    return Results.BadRequest();
+                var request = requestJson.Deserialize<NativeAcsPolicyValidationRequest>(ProjectValidationJsonOptions);
+                if (request?.Artifact is null)
+                    throw ProjectConfigException.Invalid(
+                        "native_acs_policy_invalid",
+                        "A complete native ACS policy artifact is required.");
+                if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
+                    return RateLimited(context);
+
+                cancellationToken.ThrowIfCancellationRequested();
+                var error = ValidateArtifact(validator, requestGate, request.Artifact, context, out var result, projectScope: true);
+                cancellationToken.ThrowIfCancellationRequested();
+                await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                return error ?? Results.Ok(new NativeAcsPolicyValidationResponse(true, result.Diagnostics));
+            }
+            catch (ProjectConfigException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ToProblem(exception);
+            }
+            catch (JsonException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.BadRequest();
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+        })
+            .WithMetadata(new RequestSizeLimitAttribute(MaximumRequestBodyBytes))
+            .WithName("ValidateProjectNativeAcsPolicy");
+
         projects.MapGet("/{projectId}", async (
             string projectId,
             HttpContext context,
@@ -466,12 +530,31 @@ public static class NativeAcsPolicyEndpoints
         return app;
     }
 
+    private static bool HasAmbiguousProperties(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in element.EnumerateObject())
+                if (!names.Add(property.Name) || HasAmbiguousProperties(property.Value))
+                    return true;
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                if (HasAmbiguousProperties(item))
+                    return true;
+        }
+        return false;
+    }
+
     private static IResult? ValidateArtifact(
         NativeAcsArtifactValidator? validator,
         NativeAcsPolicyRequestGate requestGate,
         NativeAcsArtifact artifact,
         HttpContext context,
-        out NativeAcsValidationResult result)
+        out NativeAcsValidationResult result,
+        bool projectScope = false)
     {
         // Run only one validator at a time; busy callers receive a retry response instead of queuing more work.
         using var slot = requestGate.TryEnterValidationSlot();
@@ -487,7 +570,8 @@ public static class NativeAcsPolicyEndpoints
         }
 
         // A missing or invalid ACS_OPA_PATH leaves the validator unregistered.
-        result = validator?.Validate(artifact) ?? new NativeAcsValidationResult(
+        result = (projectScope ? validator?.ValidateComposedProject(artifact) : validator?.Validate(artifact))
+            ?? new NativeAcsValidationResult(
             false, [], NativeAcsValidationDependencyFailure.OpaUnavailable);
         if (result.DependencyFailure is { } dependencyFailure)
         {

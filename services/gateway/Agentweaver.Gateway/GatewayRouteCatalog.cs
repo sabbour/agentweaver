@@ -562,6 +562,12 @@ public static class GatewayRouteCatalog
             ["pageSize", "cursor"], forwardTenantSelector: true,
             exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/policies/projects/{projectId}/validate",
+            "/api/policies/projects/{projectId}/validate",
+            "validateProjectNativeAcsPolicy", "Validate a Project Policy artifact",
+            body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/policies/projects/{projectId}", "/api/policies/projects/{projectId}",
             "readProjectNativeAcsPolicy", "Read the current Project Policy source",
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],

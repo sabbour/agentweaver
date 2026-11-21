@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -402,6 +403,379 @@ public sealed partial class ProjectsConfigPostgresTests
             }
         }
         Assert.Equal(before, await CapturePolicyTableStateAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsProjectValidationRequiresCurrentProjectAuthorAndHasNoPolicyEffects()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "project-validation-tenant-" + suffix;
+        var tenantSubject = "project-validation-admin-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, tenantSubject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenant, ProjectAuthorityRole.TenantAdmin);
+        var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var project = await service.CreateProjectAsync(tenantAdmin, "Validation project " + suffix, CancellationToken.None);
+        var other = await service.CreateProjectAsync(tenantAdmin, "Other project " + suffix, CancellationToken.None);
+        var ownerSubject = "project-validation-owner-" + suffix;
+        var viewerSubject = "project-validation-viewer-" + suffix;
+        var contributorSubject = "project-validation-contributor-" + suffix;
+        var platformSubject = "project-validation-platform-" + suffix;
+        var ownerCaller = await SeedCallerAsync(
+            db, authorityStore, ownerSubject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
+        await authorityStore.AssignRoleAsync(ownerCaller.MembershipId, ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin, "fixture");
+        foreach (var (subject, role) in new[]
+        {
+            (viewerSubject, ProjectAuthorityRole.Viewer),
+            (contributorSubject, ProjectAuthorityRole.Contributor)
+        })
+            _ = await SeedCallerAsync(db, authorityStore, subject, tenant, ["api.read", "projects.admin"],
+                ProjectAuthorityResourceType.Project, project.ProjectId, role);
+        _ = await SeedCallerAsync(db, authorityStore, platformSubject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, Path.Combine(AppContext.BaseDirectory, "missing-opa"));
+        using var owner = CreateProjectPolicyReader(host, ownerSubject, tenant);
+        using var admin = CreateProjectPolicyReader(host, tenantSubject, tenant);
+        using var viewer = CreateProjectPolicyReader(host, viewerSubject, tenant);
+        using var contributor = CreateProjectPolicyReader(host, contributorSubject, tenant);
+        using var platform = CreateProjectPolicyReader(host, platformSubject, tenant);
+        using var bound = CreateProjectPolicyReader(host, ownerSubject, tenant, project.ProjectId);
+        using var runBound = CreateProjectPolicyReader(host, ownerSubject, tenant, project.ProjectId, "run-" + suffix);
+        using var purpose = CreateProjectPolicyReader(host, ownerSubject, tenant, purpose: "policy.validate");
+        using var wrongTenant = CreateProjectPolicyReader(host, ownerSubject, "wrong-tenant-" + suffix);
+        using var noAdminScope = CreateProjectPolicyReader(host, ownerSubject, tenant);
+        foreach (var client in new[] { owner, admin, viewer, contributor, platform, bound, runBound, purpose, wrongTenant })
+        {
+            client.DefaultRequestHeaders.Remove("X-Test-Scope");
+            client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read projects.admin");
+        }
+
+        var artifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact("""{"allowed_action_ids":[]}""");
+        var network = artifact with
+        {
+            Files = artifact.Files.Add(new NativeAcsArtifactFile(
+                "policy/data.json", Encoding.UTF8.GetBytes("{}").ToImmutableArray()))
+        };
+        network = network with { ContentSha256 = NativeAcsArtifactHash.Compute(network) };
+        var path = $"/api/policies/projects/{project.ProjectId}/validate";
+        var state = await CapturePolicyTableStateAsync();
+        async Task<HttpResponseMessage> Validate(HttpClient client, NativeAcsArtifact input, string? route = null) =>
+            await client.PostAsJsonAsync(route ?? path, new NativeAcsPolicyValidationRequest { Artifact = input });
+
+        using var ownerResponse = await Validate(owner, artifact);
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, ownerResponse.StatusCode);
+        Assert.True(ownerResponse.Headers.CacheControl?.NoStore);
+        using var adminResponse = await Validate(admin, artifact);
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, adminResponse.StatusCode);
+        using var networkResponse = await Validate(owner, network);
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, networkResponse.StatusCode);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
+        var requestJson = JsonSerializer.Serialize(new NativeAcsPolicyValidationRequest { Artifact = artifact }, jsonOptions);
+        var duplicateHash = requestJson.Replace(
+            "\"contentSha256\":", "\"contentSha256\":\"invalid\",\"contentSha256\":", StringComparison.Ordinal);
+        using var duplicateResponse = await owner.PostAsync(path,
+            new StringContent(duplicateHash, Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, duplicateResponse.StatusCode);
+        var duplicateArtifact = requestJson.Replace(
+            "\"artifact\":", "\"artifact\":null,\"artifact\":", StringComparison.Ordinal);
+        using var duplicateRootResponse = await owner.PostAsync(path,
+            new StringContent(duplicateArtifact, Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, duplicateRootResponse.StatusCode);
+        var caseDuplicate = requestJson.Replace(
+            "\"contentSha256\":", "\"ContentSha256\":\"invalid\",\"contentSha256\":", StringComparison.Ordinal);
+        using var caseDuplicateResponse = await admin.PostAsync(path,
+            new StringContent(caseDuplicate, Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, caseDuplicateResponse.StatusCode);
+        var pascalCaseRequest = JsonSerializer.Serialize(new NativeAcsPolicyValidationRequest { Artifact = artifact });
+        using var pascalCaseResponse = await admin.PostAsync(path,
+            new StringContent(pascalCaseRequest, Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, pascalCaseResponse.StatusCode);
+        var largePathArtifact = artifact with
+        {
+            Files = [new NativeAcsArtifactFile(new string('\u2028', 900_000), ImmutableArray<byte>.Empty)],
+        };
+        var largeRequest = JsonSerializer.Serialize(
+            new NativeAcsPolicyValidationRequest { Artifact = largePathArtifact }, jsonOptions)
+            .Replace("\\u2028", "\u2028", StringComparison.OrdinalIgnoreCase);
+        Assert.True(Encoding.UTF8.GetByteCount(largeRequest) < 5 * 1024 * 1024);
+        using var largeResponse = await owner.PostAsync(path,
+            new StringContent(largeRequest, Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, largeResponse.StatusCode);
+        var responseBytes = await largeResponse.Content.ReadAsByteArrayAsync();
+        Assert.True(responseBytes.Length < 5 * 1024 * 1024, $"Response size: {responseBytes.Length} bytes.");
+        using var largeDocument = JsonDocument.Parse(responseBytes);
+        var fileSize = largeDocument.RootElement.GetProperty("diagnostics").EnumerateArray()
+            .Single(item => item.GetProperty("code").GetString() == "file_size");
+        Assert.Equal(JsonValueKind.Null, fileSize.GetProperty("relativePath").ValueKind);
+        using var wrongProject = await Validate(owner, artifact, $"/api/policies/projects/{other.ProjectId}/validate");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, wrongProject.StatusCode);
+        foreach (var deniedClient in new[] { viewer, contributor, platform, bound, runBound, purpose, wrongTenant, noAdminScope })
+        {
+            using var denied = await Validate(deniedClient, artifact);
+            Assert.Equal(System.Net.HttpStatusCode.Forbidden, denied.StatusCode);
+        }
+        using var query = await Validate(owner, artifact, path + "?scope=platform");
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, query.StatusCode);
+        Assert.Equal(state, await CapturePolicyTableStateAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsProjectValidationDoesNotReadOrDisclosePlatformSource()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "project-validation-private-" + suffix;
+        var tenantSubject = "project-validation-private-admin-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(db, authorityStore, tenantSubject, tenant,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenant, ProjectAuthorityRole.TenantAdmin);
+        var platformAdmin = await SeedCallerAsync(db, authorityStore, "project-validation-private-platform-" + suffix,
+            tenant, ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Private baseline validation " + suffix, CancellationToken.None);
+        var projectArtifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact("""{"allowed_action_ids":[]}""");
+        await CreateNativeAcsStore().WriteAsync(tenantAdmin,
+            Request(project.ProjectId, projectArtifact, null, "project-private-" + suffix), CancellationToken.None);
+        await WritePlatformPolicyAsync(platformAdmin, Artifact("private-platform-first-" + suffix),
+            "platform-first-" + suffix, "platform-correlation-first-" + suffix);
+
+        var configuredOpaPath = Environment.GetEnvironmentVariable("ACS_OPA_PATH");
+        if (OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("CI") == "true")
+            Assert.True(File.Exists(configuredOpaPath), "Set ACS_OPA_PATH to the pinned OPA executable.");
+        var opaPath = OperatingSystem.IsLinux() && File.Exists(configuredOpaPath)
+            ? configuredOpaPath!
+            : Path.Combine(AppContext.BaseDirectory, "missing-opa");
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(fixture.DataSource, opaPath);
+        using var client = CreateProjectPolicyReader(host, tenantSubject, tenant);
+        client.DefaultRequestHeaders.Remove("X-Test-Scope");
+        client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read projects.admin");
+        var path = $"/api/policies/projects/{project.ProjectId}/validate";
+        using var first = await client.PostAsJsonAsync(path, new NativeAcsPolicyValidationRequest { Artifact = projectArtifact });
+        var firstBody = await first.Content.ReadAsStringAsync();
+        Assert.Equal(OperatingSystem.IsLinux() && File.Exists(opaPath)
+                ? System.Net.HttpStatusCode.OK
+                : System.Net.HttpStatusCode.ServiceUnavailable,
+            first.StatusCode);
+
+        await WritePlatformPolicyAsync(platformAdmin, Artifact("private-platform-second-" + suffix),
+            "platform-second-" + suffix, "platform-correlation-second-" + suffix);
+        var state = await CapturePolicyTableStateAsync();
+        using var second = await client.PostAsJsonAsync(path, new NativeAcsPolicyValidationRequest { Artifact = projectArtifact });
+        Assert.Equal(first.StatusCode, second.StatusCode);
+        Assert.Equal(firstBody, await second.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("private-platform-", firstBody, StringComparison.Ordinal);
+        using var read = await client.GetAsync($"/api/policies/projects/{project.ProjectId}");
+        Assert.Equal(System.Net.HttpStatusCode.OK, read.StatusCode);
+        using var document = JsonDocument.Parse(await read.Content.ReadAsStringAsync());
+        var returned = JsonSerializer.Deserialize<NativeAcsArtifact>(
+            document.RootElement.GetProperty("artifact"), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(returned);
+        Assert.Equal(projectArtifact.ContentSha256, NativeAcsArtifactHash.Compute(returned));
+        Assert.DoesNotContain(returned.Files, file => file.RelativePath == "policy/data.json");
+        Assert.Equal(state, await CapturePolicyTableStateAsync());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public Task NativeAcsProjectValidationRechecksRevokedRoleForInvalidAndDependency(
+        bool tenantRole, bool invalidArtifact) =>
+        CheckProjectValidationRoleRevocation(tenantRole, invalidArtifact ? "invalid" : "dependency");
+
+    [ProjectNativeTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task NativeAcsProjectValidationRechecksRevokedRoleForSuccess(bool tenantRole) =>
+        CheckProjectValidationRoleRevocation(tenantRole, "success");
+
+    private async Task CheckProjectValidationRoleRevocation(bool tenantRole, string outcome)
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "project-validation-revoke-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(db, authorityStore, "project-validation-revoke-admin-" + suffix,
+            tenant, ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenant,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Validation revocation " + suffix, CancellationToken.None);
+        var subject = "project-validation-revoke-owner-" + suffix;
+        var caller = await SeedCallerAsync(db, authorityStore, subject, tenant, ["api.read", "projects.admin"],
+            tenantRole ? ProjectAuthorityResourceType.Tenant : ProjectAuthorityResourceType.Project,
+            tenantRole ? tenant : project.ProjectId,
+            tenantRole ? ProjectAuthorityRole.TenantAdmin : ProjectAuthorityRole.Owner);
+        var grant = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == caller.MembershipId &&
+            item.Role == (tenantRole ? ProjectAuthorityRole.TenantAdmin : ProjectAuthorityRole.Owner));
+        var artifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact("""{"allowed_action_ids":[]}""");
+        if (outcome == "invalid")
+        {
+            artifact = artifact with
+            {
+                Files = artifact.Files.Add(new NativeAcsArtifactFile(
+                    "policy/data.json", Encoding.UTF8.GetBytes("{}").ToImmutableArray()))
+            };
+            artifact = artifact with { ContentSha256 = NativeAcsArtifactHash.Compute(artifact) };
+        }
+        var opaPath = outcome == "success"
+            ? Environment.GetEnvironmentVariable("ACS_OPA_PATH")
+            : Path.Combine(AppContext.BaseDirectory, "missing-opa");
+        Assert.False(string.IsNullOrEmpty(opaPath));
+        if (outcome == "success")
+            Assert.True(File.Exists(opaPath), "Set ACS_OPA_PATH to the pinned OPA executable.");
+        var directResult = new NativeAcsArtifactValidator(opaPath!).ValidateComposedProject(artifact);
+        Assert.Equal(outcome == "success", directResult.IsValid);
+        Assert.Equal(outcome == "dependency", directResult.DependencyFailure is not null);
+        Assert.Equal(outcome == "invalid", !directResult.Diagnostics.IsEmpty);
+        var checks = 0;
+        var revoked = 0;
+        var interceptor = new PolicyReadInterceptor(async cancellationToken =>
+        {
+            if (Interlocked.Increment(ref checks) == 5)
+            {
+                await authorityStore.RevokeRoleAssignmentAsync(
+                    grant.AssignmentId, grant.Revision, "fixture", cancellationToken);
+                Interlocked.Increment(ref revoked);
+            }
+        }, "project_role_assignments");
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, opaPath, commandInterceptor: interceptor);
+        using var client = CreateProjectPolicyReader(host, subject, tenant);
+        client.DefaultRequestHeaders.Remove("X-Test-Scope");
+        client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read projects.admin");
+        var state = await CapturePolicyTableStateAsync();
+        using var response = await client.PostAsJsonAsync(
+            $"/api/policies/projects/{project.ProjectId}/validate",
+            new NativeAcsPolicyValidationRequest { Artifact = artifact });
+        Assert.Equal(1, revoked);
+        Assert.Contains(response.StatusCode, new[] { System.Net.HttpStatusCode.NotFound, System.Net.HttpStatusCode.Forbidden });
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("diagnostics", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("native_acs_dependency_unavailable", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("isValid", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(artifact.ContentSha256, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("policy/data.json", body, StringComparison.Ordinal);
+        Assert.Equal(state, await CapturePolicyTableStateAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsProjectValidationPropagatesCancellationDuringAuthorityRecheck()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "project-validation-cancel-" + suffix;
+        var subject = "project-validation-cancel-admin-" + suffix;
+        var admin = await SeedCallerAsync(db, authorityStore, subject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenant, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(admin, "Validation cancellation " + suffix, CancellationToken.None);
+        var calls = 0;
+        using var cancellation = new CancellationTokenSource();
+        var interceptor = new PolicyReadInterceptor(_ =>
+        {
+            if (Interlocked.Increment(ref calls) == 5)
+                cancellation.Cancel();
+            return Task.CompletedTask;
+        }, "project_role_assignments");
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, Path.Combine(AppContext.BaseDirectory, "missing-opa"),
+            commandInterceptor: interceptor, requestToken: cancellation.Token);
+        using var client = CreateProjectPolicyReader(host, subject, tenant);
+        client.DefaultRequestHeaders.Remove("X-Test-Scope");
+        client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read projects.admin");
+        var artifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact("""{"allowed_action_ids":[]}""");
+        var state = await CapturePolicyTableStateAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.PostAsJsonAsync(
+            $"/api/policies/projects/{project.ProjectId}/validate",
+            new NativeAcsPolicyValidationRequest { Artifact = artifact }));
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(state, await CapturePolicyTableStateAsync());
+    }
+
+    [ProjectNativeFact]
+    public async Task NativeAcsProjectValidationKeepsSlotUntilCancelledNativeCallExits()
+    {
+        if (!OperatingSystem.IsLinux())
+            throw new PlatformNotSupportedException();
+        var opaPath = Environment.GetEnvironmentVariable("ACS_OPA_PATH");
+        Assert.True(File.Exists(opaPath), "Set ACS_OPA_PATH to the pinned OPA executable.");
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "project-validation-slot-" + suffix;
+        var subject = "project-validation-slot-admin-" + suffix;
+        var admin = await SeedCallerAsync(db, authorityStore, subject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenant, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(admin, "Validation slot " + suffix, CancellationToken.None);
+        var marker = Path.Combine(AppContext.BaseDirectory, "opa-" + suffix + ".started");
+        var release = Path.Combine(AppContext.BaseDirectory, "opa-" + suffix + ".release");
+        var wrapper = Path.Combine(AppContext.BaseDirectory, "opa-" + suffix + ".sh");
+        await File.WriteAllTextAsync(wrapper,
+            $"#!/bin/sh\nif [ \"$1\" = \"parse\" ] && [ ! -f \"{release}\" ]; then : > \"{marker}\"; " +
+            $"i=0; while [ ! -f \"{release}\" ] && [ \"$i\" -lt 400 ]; do sleep 0.01; i=$((i+1)); done; fi\n" +
+            $"exec \"{opaPath}\" \"$@\"\n");
+        File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        using var cancellation = new CancellationTokenSource();
+        Task<HttpResponseMessage>? pending = null;
+        try
+        {
+            using var host = await StartNativeAcsPolicyEndpointHostAsync(
+                fixture.DataSource, wrapper, requestToken: cancellation.Token);
+            using var first = CreateProjectPolicyReader(host, subject, tenant);
+            using var second = CreateProjectPolicyReader(host, subject, tenant);
+            foreach (var client in new[] { first, second })
+            {
+                client.DefaultRequestHeaders.Remove("X-Test-Scope");
+                client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read projects.admin");
+            }
+            second.DefaultRequestHeaders.Add("X-Test-No-Cancel", "true");
+            var artifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact("""{"allowed_action_ids":[]}""");
+            var request = new NativeAcsPolicyValidationRequest { Artifact = artifact };
+            var path = $"/api/policies/projects/{project.ProjectId}/validate";
+            var state = await CapturePolicyTableStateAsync();
+            pending = first.PostAsJsonAsync(path, request);
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            while (!File.Exists(marker) && !pending.IsCompleted && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            Assert.True(File.Exists(marker), "The native OPA parser did not start.");
+            cancellation.Cancel();
+            using var busy = await second.PostAsJsonAsync(path, request);
+            Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, busy.StatusCode);
+            using var busyJson = JsonDocument.Parse(await busy.Content.ReadAsStringAsync());
+            Assert.Equal("native_acs_validation_busy", busyJson.RootElement.GetProperty("code").GetString());
+            await File.WriteAllTextAsync(release, "");
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await pending.WaitAsync(TimeSpan.FromSeconds(10)));
+            using var after = await second.PostAsJsonAsync(path, request);
+            Assert.Equal(System.Net.HttpStatusCode.OK, after.StatusCode);
+            Assert.Equal(state, await CapturePolicyTableStateAsync());
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(release, "");
+            if (pending is not null)
+            {
+                try { using var response = await pending.WaitAsync(TimeSpan.FromSeconds(10)); }
+                catch (OperationCanceledException) { }
+            }
+            File.Delete(wrapper);
+            File.Delete(marker);
+            File.Delete(release);
+        }
     }
 
     [Fact]
@@ -1981,7 +2355,8 @@ public sealed partial class ProjectsConfigPostgresTests
                     if (requestToken is not null)
                         app.Use(async (context, next) =>
                         {
-                            context.RequestAborted = requestToken.Value;
+                            if (!context.Request.Headers.ContainsKey("X-Test-No-Cancel"))
+                                context.RequestAborted = requestToken.Value;
                             await next(context);
                         });
                     app.UseRouting();
@@ -2008,6 +2383,25 @@ public sealed partial class ProjectsConfigPostgresTests
                 command.CommandText.Contains("project_role_assignments", StringComparison.OrdinalIgnoreCase))
                 _scopeListQueries.Enqueue(command.CommandText);
             return ValueTask.FromResult(result);
+        }
+
+    }
+
+    public sealed class ProjectNativeFactAttribute : FactAttribute
+    {
+        public ProjectNativeFactAttribute()
+        {
+            if (!OperatingSystem.IsLinux())
+                Skip = "The pinned ACS package has a Linux-x64 native library.";
+        }
+    }
+
+    public sealed class ProjectNativeTheoryAttribute : TheoryAttribute
+    {
+        public ProjectNativeTheoryAttribute()
+        {
+            if (!OperatingSystem.IsLinux())
+                Skip = "The pinned ACS package has a Linux-x64 native library.";
         }
     }
 
