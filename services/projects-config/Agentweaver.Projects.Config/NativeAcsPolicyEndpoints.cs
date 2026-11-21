@@ -335,7 +335,6 @@ public static class NativeAcsPolicyEndpoints
 
         projects.MapPost("/{projectId}/validate", async (
             string projectId,
-            JsonElement requestJson,
             HttpContext context,
             [FromServices] ProjectsConfigService projectsService,
             [FromServices] ProjectAuthorizationOwner authorizationOwner,
@@ -353,6 +352,12 @@ public static class NativeAcsPolicyEndpoints
                     .ConfigureAwait(false);
                 if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
                     return RateLimited(context);
+                if (!context.Request.HasJsonContentType())
+                    return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+                if (context.Request.ContentLength > MaximumRequestBodyBytes)
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                var requestJson = await context.Request.ReadFromJsonAsync<JsonElement>(cancellationToken)
+                    .ConfigureAwait(false);
                 if (HasAmbiguousProperties(requestJson))
                     return Results.BadRequest();
                 var request = requestJson.Deserialize<NativeAcsPolicyValidationRequest>(ProjectValidationJsonOptions);
@@ -372,6 +377,11 @@ public static class NativeAcsPolicyEndpoints
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 return ToProblem(exception);
+            }
+            catch (BadHttpRequestException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.StatusCode(exception.StatusCode);
             }
             catch (JsonException)
             {

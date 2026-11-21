@@ -595,6 +595,79 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task NativeAcsProjectValidationParsesBodyAfterAuthorityAndBudgetChecks()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "project-validation-order-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, "project-validation-order-admin-" + suffix, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenant, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Order project " + suffix, CancellationToken.None);
+        var ownerSubject = "project-validation-order-owner-" + suffix;
+        _ = await SeedCallerAsync(
+            db, authorityStore, ownerSubject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
+        var viewerSubject = "project-validation-order-viewer-" + suffix;
+        _ = await SeedCallerAsync(
+            db, authorityStore, viewerSubject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Viewer);
+
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, Path.Combine(AppContext.BaseDirectory, "missing-opa"));
+        using var owner = CreateProjectPolicyReader(host, ownerSubject, tenant);
+        using var viewer = CreateProjectPolicyReader(host, viewerSubject, tenant);
+        foreach (var client in new[] { owner, viewer })
+        {
+            client.DefaultRequestHeaders.Remove("X-Test-Scope");
+            client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read projects.admin");
+        }
+
+        var path = $"/api/policies/projects/{project.ProjectId}/validate";
+
+        using var viewerMalformed = await viewer.PostAsync(
+            path, new StringContent("{not-json", Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, viewerMalformed.StatusCode);
+
+        using var viewerText = await viewer.PostAsync(
+            path, new StringContent("plain-text", Encoding.UTF8, "text/plain"));
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, viewerText.StatusCode);
+
+        using var unsupportedMedia = await owner.PostAsync(
+            path, new StringContent("plain-text", Encoding.UTF8, "text/plain"));
+        Assert.Equal(System.Net.HttpStatusCode.UnsupportedMediaType, unsupportedMedia.StatusCode);
+
+        using var nullArtifact = await owner.PostAsync(
+            path, new StringContent("""{"artifact":null}""", Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, nullArtifact.StatusCode);
+        using var nullArtifactJson = await JsonDocument.ParseAsync(await nullArtifact.Content.ReadAsStreamAsync());
+        Assert.Equal("native_acs_policy_invalid", nullArtifactJson.RootElement.GetProperty("code").GetString());
+
+        using var oversized = await owner.PostAsync(
+            path, new StringContent(new string(' ', (5 * 1024 * 1024) + 1), Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.RequestEntityTooLarge, oversized.StatusCode);
+
+        for (var index = 0; index < 3; index++)
+        {
+            using var malformed = await owner.PostAsync(
+                path, new StringContent("{not-json", Encoding.UTF8, "application/json"));
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, malformed.StatusCode);
+        }
+
+        using var rateLimitedMalformed = await owner.PostAsync(
+            path, new StringContent("{not-json", Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, rateLimitedMalformed.StatusCode);
+        using var rateLimitedJson = await JsonDocument.ParseAsync(await rateLimitedMalformed.Content.ReadAsStreamAsync());
+        Assert.Equal("native_acs_validation_rate_limited", rateLimitedJson.RootElement.GetProperty("code").GetString());
+
+        using var rateLimitedText = await owner.PostAsync(
+            path, new StringContent("plain-text", Encoding.UTF8, "text/plain"));
+        Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, rateLimitedText.StatusCode);
+    }
+
+    [Fact]
     public async Task NativeAcsProjectValidationDoesNotReadOrDisclosePlatformSource()
     {
         await using var db = CreateDbContext();
