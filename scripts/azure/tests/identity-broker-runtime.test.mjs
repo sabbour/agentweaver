@@ -357,6 +357,13 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
   assert.equal(data.IdentityBroker__WebOrigin, `https://${portalHostname}`);
   assert.equal(data.IdentityBroker__SecretRedemption__VaultUri, 'https://agentweaver-kv.vault.azure.net/');
   assert.equal(data.IdentityBroker__SecretRedemption__VaultHost, 'agentweaver-kv.vault.azure.net');
+  assert.equal(data.IdentityBroker__SecretRedemption__ByokVaultHost, 'agentweaver-kv.vault.azure.net');
+  assert.equal(data.IdentityBroker__SecretRedemption__ByokVaultUri, undefined);
+  const withByok = brokerAcceptanceConfiguration({ ...config, byokKeyVaultName: 'agentweaver-byok-kv' }, {
+    issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname,
+  });
+  assert.equal(withByok.IdentityBroker__SecretRedemption__ByokVaultHost, 'agentweaver-byok-kv.vault.azure.net');
+  assert.equal(withByok.IdentityBroker__SecretRedemption__ByokVaultUri, 'https://agentweaver-byok-kv.vault.azure.net/');
   assert.equal(data.IdentityBroker__RunBinding__ProjectsAudience, 'https://projects.agentweaver.io/run-binding');
   assert.equal(data.IdentityBroker__RunBinding__ProjectsOwnerAddress,
     'https://projects-config.agentweaver.svc.cluster.local:8443/');
@@ -420,6 +427,11 @@ test('config-only bootstrap stages the exact source map and fails closed on drif
   assert.equal(targetMap.data.IdentityBroker__Issuer,
     'https://agentweaver.6af2d5d83827af00019b70e2.westus2.aksapp.io/');
   assert.equal(targetMap.data.IdentityBroker__SecretRedemption__VaultHost, 'awwus2np01-kv1.vault.azure.net');
+  assert.equal(targetMap.data.IdentityBroker__SecretRedemption__ByokVaultHost, 'awwus2np01-kv1.vault.azure.net');
+  assert.equal(targetMap.data.IdentityBroker__SecretRedemption__ByokVaultUri, undefined);
+  assert.equal(sourceMap.data.IdentityBroker__SecretRedemption__ByokVaultHost, 'agentweaver-byok-kv-v1.vault.azure.net');
+  assert.equal(sourceMap.data.IdentityBroker__SecretRedemption__ByokVaultUri,
+    'https://agentweaver-byok-kv-v1.vault.azure.net/');
   assert.equal(targetMap.data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId,
     '4cb6b3eb-db18-44e9-a624-0dc969d0417b');
   const sourceHostname = new URL(targetMap.data.IdentityBroker__Issuer).hostname;

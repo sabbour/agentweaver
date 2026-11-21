@@ -312,6 +312,16 @@ authentication, body reads, replay, or database access. The response has
 `Cache-Control: no-store` and `Pragma: no-cache`. Except for `HEAD`, its body is
 `{"code":"credential_publication_unavailable"}`. `HEAD` has no body.
 
+Identity Broker uses the v2 private routes under
+`/internal/byok/credential-publications/v2/` (`preflight`, `publish`, `cancel`,
+and `disable`) over the pinned, no-redirect Broker HTTPS channel. Each v2
+request verifies current actor membership and role authority in Projects &
+Config, serializes `publish`, `cancel`, and `disable` under the provider lock,
+and records durable operation receipts in `model_provider_credential_operations`.
+`disable` clears the active credential reference under the same provider lock
+used by run selection so new pins fail (`422 model_credential_unavailable`)
+while previously accepted pins remain redeemable.
+
 Projects requires each Draft head change and its matching revision in the same
 PostgreSQL transaction. A new Draft starts at revision 1 without a credential.
 An edit advances the revision by one and preserves the previous credential

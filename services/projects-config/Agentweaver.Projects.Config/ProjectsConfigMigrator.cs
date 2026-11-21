@@ -113,6 +113,21 @@ public static class ProjectsConfigMigrator
                AND NOT has_any_column_privilege(current_user, 'projects_config.model_provider_reference_reservations', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'projects_config.model_provider_reference_reservations', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.model_provider_reference_reservations', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'projects_config.model_provider_credential_operations', 'SELECT')
+               AND has_table_privilege(current_user, 'projects_config.model_provider_credential_operations', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_credential_operations', 'UPDATE')
+               AND NOT has_any_column_privilege(current_user, 'projects_config.model_provider_credential_operations', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_credential_operations', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_credential_operations', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'SELECT')
+               AND has_table_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'UPDATE')
+               AND has_column_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'consumed_at', 'UPDATE')
+               AND has_column_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'consumed_by_kind', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'preflight_id', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'operation_id', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_credential_preflights', 'TRUNCATE')
                AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'INSERT')
                AND NOT has_any_column_privilege(current_user, 'projects_config.installation_identity', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.installation_identity', 'UPDATE')
@@ -141,6 +156,10 @@ public static class ProjectsConfigMigrator
                AND has_function_privilege(
                    current_user,
                    'projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])',
+                   'EXECUTE')
+               AND has_function_privilege(
+                   current_user,
+                   'projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text)',
                    'EXECUTE')
                AND NOT has_function_privilege(
                    current_user,

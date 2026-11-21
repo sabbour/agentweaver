@@ -344,10 +344,10 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 32 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 19)
+        if (services.Length != 5 || protectedTables.Length != 34 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 21)
             throw new InvalidOperationException(
-                "The exact fourteen row-lock columns, nineteen append-only ledgers, and provider insert guard are required.");
+                "The exact fourteen row-lock columns, twenty-one append-only ledgers, and provider insert guard are required.");
 
         foreach (var (service, table) in protectedTables)
         {
@@ -367,7 +367,7 @@ internal static class InitializerChecks
                 var expectedType = marker ? (providerHead ? 23 : 7) : (providerHead ? 21 : 5);
                 var expectedHash = marker
                     ? "251d3b422db7283268c1264b4743de38b0af2454e34fc23330e1a0d9eba11c18"
-                    : "04c257420b1b56dec4436415bf3a063b4482936ce841630f32bdbee8d87d0964";
+                    : "b653f4ce0ae62553e6ef687a17a73d1c37391c6649656677308e4389c3eca999";
                 return (providerHead || providerRevision) && (marker || pair)
                     && guard.Trigger == $"{name}_write_{(marker ? "marker" : "pair")}"
                     && guard.TriggerType == expectedType && guard.Deferrable == pair
@@ -546,10 +546,14 @@ internal static class InitializerChecks
                 hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard ||
                 hasProviderReferenceGuard ||
                 (providerRevision && typeSevenGuards.Length == 1 && IsProviderWriteGuard(typeSevenGuards[0]));
+            var preflightTable = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "model_provider_credential_preflights";
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead
                 ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
-                : table.UpdateColumns is { Length: > 0 };
+                : preflightTable
+                    ? !(table.UpdateColumns ?? []).SequenceEqual(["consumed_at", "consumed_by_kind"], StringComparer.Ordinal)
+                    : table.UpdateColumns is { Length: > 0 };
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
                 guards.Length != mutationGuardCount + typeSevenGuards.Length +
@@ -623,6 +627,8 @@ internal static class InitializerChecks
                     ["SELECT", "INSERT"], ["current_revision", "updated_at"], false),
                 ("projects-config", "projects_config", GovernanceDecisionHeadTable,
                     ["SELECT", "INSERT"], GovernanceDecisionHeadUpdateColumns, true),
+                ("projects-config", "projects_config", "model_provider_credential_preflights",
+                    ["SELECT", "INSERT"], ["consumed_at", "consumed_by_kind"], true),
             ];
         var planned = services.SelectMany(service => service.Tables
             .Where(table => table.UpdateColumns is not { Length: 0 })
@@ -637,10 +643,14 @@ internal static class InitializerChecks
 
         foreach (var (service, table) in planned)
         {
-            var guarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
+            var governanceGuarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
                 table.Table == GovernanceDecisionHeadTable;
+            var preflightGuarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
+                table.Table == "model_provider_credential_preflights";
+            var guarded = governanceGuarded || preflightGuarded;
+            var expectedGuardCount = governanceGuarded ? 4 : preflightGuarded ? 2 : 0;
             if (table.LockColumn is not null || table.MutationDenialRequired != guarded ||
-                GetMutationDenialGuards(table).Length != (guarded ? 4 : 0))
+                GetMutationDenialGuards(table).Length != expectedGuardCount)
                 throw new InvalidOperationException(
                     "Column-scoped UPDATE grants require the reviewed governance-head guards and no row-lock guard.");
         }

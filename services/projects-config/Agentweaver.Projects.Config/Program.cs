@@ -182,6 +182,7 @@ builder.Services.AddScoped<ModelProviderDraftService>(services => new(
     services.GetRequiredService<TimeProvider>(),
     services.GetRequiredService<ModelBindingCapabilities>(),
     builder.Configuration.GetValue<bool>("ProjectsConfig:ProviderReferenceReservationsEnabled")));
+builder.Services.AddScoped<ModelProviderCredentialPublicationV2Service>();
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Projects.Config");
 builder.Services.AddScoped<NativeAcsPolicyStore>();

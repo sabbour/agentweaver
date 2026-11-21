@@ -140,3 +140,58 @@ public sealed class ModelProviderDraftException(string code, string message) : E
     public static ModelProviderDraftException NotFound() =>
         new("model_provider_draft_not_found", "The provider draft was not found.");
 }
+
+public enum ModelProviderCredentialOperationKind
+{
+    Publish,
+    Cancel,
+    Disable,
+}
+
+public sealed class ModelProviderCredentialOperationRecord
+{
+    public Guid OperationId { get; set; }
+    public ModelProviderCredentialOperationKind OperationKind { get; set; }
+    public required string ProviderId { get; set; }
+    public ModelProviderBindingScope Scope { get; set; }
+    public string? ProjectId { get; set; }
+    public long? ProviderRevision { get; set; }
+    public long? ExpectedProviderRevision { get; set; }
+    public long? OriginalProviderRevision { get; set; }
+    public long? OriginalCredentialRevision { get; set; }
+    public Guid? CredentialSlotId { get; set; }
+    public string? CredentialSecretId { get; set; }
+    public string? CredentialVersion { get; set; }
+    public string? ConfigurationHash { get; set; }
+    public required string OriginalTenant { get; set; }
+    public Guid OriginalMembershipId { get; set; }
+    public long OriginalMembershipRevision { get; set; }
+    public Guid CurrentMembershipId { get; set; }
+    public long CurrentMembershipRevision { get; set; }
+    public Guid CurrentAssignmentId { get; set; }
+    public long CurrentAssignmentRevision { get; set; }
+    public required string Issuer { get; set; }
+    public required string ActorId { get; set; }
+    public required string RequestFingerprint { get; set; }
+    public DateTimeOffset RecordedAt { get; set; }
+}
+
+public sealed class ModelProviderCredentialPreflightRecord
+{
+    public Guid PreflightId { get; set; }
+    public Guid OperationId { get; set; }
+    public required string Mode { get; set; }
+    public ModelProviderBindingScope Scope { get; set; }
+    public string? ProjectId { get; set; }
+    public required string ProviderId { get; set; }
+    public required string Issuer { get; set; }
+    public required string ActorId { get; set; }
+    public required string TenantId { get; set; }
+    public Guid MembershipId { get; set; }
+    public long MembershipRevision { get; set; }
+    public Guid AssignmentId { get; set; }
+    public long AssignmentRevision { get; set; }
+    public DateTimeOffset IssuedAt { get; set; }
+    public DateTimeOffset? ConsumedAt { get; set; }
+    public ModelProviderCredentialOperationKind? ConsumedByKind { get; set; }
+}

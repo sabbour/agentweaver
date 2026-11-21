@@ -461,6 +461,15 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasColumnType("character varying(256)")
                         .HasColumnName("actor_id");
 
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<string>("PendingSecretVersion")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("pending_secret_version");
+
                     b.Property<DateTimeOffset>("ClaimedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("claimed_at");
@@ -476,6 +485,10 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.Property<Guid>("CredentialSlotId")
                         .HasColumnType("uuid")
                         .HasColumnName("credential_slot_id");
+
+                    b.Property<DateTimeOffset?>("DispatchedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatched_at");
 
                     b.Property<long?>("ExpectedProviderRevision")
                         .HasColumnType("bigint")
@@ -522,6 +535,10 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.Property<DateTimeOffset?>("QuarantinedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("quarantined_at");
+
+                    b.Property<DateTimeOffset?>("RecoveredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recovered_at");
 
                     b.Property<string>("RequestFingerprint")
                         .IsRequired()
@@ -582,7 +599,7 @@ namespace Agentweaver.Identity.Broker.Migrations
 
                             t.HasCheckConstraint("ck_model_provider_credential_write_claims_fingerprint", "request_fingerprint ~ '^[0-9a-f]{64}$'");
 
-                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_outcome", "((state = 'Claimed' AND quarantined_at IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR (state = 'Quarantined' AND quarantined_at IS NOT NULL AND completed_revision IS NULL AND completed_at IS NULL) OR (state IN ('Completed', 'PublicationPending', 'Published') AND quarantined_at IS NULL AND completed_revision IS NOT NULL AND completed_at IS NOT NULL AND CASE WHEN expected_revision < 9223372036854775807 THEN completed_revision = expected_revision + 1 ELSE FALSE END AND ((state = 'Completed' AND expected_provider_revision IS NULL) OR (state IN ('PublicationPending', 'Published') AND expected_provider_revision IS NOT NULL)))) AND ((state <> 'Published' AND published_provider_revision IS NULL AND published_configuration_hash IS NULL AND published_at IS NULL) OR (state = 'Published' AND published_provider_revision IS NOT NULL AND published_configuration_hash IS NOT NULL AND published_at IS NOT NULL AND CASE WHEN expected_provider_revision IS NOT NULL AND expected_provider_revision < 9223372036854775807 THEN published_provider_revision = expected_provider_revision + 1 ELSE FALSE END AND published_configuration_hash COLLATE \"C\" ~ '^[0-9A-Fa-f]{64}$'))");
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_outcome", "((state = 'Claimed' AND quarantined_at IS NULL AND cancelled_at IS NULL AND pending_secret_version IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR (state = 'Quarantined' AND quarantined_at IS NOT NULL AND cancelled_at IS NULL AND pending_secret_version IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR (state = 'Cancelled' AND cancelled_at IS NOT NULL) OR (state = 'PublicationPending' AND quarantined_at IS NULL AND cancelled_at IS NULL AND pending_secret_version IS NOT NULL AND pending_secret_version ~ '^[0-9A-Fa-f]{32}$' AND completed_revision IS NULL AND completed_at IS NULL AND expected_provider_revision IS NOT NULL) OR (state IN ('Completed', 'Published') AND quarantined_at IS NULL AND cancelled_at IS NULL AND completed_revision IS NOT NULL AND completed_at IS NOT NULL AND CASE WHEN expected_revision < 9223372036854775807 THEN completed_revision = expected_revision + 1 ELSE FALSE END AND ((state = 'Completed' AND pending_secret_version IS NULL AND expected_provider_revision IS NULL) OR (state = 'Published' AND pending_secret_version IS NOT NULL AND pending_secret_version ~ '^[0-9A-Fa-f]{32}$' AND expected_provider_revision IS NOT NULL)))) AND ((state <> 'Published' AND published_provider_revision IS NULL AND published_configuration_hash IS NULL AND published_at IS NULL) OR (state = 'Published' AND published_provider_revision IS NOT NULL AND published_configuration_hash IS NOT NULL AND published_at IS NOT NULL AND CASE WHEN expected_provider_revision IS NOT NULL AND expected_provider_revision < 9223372036854775807 THEN published_provider_revision = expected_provider_revision + 1 ELSE FALSE END AND published_configuration_hash COLLATE \"C\" ~ '^[0-9A-Fa-f]{64}$'))");
 
                             t.HasCheckConstraint("ck_model_provider_credential_write_claims_publication_identity", "(expected_provider_revision IS NULL AND purpose IS NULL AND issuer IS NULL AND tenant IS NULL) OR (expected_provider_revision IS NOT NULL AND expected_provider_revision > 0 AND expected_provider_revision < 9223372036854775807 AND purpose IS NOT NULL AND purpose = 'credential-publication' AND issuer IS NOT NULL AND octet_length(issuer) = length(issuer) AND issuer COLLATE \"C\" ~ '^[!-~]+$' AND tenant IS NOT NULL AND octet_length(tenant) = length(tenant) AND tenant COLLATE \"C\" ~ '^[A-Za-z0-9._:-]+$')");
 
@@ -592,7 +609,7 @@ namespace Agentweaver.Identity.Broker.Migrations
 
                             t.HasCheckConstraint("ck_model_provider_credential_write_claims_secret_name", "secret_name ~ '^[A-Za-z0-9-]{1,127}$'");
 
-                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_state", "state IN ('Claimed', 'Quarantined', 'Completed', 'PublicationPending', 'Published')");
+                            t.HasCheckConstraint("ck_model_provider_credential_write_claims_state", "state IN ('Claimed', 'Quarantined', 'Completed', 'PublicationPending', 'Published', 'Cancelled')");
 
                             t.HasCheckConstraint("ck_model_provider_credential_write_claims_vault_source", "vault_source IN ('Existing', 'Byok')");
                         });

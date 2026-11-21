@@ -24,11 +24,25 @@ test('awwus2np01 values replace every default-target value and keep the fixed P1
 
   const result = applyTargetValues(text, pairs);
   for (const [from] of pairs) assert.ok(!result.includes(from), `${from} remains`);
-  for (const value of ['eastus2euap', 'agentweaver-kv-v1', 'agentweaverblob', 'agentweaver-pg.',
-    'agentweaver-id-identity-broker']) {
+  for (const value of ['eastus2euap', 'agentweaver-kv-v1', 'agentweaver-byok-kv-v1', 'agentweaverblob', 'agentweaver-pg.',
+    'agentweaver-id-identity-broker', 'IdentityBroker__SecretRedemption__ByokVaultUri']) {
     assert.ok(!result.includes(value), `${value} remains`);
   }
   for (const role of ['agentweaver-id-projects-config', 'agentweaver-id-p1-postgres-migration']) {
     assert.ok(text.includes(role) && result.includes(role), `${role} must stay`);
   }
+});
+
+test('kustomize renders opt-in BYOK vault for agentweaver and omits ByokVaultUri for opted-out awwus2np01', () => {
+  const rendered = execFileSync('kubectl', ['kustomize', path.join(root, 'deploy', 'k8s')], {
+    cwd: root, encoding: 'utf8',
+  });
+  const optInDoc = applyTargetValues(rendered, targetValuePairs(root, 'agentweaver'));
+  assert.match(optInDoc, /IdentityBroker__SecretRedemption__ByokVaultHost:\s*agentweaver-byok-kv-v1\.vault\.azure\.net/);
+  assert.match(optInDoc, /IdentityBroker__SecretRedemption__ByokVaultUri:\s*https:\/\/agentweaver-byok-kv-v1\.vault\.azure\.net\//);
+
+  const optedOutDoc = applyTargetValues(rendered, targetValuePairs(root, 'awwus2np01'));
+  assert.match(optedOutDoc, /IdentityBroker__SecretRedemption__ByokVaultHost:\s*awwus2np01-kv1\.vault\.azure\.net/);
+  assert.doesNotMatch(optedOutDoc, /IdentityBroker__SecretRedemption__ByokVaultUri/);
+  assert.doesNotMatch(optedOutDoc, /agentweaver-byok-kv-v1/);
 });

@@ -115,6 +115,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   const location = values?.location?.value;
   const namePrefix = values?.namePrefix?.value;
   let keyVaultName;
+  let byokKeyVaultName;
   const parameterTenantId = values?.tenantId?.value;
   const owner = values?.owner?.value;
   const costCenter = values?.costCenter?.value;
@@ -139,9 +140,9 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   if (scope === 'infrastructure-only') {
     nodePoolBounds = assertAutoscalerBounds(values);
     keyVaultName = assertApprovedKeyVaultName(resourceGroup, values?.keyVaultName?.value);
-    const byokKeyVaultName = values?.byokKeyVaultName?.value;
-    if (byokKeyVaultName !== undefined && byokKeyVaultName !== '') {
-      assertApprovedKeyVaultName(resourceGroup, byokKeyVaultName);
+    const configuredByokVaultName = values?.byokKeyVaultName?.value;
+    if (configuredByokVaultName !== undefined && configuredByokVaultName !== '') {
+      byokKeyVaultName = assertApprovedKeyVaultName(resourceGroup, configuredByokVaultName);
       if (!byokKeyVaultName.startsWith(`${resourceGroup}-`)) {
         throw new Error('BYOK Key Vault name must use the selected target prefix.');
       }
@@ -175,6 +176,16 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     // The existing-cluster template does not own node-pool settings; retain the full-foundation policy check.
     nodePoolBounds = assertAutoscalerBounds(foundationValues);
     keyVaultName = assertApprovedKeyVaultName(resourceGroup, foundationValues?.keyVaultName?.value);
+    const configuredByokVaultName = foundationValues?.byokKeyVaultName?.value;
+    if (configuredByokVaultName !== undefined && configuredByokVaultName !== '') {
+      byokKeyVaultName = assertApprovedKeyVaultName(resourceGroup, configuredByokVaultName);
+      if (!byokKeyVaultName.startsWith(`${resourceGroup}-`)) {
+        throw new Error('BYOK Key Vault name must use the selected target prefix.');
+      }
+      if (byokKeyVaultName.toLowerCase() === keyVaultName.toLowerCase()) {
+        throw new Error('BYOK Key Vault must be separate from the existing keyVaultName.');
+      }
+    }
     postgresEntraAdminObjectId = foundationValues?.postgresEntraAdminObjectId?.value;
     postgresEntraAdminPrincipalName = foundationValues?.postgresEntraAdminPrincipalName?.value;
     postgresEntraAdminPrincipalType = foundationValues?.postgresEntraAdminPrincipalType?.value;
@@ -195,7 +206,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner, costCenter,
-    location, monitorLocation, keyVaultName, kataVmSize, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
+    location, monitorLocation, keyVaultName, byokKeyVaultName, kataVmSize, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
     nodePoolMinCount: nodePoolBounds.minCount, nodePoolMaxCount: nodePoolBounds.maxCount,
     postgresEntraAdminPrincipalType,
     appRoutingDnsZoneResourceIds,

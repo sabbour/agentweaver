@@ -490,6 +490,37 @@ public static class GatewayRouteCatalog
             maximumRequestBodyBytes: ModelProviderDraftSaveLimit, forwardTenantSelector: true,
             exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
             excludeFromMcp: true);
+        const long ModelProviderCredentialPutLimit = 16 * 1024;
+        const long ModelProviderCredentialDeleteLimit = 8 * 1024;
+        const long ModelProviderCredentialResponseLimit = 16 * 1024;
+        Add("PUT", GatewayOwner.IdentityBroker, "/platform/byok-providers/{providerId}/credential",
+            "/api/platform/byok-providers/{providerId}/credential", "setPlatformByokProviderCredential",
+            "Set, rotate, or recover a platform BYOK provider credential", body: true,
+            maximumRequestBodyBytes: ModelProviderCredentialPutLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
+            excludeFromMcp: true);
+        Add("DELETE", GatewayOwner.IdentityBroker, "/platform/byok-providers/{providerId}/credential",
+            "/api/platform/byok-providers/{providerId}/credential", "disablePlatformByokProviderCredential",
+            "Disable or cancel a platform BYOK provider credential",
+            ["operationId", "expectedProviderRevision", "expectedCredentialRevision", "cancel"],
+            body: true, jsonBodyRequired: false,
+            maximumRequestBodyBytes: ModelProviderCredentialDeleteLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
+            excludeFromMcp: true);
+        Add("PUT", GatewayOwner.IdentityBroker, "/projects/{projectId}/byok-providers/{providerId}/credential",
+            "/api/projects/{projectId}/byok-providers/{providerId}/credential", "setProjectByokProviderCredential",
+            "Set, rotate, or recover a project BYOK provider credential", body: true,
+            maximumRequestBodyBytes: ModelProviderCredentialPutLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
+            excludeFromMcp: true);
+        Add("DELETE", GatewayOwner.IdentityBroker, "/projects/{projectId}/byok-providers/{providerId}/credential",
+            "/api/projects/{projectId}/byok-providers/{providerId}/credential", "disableProjectByokProviderCredential",
+            "Disable or cancel a project BYOK provider credential",
+            ["operationId", "expectedProviderRevision", "expectedCredentialRevision", "cancel"],
+            body: true, jsonBodyRequired: false,
+            maximumRequestBodyBytes: ModelProviderCredentialDeleteLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
+            excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/policies/platform", "/api/policies/platform/",
             "readPlatformNativeAcsPolicy", "Read the current canonical Platform Policy",
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],

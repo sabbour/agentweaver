@@ -58,13 +58,28 @@ project Owner or PlatformAdmin. Every operation requires `api.read` and
 | `GET /api/v1/projects/{projectId}/byok-providers/{providerId}` | Projects `GET /api/projects/{projectId}/byok-providers/{providerId}` | `readProjectByokProviderDraft` |
 | `POST /api/v1/projects/{projectId}/byok-providers` | Projects `POST /api/projects/{projectId}/byok-providers` | `createProjectByokProviderDraft` |
 | `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}` | Projects `PUT /api/projects/{projectId}/byok-providers/{providerId}` | `updateProjectByokProviderDraft` |
+| `PUT /api/v1/platform/byok-providers/{providerId}/credential` | Identity Broker `PUT /api/platform/byok-providers/{providerId}/credential` | `setPlatformByokProviderCredential` |
+| `DELETE /api/v1/platform/byok-providers/{providerId}/credential` | Identity Broker `DELETE /api/platform/byok-providers/{providerId}/credential` | `disablePlatformByokProviderCredential` |
+| `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}/credential` | Identity Broker `PUT /api/projects/{projectId}/byok-providers/{providerId}/credential` | `setProjectByokProviderCredential` |
+| `DELETE /api/v1/projects/{projectId}/byok-providers/{providerId}/credential` | Identity Broker `DELETE /api/projects/{projectId}/byok-providers/{providerId}/credential` | `disableProjectByokProviderCredential` |
 
 List routes accept only `pageSize` and `afterProviderId`. Saves use an
 operation ID and expected revision; create uses revision `0`, while update
 requires a positive revision. Save retries return the revision committed by
-the original operation. Delete, activation, and credential routes are not
-available through Gateway. The private Projects publication path returns
-`503 credential_publication_unavailable`.
+the original operation.
+
+Credential `PUT` routes are write-only and store raw API keys in the dedicated
+BYOK Key Vault (`byok-<scope>-<providerId>`). Responses and logs never include
+the key, key hashes, or vault secret names. Existing-vault reference attachment
+is rejected (`400 existing_vault_reference_not_supported`). An uncertain Key
+Vault write is quarantined and never re-sent; callers can recover with
+`recoverySecretVersion` after verifying operation provenance, or cancel with
+`DELETE ...?operationId=<guid>&cancel=true`. Cancellation is final unless
+Projects & Config already committed a matching publication receipt, in which
+case the receipt wins. `DELETE` disables the credential slot and blocks new
+run-selection pins under the provider lock while keeping earlier accepted pins
+redeemable. Provider activation remains unavailable through Gateway. The legacy
+private Projects publication path returns `503 credential_publication_unavailable`.
 Platform create accepts an optional `reference` to reserve the exact spelling
 of a deployment-managed BYOK model, with the matching `targetInstallationId`.
 Reservations are permanent and start as

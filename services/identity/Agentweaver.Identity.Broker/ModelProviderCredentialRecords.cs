@@ -33,6 +33,7 @@ public enum ModelProviderCredentialWriteClaimState
     Completed,
     PublicationPending,
     Published,
+    Cancelled,
 }
 
 public enum ModelProviderCredentialWriteClaimStatus
@@ -43,6 +44,7 @@ public enum ModelProviderCredentialWriteClaimStatus
     Claimed,
     PublicationPending,
     Published,
+    Cancelled,
 }
 
 public enum ModelProviderCredentialCurrentStatus
@@ -108,7 +110,11 @@ public sealed class ModelProviderCredentialWriteClaim
     public required string ActorId { get; set; }
     public ModelProviderCredentialWriteClaimState State { get; set; }
     public DateTimeOffset ClaimedAt { get; set; }
+    public DateTimeOffset? DispatchedAt { get; set; }
     public DateTimeOffset? QuarantinedAt { get; set; }
+    public DateTimeOffset? RecoveredAt { get; set; }
+    public DateTimeOffset? CancelledAt { get; set; }
+    public string? PendingSecretVersion { get; set; }
     public long? CompletedRevision { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
     public long? ExpectedProviderRevision { get; set; }
