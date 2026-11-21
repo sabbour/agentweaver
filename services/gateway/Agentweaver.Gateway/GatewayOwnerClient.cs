@@ -106,6 +106,12 @@ public sealed partial class GatewayOwnerClient(
                         .ConfigureAwait(false);
                     return;
                 }
+                if (route.MaximumRequestBodyBytes is { } maximumBytes &&
+                    context.Request.ContentLength > maximumBytes)
+                    throw RequestBodyTooLarge();
+
+                await AuthorizeManualRateCardUploadAsync(context, bearer, timeout.Token)
+                    .ConfigureAwait(false);
             }
             if (route.OperationId == "readPlatformNativeAcsPolicy")
             {
@@ -2247,6 +2253,89 @@ public sealed partial class GatewayOwnerClient(
         value is { Length: > 0 } && value.Length <= maxLength &&
         char.IsAsciiLetterOrDigit(value[0]) &&
         value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-');
+
+    private async Task AuthorizeManualRateCardUploadAsync(
+        HttpContext context,
+        AuthenticationHeaderValue bearer,
+        CancellationToken cancellationToken)
+    {
+        RequireUnboundPlatformAdminCaller(context, options.IdentityAudience);
+        var tenant = ReadManualRateCardTenantSelector(context);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            BuildOwnerUri(GatewayOwner.Projects, "/api/authorization/platform/model-pricing-rate-cards"));
+        request.Headers.Authorization = bearer;
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation(TenantSelectorHeader, tenant);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await SendAsync(GatewayOwner.Projects, request, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException)
+        {
+            throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
+        }
+        catch (IOException)
+        {
+            throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+                throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "projects_authorization_denied");
+            if (IsRedirect(response.StatusCode))
+                throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_redirect_rejected");
+            if (response.StatusCode != HttpStatusCode.NoContent)
+                throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
+            if (response.Headers.CacheControl?.NoStore != true)
+                throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_cache_policy_invalid");
+        }
+    }
+
+    private static void RequireUnboundPlatformAdminCaller(HttpContext context, string? ownerAudience)
+    {
+        var subjects = context.User.FindAll("sub").Take(2).ToArray();
+        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .ToArray();
+        if (context.User.Identity?.IsAuthenticated != true ||
+            subjects.Length != 1 || !Guid.TryParseExact(subjects[0].Value, "D", out _) ||
+            string.IsNullOrWhiteSpace(ownerAudience) ||
+            !context.User.FindAll("aud").Any(claim => string.Equals(claim.Value, ownerAudience, StringComparison.Ordinal)) ||
+            !scopes.Contains("api.read", StringComparer.Ordinal) ||
+            !scopes.Contains("projects.admin", StringComparer.Ordinal))
+            throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "caller_scope_invalid");
+
+        if (context.User.HasClaim(claim => claim.Type is "project_id" or "run_id" or "purpose"))
+            throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "caller_binding_mismatch");
+    }
+
+    private static string? ReadManualRateCardTenantSelector(HttpContext context)
+    {
+        var selectors = context.Request.Headers[TenantSelectorHeader];
+        if (selectors.Count == 0)
+            return null;
+        if (selectors.Count != 1 || !IsOpaqueProjectTenantIdentifier(selectors[0]))
+            throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "projects_authorization_tenant_invalid");
+        return selectors[0];
+    }
+
+    private static bool IsOpaqueProjectTenantIdentifier(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) ||
+            character is '.' or '_' or '-' or ':');
+
+    private static GatewayOwnerFailureException ManualRateCardFailure(int statusCode, string code) =>
+        new(statusCode, "application/problem+json", ProblemBody(code, statusCode));
 
     private static bool IsSupportedManualRateCardJsonContentType(string? contentType)
     {
