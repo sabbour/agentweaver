@@ -267,6 +267,76 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void AlternateReferenceOverridePreservesHostedConnectionWithoutInheritingByokCredentials()
+    {
+        var connectionId = Guid.NewGuid();
+        var hostedPlatform = PlatformDefaults() with
+        {
+            ModelSelection = new ModelSelectionSettings(
+                "platform-model", null, ModelSourceMode.HostedCopilot, connectionId)
+        };
+        var hostedProject = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ModelTaskOverrides =
+            [
+                new ModelTaskSelectionOverride(ModelTaskKind.CodeWriting, new("hosted-alternate", "low"))
+            ]
+        });
+        var context = new RunSelectionContext
+        {
+            Revision = "model-routing-v1",
+            AvailableModelSelectionReferences = ImmutableHashSet.Create(
+                StringComparer.Ordinal,
+                "platform-model",
+                "gpt-6.1-sol",
+                "gpt-6-luna",
+                "hosted-alternate",
+                "byok-provider")
+        };
+
+        var hostedResolved = ProjectsConfigService.ResolveModelSelections(
+            hostedProject, hostedPlatform, context, "project-1");
+        Assert.Equal(ModelSourceMode.HostedCopilot, hostedResolved.PrimarySelection.SourceMode);
+        Assert.Equal(connectionId, hostedResolved.PrimarySelection.ConnectionId);
+        var hostedAlternate = Assert.Single(hostedResolved.EffectiveSelections,
+            item => item.Selection.Reference == "hosted-alternate");
+        Assert.Equal(ModelSourceMode.HostedCopilot, hostedAlternate.Selection.SourceMode);
+        Assert.Equal(connectionId, hostedAlternate.Selection.ConnectionId);
+        Assert.Null(hostedAlternate.Selection.CredentialReference);
+        Assert.Null(hostedAlternate.Selection.CredentialIdentity);
+        Assert.Null(hostedAlternate.Selection.ModelBindingPin);
+
+        var byokPlatform = PlatformDefaults() with
+        {
+            ModelSelection = new ModelSelectionSettings(
+                "byok-provider",
+                new SecretRef("byok-platform-provider", new string('a', 32)),
+                ModelSourceMode.Byok)
+            {
+                CredentialIdentity = new ModelCredentialIdentity(
+                    Guid.NewGuid(), ModelProviderBindingScope.Platform, null, "byok-provider"),
+                ModelBindingPin = new RuntimeModelBindingPin(
+                    1, "byok-provider", "deployment", ModelSourceMode.Byok,
+                    "revision", new string('b', 64))
+                {
+                    ProviderType = "openai",
+                    ProviderId = "byok-provider",
+                    ReasoningEffort = "high"
+                }
+            }
+        };
+        var byokResolved = ProjectsConfigService.ResolveModelSelections(
+            hostedProject, byokPlatform, context, "project-1");
+        var unpinnedAlternate = Assert.Single(byokResolved.EffectiveSelections,
+            item => item.Selection.Reference == "hosted-alternate");
+        Assert.Null(unpinnedAlternate.Selection.SourceMode);
+        Assert.Null(unpinnedAlternate.Selection.ConnectionId);
+        Assert.Null(unpinnedAlternate.Selection.CredentialReference);
+        Assert.Null(unpinnedAlternate.Selection.CredentialIdentity);
+        Assert.Null(unpinnedAlternate.Selection.ModelBindingPin);
+    }
+
+    [Fact]
     public void ResolvesTaskRoleAndAgentModelOverridesAndKeepsExplicitProjectSelectionGlobal()
     {
         var platform = PlatformDefaults() with
