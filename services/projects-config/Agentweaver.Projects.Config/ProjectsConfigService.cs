@@ -1867,11 +1867,14 @@ public sealed partial class ProjectsConfigService
             var explicitSourceMode = modelOverride.ModelBindingPin?.SourceMode ??
                 (modelOverride.CredentialIdentity is not null || modelOverride.CredentialReference is not null
                     ? ModelSourceMode.Byok
-                    : (ModelSourceMode?)null);
+                    : current?.SourceMode == ModelSourceMode.HostedCopilot
+                        ? ModelSourceMode.HostedCopilot
+                        : (ModelSourceMode?)null);
             return new ModelSelectionSettings(
                 explicitReference,
                 modelOverride.CredentialReference,
-                explicitSourceMode)
+                explicitSourceMode,
+                explicitSourceMode == ModelSourceMode.HostedCopilot ? current?.ConnectionId : null)
             {
                 ReasoningEffort = explicitEffort,
                 ModelBindingPin = modelOverride.ModelBindingPin,
