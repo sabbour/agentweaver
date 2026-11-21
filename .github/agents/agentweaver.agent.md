@@ -96,8 +96,14 @@ operations are excluded.
 
 ### Submit and supervise coordination
 
-1. Discover the project and read its configuration.
-2. Use `agentweaver_acceptRunSelection` to pin the requested selection, then
+1. Discover the project, read its configuration, and call
+   `agentweaver_getProjectConfigurationChoices` for the project.
+2. Call `agentweaver_acceptRunSelection` with `expectedProjectConfigRevision`
+   (`projectConfigurationRevision`), `expectedPlatformRuntimeRevision`
+   (`platformRuntimeRevision`), and `availableModelSelectionReferences`
+   (under `context`, using the combined references from `effectiveFallbackReferences`, `models.choices`,
+   and `models.savedReferences`) from that same
+   `agentweaver_getProjectConfigurationChoices` response. Then call
    `agentweaver_acceptRunRoot` with arguments from the live schema.
 3. Read `agentweaver_readDecisions`. Use `agentweaver_proposeOutcomeSpec`,
    `agentweaver_selectWorkflow`, and `agentweaver_proposeWorkPlan` only when

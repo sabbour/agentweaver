@@ -31,6 +31,8 @@ public sealed class GatewayModelProviderDraftTests
         ("GET", "/api/v1/platform/byok-providers/{providerId}", "readPlatformByokProviderDraft", "/api/platform/byok-providers/{providerId}"),
         ("POST", "/api/v1/platform/byok-providers", "createPlatformByokProviderDraft", "/api/platform/byok-providers"),
         ("PUT", "/api/v1/platform/byok-providers/{providerId}", "updatePlatformByokProviderDraft", "/api/platform/byok-providers/{providerId}"),
+        ("POST", "/api/v1/platform/byok-providers/{providerId}/activate", "activatePlatformByokProviderDraft", "/api/platform/byok-providers/{providerId}/activate"),
+        ("POST", "/api/v1/platform/byok-providers/deactivate", "deactivatePlatformByokProviderDraft", "/api/platform/byok-providers/deactivate"),
         ("GET", "/api/v1/projects/{projectId}/byok-providers", "listProjectByokProviderDrafts", "/api/projects/{projectId}/byok-providers"),
         ("GET", "/api/v1/projects/{projectId}/byok-providers/{providerId}", "readProjectByokProviderDraft", "/api/projects/{projectId}/byok-providers/{providerId}"),
         ("POST", "/api/v1/projects/{projectId}/byok-providers", "createProjectByokProviderDraft", "/api/projects/{projectId}/byok-providers"),
@@ -68,7 +70,8 @@ public sealed class GatewayModelProviderDraftTests
                 Assert.True(content.TryGetProperty("application/json", out _));
                 Assert.True(content.TryGetProperty("application/problem+json", out _));
             }
-            if (route.OperationId is "readPlatformByokProviderDraft" or "readProjectByokProviderDraft" or
+            if (route.OperationId is "readPlatformByokProviderDraft" or "activatePlatformByokProviderDraft" or
+                "readProjectByokProviderDraft" or
                 "listProjectByokProviderDrafts" or "createProjectByokProviderDraft" or
                 "updateProjectByokProviderDraft")
                 Assert.True(responses.TryGetProperty("404", out _));
@@ -132,6 +135,8 @@ public sealed class GatewayModelProviderDraftTests
             {
                 "createPlatformByokProviderDraft" => "#/components/schemas/ModelProviderDraftPlatformCreateRequest",
                 "createProjectByokProviderDraft" => "#/components/schemas/ModelProviderDraftProjectCreateRequest",
+                "activatePlatformByokProviderDraft" => "#/components/schemas/ActivatePlatformModelProviderRequest",
+                "deactivatePlatformByokProviderDraft" => "#/components/schemas/DeactivatePlatformModelProviderRequest",
                 _ => "#/components/schemas/ModelProviderDraftSaveRequest",
             }, schemaRef);
         }
@@ -154,7 +159,7 @@ public sealed class GatewayModelProviderDraftTests
             draftSchema.GetProperty("properties").GetProperty("state")
                 .GetProperty("enum").EnumerateArray()
                 .Select(value => value.GetString()!).ToArray());
-        Assert.False(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}/activate", out _));
+        Assert.True(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}/activate", out _));
         Assert.False(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}", out var item) &&
             item.TryGetProperty("delete", out _));
     }

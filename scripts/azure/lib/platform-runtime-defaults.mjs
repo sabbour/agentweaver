@@ -116,6 +116,7 @@ function canonicalJson(value, location = []) {
   if (Array.isArray(value)) return value.map(item => canonicalJson(item, [...location, null]));
   if (value && typeof value === 'object') {
     return Object.fromEntries(Object.keys(value).sort().flatMap(key => {
+      if (location.length === 0 && key === 'modelDefaultSwitch') return [];
       const child = [...location, key];
       return value[key] === null && optionalNullPaths.has(JSON.stringify(child))
         ? []

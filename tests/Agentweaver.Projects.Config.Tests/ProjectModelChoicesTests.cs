@@ -10,6 +10,38 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed class ProjectModelChoicesTests
 {
     [Fact]
+    public void EffectiveFallbackReferencesComeFromTheMatchingPlatformFallbackLayer()
+    {
+        var defaults = new PlatformRuntimeDefaults
+        {
+            ModelSelection = new("provider", new SecretRef("key", "version"), ModelSourceMode.Byok)
+            {
+                CredentialIdentity = new(
+                    Guid.NewGuid(), ModelProviderBindingScope.Platform, null, "provider"),
+                ModelBindingPin = new(
+                    1, "provider", "model", ModelSourceMode.Byok, "revision", new string('a', 64))
+                {
+                    ProviderType = "openai",
+                    ProviderId = "provider",
+                    ReasoningEffort = "high",
+                },
+            },
+            ModelTaskDefaults =
+            [
+                new(ModelTaskKind.Planning, new("provider", "high")),
+                new(ModelTaskKind.CodeWriting, new("explicit-coder", "low")),
+            ],
+        };
+
+        Assert.Equal(
+            ["explicit-coder", "provider"],
+            ProjectsConfigService.BuildEffectiveFallbackReferences(
+                new ProjectConfiguration(), defaults).ToArray());
+        Assert.Empty(ProjectsConfigService.BuildEffectiveFallbackReferences(
+            new ProjectConfiguration { ModelSelection = new("project-explicit") }, defaults));
+    }
+
+    [Fact]
     public void SavedReferencesNeverBecomeEligibleChoicesOrEfforts()
     {
         var platform = new VersionedPlatformRuntimeDefaults(

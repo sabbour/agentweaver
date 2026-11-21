@@ -104,6 +104,10 @@ internal static partial class GatewayOpenApi
             ["writePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyWriteRequest", "NativeAcsPolicyWriteReceipt", "200"),
             ["listPlatformByokProviderDrafts"] = C(null, "ModelProviderDraftPage", "200"),
+            ["activatePlatformByokProviderDraft"] = C(
+                "ActivatePlatformModelProviderRequest", "PlatformModelDefaultSwitchResult", "200"),
+            ["deactivatePlatformByokProviderDraft"] = C(
+                "DeactivatePlatformModelProviderRequest", "PlatformModelDefaultSwitchResult", "200"),
             ["readPlatformByokDeploymentBindings"] = C(null, "ByokDeploymentBindingSnapshot", "200"),
             ["readPlatformByokProviderDraft"] = C(null, "ModelProviderDraft", "200"),
             ["createPlatformByokProviderDraft"] = C("ModelProviderDraftPlatformCreateRequest", "ModelProviderDraft", "200"),
@@ -849,15 +853,22 @@ else if (route.OperationId is
                 "The request has an invalid body, URL, provider ID, or list query.");
             responses["403"] = DraftErrorResponse(
                 "The caller lacks api.read, projects.admin, current membership, or the required current role and binding.");
-            if (route.OperationId is "readPlatformByokProviderDraft" or "readProjectByokProviderDraft" or
+            if (route.OperationId is "readPlatformByokProviderDraft" or "activatePlatformByokProviderDraft" or
+                "readProjectByokProviderDraft" or
                 "listProjectByokProviderDrafts" or "createProjectByokProviderDraft" or
                 "updateProjectByokProviderDraft")
                 responses["404"] = DraftErrorResponse("No Draft exists in the requested scope.");
             responses["409"] = DraftErrorResponse(
                 "The save conflicts or an existing Draft URL needs a safe revisioned update.");
+            if (route.OperationId == "activatePlatformByokProviderDraft")
+                responses["422"] = DraftErrorResponse(
+                    "The selected provider lacks current credential or rate-card evidence.");
             if (route.HasJsonBody)
             {
-                responses["413"] = DraftErrorResponse("The save body exceeds the 32768-byte limit.");
+                responses["413"] = DraftErrorResponse(
+                    route.OperationId is "activatePlatformByokProviderDraft" or "deactivatePlatformByokProviderDraft"
+                        ? "The switch body exceeds the 8192-byte limit."
+                        : "The save body exceeds the 32768-byte limit.");
                 responses["415"] = DraftErrorResponse("The save request must use a JSON content type.");
             }
             responses["503"] = DraftErrorResponse("Projects & Config could not complete the Draft request.");
@@ -1311,6 +1322,7 @@ else if (route.OperationId is
     private static bool IsModelProviderDraftRoute(string operationId) =>
         operationId is "readPlatformByokDeploymentBindings" or "listPlatformByokProviderDrafts" or "readPlatformByokProviderDraft" or
             "createPlatformByokProviderDraft" or "updatePlatformByokProviderDraft" or
+            "activatePlatformByokProviderDraft" or "deactivatePlatformByokProviderDraft" or
             "listProjectByokProviderDrafts" or "readProjectByokProviderDraft" or
             "createProjectByokProviderDraft" or "updateProjectByokProviderDraft";
 
@@ -1800,9 +1812,11 @@ else if (route.OperationId is
             ("projectId", Str()), ("revision", Int()), ("configuration", Ref("ProjectConfiguration")),
             ("updatedByActorId", Str()), ("createdAt", Date())),
         ["ProjectConfigurationChoices"] = Obj(
-            ["projectId", "projectConfigurationRevision", "platformRuntimeRevision", "models", "providers"],
+            ["projectId", "projectConfigurationRevision", "platformRuntimeRevision", "models", "providers",
+                "effectiveFallbackReferences"],
             ("projectId", Str()), ("projectConfigurationRevision", Int()), ("platformRuntimeRevision", Int()),
-            ("models", Ref("ProjectModelChoices")), ("providers", Ref("ProjectProviderChoices"))),
+            ("models", Ref("ProjectModelChoices")), ("providers", Ref("ProjectProviderChoices")),
+            ("effectiveFallbackReferences", Arr(Str()))),
         ["HostedModelReasoningCatalogV1"] = Obj(
             ["contractVersion", "projectId", "projectConfigurationRevision", "bindingsRevision", "state",
                 "unavailableReason", "models"],
@@ -2396,8 +2410,20 @@ else if (route.OperationId is
             ("hasCredential", Bool()), ("reference", Str()),
             ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr())),
         ["ModelProviderDraftPage"] = Obj(
-            ["providers", "nextAfterProviderId"],
+            ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"],
+            ("switchMode", Nullable(Enum("untouched", "active", "explicitHosted"))),
+            ("activeProviderId", NullableStr()), ("settingsRevision", NullableInt()),
             ("providers", Arr(Ref("ModelProviderDraft"))), ("nextAfterProviderId", NullableStr())),
+        ["ActivatePlatformModelProviderRequest"] = StrictObj(
+            ["expectedSettingsRevision", "expectedProviderRevision"],
+            ("expectedSettingsRevision", Int()), ("expectedProviderRevision", Int())),
+        ["DeactivatePlatformModelProviderRequest"] = StrictObj(
+            ["expectedSettingsRevision"],
+            ("expectedSettingsRevision", Int())),
+        ["PlatformModelDefaultSwitchResult"] = StrictObj(
+            ["mode", "activeProviderId", "settingsRevision"],
+            ("mode", Enum("untouched", "active", "explicitHosted")), ("activeProviderId", NullableStr()),
+            ("settingsRevision", Int())),
         ["ByokDeploymentBindingSnapshot"] = Obj(
             ["revision", "bindings"],
             ("revision", Str()), ("bindings", Arr(Ref("ByokDeploymentBinding")))),
@@ -2432,10 +2458,17 @@ else if (route.OperationId is
             ("implementationId", Str()), ("displayName", Str()), ("version", Str()), ("enabled", Bool())),
         ["PlatformRuntimeDefaults"] = Obj(["egressBaseline", "runLimits"],
             ("modelSelection", NullableRef("ModelSelectionSettings")),
+            ("modelDefaultSwitch", Ref("PlatformModelDefaultSwitch")),
             ("modelTaskDefaults", Arr(Ref("ModelTaskSelectionOverride"))),
             ("modelRoleDefaults", Arr(Ref("ModelRoleSelectionOverride"))),
             ("modelAgentDefaults", Arr(Ref("ModelAgentSelectionOverride"))),
             ("egressBaseline", Arr(Ref("NetworkEgressRule"))), ("runLimits", Ref("CopilotRunLimits"))),
+        ["PlatformModelDefaultSwitch"] = Obj(
+            ["mode", "managedTaskKinds"],
+            ("mode", Enum("untouched", "active", "explicitHosted")),
+            ("activeProviderId", NullableStr()), ("providerRevision", NullableInt()),
+            ("managedTaskKinds", Arr(Enum("planning", "review", "design", "security", "creativeWriting",
+                "complex", "codeWriting", "straightforward")))),
         ["CopilotRunLimits"] = Obj(["maxModelTurns", "maxToolCalls", "maxChildren", "maxConcurrentChildren", "maxWallTimeSeconds", "maxPromptTokens"],
             ("maxModelTurns", Int()), ("maxToolCalls", Int()), ("maxChildren", Int()),
             ("maxConcurrentChildren", Int()), ("maxWallTimeSeconds", Int()), ("maxPromptTokens", Int()),

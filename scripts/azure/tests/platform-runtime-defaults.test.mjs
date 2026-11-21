@@ -259,6 +259,28 @@ test('readback rejects changed values, unknown nulls, and redacted credential re
   }
 });
 
+test('compare and readback ignore server-owned modelDefaultSwitch state', async () => {
+  const untouched = { ...defaults, modelDefaultSwitch: { mode: 'untouched', managedTaskKinds: [] } };
+  const dryRun = createDependencies({
+    responses: [{ status: 200, body: { revision: 4, defaults: untouched } }],
+  });
+  assert.deepEqual(
+    await runPlatformRuntimeDefaults(options(), dryRun.overrides),
+    { result: 'exact', revision: 4, exitCode: 0 });
+
+  const explicitHosted = { ...defaults, modelDefaultSwitch: { mode: 'explicitHosted', managedTaskKinds: [] } };
+  const execute = createDependencies({
+    responses: [
+      { status: 200, body: { revision: 4, defaults: null } },
+      { status: 200, body: { revision: 5, defaults: explicitHosted } },
+      { status: 200, body: { revision: 5, defaults: explicitHosted } },
+    ],
+  });
+  assert.deepEqual(
+    await runPlatformRuntimeDefaults(options({ execute: true }), execute.overrides),
+    { result: 'exact', revision: 5, exitCode: 0 });
+});
+
 test('a redacted current response stops execute before any write', async () => {
   const redacted = structuredClone(defaults);
   redacted.modelSelection = { reference: 'byok-model', credentialReference: '[REDACTED]' };

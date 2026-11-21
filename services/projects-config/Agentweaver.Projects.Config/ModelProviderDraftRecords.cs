@@ -113,7 +113,12 @@ public sealed record ModelProviderDraft(
 
 public sealed record ModelProviderDraftPage(
     IReadOnlyList<ModelProviderDraft> Providers,
-    string? NextAfterProviderId);
+    string? NextAfterProviderId)
+{
+    public string? SwitchMode { get; init; }
+    public string? ActiveProviderId { get; init; }
+    public long? SettingsRevision { get; init; }
+}
 
 public sealed class ModelProviderDraftException(string code, string message) : Exception(message)
 {

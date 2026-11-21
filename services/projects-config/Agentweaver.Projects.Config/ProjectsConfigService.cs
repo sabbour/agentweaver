@@ -12,6 +12,7 @@ using Agentweaver.Providers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace Agentweaver.Projects.Config;
 
@@ -49,7 +50,8 @@ public sealed record ProjectConfigurationChoices(
     long ProjectConfigurationRevision,
     long PlatformRuntimeRevision,
     ProjectModelChoices Models,
-    ProjectProviderChoices Providers);
+    ProjectProviderChoices Providers,
+    ImmutableArray<string> EffectiveFallbackReferences);
 
 /// <summary>
 /// Model references and reasoning choices that may be selected for future runs. <see cref="Choices"/> lists only
@@ -102,6 +104,12 @@ public sealed record VersionedPlatformRuntimeDefaults(
     PlatformRuntimeDefaults? Defaults,
     string? UpdatedByActorId,
     DateTimeOffset? CreatedAt);
+
+/// <summary>Saved platform model-switch result.</summary>
+public sealed record PlatformModelDefaultSwitchResult(
+    string Mode,
+    string? ActiveProviderId,
+    long SettingsRevision);
 
 /// <summary>Effective run configuration resolved from immutable project, platform, and owner-provided context.</summary>
 public sealed record EffectiveRunSelection(
@@ -211,7 +219,8 @@ public sealed partial class ProjectsConfigService
             configurationRevision.Revision,
             platform.Revision,
             modelChoices,
-            BuildProviderChoices(configuration));
+            BuildProviderChoices(configuration),
+            BuildEffectiveFallbackReferences(configuration, platform.Defaults));
     }
 
     /// <summary>Loads a project after checking current read or write authority for marketplace operations.</summary>
@@ -679,10 +688,14 @@ public sealed partial class ProjectsConfigService
         CancellationToken cancellationToken)
     {
         await EnsurePlatformAdminAsync(caller, cancellationToken).ConfigureAwait(false);
-        var normalized = ProjectConfigurationValidator.Validate(defaults);
         var head = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
         if (head.CurrentRevision != expectedRevision)
             throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
+        var current = expectedRevision == 0
+            ? null
+            : await ReadPlatformDefaultsAsync(head, cancellationToken).ConfigureAwait(false);
+        var normalized = ProjectConfigurationValidator.Validate(
+            PreservePlatformModelSwitch(current?.Defaults, defaults));
 
         var now = timeProvider.GetUtcNow();
         var nextRevision = checked(head.CurrentRevision + 1);
@@ -705,6 +718,106 @@ public sealed partial class ProjectsConfigService
         }
 
         return new VersionedPlatformRuntimeDefaults(nextRevision, normalized, caller.ActorId, now);
+    }
+
+    /// <summary>Switches installation model fallbacks to one exact Available platform provider revision.</summary>
+    public async Task<PlatformModelDefaultSwitchResult> ActivatePlatformModelProviderAsync(
+        ProjectAuthorizationContext caller,
+        string providerId,
+        long expectedSettingsRevision,
+        long expectedProviderRevision,
+        CancellationToken cancellationToken)
+    {
+        await EnsurePlatformAdminAsync(caller, cancellationToken).ConfigureAwait(false);
+        if (expectedSettingsRevision < 1 || expectedProviderRevision < 1)
+            throw ProjectConfigException.Invalid(
+                "invalid_expected_revision", "Activation requires initialized positive revisions.");
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await LockPlatformAdminAuthorityAsync(db, caller, cancellationToken).ConfigureAwait(false);
+            var head = await LockPlatformHeadForSwitchAsync(db, cancellationToken).ConfigureAwait(false);
+            if (head.CurrentRevision != expectedSettingsRevision)
+                throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
+            if (!await HasCurrentRoleAsync(
+                db, caller, ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin, cancellationToken).ConfigureAwait(false))
+                throw ProjectConfigException.Forbidden();
+
+            var provider = await LockAndReadPlatformProviderAsync(
+                db, providerId, cancellationToken).ConfigureAwait(false);
+            if (provider is null || provider.Head.State != ModelProviderDraftState.Available ||
+                provider.Head.CurrentRevision != expectedProviderRevision)
+                throw ProjectConfigException.Conflict("The provider revision changed or is unavailable.");
+            var binding = ModelProviderDraftService.ToBinding(provider.Revision);
+            var switched = ApplyPlatformProviderSwitch(
+                await ReadPlatformDefaultsRevisionAsync(
+                    db, head, cancellationToken).ConfigureAwait(false),
+                binding);
+            var next = await AppendPlatformDefaultsAsync(
+                db, head, caller.ActorId, switched, cancellationToken).ConfigureAwait(false);
+            if (!await HasCurrentRoleAsync(
+                db, caller, ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin, cancellationToken).ConfigureAwait(false))
+                throw ProjectConfigException.Forbidden();
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new PlatformModelDefaultSwitchResult(
+                ToSwitchMode(PlatformModelDefaultSwitchMode.Active), providerId, next);
+        }
+        catch (Exception exception) when (IsSerializationFailure(exception))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
+        }
+    }
+
+    /// <summary>Returns new-run installation fallbacks to the shipped hosted Copilot choices.</summary>
+    public async Task<PlatformModelDefaultSwitchResult> DeactivatePlatformModelProviderAsync(
+        ProjectAuthorizationContext caller,
+        long expectedSettingsRevision,
+        CancellationToken cancellationToken)
+    {
+        await EnsurePlatformAdminAsync(caller, cancellationToken).ConfigureAwait(false);
+        if (expectedSettingsRevision < 1)
+            throw ProjectConfigException.Invalid(
+                "invalid_expected_revision", "Deactivation requires initialized positive settings.");
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await LockPlatformAdminAuthorityAsync(db, caller, cancellationToken).ConfigureAwait(false);
+            var head = await LockPlatformHeadForSwitchAsync(db, cancellationToken).ConfigureAwait(false);
+            if (head.CurrentRevision != expectedSettingsRevision)
+                throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
+            if (!await HasCurrentRoleAsync(
+                db, caller, ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin, cancellationToken).ConfigureAwait(false))
+                throw ProjectConfigException.Forbidden();
+            var defaults = await ReadPlatformDefaultsRevisionAsync(db, head, cancellationToken)
+                .ConfigureAwait(false);
+            var hosted = RestoreHostedPlatformFallbacks(defaults);
+            var next = await AppendPlatformDefaultsAsync(
+                db, head, caller.ActorId, hosted, cancellationToken).ConfigureAwait(false);
+            if (!await HasCurrentRoleAsync(
+                db, caller, ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin, cancellationToken).ConfigureAwait(false))
+                throw ProjectConfigException.Forbidden();
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new PlatformModelDefaultSwitchResult(
+                ToSwitchMode(PlatformModelDefaultSwitchMode.ExplicitHosted), null, next);
+        }
+        catch (Exception exception) when (IsSerializationFailure(exception))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
+        }
     }
 
     /// <summary>
@@ -1322,6 +1435,285 @@ public sealed partial class ProjectsConfigService
             revision.CreatedAt);
     }
 
+    private static PlatformRuntimeDefaults PreservePlatformModelSwitch(
+        PlatformRuntimeDefaults? current,
+        PlatformRuntimeDefaults submitted)
+    {
+        if (current is null)
+            return submitted with { ModelDefaultSwitch = new PlatformModelDefaultSwitch() };
+        var switchState = current.ModelDefaultSwitch;
+        if (switchState.Mode != PlatformModelDefaultSwitchMode.Active)
+            return submitted with { ModelDefaultSwitch = switchState };
+
+        var tasks = submitted.ModelTaskDefaults
+            .Where(item => !switchState.ManagedTaskKinds.Contains(item.TaskKind))
+            .Concat(current.ModelTaskDefaults.Where(item =>
+                switchState.ManagedTaskKinds.Contains(item.TaskKind)))
+            .GroupBy(item => item.TaskKind)
+            .Select(group => group.First())
+            .OrderBy(item => item.TaskKind)
+            .ToImmutableArray();
+        return submitted with
+        {
+            ModelSelection = current.ModelSelection,
+            ModelTaskDefaults = tasks,
+            ModelDefaultSwitch = switchState,
+        };
+    }
+
+    private static PlatformRuntimeDefaults ApplyPlatformProviderSwitch(
+        PlatformRuntimeDefaults current,
+        ModelProviderBindingRevision binding)
+    {
+        if (binding.Scope != ModelProviderBindingScope.Platform ||
+            binding.ProjectId is not null ||
+            binding.CredentialIdentity is not { } identity ||
+            binding.CredentialReference is not { } credential ||
+            binding.RateCardPin is null)
+            throw new ProjectConfigException(
+                "model_provider_binding_unavailable",
+                "The selected platform provider does not have the required credential and pricing evidence.",
+                StatusCodes.Status422UnprocessableEntity);
+
+        ModelSelectionSettings CreateSelection(string effort)
+        {
+            if (!binding.ReasoningEfforts.Contains(effort, StringComparer.Ordinal))
+                throw ProviderBindingUnavailable();
+            RuntimeModelBindingPin pin;
+            try
+            {
+                pin = RuntimeModelBindingsResolver.Pin(binding, effort);
+            }
+            catch (RuntimeAuthorizationException)
+            {
+                throw ProviderBindingUnavailable();
+            }
+            return new ModelSelectionSettings(
+                binding.ProviderId, credential, ModelSourceMode.Byok)
+            {
+                ReasoningEffort = effort,
+                CredentialIdentity = identity,
+                ModelBindingPin = pin,
+            };
+        }
+
+        var shipped = ModelTaskSelectionDefaults.Create()
+            .ToDictionary(item => item.TaskKind);
+        var previousManaged = current.ModelDefaultSwitch.Mode == PlatformModelDefaultSwitchMode.Active
+            ? current.ModelDefaultSwitch.ManagedTaskKinds
+            : [];
+        var managed = current.ModelTaskDefaults
+            .Where(item => previousManaged.Contains(item.TaskKind) ||
+                shipped.TryGetValue(item.TaskKind, out var installation) &&
+                item.Selection == installation.Selection)
+            .Select(item => item.TaskKind)
+            .ToImmutableHashSet();
+        var taskDefaults = current.ModelTaskDefaults
+            .Select(item =>
+            {
+                if (!managed.Contains(item.TaskKind))
+                    return item;
+                var effort = item.Selection.ReasoningEffort ??
+                             item.Selection.ModelBindingPin?.ReasoningEffort ??
+                             shipped[item.TaskKind].Selection.ReasoningEffort ??
+                             "high";
+                var switched = CreateSelection(effort);
+                return item with
+                {
+                    Selection = new ModelSelectionOverride(
+                        switched.Reference, switched.ReasoningEffort, switched.ModelBindingPin)
+                    {
+                        CredentialReference = switched.CredentialReference,
+                        CredentialIdentity = switched.CredentialIdentity,
+                    },
+                };
+            })
+            .ToImmutableArray();
+        return ProjectConfigurationValidator.Validate(current with
+        {
+            ModelSelection = CreateSelection("high"),
+            ModelTaskDefaults = taskDefaults,
+            ModelDefaultSwitch = new PlatformModelDefaultSwitch
+            {
+                Mode = PlatformModelDefaultSwitchMode.Active,
+                ActiveProviderId = binding.ProviderId,
+                ProviderRevision = binding.ProviderRevision,
+                ManagedTaskKinds = managed.OrderBy(kind => kind).ToImmutableArray(),
+            },
+        });
+    }
+
+    private static PlatformRuntimeDefaults RestoreHostedPlatformFallbacks(PlatformRuntimeDefaults current)
+    {
+        var shipped = ModelTaskSelectionDefaults.Create()
+            .ToDictionary(item => item.TaskKind);
+        var existing = current.ModelTaskDefaults
+            .ToDictionary(item => item.TaskKind);
+        var managed = current.ModelDefaultSwitch.ManagedTaskKinds.ToImmutableHashSet();
+        var tasks = Enum.GetValues<ModelTaskKind>()
+            .Select(taskKind =>
+            {
+                var fallback = shipped[taskKind];
+                if (!existing.TryGetValue(taskKind, out var currentTask) || managed.Contains(taskKind))
+                    return fallback;
+                if (currentTask.Selection.Reference is null)
+                {
+                    var effort = currentTask.Selection.ReasoningEffort ??
+                                 fallback.Selection.ReasoningEffort ??
+                                 "high";
+                    return new ModelTaskSelectionOverride(
+                        taskKind,
+                        new ModelSelectionOverride(fallback.Selection.Reference, effort));
+                }
+                return currentTask;
+            })
+            .ToImmutableArray();
+        return ProjectConfigurationValidator.Validate(current with
+        {
+            ModelSelection = null,
+            ModelTaskDefaults = tasks,
+            ModelDefaultSwitch = new PlatformModelDefaultSwitch
+            {
+                Mode = PlatformModelDefaultSwitchMode.ExplicitHosted,
+            },
+        });
+    }
+
+    private static string ToSwitchMode(PlatformModelDefaultSwitchMode mode) => mode switch
+    {
+        PlatformModelDefaultSwitchMode.Untouched => "untouched",
+        PlatformModelDefaultSwitchMode.Active => "active",
+        PlatformModelDefaultSwitchMode.ExplicitHosted => "explicitHosted",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+    };
+
+    private static async Task<PlatformRuntimeHeadRecord> LockPlatformHeadForSwitchAsync(
+        ProjectsConfigDbContext context,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)context.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            "SELECT id FROM projects_config.platform_runtime_heads WHERE id = 'default' FOR UPDATE",
+            connection, transaction);
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+            throw new InvalidOperationException("The platform runtime head row is missing.");
+        return await context.PlatformRuntimeHeads.SingleAsync(
+            item => item.Id == PlatformRuntimeHeadRecord.SingletonId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task LockPlatformAdminAuthorityAsync(
+        ProjectsConfigDbContext context,
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
+        var grants = caller.Grants.Where(grant =>
+            grant.ResourceType == ProjectAuthorityResourceType.Platform &&
+            grant.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
+            grant.Role == ProjectAuthorityRole.PlatformAdmin).ToArray();
+        if (grants.Length == 0)
+            throw ProjectConfigException.Forbidden();
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)context.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT assignment_id, revision, authorization_result
+            FROM projects_config.lock_native_acs_policy_authority(
+                @membership_id, @issuer, @actor, @tenant, @membership_revision,
+                'Platform', 'default', @ids, @types, @resources, @roles, @revisions)
+            """,
+            connection, transaction);
+        command.Parameters.AddWithValue("membership_id", caller.MembershipId);
+        command.Parameters.AddWithValue("issuer", caller.Issuer);
+        command.Parameters.AddWithValue("actor", caller.ActorId);
+        command.Parameters.AddWithValue("tenant", caller.TenantId);
+        command.Parameters.AddWithValue("membership_revision", caller.MembershipRevision);
+        command.Parameters.AddWithValue("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid,
+            grants.Select(item => item.AssignmentId).ToArray());
+        command.Parameters.AddWithValue("types", NpgsqlDbType.Array | NpgsqlDbType.Text,
+            grants.Select(item => item.ResourceType.ToString()).ToArray());
+        command.Parameters.AddWithValue("resources", NpgsqlDbType.Array | NpgsqlDbType.Text,
+            grants.Select(item => item.ResourceId).ToArray());
+        command.Parameters.AddWithValue("roles", NpgsqlDbType.Array | NpgsqlDbType.Text,
+            grants.Select(item => item.Role.ToString()).ToArray());
+        command.Parameters.AddWithValue("revisions", NpgsqlDbType.Array | NpgsqlDbType.Bigint,
+            grants.Select(item => item.Revision).ToArray());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetString(2) != "authorized" ||
+            !grants.Any(item => item.AssignmentId == reader.GetGuid(0) && item.Revision == reader.GetInt64(1)))
+            throw ProjectConfigException.Forbidden();
+    }
+
+    private static async Task<LockedPlatformProvider?> LockAndReadPlatformProviderAsync(
+        ProjectsConfigDbContext context,
+        string providerId,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)context.Database.CurrentTransaction!.GetDbTransaction();
+        await using var lockCommand = new NpgsqlCommand(
+            """
+            SELECT provider_id
+            FROM projects_config.model_providers
+            WHERE provider_id = @provider_id AND scope = 'Platform' AND project_id IS NULL
+            FOR UPDATE
+            """,
+            connection, transaction);
+        lockCommand.Parameters.AddWithValue("provider_id", providerId);
+        if (await lockCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+            return null;
+        var head = await context.ModelProviderDrafts.SingleAsync(
+            item => item.ProviderId == providerId && item.Scope == ModelProviderBindingScope.Platform &&
+                item.ProjectId == null, cancellationToken).ConfigureAwait(false);
+        var revision = await context.ModelProviderDraftRevisions.AsNoTracking().SingleAsync(
+            item => item.ProviderId == providerId && item.ProviderRevision == head.CurrentRevision,
+            cancellationToken).ConfigureAwait(false);
+        return new LockedPlatformProvider(head, revision);
+    }
+
+    private static async Task<PlatformRuntimeDefaults> ReadPlatformDefaultsRevisionAsync(
+        ProjectsConfigDbContext context,
+        PlatformRuntimeHeadRecord head,
+        CancellationToken cancellationToken)
+    {
+        if (head.CurrentRevision == 0)
+            throw new ProjectConfigException(
+                "platform_runtime_unconfigured",
+                "Platform runtime defaults must be initialized before switching the provider.",
+                StatusCodes.Status409Conflict);
+        var revision = await context.PlatformRuntimeRevisions.AsNoTracking().SingleAsync(
+            item => item.Revision == head.CurrentRevision, cancellationToken).ConfigureAwait(false);
+        return ProjectConfigurationValidator.Validate(
+            Deserialize<PlatformRuntimeDefaults>(revision.ConfigurationJson));
+    }
+
+    private async Task<long> AppendPlatformDefaultsAsync(
+        ProjectsConfigDbContext context,
+        PlatformRuntimeHeadRecord head,
+        string actorId,
+        PlatformRuntimeDefaults defaults,
+        CancellationToken cancellationToken)
+    {
+        var revision = checked(head.CurrentRevision + 1);
+        var now = timeProvider.GetUtcNow();
+        context.PlatformRuntimeRevisions.Add(new PlatformRuntimeRevisionRecord
+        {
+            HeadId = PlatformRuntimeHeadRecord.SingletonId,
+            Revision = revision,
+            ConfigurationJson = Serialize(defaults),
+            UpdatedByActorId = actorId,
+            CreatedAt = now,
+        });
+        head.CurrentRevision = revision;
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return revision;
+    }
+
+    private sealed record LockedPlatformProvider(
+        ModelProviderDraftHeadRecord Head,
+        ModelProviderDraftRevisionRecord Revision);
+
     /// <summary>Resolves global task routes and configured overrides for eligible cast assignments.</summary>
     internal static ResolvedModelSelections ResolveModelSelections(
         ProjectConfiguration project,
@@ -1366,7 +1758,8 @@ public sealed partial class ProjectsConfigService
 
             var effort = selection.ReasoningEffort ?? "high";
             var normalized = selection with { ReasoningEffort = effort };
-            ProjectConfigurationValidator.ValidateResolvedCredentialSlotBinding(normalized, "modelSelection");
+            ProjectConfigurationValidator.ValidateResolvedCredentialSlotBinding(
+                normalized, "modelSelection");
             if (normalized.CredentialIdentity is
                 { Scope: ModelProviderBindingScope.Project } identity &&
                 identity.ProjectId != projectId)
@@ -1374,11 +1767,16 @@ public sealed partial class ProjectsConfigService
                     "model_credential_identity_invalid",
                     "The model credential slot belongs to a different project.",
                     StatusCodes.Status422UnprocessableEntity);
+            var selectionConnectionScope = normalized.CredentialIdentity is { } slotIdentity
+                ? (slotIdentity.Scope == ModelProviderBindingScope.Project
+                    ? ProjectAuthorityResourceType.Project
+                    : ProjectAuthorityResourceType.Platform)
+                : connectionScope;
             var key = (normalized.Reference, effort);
             if (effectiveByIdentity.TryGetValue(key, out var existing))
-                effectiveByIdentity[key] = MergeEffectiveSelection(existing, normalized, connectionScope);
+                effectiveByIdentity[key] = MergeEffectiveSelection(existing, normalized, selectionConnectionScope);
             else
-                effectiveByIdentity.Add(key, new EffectiveModelSelection(normalized, connectionScope));
+                effectiveByIdentity.Add(key, new EffectiveModelSelection(normalized, selectionConnectionScope));
             if (effectiveByIdentity.Count > ModelTaskSelectionLimits.MaximumAcceptedSelections)
                 throw new ProjectConfigException(
                     "model_selection_limit_exceeded",
@@ -1460,27 +1858,51 @@ public sealed partial class ProjectsConfigService
     {
         if (modelOverride is null)
             return current;
-        var reference = modelOverride.Reference ?? current?.Reference;
-        if (reference is null)
-            throw new ProjectConfigException(
-                "model_selection_unavailable",
-                "A model selection override requires a base model reference.",
-                StatusCodes.Status422UnprocessableEntity);
+        if (modelOverride.Reference is { } explicitReference &&
+            current?.Reference != explicitReference)
+        {
+            var explicitEffort = modelOverride.ReasoningEffort ??
+                                 modelOverride.ModelBindingPin?.ReasoningEffort ??
+                                 "high";
+            var explicitSourceMode = modelOverride.ModelBindingPin?.SourceMode ??
+                (modelOverride.CredentialIdentity is not null || modelOverride.CredentialReference is not null
+                    ? ModelSourceMode.Byok
+                    : (ModelSourceMode?)null);
+            return new ModelSelectionSettings(
+                explicitReference,
+                modelOverride.CredentialReference,
+                explicitSourceMode)
+            {
+                ReasoningEffort = explicitEffort,
+                ModelBindingPin = modelOverride.ModelBindingPin,
+                CredentialIdentity = modelOverride.CredentialIdentity,
+            };
+        }
+
+        var reference = modelOverride.Reference ?? current?.Reference ?? throw new ProjectConfigException(
+            "model_selection_unavailable",
+            "A model selection override requires a base model reference.",
+            StatusCodes.Status422UnprocessableEntity);
         var effort = modelOverride.ReasoningEffort ??
                      modelOverride.ModelBindingPin?.ReasoningEffort ??
                      current?.ReasoningEffort ?? "high";
         var sourceMode = modelOverride.ModelBindingPin?.SourceMode ?? current?.SourceMode;
         var sourceChanged = current?.SourceMode != sourceMode;
-        var changed = current is null || current.Reference != reference ||
-                      (current.ReasoningEffort ?? "high") != effort || sourceChanged;
+        var effortChanged = (current?.ReasoningEffort ?? "high") != effort;
         var slotBacked = modelOverride.CredentialIdentity is not null ||
                          modelOverride.ModelBindingPin?.ProviderId is not null;
-        var credentialBindingChanged = current is null || current.Reference != reference || sourceChanged ||
+        var credentialBindingChanged = current is null || sourceChanged ||
                                        modelOverride.CredentialIdentity is not null &&
                                        current.CredentialIdentity != modelOverride.CredentialIdentity ||
                                        slotBacked && current.CredentialIdentity is null ||
                                        modelOverride.ModelBindingPin?.ProviderId is { } providerId &&
                                        current.CredentialIdentity?.ProviderId != providerId;
+        var retainedPin = modelOverride.ModelBindingPin ??
+                          (modelOverride.Reference is null && !sourceChanged && current?.ModelBindingPin is not null
+                              ? current.ModelBindingPin with { ReasoningEffort = effort }
+                              : !sourceChanged && !effortChanged
+                                  ? current?.ModelBindingPin
+                                  : null);
         return new ModelSelectionSettings(
             reference,
             modelOverride.CredentialReference ??
@@ -1489,7 +1911,7 @@ public sealed partial class ProjectsConfigService
             sourceMode == ModelSourceMode.HostedCopilot ? current?.ConnectionId : null)
         {
             ReasoningEffort = effort,
-            ModelBindingPin = modelOverride.ModelBindingPin ?? (changed ? null : current?.ModelBindingPin),
+            ModelBindingPin = retainedPin,
             CredentialIdentity = modelOverride.CredentialIdentity ??
                                  (credentialBindingChanged ? null : current?.CredentialIdentity)
         };
@@ -1598,12 +2020,16 @@ public sealed partial class ProjectsConfigService
             {
                 throw ProviderBindingUnavailable();
             }
-            if (requestedPin != expectedPin)
+            if (requestedPin with { ReasoningEffort = selection.ReasoningEffort ?? "high" } != expectedPin)
                 throw new ProjectConfigException(
                     "model_provider_binding_stale",
                     "The selected provider or rate-card revision has changed.",
                     StatusCodes.Status422UnprocessableEntity);
-            return selection with { ProviderBindingRevision = binding };
+            return selection with
+            {
+                ModelBindingPin = expectedPin,
+                ProviderBindingRevision = binding,
+            };
         }
 
         var primary = await BindAsync(selections.PrimarySelection).ConfigureAwait(false);
@@ -2045,6 +2471,30 @@ public sealed partial class ProjectsConfigService
             "high",
             choices,
             savedReferences);
+    }
+
+    internal static ImmutableArray<string> BuildEffectiveFallbackReferences(
+        ProjectConfiguration project,
+        PlatformRuntimeDefaults? defaults)
+    {
+        var references = new HashSet<string>(StringComparer.Ordinal);
+        void Add(string? reference)
+        {
+            if (!string.IsNullOrWhiteSpace(reference))
+                references.Add(reference);
+        }
+
+        if (project.ModelSelection is null)
+        {
+            Add(defaults?.ModelSelection?.Reference);
+            foreach (var item in defaults?.ModelTaskDefaults ?? [])
+                Add(item.Selection.Reference);
+            foreach (var item in defaults?.ModelRoleDefaults ?? [])
+                Add(item.Selection.Reference);
+            foreach (var item in defaults?.ModelAgentDefaults ?? [])
+                Add(item.Selection.Reference);
+        }
+        return references.Order(StringComparer.Ordinal).ToImmutableArray();
     }
 
     private ProjectProviderChoices BuildProviderChoices(ProjectConfiguration project)
