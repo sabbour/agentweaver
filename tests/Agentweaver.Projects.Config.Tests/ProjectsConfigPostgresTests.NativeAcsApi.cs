@@ -529,6 +529,72 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task NativeAcsProjectValidationChargesActorBudgetAfterAuthorityAndEnforcesRouteAuthMatrix()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenant = "project-validation-budget-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db, authorityStore, "project-validation-budget-admin-" + suffix, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenant, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Budget project " + suffix, CancellationToken.None);
+        var ownerSubject = "project-validation-budget-owner-" + suffix;
+        _ = await SeedCallerAsync(
+            db, authorityStore, ownerSubject, tenant, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
+
+        using var host = await StartNativeAcsPolicyEndpointHostAsync(
+            fixture.DataSource, Path.Combine(AppContext.BaseDirectory, "missing-opa"));
+        using var unauthenticated = host.GetTestClient();
+        using var ownerOnly = CreateProjectPolicyReader(host, ownerSubject, tenant);
+        ownerOnly.DefaultRequestHeaders.Remove("X-Test-Scope");
+        ownerOnly.DefaultRequestHeaders.Add("X-Test-Scope", "api.read projects.admin");
+
+        var artifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact("""{"allowed_action_ids":[]}""");
+        var path = $"/api/policies/projects/{project.ProjectId}/validate";
+        var requestJson = JsonSerializer.Serialize(
+            new NativeAcsPolicyValidationRequest { Artifact = artifact },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var duplicateHash = requestJson.Replace(
+            "\"contentSha256\":", "\"contentSha256\":\"invalid\",\"contentSha256\":", StringComparison.Ordinal);
+
+        using var unauthResponse = await unauthenticated.PostAsJsonAsync(
+            path, new NativeAcsPolicyValidationRequest { Artifact = artifact });
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, unauthResponse.StatusCode);
+
+        using var missingProjectResponse = await ownerOnly.PostAsJsonAsync(
+            $"/api/policies/projects/missing-project-{suffix}/validate",
+            new NativeAcsPolicyValidationRequest { Artifact = artifact });
+        Assert.Contains(
+            missingProjectResponse.StatusCode,
+            new[] { System.Net.HttpStatusCode.Forbidden, System.Net.HttpStatusCode.NotFound });
+
+        using var emptyQueryResponse = await ownerOnly.PostAsJsonAsync(
+            path + "?=1", new NativeAcsPolicyValidationRequest { Artifact = artifact });
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, emptyQueryResponse.StatusCode);
+
+        using var authorizedResponse = await ownerOnly.PostAsJsonAsync(
+            path, new NativeAcsPolicyValidationRequest { Artifact = artifact });
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, authorizedResponse.StatusCode);
+
+        for (var index = 0; index < 5; index++)
+        {
+            using var duplicateResponse = await ownerOnly.PostAsync(
+                path, new StringContent(duplicateHash, Encoding.UTF8, "application/json"));
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, duplicateResponse.StatusCode);
+        }
+
+        using var limitedResponse = await ownerOnly.PostAsync(
+            path, new StringContent(duplicateHash, Encoding.UTF8, "application/json"));
+        Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, limitedResponse.StatusCode);
+        Assert.Equal("60", limitedResponse.Headers.RetryAfter?.Delta?.TotalSeconds.ToString());
+        using var limitedJson = await JsonDocument.ParseAsync(await limitedResponse.Content.ReadAsStreamAsync());
+        Assert.Equal("native_acs_validation_rate_limited", limitedJson.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task NativeAcsProjectValidationDoesNotReadOrDisclosePlatformSource()
     {
         await using var db = CreateDbContext();

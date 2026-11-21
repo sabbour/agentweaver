@@ -351,6 +351,8 @@ public static class NativeAcsPolicyEndpoints
                     .ConfigureAwait(false);
                 await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
                     .ConfigureAwait(false);
+                if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
+                    return RateLimited(context);
                 if (HasAmbiguousProperties(requestJson))
                     return Results.BadRequest();
                 var request = requestJson.Deserialize<NativeAcsPolicyValidationRequest>(ProjectValidationJsonOptions);
@@ -358,8 +360,6 @@ public static class NativeAcsPolicyEndpoints
                     throw ProjectConfigException.Invalid(
                         "native_acs_policy_invalid",
                         "A complete native ACS policy artifact is required.");
-                if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
-                    return RateLimited(context);
 
                 cancellationToken.ThrowIfCancellationRequested();
                 var error = ValidateArtifact(validator, requestGate, request.Artifact, context, out var result, projectScope: true);
