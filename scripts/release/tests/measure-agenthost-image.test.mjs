@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import test from 'node:test';
-import { measureAgentHostImage } from '../measure-agenthost-image.mjs';
+import { measureAgentHostArchiveSync, measureAgentHostImage } from '../measure-agenthost-image.mjs';
 
-function fixture(change) {
+function fixture(change, version) {
   const source = { sha: 'a'.repeat(40), tree: 'b'.repeat(40) };
   const entries = new Map();
   function blob(bytes, mediaType) {
@@ -18,7 +18,11 @@ function fixture(change) {
     config: {
       User: change === 'root' ? '0:0' : '1654:1654',
       Entrypoint: ['dotnet', 'Agentweaver.AgentHost.dll'],
-      Labels: { 'org.opencontainers.image.revision': source.sha, 'io.agentweaver.source-tree': source.tree },
+      Labels: {
+        'org.opencontainers.image.revision': source.sha,
+        'io.agentweaver.source-tree': source.tree,
+        ...(version === undefined ? {} : { 'org.opencontainers.image.version': version }),
+      },
     },
   };
   if (change === 'source') config.config.Labels['org.opencontainers.image.revision'] = 'c'.repeat(40);
@@ -51,6 +55,25 @@ test('pull-byte measurement uses exact compressed blobs, deduplicates layers, an
   assert.equal(receipt.image.compressedPullBytes,
     f.descriptor.size + f.manifest.config.size + f.manifest.layers[0].size);
   assert.notEqual(receipt.image.digest, f.manifest.config.digest);
+});
+
+test('measurement preserves the version label from the validated image config', async () => {
+  const f = fixture(undefined, '1.2.3');
+  const receipt = await measureAgentHostImage(f.index, f.read, f.source);
+  assert.equal(receipt.image.version, '1.2.3');
+});
+
+test('measurement rejects Git source identities that are not exact commit and tree SHAs', async () => {
+  const f = fixture();
+  await assert.rejects(() => measureAgentHostImage(f.index, f.read, { ...f.source, sha: 'not-a-commit' }),
+    /An exact clean Git source SHA and tree are required/);
+  await assert.rejects(() => measureAgentHostImage(f.index, f.read, { ...f.source, tree: 'not-a-tree' }),
+    /An exact clean Git source SHA and tree are required/);
+});
+
+test('archive measurement rejects a source identifier that is not an exact commit SHA', () => {
+  assert.throws(() => measureAgentHostArchiveSync('unused.tar', process.cwd(), 'not-a-commit'),
+    /An explicit AgentHost measurement source must be an exact commit SHA/);
 });
 
 for (const change of ['platform', 'root', 'source', 'uncompressed', 'size', 'conflict', 'manifest']) {

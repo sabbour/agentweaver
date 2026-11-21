@@ -297,6 +297,9 @@ test('draft dependency declarations allow pure version preparation without chang
     .filter(file => existsSync(path.join(root, file)))
     .map(file => [file, readFileSync(path.join(root, file))]));
   const prepared = verifyPreparation(root, receipt);
+  const changedChecksum = `${receipt.planChecksum.slice(0, -1)}${receipt.planChecksum.endsWith('0') ? '1' : '0'}`;
+  assert.throws(() => verifyPreparation(root, { ...receipt, planChecksum: changedChecksum }),
+    /receipt decisions do not match genuine source changesets/);
   const readSource = file => {
     const result = spawnSync('git', ['show', `${receipt.sourceSha}:${file}`], { cwd: root, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
