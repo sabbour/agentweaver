@@ -24,7 +24,13 @@ public sealed class RuntimeRateCardOwnerClientTests
         }));
         var client = CreateClient(httpClient);
 
-        Assert.True(await client.VerifyAsync(CardId, Version, CancellationToken.None));
+        var pin = await client.ReadPinAsync(CardId, Version, CancellationToken.None);
+        Assert.NotNull(pin);
+        Assert.Equal(CardId, pin.RateCardId);
+        Assert.Equal(Version, pin.RateCardVersion);
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant(),
+            pin.ContentHash);
         Assert.Equal(
             "/internal/runtime-rate-cards?id=manual%3Aazure-card&version=opaque%3A2026-11-10",
             observedPathAndQuery);
