@@ -130,7 +130,15 @@ public sealed class RuntimeRateCardManualWriteEndpointTests : IAsyncLifetime
             using var readResponse = await client.SendAsync(readRequest);
             Assert.Equal(HttpStatusCode.OK, readResponse.StatusCode);
             Assert.Equal(expectedEtag, readResponse.Headers.ETag?.ToString());
-            Assert.Equal(expectedCanonical, await readResponse.Content.ReadAsStringAsync());
+            var readBody = await readResponse.Content.ReadAsStringAsync();
+            Assert.Equal(expectedCanonical, readBody);
+
+            var readCard = RuntimeRateCardReadContract.Deserialize(Encoding.UTF8.GetBytes(readBody));
+            Assert.NotNull(readCard);
+            var pin = RuntimeRateCardReadContract.CreatePin(readCard);
+            Assert.Equal(id, pin.RateCardId);
+            Assert.Equal(version, pin.RateCardVersion);
+            Assert.Equal(expectedEtag, $"\"{pin.ContentHash}\"");
         }
     }
 
@@ -226,6 +234,32 @@ public sealed class RuntimeRateCardManualWriteEndpointTests : IAsyncLifetime
         Assert.Equal(expectedStatus, response.StatusCode);
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         Assert.Null(await _store.GetAsync("card-fail", "v1"));
+    }
+
+    [Fact]
+    public async Task ProjectsDenialReturns403BeforeReadingRequestBody()
+    {
+        using var host = await StartTestHostAsync(_ => new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+        });
+        var server = host.GetTestServer();
+        var bodyRead = false;
+        var context = await server.SendAsync(http =>
+        {
+            http.Request.Method = HttpMethods.Put;
+            http.Request.Path = "/api/platform/model-pricing/rate-cards/card-auth-body/v1";
+            http.Request.Headers.Authorization = "Bearer caller-token";
+            http.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+            http.Request.Headers["X-Scopes"] = "api.read projects.admin";
+            http.Request.ContentType = "application/json";
+            http.Request.Body = new ObserveReadStream(
+                Encoding.UTF8.GetBytes(ValidBody("card-auth-body", "v1")),
+                () => bodyRead = true);
+        });
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.False(bodyRead);
     }
 
     [Theory]
@@ -463,6 +497,18 @@ public sealed class RuntimeRateCardManualWriteEndpointTests : IAsyncLifetime
     {
         public override bool CanSeek => false;
         public override long Length => throw new NotSupportedException();
+    }
+
+    private sealed class ObserveReadStream(byte[] data, Action onRead) : MemoryStream(data)
+    {
+        public override bool CanSeek => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            onRead();
+            return base.ReadAsync(buffer, cancellationToken);
+        }
     }
 
     private sealed class TestAuthHandler(

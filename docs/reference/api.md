@@ -1198,6 +1198,21 @@ check current authority on every request before it calls Azure Retail.
 Project-bound tokens must name the same project. Run-bound tokens are denied.
 The response uses `Cache-Control: no-store`.
 
+`region` is required and contains 1 to 64 ASCII letters or digits.
+`search` is required and contains 1 to 64 ASCII letters, digits, periods,
+hyphens, or spaces. The route rejects unknown and repeated query keys.
+The search uses USD consumption meters for Foundry Models in the requested
+region. The response has `region`, `sourceUrl`, `retrievedOn`, and `items`.
+Each item has `meterId`, `meterName`, `productName`, `skuName`,
+`unitOfMeasure`, `currencyCode`, `retailPrice`, `tierMinimumUnits`, and
+`usdPer1M`. A null `usdPer1M` means the meter does not use a positive
+tier-zero `1K` or `1M` unit price.
+
+Invalid input returns `400 query_invalid`. Projects denies unauthorized
+callers with `403`; an unavailable or invalid Projects response returns `502`.
+Azure Retail errors return `503 pricing_unavailable`. The lookup does not
+store prices or change a project's rate cards.
+
 ### Manual runtime price cards
 
 | Method and Gateway path | Owner path | Operation ID |
@@ -1220,21 +1235,6 @@ and positive decimal USD prices per million tokens.
 A new version returns `201`. An identical canonical replay returns `200`.
 Conflicting content or a legacy row at that key returns `409`. Both successes
 return canonical JSON, a strong SHA-256 `ETag`, and `Cache-Control: no-store`.
-
-`region` is required and contains 1 to 64 ASCII letters or digits.
-`search` is required and contains 1 to 64 ASCII letters, digits, periods,
-hyphens, or spaces. The route rejects unknown and repeated query keys.
-The search uses USD consumption meters for Foundry Models in the requested
-region. The response has `region`, `sourceUrl`, `retrievedOn`, and `items`.
-Each item has `meterId`, `meterName`, `productName`, `skuName`,
-`unitOfMeasure`, `currencyCode`, `retailPrice`, `tierMinimumUnits`, and
-`usdPer1M`. A null `usdPer1M` means the meter does not use a positive
-tier-zero `1K` or `1M` unit price.
-
-Invalid input returns `400 query_invalid`. Projects denies unauthorized
-callers with `403`; an unavailable or invalid Projects response returns `502`.
-Azure Retail errors return `503 pricing_unavailable`. The lookup does not
-store prices or change a project's rate cards.
 
 ### Chief of Staff
 

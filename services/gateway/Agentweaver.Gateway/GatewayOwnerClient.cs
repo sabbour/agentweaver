@@ -283,6 +283,15 @@ public sealed partial class GatewayOwnerClient(
             await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
                 .ConfigureAwait(false);
         }
+        catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            await WriteOwnerFailureAsync(context, RequestBodyTooLarge()).ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception) when (!context.Response.HasStarted &&
+            FindRequestBodyTooLarge(exception) is { } tooLarge)
+        {
+            await WriteOwnerFailureAsync(context, tooLarge).ConfigureAwait(false);
+        }
         catch (HttpRequestException)
         {
             await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
@@ -2176,6 +2185,10 @@ public sealed partial class GatewayOwnerClient(
         if (context.Request.ContentLength > maximumBytes)
             throw RequestBodyTooLarge();
 
+        // Stream manual price uploads directly to Events so authority runs before reading the body.
+        if (route.OperationId == "savePlatformManualRuntimeRateCard")
+            return null;
+
         var body = new MemoryStream();
         var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
         try
@@ -2244,6 +2257,78 @@ public sealed partial class GatewayOwnerClient(
 
         return string.IsNullOrEmpty(parsed.CharSet) ||
             string.Equals(parsed.CharSet.Trim('"'), "utf-8", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static GatewayOwnerFailureException? FindRequestBodyTooLarge(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is GatewayOwnerFailureException failure &&
+                failure.StatusCode == StatusCodes.Status413PayloadTooLarge)
+                return failure;
+            if (current is BadHttpRequestException badRequest &&
+                badRequest.StatusCode == StatusCodes.Status413PayloadTooLarge)
+                return RequestBodyTooLarge();
+        }
+        return null;
+    }
+
+    private sealed class BoundedRequestStream(Stream inner, long maximumBytes) : Stream
+    {
+        private long _bytesRead;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (buffer.IsEmpty)
+                return 0;
+
+            var remaining = maximumBytes - _bytesRead;
+            var maxRead = (int)Math.Min(buffer.Length, remaining + 1);
+
+            int read;
+            try
+            {
+                read = await inner.ReadAsync(buffer[..maxRead], cancellationToken).ConfigureAwait(false);
+            }
+            catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+            {
+                throw RequestBodyTooLarge();
+            }
+
+            if (read == 0)
+                return 0;
+
+            _bytesRead += read;
+            if (_bytesRead > maximumBytes)
+                throw RequestBodyTooLarge();
+
+            return read;
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
     }
 
     private static GatewayOwnerFailureException RequestBodyTooLarge() =>
@@ -2335,7 +2420,11 @@ public sealed partial class GatewayOwnerClient(
                     "application/problem+json",
                     ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
             }
-            request.Content = new StreamContent(requestBody ?? context.Request.Body);
+            var stream = requestBody ?? (route.OperationId == "savePlatformManualRuntimeRateCard" &&
+                route.MaximumRequestBodyBytes is { } streamLimit
+                ? new BoundedRequestStream(context.Request.Body, streamLimit)
+                : context.Request.Body);
+            request.Content = new StreamContent(stream);
             if (context.Request.ContentLength is { } contentLength)
                 request.Content.Headers.ContentLength = contentLength;
             request.Content.Headers.ContentType = contentType is null
