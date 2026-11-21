@@ -10,8 +10,12 @@ or recreate a dynamic issue-to-merge workflow.
 
 1. **Confirm the scope.** Read the issue, its comments, and the request. Read the
    relevant README, architecture, and testing guides. Write down the deliverable,
-   acceptance checks, and exclusions. Verify the existing `type:` and `area:`
-   labels and milestone. Do not change issue metadata unless the task needs it.
+   acceptance checks, and exclusions. Keep unrequested features separate from
+   the spec. Get explicit user approval before treating them as acceptance
+   criteria, dependencies, or reasons to keep an issue open. Check what the user
+   approved, not whose name appears on the GitHub issue. Verify the existing
+   `type:` and `area:` labels and milestone. Do not change issue metadata
+   unless the task needs it.
 2. **Review the design before code.** Check matching v0.x code and tests for prior
    art. Record the source-backed baseline, proposed change, failure and recovery
    behavior, tests, documentation, and release impact. Get a focused design review
