@@ -489,11 +489,34 @@ export async function createP1Fixture(plan, {
       throw new Error('The current project configuration revision does not match setup.');
     }
 
-    const platformRevision = plan.fixturePlan.expectedPlatformRuntimeRevision;
+    const choices = (await invoke(
+      api, 'getProjectConfigurationChoices', { projectId }, undefined, [200])).value;
+    if (choices?.projectId !== projectId
+      || choices.projectConfigurationRevision !== configuration.revision
+      || !Array.isArray(choices.effectiveFallbackReferences)
+      || !Number.isSafeInteger(choices.platformRuntimeRevision)
+      || choices.platformRuntimeRevision < 1) {
+      throw new Error('The project choices did not return one matching settings snapshot.');
+    }
+    const platformRevision = choices.platformRuntimeRevision;
+    if (platformRevision !== plan.fixturePlan.expectedPlatformRuntimeRevision) {
+      throw new Error('The platform choices revision differs from the fixture plan.');
+    }
+    const availableModelSelectionReferences = new Set(
+      plan.fixturePlan.selectionContext.availableModelSelectionReferences);
+    for (const reference of choices.effectiveFallbackReferences) {
+      if (typeof reference !== 'string' || reference.length === 0) {
+        throw new Error('The project choices contain an invalid fallback reference.');
+      }
+      availableModelSelectionReferences.add(reference);
+    }
     const selectionRequest = {
       expectedProjectConfigRevision: configuration.revision,
       expectedPlatformRuntimeRevision: platformRevision,
-      context: plan.fixturePlan.selectionContext,
+      context: {
+        ...plan.fixturePlan.selectionContext,
+        availableModelSelectionReferences: [...availableModelSelectionReferences].sort(),
+      },
     };
     const acceptedSelection = (await invoke(api, 'acceptRunSelection', {
       projectId, runId,

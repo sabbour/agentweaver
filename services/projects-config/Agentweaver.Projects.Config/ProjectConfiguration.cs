@@ -177,6 +177,8 @@ public sealed record ProjectConfiguration
 public sealed record PlatformRuntimeDefaults
 {
     public ModelSelectionSettings? ModelSelection { get; init; }
+    /// <summary>How installation model fallbacks are currently selected.</summary>
+    public PlatformModelDefaultSwitch ModelDefaultSwitch { get; init; } = new();
     /// <summary>Platform task defaults, including the built-in task-based model routes.</summary>
     public ImmutableArray<ModelTaskSelectionOverride> ModelTaskDefaults { get; init; } =
         ModelTaskSelectionDefaults.Create();
@@ -186,6 +188,29 @@ public sealed record PlatformRuntimeDefaults
     public ImmutableArray<ModelAgentSelectionOverride> ModelAgentDefaults { get; init; } = [];
     public ImmutableArray<NetworkEgressRule> EgressBaseline { get; init; } = [];
     public CopilotRunLimits RunLimits { get; init; } = new();
+}
+
+/// <summary>Persisted state for the administrator-controlled platform model fallback.</summary>
+public enum PlatformModelDefaultSwitchMode
+{
+    Untouched,
+    Active,
+    ExplicitHosted,
+}
+
+/// <summary>Active BYOK provider evidence and the task routes managed by the platform switch.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record PlatformModelDefaultSwitch
+{
+    public PlatformModelDefaultSwitchMode Mode { get; init; } = PlatformModelDefaultSwitchMode.Untouched;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActiveProviderId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ProviderRevision { get; init; }
+
+    public ImmutableArray<ModelTaskKind> ManagedTaskKinds { get; init; } = [];
 }
 
 /// <summary>Built-in task routing used until a platform administrator supplies narrower defaults.</summary>
@@ -681,6 +706,20 @@ public static class ProjectConfigurationValidator
         if (defaults.ModelSelection?.CredentialReference is { } secret &&
             (string.IsNullOrWhiteSpace(secret.Id) || string.IsNullOrWhiteSpace(secret.Version)))
             throw Invalid("Model credential references must contain an exact secret ID and version.");
+        if (defaults.ModelDefaultSwitch is null ||
+            defaults.ModelDefaultSwitch.ManagedTaskKinds.IsDefault ||
+            defaults.ModelDefaultSwitch.ManagedTaskKinds.Distinct().Count() !=
+                defaults.ModelDefaultSwitch.ManagedTaskKinds.Length ||
+            !Enum.IsDefined(defaults.ModelDefaultSwitch.Mode))
+            throw Invalid("Platform model default switch state is invalid.");
+        if (defaults.ModelDefaultSwitch.Mode == PlatformModelDefaultSwitchMode.Active &&
+            (string.IsNullOrWhiteSpace(defaults.ModelDefaultSwitch.ActiveProviderId) ||
+             defaults.ModelDefaultSwitch.ProviderRevision is not > 0))
+            throw Invalid("An active platform model fallback requires a provider ID and revision.");
+        if (defaults.ModelDefaultSwitch.Mode != PlatformModelDefaultSwitchMode.Active &&
+            (defaults.ModelDefaultSwitch.ActiveProviderId is not null ||
+             defaults.ModelDefaultSwitch.ProviderRevision is not null))
+            throw Invalid("Only an active platform model fallback can name a provider.");
 
         ValidateModelOverrides(
             defaults.ModelTaskDefaults,

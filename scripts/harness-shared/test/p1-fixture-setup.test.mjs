@@ -24,6 +24,7 @@ function apiFor({
   actorId = ACTOR_ID,
   tenantId = TENANT_ID,
   platformRuntimeRevision = 7,
+  choicesPlatformRuntimeRevision = platformRuntimeRevision,
   failures = {},
   journalEvents = [],
 } = {}) {
@@ -45,6 +46,7 @@ function apiFor({
     listProjectRoleAssignments: 'GET',
     revokeProjectRoleAssignment: 'DELETE',
     getProjectConfiguration: 'GET',
+    getProjectConfigurationChoices: 'GET',
     getPlatformRuntimeDefaults: 'GET',
     acceptRunSelection: 'POST',
     getRunSelection: 'GET',
@@ -71,6 +73,7 @@ function apiFor({
     listProjectRoleAssignments: '/api/v1/projects/{projectId}/role-assignments',
     revokeProjectRoleAssignment: '/api/v1/projects/{projectId}/role-assignments/{assignmentId}',
     getProjectConfiguration: '/api/v1/projects/{projectId}/configuration',
+    getProjectConfigurationChoices: '/api/v1/projects/{projectId}/configuration/choices',
     getPlatformRuntimeDefaults: '/api/v1/platform/runtime-defaults',
     acceptRunSelection: '/api/v1/projects/{projectId}/runs/{runId}/selection',
     getRunSelection: '/api/v1/projects/{projectId}/runs/{runId}/selection',
@@ -235,6 +238,13 @@ function apiFor({
           });
         case 'getProjectConfiguration':
           return result(200, { projectId, revision: 4, configuration: {} });
+        case 'getProjectConfigurationChoices':
+          return result(200, {
+            projectId,
+            projectConfigurationRevision: 4,
+            platformRuntimeRevision: choicesPlatformRuntimeRevision,
+            effectiveFallbackReferences: ['fixture-fallback'],
+          });
         case 'getPlatformRuntimeDefaults':
           return result(403, { code: 'forbidden' });
         case 'acceptRunSelection':
@@ -786,6 +796,7 @@ test('TenantAdmin setup with Owner and Orchestrator grants accepts selection wit
     const selectionRequest = api.calls.find(call => call.operationId === 'acceptRunSelection');
     assert.equal(selectionRequest.body.expectedPlatformRuntimeRevision,
       fixturePlan.fixturePlan.expectedPlatformRuntimeRevision);
+    assert.ok(selectionRequest.body.context.availableModelSelectionReferences.includes('fixture-fallback'));
     assert.equal(fixture.state.selection.platformRuntimeRevision,
       fixturePlan.fixturePlan.expectedPlatformRuntimeRevision);
     assert.ok(api.calls.some(call => call.operationId === 'getRunSelection'));
@@ -795,7 +806,7 @@ test('TenantAdmin setup with Owner and Orchestrator grants accepts selection wit
 });
 
 test('stale expected platform revision is denied before run identity or root/session creation', async () => {
-  const api = apiFor({ platformRuntimeRevision: 8 });
+  const api = apiFor({ platformRuntimeRevision: 8, choicesPlatformRuntimeRevision: 7 });
   const invoke = api.invoke.bind(api);
   let selectionStatus;
   api.invoke = async (operationId, options) => {

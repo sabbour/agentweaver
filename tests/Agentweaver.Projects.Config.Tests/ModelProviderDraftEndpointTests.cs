@@ -22,6 +22,73 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     [Fact]
+    public async Task PlatformProviderSwitchEndpointsReturnTheSavedRevisionAndListState()
+    {
+        await using var db = CreateDbContext();
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var tenantId = "switch-endpoint-" + Guid.NewGuid().ToString("N");
+            var admin = await SeedCallerAsync(
+                db, authority, "switch-endpoint-admin-" + Guid.NewGuid().ToString("N"),
+                tenantId, ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+            var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+            var settings = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+            if (settings.Revision == 0)
+                settings = await service.UpdatePlatformRuntimeDefaultsAsync(
+                    admin, 0, PlatformDefaults(), CancellationToken.None);
+            var provider = await SeedAvailablePlatformByokProviderAsync(
+                this, db, admin, "endpoint-switch-" + Guid.NewGuid().ToString("N"));
+
+            using var host = await StartDraftEndpointHostAsync(
+                fixture.DataSource, new CapturedLogs());
+            using var client = CreateDraftEndpointClient(host, admin.ActorId, admin.TenantId);
+            using var activation = new HttpRequestMessage(
+                HttpMethod.Post, "/api/platform/byok-providers/" + provider.ProviderId + "/activate")
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new
+                    {
+                        expectedSettingsRevision = settings.Revision,
+                        expectedProviderRevision = provider.ProviderRevision,
+                    }),
+                    Encoding.UTF8, "application/json"),
+            };
+            using var activated = await client.SendAsync(activation);
+            Assert.Equal(HttpStatusCode.OK, activated.StatusCode);
+            using var activeBody = JsonDocument.Parse(await activated.Content.ReadAsStringAsync());
+            var settingsRevision = activeBody.RootElement.GetProperty("settingsRevision").GetInt64();
+
+            using var listed = await client.GetAsync("/api/platform/byok-providers?pageSize=100");
+            Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+            using var listBody = JsonDocument.Parse(await listed.Content.ReadAsStringAsync());
+            Assert.Equal("active", listBody.RootElement.GetProperty("switchMode").GetString());
+            Assert.Equal(provider.ProviderId,
+                listBody.RootElement.GetProperty("activeProviderId").GetString());
+            Assert.Equal(settingsRevision,
+                listBody.RootElement.GetProperty("settingsRevision").GetInt64());
+            Assert.True(Assert.Single(
+                listBody.RootElement.GetProperty("providers").EnumerateArray(),
+                item => item.GetProperty("id").GetString() == provider.ProviderId)
+                .GetProperty("is_active").GetBoolean());
+
+            using var deactivate = new HttpRequestMessage(
+                HttpMethod.Post, "/api/platform/byok-providers/deactivate")
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new { expectedSettingsRevision = settingsRevision }),
+                    Encoding.UTF8, "application/json"),
+            };
+            using var deactivated = await client.SendAsync(deactivate);
+            Assert.Equal(HttpStatusCode.OK, deactivated.StatusCode);
+            using var hostedBody = JsonDocument.Parse(await deactivated.Content.ReadAsStringAsync());
+            Assert.Equal("explicitHosted",
+                hostedBody.RootElement.GetProperty("mode").GetString());
+            Assert.Equal(JsonValueKind.Null,
+                hostedBody.RootElement.GetProperty("activeProviderId").ValueKind);
+    }
+
+    [Fact]
     public async Task DeploymentBindingsReadRequiresUnboundPlatformAdminAndReturnsOnlyByokSnapshot()
     {
         await using var db = CreateDbContext();
@@ -731,6 +798,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     services.AddSingleton(TimeProvider.System);
                     services.AddSingleton(new ProjectsConfigIdentityOptions(TestIssuer));
                     services.AddScoped<ProjectAuthorizationOwner>();
+                    services.AddScoped<ProjectsConfigService>();
                     if (enableReferences || bindingsOverride is not null)
                     {
                         var configuration = new ConfigurationBuilder().AddInMemoryCollection(

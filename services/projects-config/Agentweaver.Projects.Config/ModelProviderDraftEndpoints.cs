@@ -79,8 +79,19 @@ internal sealed record ModelProviderDraftResponse(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Reference);
 
 internal sealed record ModelProviderDraftPageResponse(
+    string? SwitchMode,
+    string? ActiveProviderId,
+    long? SettingsRevision,
     IReadOnlyList<ModelProviderDraftResponse> Providers,
     string? NextAfterProviderId);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record ActivatePlatformModelProviderRequest(
+    long ExpectedSettingsRevision,
+    long ExpectedProviderRevision);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record DeactivatePlatformModelProviderRequest(long ExpectedSettingsRevision);
 
 internal sealed class ModelProviderDraftUnsafeMetadataException(string providerId, long revision) : Exception
 {
@@ -105,6 +116,7 @@ internal static class ModelProviderDraftEndpoints
         "readPlatformByokDeploymentBindings",
         "listPlatformByokProviderDrafts", "readPlatformByokProviderDraft",
         "createPlatformByokProviderDraft", "updatePlatformByokProviderDraft",
+        "activatePlatformByokProviderDraft", "deactivatePlatformByokProviderDraft",
         "listProjectByokProviderDrafts", "readProjectByokProviderDraft",
         "createProjectByokProviderDraft", "updateProjectByokProviderDraft",
     };
@@ -130,6 +142,10 @@ internal static class ModelProviderDraftEndpoints
             ProjectAuthorizationOwner owner, ModelProviderDraftService service, CancellationToken cancellationToken) =>
             SaveAsync(context, owner, service, ModelProviderBindingScope.Platform, null, providerId, false, cancellationToken))
             .WithName("updatePlatformByokProviderDraft");
+        platform.MapPost("/{providerId}/activate", ActivateAsync)
+            .WithName("activatePlatformByokProviderDraft");
+        platform.MapPost("/deactivate", DeactivateAsync)
+            .WithName("deactivatePlatformByokProviderDraft");
 
         var project = app.MapGroup("/api/projects/{projectId}/byok-providers").RequireAuthorization();
         project.MapGet("", (HttpContext context, string projectId, ProjectAuthorizationOwner owner,
@@ -244,8 +260,12 @@ internal static class ModelProviderDraftEndpoints
             var caller = await ResolveCallerAsync(context, owner, cancellationToken).ConfigureAwait(false);
             var page = await service.ListPageAsync(
                 caller, scope, projectId, pageSize, afterProviderId, cancellationToken).ConfigureAwait(false);
-            var providers = page.Providers.Select(Project).ToArray();
-            return Results.Ok(new ModelProviderDraftPageResponse(providers, page.NextAfterProviderId));
+            var providers = page.Providers
+                .Select(item => Project(item, page.ActiveProviderId))
+                .ToArray();
+            return Results.Ok(new ModelProviderDraftPageResponse(
+                page.SwitchMode, page.ActiveProviderId, page.SettingsRevision,
+                providers, page.NextAfterProviderId));
         }
 
         catch (ModelProviderDraftUnsafeMetadataException exception)
@@ -484,7 +504,9 @@ internal static class ModelProviderDraftEndpoints
         return true;
     }
 
-    internal static ModelProviderDraftResponse Project(ModelProviderDraft draft)
+    internal static ModelProviderDraftResponse Project(
+        ModelProviderDraft draft,
+        string? activeProviderId = null)
     {
         var binding = draft.Binding;
         ValidatePublicUrl(binding.BaseUrl, binding.ProviderType, binding.ProviderId, binding.ProviderRevision);
@@ -493,7 +515,76 @@ internal static class ModelProviderDraftEndpoints
             binding.WireApi, binding.AzureApiVersion, binding.ReasoningEfforts, binding.PromptCapacityTokens,
             binding.Scope == ModelProviderBindingScope.Platform ? "platform" : "project",
             binding.ProjectId, draft.State.ToString(), binding.ProviderRevision, binding.ConfigurationHash,
-            null, null, false, false, binding.CredentialVersion is not null, draft.Reference);
+            null, null, false,
+            binding.ProviderId == activeProviderId,
+            binding.CredentialVersion is not null,
+            draft.Reference);
+    }
+
+    private static async Task<IResult> ActivateAsync(
+        HttpContext context,
+        string providerId,
+        ActivatePlatformModelProviderRequest request,
+        ProjectAuthorizationOwner owner,
+        ProjectsConfigService service,
+        CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            if (context.Request.Query.Count != 0 || !IsProviderId(providerId))
+                return InvalidRequest();
+            var caller = await ResolveCallerAsync(context, owner, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(await service.ActivatePlatformModelProviderAsync(
+                caller, providerId, request.ExpectedSettingsRevision,
+                request.ExpectedProviderRevision, cancellationToken).ConfigureAwait(false));
+        }
+        catch (ProjectConfigException exception)
+        {
+            return OwnerError(exception);
+        }
+        catch (ModelProviderDraftException exception)
+        {
+            return DraftError(exception);
+        }
+        catch (JsonException)
+        {
+            return InvalidRequest();
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+    }
+
+    private static async Task<IResult> DeactivateAsync(
+        HttpContext context,
+        DeactivatePlatformModelProviderRequest request,
+        ProjectAuthorizationOwner owner,
+        ProjectsConfigService service,
+        CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            if (context.Request.Query.Count != 0)
+                return InvalidRequest();
+            var caller = await ResolveCallerAsync(context, owner, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(await service.DeactivatePlatformModelProviderAsync(
+                caller, request.ExpectedSettingsRevision, cancellationToken).ConfigureAwait(false));
+        }
+        catch (ProjectConfigException exception)
+        {
+            return OwnerError(exception);
+        }
+        catch (JsonException)
+        {
+            return InvalidRequest();
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
     }
 
     private static void ValidatePublicUrl(string value, string providerType, string providerId, long revision)

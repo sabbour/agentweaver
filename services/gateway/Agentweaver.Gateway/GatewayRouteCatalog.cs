@@ -468,6 +468,18 @@ public static class GatewayRouteCatalog
             maximumRequestBodyBytes: ModelProviderDraftSaveLimit, forwardTenantSelector: true,
             exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderDraftRowLimit,
             excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/platform/byok-providers/{providerId}/activate",
+            "/api/platform/byok-providers/{providerId}/activate", "activatePlatformByokProviderDraft",
+            "Activate a platform BYOK provider for new runs", body: true,
+            maximumRequestBodyBytes: 8 * 1024, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: 8 * 1024,
+            excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/platform/byok-providers/deactivate",
+            "/api/platform/byok-providers/deactivate", "deactivatePlatformByokProviderDraft",
+            "Use hosted Copilot for new runs", body: true,
+            maximumRequestBodyBytes: 8 * 1024, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: 8 * 1024,
+            excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/byok-providers",
             "/api/projects/{projectId}/byok-providers", "listProjectByokProviderDrafts",
             "List project BYOK provider drafts", ["pageSize", "afterProviderId"],

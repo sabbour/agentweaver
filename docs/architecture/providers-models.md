@@ -22,9 +22,9 @@ resolver path. It separates A2UI and GitHub Canvas compatibility from Applicatio
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'" alt="Provider resolution flow: the Foundation Probe supplies existing target IDs and ResourceNegotiation; Knowledge resolves and negotiates one selected Memory candidate per run. ProviderResolver pins immutable bindings; no resources are provisioned and no model AgentHost is shown." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'" alt="Provider resolution and model fallback pinning: ProviderCatalog and ProviderResolver pin supplied resource bindings. Projects & Config locks settings before an Available model provider, appends one settings revision, and lets fresh runs pin it while accepted runs retain old selections." />
   </a>
-  <figcaption>The Probe supplies existing target IDs, generation, and ResourceNegotiation; Knowledge negotiates its selected Memory provider. ProviderResolver pins both bindings but does not provision resources.</figcaption>
+  <figcaption>The Probe supplies existing target IDs, generation, and ResourceNegotiation; Knowledge negotiates its selected Memory provider. ProviderResolver pins both bindings but does not provision resources. The platform model switch separately pins a settings-backed fallback for fresh runs.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.drawio'">Open editable draw.io source</a></p>
 
@@ -93,6 +93,21 @@ provider and model identity while keeping the aggregate `byok.tokens` budget
 meter unchanged. Hosted Copilot quote status does not replace the existing
 hard USD BYOK budget: a valid BYOK card admission can proceed, while unpriced
 BYOK usage still blocks dispatch under that hard budget.
+
+The platform model switch changes installation fallbacks for new runs. The
+settings revision records `untouched`, `active`, or `explicitHosted`. Activation
+uses one exact `Available` platform provider revision and its stored credential
+and rate-card evidence. It locks the platform settings head before the
+provider head. Deactivation restores the shipped hosted Copilot model and task
+efforts. It does not remove or disable the saved provider.
+
+The switch replaces only installation fallbacks. Explicit project, role,
+agent, and task model choices and effort-only overrides remain effective.
+Fresh interactive and non-interactive starts resolve the selected binding under
+the Projects transaction and pin it to the accepted run. An exact authorized
+retry reads the saved selection before mutable platform settings. The
+non-interactive choices read returns effective fallback references with the
+matching settings revision.
 
 Explicit-event forks require the pinned provider's `sessions.events.fork` capability
 and a committed source event matched to its session-bound cursor. Events rechecks the

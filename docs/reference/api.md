@@ -38,10 +38,9 @@ commands, authorization, and current distribution status, see the
 ## Model-provider Draft and Available metadata
 
 These routes expose provider metadata through the Gateway. New providers have
-state `Draft`. Credential publication and activation are unavailable.
-Existing `Available` revisions remain readable. `Available` does not select a
-provider or change deployment-owned model eligibility. Projects
-& Config owns the records and checks current authority on every request.
+state `Draft`. Existing `Available` revisions remain readable. A PlatformAdmin
+can select one `Available` platform provider for new runs. Projects & Config
+owns the records and checks current authority on every request.
 Platform operations require an unbound current PlatformAdmin. Project
 operations require the exact project binding, no run binding, and a current
 project Owner or PlatformAdmin. Every operation requires `api.read` and
@@ -54,6 +53,8 @@ project Owner or PlatformAdmin. Every operation requires `api.read` and
 | `GET /api/v1/platform/byok-providers/{providerId}` | Projects `GET /api/platform/byok-providers/{providerId}` | `readPlatformByokProviderDraft` |
 | `POST /api/v1/platform/byok-providers` | Projects `POST /api/platform/byok-providers` | `createPlatformByokProviderDraft` |
 | `PUT /api/v1/platform/byok-providers/{providerId}` | Projects `PUT /api/platform/byok-providers/{providerId}` | `updatePlatformByokProviderDraft` |
+| `POST /api/v1/platform/byok-providers/{providerId}/activate` | Projects `POST /api/platform/byok-providers/{providerId}/activate` | `activatePlatformByokProviderDraft` |
+| `POST /api/v1/platform/byok-providers/deactivate` | Projects `POST /api/platform/byok-providers/deactivate` | `deactivatePlatformByokProviderDraft` |
 | `GET /api/v1/projects/{projectId}/byok-providers` | Projects `GET /api/projects/{projectId}/byok-providers` | `listProjectByokProviderDrafts` |
 | `GET /api/v1/projects/{projectId}/byok-providers/{providerId}` | Projects `GET /api/projects/{projectId}/byok-providers/{providerId}` | `readProjectByokProviderDraft` |
 | `POST /api/v1/projects/{projectId}/byok-providers` | Projects `POST /api/projects/{projectId}/byok-providers` | `createProjectByokProviderDraft` |
@@ -66,7 +67,10 @@ project Owner or PlatformAdmin. Every operation requires `api.read` and
 List routes accept only `pageSize` and `afterProviderId`. Saves use an
 operation ID and expected revision; create uses revision `0`, while update
 requires a positive revision. Save retries return the revision committed by
-the original operation.
+the original operation. Activation requires the current positive
+`expectedSettingsRevision` and `expectedProviderRevision`. It also requires an
+`Available` platform provider with stored credential and pricing evidence.
+Deactivation requires `expectedSettingsRevision`.
 
 Credential `PUT` routes are write-only and store raw API keys in the dedicated
 BYOK Key Vault (`byok-<scope>-<providerId>`). Responses and logs never include
@@ -78,7 +82,7 @@ Vault write is quarantined and never re-sent; callers can recover with
 Projects & Config already committed a matching publication receipt, in which
 case the receipt wins. `DELETE` disables the credential slot and blocks new
 run-selection pins under the provider lock while keeping earlier accepted pins
-redeemable. Provider activation remains unavailable through Gateway. The legacy
+redeemable. The legacy
 private Projects publication path returns `503 credential_publication_unavailable`.
 Platform create accepts an optional `reference` to reserve the exact spelling
 of a deployment-managed BYOK model, with the matching `targetInstallationId`.
@@ -96,6 +100,14 @@ The deployment-binding read takes no query or request body. It returns the
 responding Projects process's startup `revision` and BYOK `bindings`. Each
 binding has a `reference`, `enabled`, and `reasoningEfforts`. A missing
 startup copy returns `503`. The response is not a deployment-wide inventory.
+
+The platform provider list returns `switchMode`, `activeProviderId`, and
+`settingsRevision` with the provider rows. The three switch modes are
+`untouched`, `active`, and `explicitHosted`. Activation replaces only the
+installation base and managed task fallbacks. Deactivation restores the shipped
+hosted Copilot task choices and keeps the provider and credential. Explicit
+project, role, agent, and task model choices stay in place. Accepted runs keep
+their saved selections; a settings revision applies only to fresh starts.
 
 ## Periodic issue sync
 

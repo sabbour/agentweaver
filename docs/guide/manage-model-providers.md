@@ -1,7 +1,10 @@
 # Manage platform BYOK provider metadata
 
 Use the native CLI to create, read, and update platform BYOK provider
-metadata. This procedure does not set a key or activate a provider.
+metadata. This procedure does not set a key or activate a provider. The
+Gateway API can activate an `Available` platform provider for new runs or
+deactivate it to restore hosted Copilot defaults. See the
+[model-provider API routes](../reference/api.md#model-provider-draft-and-available-metadata).
 For a Project's provider drafts, see
 [Manage project BYOK provider metadata](./manage-project-byok-provider-metadata.md).
 
