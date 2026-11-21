@@ -370,6 +370,11 @@ public static class GatewayRouteCatalog
             "Search Azure Retail model prices", ["region", "search"], forwardTenantSelector: true,
             exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: 8 * 1024 * 1024,
             excludeFromMcp: true);
+        Add("PUT", GatewayOwner.Events, "/platform/model-pricing/rate-cards/{id}/{version}",
+            "/api/platform/model-pricing/rate-cards/{id}/{version}", "savePlatformManualRuntimeRateCard",
+            "Save a manual runtime price card", body: true, maximumRequestBodyBytes: 64 * 1024,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control", "ETag"],
+            maximumResponseBytes: 256 * 1024, excludeFromMcp: true);
         // Chief of Staff routes are caller-private and require an unbound token.
         var chiefOfStaff = "/chief-of-staff";
         Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations", "/api" + chiefOfStaff + "/conversations",

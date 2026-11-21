@@ -76,6 +76,8 @@ public static class ProjectConfigEndpoints
 
         authorization.MapGet("/projects/{projectId}/model-pricing-search", AuthorizeModelPricingSearchAsync)
             .WithName("AuthorizeProjectModelPricingSearch");
+        authorization.MapGet("/platform/model-pricing-rate-cards", AuthorizePlatformModelPricingRateCardWriteAsync)
+            .WithName("AuthorizePlatformModelPricingRateCardWrite");
 
         var castingCatalog = app.MapGroup("/api/casting").RequireAuthorization();
         castingCatalog.MapGet("/templates", (HttpContext context) =>
@@ -1263,6 +1265,31 @@ public static class ProjectConfigEndpoints
                     ProjectAuthorityResourceType.Project,
                     projectId,
                     ProjectAuthorityRole.Owner))
+                throw ProjectConfigException.Forbidden();
+            return Results.NoContent();
+        }
+        catch (ProjectConfigException exception)
+        {
+            return ToProblem(exception);
+        }
+    }
+
+    internal static async Task<IResult> AuthorizePlatformModelPricingRateCardWriteAsync(
+        HttpContext context,
+        ProjectAuthorizationOwner authorizationOwner,
+        CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            if (context.Request.Query.Count != 0)
+                throw ProjectConfigException.Forbidden();
+            var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                .ConfigureAwait(false);
+            caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+            caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+            caller.RequireUnboundRequest();
+            if (!caller.IsPlatformAdmin)
                 throw ProjectConfigException.Forbidden();
             return Results.NoContent();
         }

@@ -1198,6 +1198,29 @@ check current authority on every request before it calls Azure Retail.
 Project-bound tokens must name the same project. Run-bound tokens are denied.
 The response uses `Cache-Control: no-store`.
 
+### Manual runtime price cards
+
+| Method and Gateway path | Owner path | Operation ID |
+| --- | --- | --- |
+| `PUT /api/v1/platform/model-pricing/rate-cards/{id}/{version}` | Events & Sessions `/api/platform/model-pricing/rate-cards/{id}/{version}` | `savePlatformManualRuntimeRateCard` |
+
+The caller needs `api.read`, `projects.admin`, active membership, an unbound
+token, and current PlatformAdmin authority. Events & Sessions checks authority
+through Projects & Config (`GET /api/authorization/platform/model-pricing-rate-cards`)
+before reading the request body.
+
+Both Gateway and Events accept literal ASCII keys matching
+`[A-Za-z0-9][A-Za-z0-9._-]*` up to 128 characters for `id` and 64 characters for
+`version`, and reject encoded path aliases and query parameters (`400`).
+Requests require `application/json` (`415`) and a 64 KiB maximum UTF-8 JSON body
+(`413`) in the version-1 rate-card shape with matching `id` and `version`,
+manual provenance (`https` source URL without credentials and `retrievedOn` date),
+and positive decimal USD prices per million tokens.
+
+A new version returns `201`. An identical canonical replay returns `200`.
+Conflicting content or a legacy row at that key returns `409`. Both successes
+return canonical JSON, a strong SHA-256 `ETag`, and `Cache-Control: no-store`.
+
 `region` is required and contains 1 to 64 ASCII letters or digits.
 `search` is required and contains 1 to 64 ASCII letters, digits, periods,
 hyphens, or spaces. The route rejects unknown and repeated query keys.

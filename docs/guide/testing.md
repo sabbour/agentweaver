@@ -146,6 +146,22 @@ dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.
 These tests check Projects-only Events authorization, exact card and provenance
 validation and strong ETags. PostgreSQL cases use disposable test containers.
 
+## Test manual runtime price-card writes
+
+Run the Events, Gateway, and Projects regressions from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter "FullyQualifiedName~RuntimeRateCardManualWriteEndpointTests"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayManualRateCardTests"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PlatformModelPricingRateCardWriteAuthorizationChecksUnboundPlatformAdminAndScopes"
+```
+
+These tests use disposable PostgreSQL databases and local test servers. They
+check unbound `PlatformAdmin` authority (`api.read` and `projects.admin`),
+literal key and encoded-alias rejection, 64 KiB body bounds, `415` media-type
+checks, `201`/`200`/`409` immutability semantics, strong SHA-256 ETags, and
+existing `RuntimeRateCardOwnerReadEndpoint` compatibility.
+
 ## Test revision-backed BYOK run admission
 
 Run the contract and orchestration tests after the Release build:
