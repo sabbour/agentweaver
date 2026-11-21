@@ -513,6 +513,37 @@ public sealed class NativeAcsPolicyTests
         Assert.True(NativeAcsUnifiedPolicyProfile.Inspect(CreateUnifiedArtifact()).IsValid);
     }
 
+    [Fact]
+    public void PlatformValidationPreservesDiagnosticRelativePathWhileProjectValidationBoundsIt()
+    {
+        var validator = new NativeAcsArtifactValidator(Path.Combine(AppContext.BaseDirectory, "missing-opa"));
+        var platformArtifact = CreateComposedArtifact();
+        var platformInvalid = Rehash(platformArtifact with
+        {
+            Files = platformArtifact.Files.Add(new NativeAcsArtifactFile("../outside.rego", [])),
+        });
+        var platformFileSize = Assert.Single(
+            validator.Validate(platformInvalid).Diagnostics,
+            diagnostic => diagnostic.Code == "file_size");
+        Assert.Equal("../outside.rego", platformFileSize.RelativePath);
+
+        var projectArtifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact("""{"allowed_action_ids":[]}""");
+        var projectNonCanonical = Rehash(projectArtifact with
+        {
+            Files = projectArtifact.Files.Add(new NativeAcsArtifactFile("../outside.rego", [])),
+        });
+        var projectFileSize = Assert.Single(
+            validator.ValidateComposedProject(projectNonCanonical).Diagnostics,
+            diagnostic => diagnostic.Code == "file_size");
+        Assert.Null(projectFileSize.RelativePath);
+
+        var projectEmptyCanonical = ReplaceComposedFile(projectArtifact, "policy/actions/data.json", string.Empty);
+        var canonicalFileSize = Assert.Single(
+            validator.ValidateComposedProject(projectEmptyCanonical).Diagnostics,
+            diagnostic => diagnostic.Code == "file_size");
+        Assert.Equal("policy/actions/data.json", canonicalFileSize.RelativePath);
+    }
+
     [NativeAcsFact]
     public async Task ProjectNativeValidationUsesExactArtifactWithoutNetworkData()
     {

@@ -97,8 +97,19 @@ public sealed class NativeAcsArtifactValidator
     public NativeAcsValidationResult ValidateComposed(NativeAcsArtifact artifact) =>
         ValidateCore(artifact, requireComposedProfile: true);
 
-    public NativeAcsValidationResult ValidateComposedProject(NativeAcsArtifact artifact) =>
-        ValidateCore(artifact, requireComposedProfile: true, projectScope: true);
+    public NativeAcsValidationResult ValidateComposedProject(NativeAcsArtifact artifact)
+    {
+        var result = ValidateCore(artifact, requireComposedProfile: true, projectScope: true);
+        if (result.Diagnostics.IsDefaultOrEmpty)
+            return result;
+
+        var bounded = result.Diagnostics
+            .Select(diagnostic => diagnostic.RelativePath is null || IsCanonicalRelativePath(diagnostic.RelativePath)
+                ? diagnostic
+                : diagnostic with { RelativePath = null })
+            .ToImmutableArray();
+        return result with { Diagnostics = bounded };
+    }
 
     private NativeAcsValidationResult ValidateCore(
         NativeAcsArtifact artifact, bool requireComposedProfile, bool projectScope = false)
@@ -964,7 +975,7 @@ public sealed class NativeAcsArtifactValidator
             message.Length <= MaximumDiagnosticMessageLength
                 ? message
                 : message[..MaximumDiagnosticMessageLength],
-            path is not null && IsCanonicalRelativePath(path) ? path : null,
+            path,
             line,
             column));
     }
