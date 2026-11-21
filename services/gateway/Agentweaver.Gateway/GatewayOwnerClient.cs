@@ -2219,6 +2219,7 @@ public sealed partial class GatewayOwnerClient(
         var isProjectPolicyRead = route.OperationId is
             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
+        var isProjectPolicyValidation = route.OperationId == "validateProjectNativeAcsPolicy";
         if (isPlatformPolicyRevisionRead &&
             context.Request.Query.Keys.Any(key => !route.QueryParameters.Contains(key, StringComparer.Ordinal)))
         {
@@ -2230,13 +2231,14 @@ public sealed partial class GatewayOwnerClient(
                 "application/problem+json",
                 ProblemBody(code, StatusCodes.Status400BadRequest));
         }
-        if (isProjectPolicyRead &&
-            context.Request.Query.Keys.Any(key => !route.QueryParameters.Contains(key, StringComparer.Ordinal)))
+        if ((isProjectPolicyRead &&
+             context.Request.Query.Keys.Any(key => !route.QueryParameters.Contains(key, StringComparer.Ordinal))) ||
+            (isProjectPolicyValidation && context.Request.QueryString.HasValue))
         {
             var code = route.OperationId switch
             {
                 "listProjectNativeAcsPolicies" => "native_acs_policy_scope_list_request_invalid",
-                "readProjectNativeAcsPolicy" => "native_acs_policy_query_not_supported",
+                "readProjectNativeAcsPolicy" or "validateProjectNativeAcsPolicy" => "native_acs_policy_query_not_supported",
                 "listProjectNativeAcsPolicyRevisions" => "native_acs_policy_history_request_invalid",
                 _ => "native_acs_policy_revision_request_invalid",
             };
@@ -2252,7 +2254,7 @@ public sealed partial class GatewayOwnerClient(
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         if (route.ForwardTenantSelector)
             tenantSelector = CopyTenantSelector(context, request);
-        if (!isPlatformPolicyRevisionRead && !isProjectPolicyRead)
+        if (!isPlatformPolicyRevisionRead && !isProjectPolicyRead && !isProjectPolicyValidation)
         {
             CopySingleRequestHeader(context, request, "Idempotency-Key");
             CopySingleRequestHeader(context, request, "If-Match");

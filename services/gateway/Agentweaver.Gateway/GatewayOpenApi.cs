@@ -101,6 +101,8 @@ internal static partial class GatewayOpenApi
             ["readProjectNativeAcsPolicyRevision"] = C(null, "NativeAcsPolicyRevisionReadResult", "200"),
             ["validatePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
+            ["validateProjectNativeAcsPolicy"] = C(
+                "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
             ["writePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyWriteRequest", "NativeAcsPolicyWriteReceipt", "200"),
             ["listPlatformByokProviderDrafts"] = C(null, "ModelProviderDraftPage", "200"),
@@ -493,7 +495,7 @@ internal static partial class GatewayOpenApi
                         "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
                         "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                         "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
-                        "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
+                        "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         route.OperationId == "getAuthorizationTargetContext" ||
                         IsModelProviderDraftRoute(route.OperationId)) && status == "200")
@@ -531,7 +533,7 @@ internal static partial class GatewayOpenApi
                                                 "Platform Policy responses are not cacheable.",
                                             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                                             "listProjectNativeAcsPolicyRevisions" or
-                                            "readProjectNativeAcsPolicyRevision" =>
+                                            "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" =>
                                                 "Project Policy responses are not cacheable.",
                                             _ when IsModelProviderDraftRoute(route.OperationId) =>
                                                 "Provider Draft responses are not cacheable.",
@@ -809,7 +811,7 @@ else if (route.OperationId is
         }
         else if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
             "readPlatformNativeAcsPolicyRevision" or "validatePlatformNativeAcsPolicy" or
-            "writePlatformNativeAcsPolicy" or "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
+            "writePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision")
         {
             responses["400"] = ProblemResponse(route.OperationId == "readPlatformNativeAcsPolicy"
@@ -818,12 +820,16 @@ else if (route.OperationId is
             var isProjectPolicyRead = route.OperationId is
                 "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                 "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
-            responses["403"] = ProblemResponse(isProjectPolicyRead
-                ? "The caller lacks current Project Policy read authority."
-                : "The caller lacks current Platform administrator authority.");
+            responses["403"] = ProblemResponse(route.OperationId == "validateProjectNativeAcsPolicy"
+                ? "The caller lacks current Project Policy author authority."
+                : isProjectPolicyRead
+                    ? "The caller lacks current Project Policy read authority."
+                    : "The caller lacks current Platform administrator authority.");
             if (route.OperationId is "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
-                "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision")
-                responses["404"] = ProblemResponse("No current or requested Policy revision exists.");
+                "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy")
+                responses["404"] = ProblemResponse(route.OperationId == "validateProjectNativeAcsPolicy"
+                    ? "The Project does not exist in the selected tenant."
+                    : "No current or requested Policy revision exists.");
             if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
                 "readPlatformNativeAcsPolicyRevision" or "listProjectNativeAcsPolicies" or
                 "readProjectNativeAcsPolicy" or "listProjectNativeAcsPolicyRevisions" or
@@ -1047,6 +1053,14 @@ else if (route.OperationId is
                 " Requires api.read, active membership, and current TenantAdmin or project Owner, Contributor, " +
                 "or Viewer authority. The caller must use an unbound token or a token bound to this Project. " +
                 "Returns the complete current artifact only after checking its content hash. The response is no-store.";
+        }
+        else if (route.OperationId == "validateProjectNativeAcsPolicy")
+        {
+            description +=
+                " Requires an unbound identity with api.read, projects.admin, current membership, and " +
+                "current Owner or TenantAdmin authority for the Project. Validates the exact submitted " +
+                "native artifact without reading or changing Policy state. Project artifacts omit Platform " +
+                "network data. Validation does not approve or activate the artifact.";
         }
         else if (route.OperationId == "listProjectNativeAcsPolicyRevisions")
         {

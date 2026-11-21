@@ -631,6 +631,26 @@
       ]
     },
     {
+      "name": "Project ACS artifact validation",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Policy.Acs/NativeAcsArtifactValidator.cs",
+        "packages/Agentweaver.Policy.Acs/NativeAcsComposableDomainsProfile.cs",
+        "packages/Agentweaver.Policy.Acs/NativeAcsUnifiedPolicyProfile.cs",
+        "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyEndpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectsConfigService.cs",
+        "tests/Agentweaver.Policy.Acs.Tests/NativeAcsPolicyTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.NativeAcsApi.cs"
+      ],
+      "required": [
+        "docs/specs/native-acs-composable-domains.md",
+        "docs/reference/api.md",
+        "docs/reference/contracts.md",
+        "docs/architecture/projects-config.md",
+        "docs/guide/cli.md",
+        "docs/guide/testing.md"
+      ]
+    },
+    {
       "name": "Canonical Project and Platform Policy reads",
       "sourcePrefixes": [
         "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyRecords.cs",

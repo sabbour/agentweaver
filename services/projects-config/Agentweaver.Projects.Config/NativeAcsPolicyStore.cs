@@ -1177,15 +1177,25 @@ internal sealed class NativeAcsPolicyStore(
     {
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(request);
+        return EnsureWriteAuthorized(caller, request.ScopeType, request.ScopeId);
+    }
+
+    internal static IReadOnlyList<ProjectAuthorizationGrant> EnsureWriteAuthorized(
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
         caller.RequireUnboundRequest();
-        return GetAuthorizingGrants(caller, request);
+        return GetAuthorizingGrants(caller, scopeType, scopeId);
     }
 
     private static IReadOnlyList<ProjectAuthorizationGrant> GetAuthorizingGrants(
         ProjectAuthorizationContext caller,
-        NativeAcsPolicyWriteRequest request)
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId)
     {
         var effective = caller.ToEffectiveResponse().EffectiveAuthority;
         bool HasPermission(ProjectAuthorizationGrant grant, ProjectAuthorizationPermission permission) =>
@@ -1195,7 +1205,7 @@ internal sealed class NativeAcsPolicyStore(
                 item.Permissions.Any(candidate =>
                     candidate.Permission == permission && candidate.RoleRevision == grant.Revision));
 
-        var candidates = request.ScopeType switch
+        var candidates = scopeType switch
         {
             NativeAcsPolicyScopeType.Platform => caller.Grants.Where(grant =>
                     grant.ResourceType == ProjectAuthorityResourceType.Platform &&
@@ -1205,7 +1215,7 @@ internal sealed class NativeAcsPolicyStore(
                 .ToArray(),
             NativeAcsPolicyScopeType.Project => caller.Grants.Where(grant =>
                     (grant.ResourceType == ProjectAuthorityResourceType.Project &&
-                        grant.ResourceId == request.ScopeId &&
+                        grant.ResourceId == scopeId &&
                         grant.Role == ProjectAuthorityRole.Owner &&
                         HasPermission(grant, ProjectAuthorizationPermission.WriteProjects)) ||
                     (grant.ResourceType == ProjectAuthorityResourceType.Tenant &&

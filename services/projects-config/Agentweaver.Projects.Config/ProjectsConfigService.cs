@@ -478,6 +478,48 @@ public sealed partial class ProjectsConfigService
             .ConfigureAwait(false);
     }
 
+    internal async Task EnsureProjectPolicyAuthorAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var grants = NativeAcsPolicyStore.EnsureWriteAuthorized(
+            caller, NativeAcsPolicyScopeType.Project, projectId);
+        _ = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
+            .ConfigureAwait(false);
+        var ids = grants.Select(grant => grant.AssignmentId).ToArray();
+        var current = await (
+                from assignment in db.RoleAssignments.AsNoTracking()
+                join membership in db.TenantMemberships.AsNoTracking()
+                    on assignment.MembershipId equals membership.MembershipId
+                where membership.MembershipId == caller.MembershipId &&
+                    membership.Issuer == caller.Issuer &&
+                    membership.Subject == caller.ActorId &&
+                    membership.TenantId == caller.TenantId &&
+                    membership.Revision == caller.MembershipRevision &&
+                    membership.State == ProjectAuthorityRecordState.Active &&
+                    assignment.State == ProjectAuthorityRecordState.Active &&
+                    ids.Contains(assignment.AssignmentId) &&
+                    db.Projects.AsNoTracking().Any(project =>
+                        project.ProjectId == projectId && project.TenantId == caller.TenantId)
+                select new
+                {
+                    assignment.AssignmentId,
+                    assignment.Revision,
+                    assignment.ResourceType,
+                    assignment.ResourceId,
+                    assignment.Role
+                })
+            .ToArrayAsync(cancellationToken).ConfigureAwait(false);
+        if (!grants.Any(grant => current.Any(assignment =>
+                assignment.AssignmentId == grant.AssignmentId &&
+                assignment.Revision == grant.Revision &&
+                assignment.ResourceType == grant.ResourceType &&
+                assignment.ResourceId == grant.ResourceId &&
+                assignment.Role == grant.Role)))
+            throw ProjectConfigException.Forbidden();
+    }
+
     private async Task<ImmutableArray<ProjectRecord>> ListReadableProjectsAsync(
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)

@@ -53,7 +53,13 @@ public static class NativeAcsUnifiedPolicyProfile
         }
     }
 
-    public static NativeAcsUnifiedPolicyInspection Inspect(NativeAcsArtifact artifact)
+    public static NativeAcsUnifiedPolicyInspection Inspect(NativeAcsArtifact artifact) =>
+        InspectCore(artifact, projectScope: false);
+
+    public static NativeAcsUnifiedPolicyInspection InspectProject(NativeAcsArtifact artifact) =>
+        InspectCore(artifact, projectScope: true);
+
+    private static NativeAcsUnifiedPolicyInspection InspectCore(NativeAcsArtifact artifact, bool projectScope)
     {
         ArgumentNullException.ThrowIfNull(artifact);
         var diagnostics = ImmutableArray.CreateBuilder<NativeAcsDiagnostic>();
@@ -64,7 +70,7 @@ public static class NativeAcsUnifiedPolicyProfile
             return Invalid(diagnostics, "unified_manifest",
                 "The unified ACS manifest does not match the reviewed profile.");
 
-        if (artifact.Files.IsDefault || artifact.Files.Length != 9)
+        if (artifact.Files.IsDefault || artifact.Files.Length != (projectScope ? 8 : 9))
             return Invalid(diagnostics, "unified_file_closure",
                 "The unified ACS artifact must contain all reviewed domain files.");
 
@@ -87,12 +93,12 @@ public static class NativeAcsUnifiedPolicyProfile
                 NativeAcsComposableDomainsProfile.ActionsModulePath,
                 NativeAcsComposableDomainsProfile.ActionsDataPath,
                 NativeAcsComposableDomainsProfile.NetworkModulePath,
-                NativeAcsComposableDomainsProfile.NetworkDataPath,
                 SelectorModulePath,
                 ModelUseModulePath,
                 ModelUseDataPath,
                 GuardrailsModulePath,
-                GuardrailsDataPath
+                GuardrailsDataPath,
+                .. projectScope ? [] : new[] { NativeAcsComposableDomainsProfile.NetworkDataPath }
             ]))
             return Invalid(diagnostics, "unified_file_closure",
                 "The unified ACS artifact must contain only the reviewed domain files.");
@@ -127,21 +133,24 @@ public static class NativeAcsUnifiedPolicyProfile
                 "The actions domain data does not match its closed schema.",
                 NativeAcsComposableDomainsProfile.ActionsDataPath);
 
-        NativeAcsFiniteNetworkPolicy? networkPolicy;
-        try
+        NativeAcsFiniteNetworkPolicy? networkPolicy = null;
+        if (!projectScope)
         {
-            var network = NativeAcsFiniteNetworkProfile.CreateArtifact(
-                StrictUtf8.GetString(files[NativeAcsComposableDomainsProfile.NetworkDataPath].Bytes.AsSpan()));
-            var networkResult = NativeAcsFiniteNetworkProfile.Validate(network);
-            if (!networkResult.IsValid || networkResult.Policy is null)
-                return new(false, [], null, null, null, networkResult.Diagnostics);
-            networkPolicy = networkResult.Policy;
-        }
-        catch (DecoderFallbackException)
-        {
-            return Invalid(diagnostics, "network_data_encoding",
-                "The network domain data must use valid UTF-8.",
-                NativeAcsComposableDomainsProfile.NetworkDataPath);
+            try
+            {
+                var network = NativeAcsFiniteNetworkProfile.CreateArtifact(
+                    StrictUtf8.GetString(files[NativeAcsComposableDomainsProfile.NetworkDataPath].Bytes.AsSpan()));
+                var networkResult = NativeAcsFiniteNetworkProfile.Validate(network);
+                if (!networkResult.IsValid || networkResult.Policy is null)
+                    return new(false, [], null, null, null, networkResult.Diagnostics);
+                networkPolicy = networkResult.Policy;
+            }
+            catch (DecoderFallbackException)
+            {
+                return Invalid(diagnostics, "network_data_encoding",
+                    "The network domain data must use valid UTF-8.",
+                    NativeAcsComposableDomainsProfile.NetworkDataPath);
+            }
         }
 
         if (!TryReadModelUse(
@@ -157,8 +166,10 @@ public static class NativeAcsUnifiedPolicyProfile
 
         return new(
             true,
-            [NativeAcsDomainId.Actions, NativeAcsDomainId.PlatformNetwork,
-                NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails],
+            projectScope
+                ? [NativeAcsDomainId.Actions, NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails]
+                : [NativeAcsDomainId.Actions, NativeAcsDomainId.PlatformNetwork,
+                    NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails],
             networkPolicy,
             modelUsePolicy,
             guardrailsPolicy,
@@ -171,8 +182,23 @@ public static class NativeAcsUnifiedPolicyProfile
         string modelUseDataJson,
         string guardrailsDataJson)
     {
-        ArgumentNullException.ThrowIfNull(actionsDataJson);
         ArgumentNullException.ThrowIfNull(networkDataJson);
+        return CreateArtifactCore(actionsDataJson, networkDataJson, modelUseDataJson, guardrailsDataJson);
+    }
+
+    public static NativeAcsArtifact CreateProjectArtifact(
+        string actionsDataJson,
+        string modelUseDataJson,
+        string guardrailsDataJson) =>
+        CreateArtifactCore(actionsDataJson, null, modelUseDataJson, guardrailsDataJson);
+
+    private static NativeAcsArtifact CreateArtifactCore(
+        string actionsDataJson,
+        string? networkDataJson,
+        string modelUseDataJson,
+        string guardrailsDataJson)
+    {
+        ArgumentNullException.ThrowIfNull(actionsDataJson);
         ArgumentNullException.ThrowIfNull(modelUseDataJson);
         ArgumentNullException.ThrowIfNull(guardrailsDataJson);
         var artifact = new NativeAcsArtifact(
@@ -190,9 +216,12 @@ public static class NativeAcsUnifiedPolicyProfile
                 new NativeAcsArtifactFile(
                     NativeAcsComposableDomainsProfile.NetworkModulePath,
                     NetworkModuleBytes.ToImmutableArray()),
-                new NativeAcsArtifactFile(
-                    NativeAcsComposableDomainsProfile.NetworkDataPath,
-                    StrictUtf8.GetBytes(networkDataJson).ToImmutableArray()),
+                .. networkDataJson is null ? [] : new[]
+                {
+                    new NativeAcsArtifactFile(
+                        NativeAcsComposableDomainsProfile.NetworkDataPath,
+                        StrictUtf8.GetBytes(networkDataJson).ToImmutableArray())
+                },
                 new NativeAcsArtifactFile(
                     ModelUseModulePath,
                     ModelUseModuleBytes.ToImmutableArray()),

@@ -340,6 +340,11 @@ activate policy or change the v4 Policy path. See the
 [Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
 for authorization, paging, limits, and errors.
 
+The Project validation route checks the exact submitted native artifact
+without reading Policy state. It accepts the existing composed profiles with
+Platform network data omitted and rechecks current author authority before
+returning diagnostics. It does not evaluate or activate the artifact.
+
 The Environment source route does not use public bearer authorization. It
 rechecks the peer certificate on every request, including requests on a reused
 TLS connection. The source store reads the head, revision metadata, and file
@@ -396,6 +401,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/policies/projects/{projectId}` | Read the current hash-verified Project Policy artifact. Requires current TenantAdmin or project Owner, Contributor, or Viewer authority and accepts only an unbound token or a token bound to this project. |
 | `GET /api/policies/projects/{projectId}/revisions?pageSize={n}&cursor={token}` | Read newest-first Project revision metadata. An authorized project with no head returns an empty page. |
 | `GET /api/policies/projects/{projectId}/revisions/{revision}` | Read the complete, hash-verified artifact from the exact retained Project revision. |
+| `POST /api/policies/projects/{projectId}/validate` | Validate a Project artifact with current unbound Owner or TenantAdmin authority. The artifact omits Platform network data. |
 | `POST /api/policies/platform/validate` | Validate a complete Platform Policy artifact without changing stored policy state. |
 | `PUT /api/policies/platform` | Store a validated complete Platform Policy preparation at an expected revision. Requires `api.read`, `projects.admin`, and a current unbound PlatformAdmin. Off by default: returns `503` unless `NativeAcsPolicy:HeadWritesEnabled` is true. Exact retries return the saved preparation after current authority and head checks. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |

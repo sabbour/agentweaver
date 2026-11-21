@@ -37,8 +37,10 @@ paths, policy IDs, and input facts:
 | Actions data | `policy/actions/data.json` | Contains only the closed `allowed_action_ids` schema in `data.actions`. |
 | Network data | `policy/data.json` | Contains only the existing finite network data schema. |
 
-The artifact contains exactly the reviewed manifest, three reviewed Rego
-modules, and two domain data files. The selector and manifest accept only
+The Platform artifact contains exactly the reviewed manifest, three reviewed
+Rego modules, and two domain data files. A Project artifact uses the same
+manifest and modules but omits `policy/data.json`. Project validation rejects
+that file when present. The selector and manifest accept only
 `pre_model_call`. The native caller supplies a typed `NativeAcsDomainId`;
 evaluation places that selection in the model request. Separate input-fact
 allowlists restrict the action and network rules. The selector reads only
@@ -48,7 +50,8 @@ the selected `domain_id` and is the only module that calls both domain rules.
 module bytes, file closure, data schemas, and complete artifact hash.
 `ClassifyChanges` accepts data-only changes and reports which domain data
 changed. Changes to the manifest, modules, or file closure fail validation.
-`NativeAcsArtifactValidator.ValidateComposed` validates this profile.
+`NativeAcsArtifactValidator.ValidateComposed` validates Platform artifacts.
+`ValidateComposedProject` validates Project artifacts using the same profile.
 `Validate` remains on the existing profile path and rejects composed
 artifacts.
 
@@ -93,8 +96,11 @@ their evidence remain independent.
 
 `Agentweaver.Policy.Acs` owns the profile, its validation, domain selection,
 and native evaluation. Environment owns composed egress-candidate compilation.
-Projects & Config does not consume this profile in this slice. No method
-creates a Platform Policy write or an admitted enforcement snapshot.
+Projects & Config uses Project-scoped validation for submitted artifacts.
+That route does not create a Policy write or an admitted enforcement snapshot.
+The Project network domain is not selected. A future consumer must select
+Platform network from the Platform scope and apply hard-deny precedence.
+The current evaluator rejects a Project artifact with omitted network data.
 
 The conservative owner defaults are:
 

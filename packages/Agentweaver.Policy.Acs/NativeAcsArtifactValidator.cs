@@ -97,7 +97,11 @@ public sealed class NativeAcsArtifactValidator
     public NativeAcsValidationResult ValidateComposed(NativeAcsArtifact artifact) =>
         ValidateCore(artifact, requireComposedProfile: true);
 
-    private NativeAcsValidationResult ValidateCore(NativeAcsArtifact artifact, bool requireComposedProfile)
+    public NativeAcsValidationResult ValidateComposedProject(NativeAcsArtifact artifact) =>
+        ValidateCore(artifact, requireComposedProfile: true, projectScope: true);
+
+    private NativeAcsValidationResult ValidateCore(
+        NativeAcsArtifact artifact, bool requireComposedProfile, bool projectScope = false)
     {
         ArgumentNullException.ThrowIfNull(artifact);
 
@@ -197,7 +201,9 @@ public sealed class NativeAcsArtifactValidator
 
             if (isUnifiedArtifact)
             {
-                var inspection = NativeAcsUnifiedPolicyProfile.Inspect(artifact);
+                var inspection = projectScope
+                    ? NativeAcsUnifiedPolicyProfile.InspectProject(artifact)
+                    : NativeAcsUnifiedPolicyProfile.Inspect(artifact);
                 if (!inspection.IsValid)
                 {
                     foreach (var diagnostic in inspection.Diagnostics)
@@ -207,7 +213,9 @@ public sealed class NativeAcsArtifactValidator
             }
             else
             {
-                var inspection = NativeAcsComposableDomainsProfile.Inspect(artifact);
+                var inspection = projectScope
+                    ? NativeAcsComposableDomainsProfile.InspectProject(artifact)
+                    : NativeAcsComposableDomainsProfile.Inspect(artifact);
                 if (!inspection.IsValid)
                 {
                     foreach (var diagnostic in inspection.Diagnostics)
@@ -956,7 +964,7 @@ public sealed class NativeAcsArtifactValidator
             message.Length <= MaximumDiagnosticMessageLength
                 ? message
                 : message[..MaximumDiagnosticMessageLength],
-            path,
+            path is not null && IsCanonicalRelativePath(path) ? path : null,
             line,
             column));
     }

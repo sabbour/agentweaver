@@ -29,6 +29,7 @@ export const nativeAcsRequiredMethods = [
   'NativeEvaluationTimeoutFailsClosed',
   'ComposedNativeSelectorKeepsDomainDecisionsIndependent',
   'UnifiedNativeModelAndGuardrailsDecisionsAreHashBound',
+  'ProjectNativeValidationUsesExactArtifactWithoutNetworkData',
 ].map((name) => `Agentweaver.Policy.Acs.Tests.NativeAcsPolicyTests.${name}`)
   .concat('Agentweaver.Policy.Acs.Tests.RuntimeNativePolicyGateTests.NativePolicyBlocksEveryWithheldModelSendAndBindsRevision');
 

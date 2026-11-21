@@ -327,6 +327,45 @@ hash. The file contains the manifest, all relative-path files, the Project ID,
 revision, hash, and timestamp. Standard output contains metadata and the output
 path, not artifact bytes. The command does not overwrite an existing file.
 
+### Validate a Project Policy artifact
+
+Use the Gateway API to validate a Project artifact. You need current Project
+Owner or TenantAdmin authority and an unbound identity with `api.read` and
+`projects.admin`. Do not set a project or run target binding; `PROJECT_ID`
+selects the route.
+
+In a .NET application that references the source project
+`packages\Agentweaver.Policy.Acs\Agentweaver.Policy.Acs.csproj`, create the
+request file. The empty action list below denies all actions. The constructor
+retains the pinned native manifest and modules, omits Platform network data,
+and computes the hash over the submitted bytes.
+
+```csharp
+using System.Text.Json;
+using Agentweaver.Policy.Acs;
+
+var artifact = NativeAcsComposableDomainsProfile.CreateProjectArtifact(
+    """{"allowed_action_ids":[]}""");
+await using var file = File.Open("project-policy-validation.json", FileMode.CreateNew);
+await JsonSerializer.SerializeAsync(
+    file, new { artifact }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+```
+
+Replace `PROJECT_ID` with the 32-character ID returned by the Project list.
+Run these commands from the directory containing the new request file:
+
+```powershell
+agentweaver auth login --scope projects.admin
+agentweaver api invoke validateProjectNativeAcsPolicy --path projectId=PROJECT_ID --scope projects.admin --body '@.\project-policy-validation.json'
+```
+
+The route returns `isValid` and diagnostics. Validation checks the submitted
+artifact, not its effective permission or the current Platform baseline. It
+does not save or activate Policy. `api invoke` accepts a JSON body up to 1 MiB;
+the Gateway HTTP limit is 5 MiB. For the v2 profile, use
+`NativeAcsUnifiedPolicyProfile.CreateProjectArtifact` with actions, model-use,
+and Guardrails data.
+
 ## Discover and invoke API operations
 
 The CLI reads the currently served Gateway `GET /openapi/v1.json` document for

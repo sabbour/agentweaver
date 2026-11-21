@@ -64,6 +64,7 @@ public sealed class NativeAcsPolicyRequestGateTests
             (Name: "ReadProjectNativeAcsPolicy", Method: "GET"),
             (Name: "ReadProjectNativeAcsPolicyRevision", Method: "GET"),
             (Name: "ValidatePlatformNativeAcsPolicy", Method: "POST"),
+            (Name: "ValidateProjectNativeAcsPolicy", Method: "POST"),
             (Name: "WritePlatformNativeAcsPolicy", Method: "PUT"),
         };
 

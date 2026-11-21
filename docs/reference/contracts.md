@@ -412,7 +412,15 @@ their own data file; they cannot change the manifest or policy modules.
 compiler entrypoints keep their single-profile behavior and reject composed
 artifacts. The Environment candidate compiler has separate composed and
 System-only entrypoints, and each candidate hash covers the complete artifact.
-This profile adds no API consumer, runtime admission, or policy write.
+Project validation consumes this profile without runtime admission or a policy write.
+
+Platform artifacts require their complete network data. Project artifacts use
+the same profile and omit `policy/data.json`; supplying that file is invalid.
+The hash covers the exact submitted manifest and files. An empty actions
+allow-list denies all actions; a missing actions data file is invalid. Project
+validation does not select or evaluate the Project network domain. Future
+consumers must select network from the Platform scope and combine applicable
+scope decisions with hard-deny precedence.
 
 `RuntimeNativePolicyGate` is an unregistered Orchestrator source boundary for
 the opt-in profile. An explicit test composition supplies accepted and current
@@ -424,7 +432,7 @@ register this composition.
 Projects & Config exposes the current Platform policy artifact through a
 source API. It uses one head per scope and keeps the Policy ID of an existing
 head. Only an empty scope gets the server-owned `canonical` Policy ID. Each
-artifact contains all policy domains. Scope and domain selection
+artifact retains the reviewed domain declarations. Scope and domain selection
 remain server-owned; future consumers evaluate applicable scope/domain
 policies independently, with hard-deny precedence.
 
@@ -437,6 +445,7 @@ policies independently, with hard-deny precedence.
 | `GET /api/v1/policies/projects/{projectId}` | Read the current Project Policy artifact. Requires `api.read`, active membership, and current TenantAdmin or project Owner, Contributor, or Viewer authority. The caller must use an unbound token or a token bound to this project. A missing head returns `404 native_acs_policy_not_found`. |
 | `GET /api/v1/policies/projects/{projectId}/revisions?pageSize={n}&cursor={token}` | Return newest-first Project Policy metadata. The versioned cursor binds the Project scope, Policy ID, snapshot revision, page size, and last returned revision. An authorized project with no head returns an empty page with null lineage fields. Each page rechecks access. |
 | `GET /api/v1/policies/projects/{projectId}/revisions/{revision}` | Return the exact retained Project revision, full artifact bytes, verified hash, and original `createdAt`. The path value must be a canonical positive decimal Int64. No head or a future revision returns `404 native_acs_policy_not_found`; a missing committed revision or corrupt source returns `500 native_acs_policy_corrupt`. |
+| `POST /api/v1/policies/projects/{projectId}/validate` | Validate the submitted Project artifact. Requires `api.read`, `projects.admin`, active membership, an unbound identity, and current project Owner or TenantAdmin authority with `WriteProjects`. The owner rechecks authority before returning diagnostics. Returns `400` for duplicate or malformed JSON properties, `422` for an invalid artifact, and `503` when validation is busy or a dependency is unavailable. No query is accepted. |
 | `POST /api/v1/policies/platform/validate` | Validate a complete artifact without changing policy state. Uses the same read authorization. A malformed request returns `400`. A proven invalid artifact returns `422` `native_acs_policy_invalid` with diagnostics. An unavailable, crashed, timed-out, or unconfigured native or OPA dependency returns `503` `native_acs_dependency_unavailable` with a typed dependency value. This includes the native validator codes `opa_timeout`, `opa_invalid_executable`, `opa_execution_error`, `rego_staging_error`, and `validation_internal_error`. Other native validator diagnostics return `422`. |
 | `PUT /api/v1/policies/platform` | Validate and store an immutable pending preparation against `expectedRevision`. Requires `api.read`, `projects.admin`, an active membership, an unbound request, and a current PlatformAdmin grant with `WritePlatformRuntimeDefaults`. New writes are off by default and return `503` `native_acs_policy_writes_unavailable` until `NativeAcsPolicy:HeadWritesEnabled` is `true`. A preparation retry returns the saved receipt after current authority and head checks. A stale head or conflicting idempotency key returns `409`. |
 
@@ -458,6 +467,12 @@ caller. It does not expose Platform Policy or an inherited Policy view. The
 list cursor is not an access grant or a cross-page snapshot. If membership or
 read grants change, the server rejects the cursor and the caller restarts the
 list. The cursor does not expose Project IDs as clear text.
+
+Project validation reads no Policy head and writes no Policy record. It checks
+the submitted profile and hash, not the current Platform policy or effective
+permission. A successful response is not a grant or an activation. See
+[Validate a Project Policy artifact](../guide/cli.md#validate-a-project-policy-artifact)
+for artifact construction and submission.
 
 A successful new PUT stores the expected head ID, revision and hash, the full
 proposed artifact and hash, the actor-scoped idempotency data, and creation
