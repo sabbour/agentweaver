@@ -1118,6 +1118,18 @@ public sealed class P1PostgresInitializerTests
                 {
                     UpdateColumns = ["sequence", "fence_generation", "head_hash", "updated_at"],
                 },
+                new TablePlan("model_provider_credential_preflights", ["SELECT", "INSERT"], null, true, null,
+                    [
+                        new("model_provider_credential_preflights_consume_only",
+                            "guard_model_provider_credential_preflight_mutation()", 27,
+                            "records in %.% are immutable", "55000"),
+                        new("model_provider_credential_preflights_no_truncate",
+                            "reject_immutable_record_mutation()", 34,
+                            "records in %.% are immutable", "55000"),
+                    ])
+                {
+                    UpdateColumns = ["consumed_at", "consumed_by_kind"],
+                },
             ],
         };
         return services;
@@ -1257,6 +1269,19 @@ public sealed class P1PostgresInitializerTests
                     .. providerTables.Single(table => table.Table == "model_provider_revisions").MutationDenialGuards!
                         .Where(guard => guard.Trigger is "model_provider_revisions_write_marker" or "model_provider_revisions_write_pair"),
                 ]),
+                AppendOnlyTable("model_provider_credential_operations"),
+                new TablePlan("model_provider_credential_preflights", ["SELECT", "INSERT"], null, true, null,
+                    [
+                        new("model_provider_credential_preflights_consume_only",
+                            "guard_model_provider_credential_preflight_mutation()", 27,
+                            "records in %.% are immutable", "55000"),
+                        new("model_provider_credential_preflights_no_truncate",
+                            "reject_immutable_record_mutation()", 34,
+                            "records in %.% are immutable", "55000"),
+                    ])
+                {
+                    UpdateColumns = ["consumed_at", "consumed_by_kind"],
+                },
                 AppendOnlyTable("native_acs_policy_preparations"),
                 AppendOnlyTable("native_acs_policy_revisions"),
                 NativeAcsPolicyFilesTable(),
@@ -1298,6 +1323,7 @@ public sealed class P1PostgresInitializerTests
                 new("guard_model_provider_reference_cross_table()", false),
                 new("guard_provider_reference_installation()", false),
                 new("reject_immutable_record_mutation()", false),
+                new("guard_model_provider_credential_preflight_mutation()", false),
                 new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
                 new("require_native_acs_policy_head_advance()", false),
                 new("require_governance_decision_head_initialize()", false),

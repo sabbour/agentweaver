@@ -191,6 +191,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 }
                 else
                     services.AddScoped<ModelProviderDraftService>();
+                services.AddScoped<ModelProviderCredentialPublicationV2Service>();
                 services.AddScoped<ProjectRoleAssignmentService>();
                 services.AddScoped<ProjectSetupAuthorityAuditService>();
                 // Preserve service binding while failing fast if the test host reaches a remote Knowledge owner.
@@ -255,13 +256,42 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                                 ClockSkew = TimeSpan.FromSeconds(5),
                             };
                         });
+                    services.AddAuthentication().AddJwtBearer(
+                        ProjectAuthorizationOwner.BrokerCredentialPublicationAuthenticationScheme,
+                        options =>
+                        {
+                            options.MapInboundClaims = false;
+                            options.TokenValidationParameters = new TokenValidationParameters
+                            {
+                                ValidateIssuer = true,
+                                ValidIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+                                ValidateAudience = true,
+                                ValidAudience = brokerRunBindingAudience,
+                                ValidateIssuerSigningKey = true,
+                                IssuerSigningKey = signingKey,
+                                ValidateLifetime = true,
+                                RequireExpirationTime = true,
+                                RequireSignedTokens = true,
+                                ValidTypes = [ProjectAuthorizationOwner.BrokerCredentialPublicationTokenType],
+                                ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
+                                ClockSkew = TimeSpan.FromSeconds(5),
+                            };
+                        });
                     services.AddAuthorization(options =>
+                    {
                         options.AddPolicy(
                             ProjectAuthorizationOwner.BrokerRunBindingAuthorizationPolicy,
                             policy => policy
                                 .AddAuthenticationSchemes(
                                     ProjectAuthorizationOwner.BrokerRunBindingAuthenticationScheme)
-                                .RequireAuthenticatedUser()));
+                                .RequireAuthenticatedUser());
+                        options.AddPolicy(
+                            ProjectAuthorizationOwner.BrokerCredentialPublicationAuthorizationPolicy,
+                            policy => policy
+                                .AddAuthenticationSchemes(
+                                    ProjectAuthorizationOwner.BrokerCredentialPublicationAuthenticationScheme)
+                                .RequireAuthenticatedUser());
+                    });
                 }
             });
             web.ConfigureLogging(logging =>
@@ -274,6 +304,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 app.UseRouting();
                 app.UseTargetContextNoStore();
                 app.UseModelProviderDraftNoStore();
+                app.UseModelProviderCredentialPublicationNoStore();
                 app.UseAuthentication();
                 app.UseAuthorization();
                 app.UseModelProviderDraftBodyLimit();
@@ -406,10 +437,14 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT, INSERT, UPDATE ON projects_config.model_providers TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.model_provider_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.model_provider_reference_reservations TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT ON projects_config.model_provider_credential_operations TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT ON projects_config.model_provider_credential_preflights TO \"{runtimeRole}\"",
+            $"GRANT UPDATE (consumed_at, consumed_by_kind) ON projects_config.model_provider_credential_preflights TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.installation_identity TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[]) TO \"{runtimeRole}\"",
+            $"GRANT EXECUTE ON FUNCTION projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO \"{runtimeRole}\"",
         };

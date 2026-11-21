@@ -129,13 +129,39 @@ for the scan and replay contract.
 
 ## BYOK credential publication
 
-The public provider routes accept metadata, not credentials or rate-card
-references. The private path `/internal/byok/credential-publications` returns
-`503 credential_publication_unavailable` for every method, including retries.
-Projects returns this result before it reads the body or authenticates the
-caller. `HEAD` returns no body. The response has `Cache-Control: no-store`
-and `Pragma: no-cache`. Hosting request logs omit this path so query data is
-not recorded.
+The public provider metadata routes accept metadata, not credentials or
+rate-card references. The legacy private path `/internal/byok/credential-publications`
+returns `503 credential_publication_unavailable` for every method, including
+retries. Projects returns this result before it reads the body or authenticates
+the caller. `HEAD` returns no body. The response has `Cache-Control: no-store`
+and `Pragma: no-cache`. Hosting request logs omit both legacy and v2 publication
+paths so query data is not recorded.
+
+The v2 private routes (`/internal/byok/credential-publications/v2/preflight`,
+`/publish`, `/cancel`, and `/disable`) authenticate the Identity Broker service
+token, lock the selected current membership, project (for project scope), and
+role assignment rows (`FOR SHARE NOWAIT` via
+`lock_credential_publication_authority`), and then lock the provider head.
+`preflight` issues a durable preflight receipt in
+`projects_config.model_provider_credential_preflights` that `publish` and
+`cancel` consume once. `publish` and `disable` advance the provider revision and
+record an immutable operation row in
+`projects_config.model_provider_credential_operations` in the same transaction;
+replays check current authority separately from the original operation
+fingerprint. `cancel` records final cancellation unless a matching `Publish`
+receipt already exists, in which case the receipt wins. `disable` clears the
+credential reference under the same `model_providers` row lock used by run
+selection (`AcceptRunSelectionAsync`) and records the original provider and
+credential revisions in the durable receipt, blocking new pins while leaving
+existing accepted run selections redeemable.
+
+Migration `AddModelProviderCredentialOperationsV2` supports empty-state rollback
+by restoring the prior `check_model_provider_pair()` trigger, and refuses
+downgrade (`credential_operations_v2_rollback_blocked`) if any rows exist in
+`model_provider_credential_operations` or `model_provider_credential_preflights`,
+or if any provider head or revision holds non-`Draft` state or credential
+fields. Once lifecycle data exists, operators must fix forward rather than roll
+back.
 
 PostgreSQL requires each Draft head change and its matching revision in the
 same transaction. A Draft edit preserves the existing credential version,

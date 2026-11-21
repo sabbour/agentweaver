@@ -33,9 +33,19 @@ function assertBrokerAcceptanceRedirectUri(value) {
   }
 }
 
+function resolveByokKeyVaultName(config, keyVaultName) {
+  if (config.byokKeyVaultName === undefined || config.byokKeyVaultName === '') return undefined;
+  const byokKeyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.byokKeyVaultName);
+  if (byokKeyVaultName.toLowerCase() === keyVaultName.toLowerCase()) {
+    throw new Error('BYOK Key Vault must be separate from the existing keyVaultName.');
+  }
+  return byokKeyVaultName;
+}
+
 /** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
-  assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  resolveByokKeyVaultName(config, keyVaultName);
   assertDedicatedTarget(config.resourceGroup);
   if (config.clusterName !== `${config.resourceGroup}-aks` ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '') ||
@@ -48,7 +58,8 @@ export function assertBrokerRuntimeInputs(config) {
 
 /** Checks the exact target inputs needed to stage the source-rendered Broker ConfigMap. */
 export function assertBrokerConfigOnlyInputs(config) {
-  assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  resolveByokKeyVaultName(config, keyVaultName);
   assertDedicatedTarget(config.resourceGroup);
   if (config.clusterName !== `${config.resourceGroup}-aks` ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '') ||
@@ -61,6 +72,7 @@ export function assertBrokerConfigOnlyInputs(config) {
 export function brokerAcceptanceConfiguration(config, { issuer, identity, portalHostname }) {
   assertBrokerRuntimeInputs(config);
   const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  const byokKeyVaultName = resolveByokKeyVaultName(config, keyVaultName);
   if (!/^https:\/\/agentweaver\.[a-z0-9.-]+\.aksapp\.io\/$/.test(issuer) ||
       !GUID.test(identity?.clientId ?? '') || !GUID.test(identity?.principalId ?? '') ||
       !/^portal\.[a-z0-9.-]+\.aksapp\.io$/.test(portalHostname ?? '') ||
@@ -85,6 +97,10 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity, portal
     IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
     IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,
     IdentityBroker__SecretRedemption__Audience: issuer,
+    IdentityBroker__SecretRedemption__ByokVaultHost: `${(byokKeyVaultName ?? keyVaultName).toLowerCase()}.vault.azure.net`,
+    ...(byokKeyVaultName
+      ? { IdentityBroker__SecretRedemption__ByokVaultUri: `https://${byokKeyVaultName.toLowerCase()}.vault.azure.net/` }
+      : {}),
     IdentityBroker__SecretRedemption__VaultHost: `${keyVaultName.toLowerCase()}.vault.azure.net`,
     IdentityBroker__SecretRedemption__VaultUri: `https://${keyVaultName.toLowerCase()}.vault.azure.net/`,
     IdentityBroker__SecretRedemption__WorkloadIdentityTenantId: config.tenantId,
@@ -195,6 +211,7 @@ function assertBrokerConfigSource(candidate, identity, config, keyVaultName, iss
   }
   const data = configMapValues(candidate, 'data');
   configMapValues(candidate, 'binaryData');
+  const byokKeyVaultName = resolveByokKeyVaultName(config, keyVaultName);
   const required = {
     ConnectionStrings__IdentityBroker:
       `Host=${config.resourceGroup}-pg.postgres.database.azure.com;Database=agentweaver;` +
@@ -204,6 +221,7 @@ function assertBrokerConfigSource(candidate, identity, config, keyVaultName, iss
     IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
     IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,
     IdentityBroker__SecretRedemption__Audience: issuer,
+    IdentityBroker__SecretRedemption__ByokVaultHost: `${(byokKeyVaultName ?? keyVaultName).toLowerCase()}.vault.azure.net`,
     IdentityBroker__SecretRedemption__VaultHost: `${keyVaultName.toLowerCase()}.vault.azure.net`,
     IdentityBroker__SecretRedemption__VaultUri: `https://${keyVaultName.toLowerCase()}.vault.azure.net/`,
     IdentityBroker__SecretRedemption__WorkloadIdentityTenantId: config.tenantId,
@@ -213,6 +231,12 @@ function assertBrokerConfigSource(candidate, identity, config, keyVaultName, iss
     IdentityBroker__Clients__1__RedirectUris__0: `https://${portalHostname}/auth/callback`,
     IdentityBroker__Clients__2__Resources__0: issuer,
   };
+  if (byokKeyVaultName) {
+    required.IdentityBroker__SecretRedemption__ByokVaultUri =
+      `https://${byokKeyVaultName.toLowerCase()}.vault.azure.net/`;
+  } else if (data.IdentityBroker__SecretRedemption__ByokVaultUri !== undefined) {
+    throw new Error('Kustomize Broker ConfigMap must omit IdentityBroker__SecretRedemption__ByokVaultUri when BYOK Key Vault is not configured.');
+  }
   for (const [field, expected] of Object.entries(required)) {
     if (data[field] !== expected) {
       throw new Error(`Kustomize Broker ConfigMap does not match the exact target, certificate, callback, or identity at data[${field}].`);
@@ -369,6 +393,7 @@ export function bootstrapIdentityBrokerRuntime(config, {
 } = {}) {
   assertBrokerRuntimeInputs(config);
   const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  const byokKeyVaultName = resolveByokKeyVaultName(config, keyVaultName);
   function azureJson(args, projectJson) {
     const result = execAz(args, { ...OPTIONS, projectJson, preserveProjectedJson: true });
     if (result.status !== 0) throw new Error(`Broker runtime target lookup failed: ${redact(result.stderr)}`);
@@ -463,7 +488,7 @@ export function bootstrapIdentityBrokerRuntime(config, {
         .replaceAll('CHANGEME-identity-broker-client-id', identity.clientId)
         .replaceAll('CHANGEME-tenant-id', config.tenantId)
         .replaceAll('CHANGEME-KEYVAULT-HOST', `${keyVaultName.toLowerCase()}.vault.azure.net`)
-        .replaceAll('CHANGEME-BYOK-KEYVAULT-HOST', `${keyVaultName.toLowerCase()}.vault.azure.net`)
+        .replaceAll('CHANGEME-BYOK-KEYVAULT-HOST', `${(byokKeyVaultName ?? keyVaultName).toLowerCase()}.vault.azure.net`)
         .replaceAll('CHANGEME-POSTGRES-HOST', `${config.resourceGroup}-pg.postgres.database.azure.com`)
         .replaceAll('CHANGEME-UPSTREAM-OIDC-AUTHORITY', 'login.microsoftonline.com')
         .replaceAll('CHANGEME-UPSTREAM-OIDC-METADATA-HOST', 'login.microsoftonline.com')

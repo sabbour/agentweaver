@@ -67,7 +67,7 @@ const GROUPS = {
     SELECT: 'tenant_memberships __ef_migrations_history installation_identity',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_skill_trust_evidence project_role_assignments authority_audit model_provider_revisions model_provider_reference_reservations native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_skill_trust_evidence project_role_assignments authority_audit model_provider_revisions model_provider_reference_reservations model_provider_credential_operations model_provider_credential_preflights native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -240,6 +240,7 @@ DECLARE
     h projects_config.model_providers%ROWTYPE;
     r projects_config.model_provider_revisions%ROWTYPE;
     previous projects_config.model_provider_revisions%ROWTYPE;
+    op projects_config.model_provider_credential_operations%ROWTYPE;
     transaction_id text := pg_catalog.pg_current_xact_id()::text;
 BEGIN
     IF TG_TABLE_NAME = 'model_providers' THEN
@@ -251,13 +252,15 @@ BEGIN
            OR h.write_transaction_id <> transaction_id
            OR r.write_transaction_id <> transaction_id
            OR h.current_revision <> NEW.current_revision
-           OR NEW.state <> 'Draft'
+           OR NEW.state NOT IN ('Draft', 'Available')
            OR (TG_OP = 'INSERT' AND
-               (NEW.current_revision <> 1 OR
+               (NEW.state <> 'Draft' OR
+                NEW.current_revision <> 1 OR
                 ROW(NEW.created_by_actor_id, NEW.created_at)
                 IS DISTINCT FROM ROW(NEW.updated_by_actor_id, NEW.updated_at)))
            OR (TG_OP = 'UPDATE' AND
-               (OLD.state <> 'Draft' OR
+               (OLD.state NOT IN ('Draft', 'Available') OR
+                NEW.state <> OLD.state OR
                 NEW.current_revision <> OLD.current_revision + 1 OR
                 ROW(NEW.provider_id, NEW.scope, NEW.project_id, NEW.created_by_actor_id, NEW.created_at)
                 IS DISTINCT FROM
@@ -271,7 +274,7 @@ BEGIN
         IF h.provider_id IS NULL OR h.write_transaction_id <> transaction_id
            OR NEW.write_transaction_id <> transaction_id
            OR h.current_revision <> NEW.provider_revision
-           OR h.state <> 'Draft'
+           OR h.state NOT IN ('Draft', 'Available')
            OR ROW(h.scope, h.project_id, h.display_name, h.type, h.base_url, h.deployment,
                   h.wire_api, h.azure_api_version, h.reasoning_efforts, h.prompt_capacity_tokens,
                   h.updated_by_actor_id, h.updated_at)
@@ -291,12 +294,32 @@ BEGIN
         ELSE
             SELECT * INTO previous FROM projects_config.model_provider_revisions
             WHERE provider_id = NEW.provider_id AND provider_revision = NEW.provider_revision - 1;
-            IF previous.provider_id IS NULL OR
-               ROW(NEW.credential_version, NEW.credential_slot_id, NEW.credential_secret_id)
-               IS DISTINCT FROM
-               ROW(previous.credential_version, previous.credential_slot_id, previous.credential_secret_id) THEN
+            IF previous.provider_id IS NULL THEN
                 RAISE EXCEPTION 'provider transition is unavailable'
                     USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+            END IF;
+            IF ROW(NEW.credential_version, NEW.credential_slot_id, NEW.credential_secret_id)
+               IS DISTINCT FROM
+               ROW(previous.credential_version, previous.credential_slot_id, previous.credential_secret_id) THEN
+                SELECT * INTO op FROM projects_config.model_provider_credential_operations
+                WHERE operation_id = NEW.operation_id
+                  AND write_transaction_id = transaction_id
+                  AND provider_id = NEW.provider_id
+                  AND provider_revision = NEW.provider_revision
+                  AND scope = NEW.scope
+                  AND project_id IS NOT DISTINCT FROM NEW.project_id;
+                IF op.operation_id IS NULL OR
+                   NOT ((op.operation_kind = 'Publish' AND
+                         NEW.credential_version = op.credential_version AND
+                         NEW.credential_slot_id = op.credential_slot_id AND
+                         NEW.credential_secret_id = op.credential_secret_id) OR
+                        (op.operation_kind = 'Disable' AND
+                         NEW.credential_version IS NULL AND
+                         NEW.credential_slot_id IS NULL AND
+                         NEW.credential_secret_id IS NULL)) THEN
+                    RAISE EXCEPTION 'provider transition is unavailable'
+                        USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+                END IF;
             END IF;
         END IF;
     END IF;
@@ -375,6 +398,30 @@ END;`,
       },
       providerWriteGuard('model_provider_revisions_write_marker', true, 7),
       providerWriteGuard('model_provider_revisions_write_pair', false, 5),
+    ],
+    model_provider_credential_operations: [
+      {
+        trigger: 'model_provider_credential_operations_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'model_provider_credential_operations_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
+    model_provider_credential_preflights: [
+      {
+        trigger: 'model_provider_credential_preflights_consume_only',
+        function: 'guard_model_provider_credential_preflight_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'model_provider_credential_preflights_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
     ],
     native_acs_policy_revisions: [
       {
@@ -778,6 +825,7 @@ const FUNCTIONS = {
     'guard_model_provider_reference_cross_table()',
     'guard_provider_reference_installation()',
     'reject_immutable_record_mutation()',
+    'guard_model_provider_credential_preflight_mutation()',
     'require_native_acs_policy_file_insert_in_revision_transaction()',
     'require_native_acs_policy_head_advance()',
     'require_governance_decision_head_initialize()',
@@ -789,6 +837,7 @@ const FUNCTIONS = {
     'reject_project_setup_operation_mutation()',
     'lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
     'lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])',
+    'lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text)',
     'issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
     'read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
   ],
@@ -855,6 +904,7 @@ const UPDATE_COLUMNS = {
     project_role_assignments: ['state', 'revision', 'revoked_by', 'revoked_at'],
     native_acs_policy_heads: ['current_revision', 'updated_at'],
     project_governance_decision_stream_heads: ['sequence', 'fence_generation', 'head_hash', 'updated_at'],
+    model_provider_credential_preflights: ['consumed_at', 'consumed_by_kind'],
   },
 };
 
@@ -905,6 +955,7 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
       signature,
       execute: signature.startsWith('lock_casting_authority(') ||
         signature.startsWith('lock_native_acs_policy_authority(') ||
+        signature.startsWith('lock_credential_publication_authority(') ||
         signature.startsWith('issue_p1_project(') ||
         signature.startsWith('read_p1_project('),
     })),

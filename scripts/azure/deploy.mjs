@@ -331,11 +331,11 @@ export async function deploy(config, {
   if (config.bootstrapIdentityBrokerRuntime) {
     // The approved parameters own the vault name; the CLI does not accept one.
     assertBrokerRuntimeInputs({ ...config, clusterName: `${config.resourceGroup}-aks`,
-      keyVaultName: source.keyVaultName });
+      keyVaultName: source.keyVaultName, byokKeyVaultName: source.byokKeyVaultName });
   }
   if (config.bootstrapIdentityBrokerConfigOnly) {
     assertBrokerConfigOnlyInputs({ ...config, clusterName: `${config.resourceGroup}-aks`,
-      keyVaultName: source.keyVaultName });
+      keyVaultName: source.keyVaultName, byokKeyVaultName: source.byokKeyVaultName });
   }
   if (source.nodePoolMinCount !== 2 || source.nodePoolMaxCount !== 3) {
     throw new Error('Reviewed deployment source must bind the approved system autoscaler bounds 2-3.');
@@ -440,6 +440,7 @@ export async function deploy(config, {
         repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
         subscriptionId: config.subscriptionId, tenantId: config.tenantId,
         clusterName: `${config.resourceGroup}-aks`, keyVaultName: source.keyVaultName,
+        byokKeyVaultName: source.byokKeyVaultName,
         upstreamClientId: config.upstreamClientId,
       });
       return { ...summary, executed: true, receipt: {
@@ -667,6 +668,7 @@ export async function deploy(config, {
         subscriptionId: config.subscriptionId, tenantId: config.tenantId,
         clusterName: `${config.resourceGroup}-aks`, upstreamClientId: config.upstreamClientId,
         keyVaultName: source.keyVaultName,
+        byokKeyVaultName: source.byokKeyVaultName,
         acceptanceRunId: config.acceptanceRunId, acceptanceRedirectUri: config.acceptanceRedirectUri,
         brokerImage: config.brokerImage,
       });

@@ -4,6 +4,7 @@
     ["agentweaver-pg.postgres.database.azure.com", "awwus2np01-pg.postgres.database.azure.com"],
     ["agentweaver-pg.privatelink.postgres.database.azure.com", "awwus2np01-pg.privatelink.postgres.database.azure.com"],
     ["agentweaver-kv-v1.vault.azure.net", "awwus2np01-kv1.vault.azure.net"],
+    ["agentweaver-byok-kv-v1.vault.azure.net", "awwus2np01-kv1.vault.azure.net"],
     ["agentweaverblob.blob.core.windows.net", "awwus2np01blob.blob.core.windows.net"],
     ["agentweaverblob.privatelink.blob.core.windows.net", "awwus2np01blob.privatelink.blob.core.windows.net"],
     ["agentweaver-id-identity-broker", "awwus2np01-id-identity-broker"],
@@ -16,5 +17,8 @@
     ["039d7849-9fa0-4488-83ed-c52ec55007ea", "fb48f6c8-82a7-41cd-8574-d2d5a9c1c77d"],
     ["5860d27c-cc2d-4097-8f0a-680316cc5b46", "66812430-d72c-47a0-b537-afcdb2de9ca2"],
     ["518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0", "e64bacfe-3d34-4b29-a161-861235f5ded7"]
+  ],
+  "omitKeys": [
+    "IdentityBroker__SecretRedemption__ByokVaultUri"
   ]
 }

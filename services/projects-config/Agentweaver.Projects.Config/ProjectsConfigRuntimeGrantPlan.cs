@@ -437,7 +437,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
                 var expected = reader.GetString(0) switch
                 {
                     "mark_model_provider_write" => "251d3b422db7283268c1264b4743de38b0af2454e34fc23330e1a0d9eba11c18",
-                    "check_model_provider_pair" => "04c257420b1b56dec4436415bf3a063b4482936ce841630f32bdbee8d87d0964",
+                    "check_model_provider_pair" => "b653f4ce0ae62553e6ef687a17a73d1c37391c6649656677308e4389c3eca999",
                     "guard_model_provider_reference_cross_table" => "d83b113d3eacaddfa44b872440903b00f366179822b7fc915e3c401ad4b46447",
                     "reject_immutable_record_mutation" => "c6c7bd8d7525928ec038d60c6e986bd8148e9c5bf4d59668a712e832bd549175",
                     _ => "",

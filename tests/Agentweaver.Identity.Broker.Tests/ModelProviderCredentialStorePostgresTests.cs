@@ -111,7 +111,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             await store.MarkPublicationWriteUncertainAsync(request);
         if (state == ModelProviderCredentialWriteClaimState.PublicationPending)
             await store.CompletePublicationWriteAsync(request, Ref("provider-key", 'b'));
-        var expectedRevision = state == ModelProviderCredentialWriteClaimState.PublicationPending ? 2 : 1;
+        const long expectedRevision = 1;
         await AssertCodeAsync("credential_slot_conflict", () => store.DisableAsync(Disable(Guid.NewGuid(), expectedRevision, identity)));
         await AssertCodeAsync("credential_slot_conflict", () => store.DisableAsync(
             Disable(Guid.NewGuid(), expectedRevision, identity with { CredentialSlotId = Guid.NewGuid() })));
@@ -190,15 +190,16 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         if (pending is not null)
         {
             Assert.Equal(ModelProviderCredentialWriteClaimStatus.PublicationPending, pending.Status);
-            var revision = Assert.Single(history);
-            Assert.Equal(reference.Id, revision.SecretName);
-            Assert.Equal(reference.Version, revision.SecretVersion);
-            Assert.Equal(request.Claim.OperationId, Assert.Single(claims).OperationId);
+            Assert.Empty(history);
+            var claim = Assert.Single(claims);
+            Assert.Equal(request.Claim.OperationId, claim.OperationId);
+            Assert.Equal(reference.Id, claim.SecretName);
+            Assert.Equal(reference.Version, claim.PendingSecretVersion);
             Assert.Equal(ModelProviderCredentialWriteClaimStatus.PublicationPending,
                 (await store.ClaimPublicationWriteAsync(request)).Status);
             await AssertCodeAsync("credential_slot_conflict", () => store.ClaimPublicationWriteAsync(competing));
             await AssertCodeAsync("credential_slot_conflict", () => store.RecordReferenceAsync(
-                Record(Guid.NewGuid(), 1, identity, Ref("provider-key", 'c'))));
+                Record(Guid.NewGuid(), 0, identity, Ref("provider-key", 'c'))));
         }
         else if (acquired is not null)
         {
@@ -251,11 +252,10 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         }
         await using var verify = CreateDb(connectionString);
         var claim = Assert.Single(await verify.ModelProviderCredentialWriteClaims.AsNoTracking().ToListAsync());
-        var revision = Assert.Single(await verify.ModelProviderCredentialRevisions.AsNoTracking().ToListAsync());
+        Assert.Empty(await verify.ModelProviderCredentialRevisions.AsNoTracking().ToListAsync());
         Assert.Equal(request.Claim.OperationId, claim.OperationId);
         Assert.Equal(ModelProviderCredentialWriteClaimState.PublicationPending, claim.State);
-        Assert.Equal(reference.Version, revision.SecretVersion);
-        Assert.Equal(request.Claim.OperationId, revision.OperationId);
+        Assert.Equal(reference.Version, claim.PendingSecretVersion);
     }
 
     [Fact]
@@ -306,7 +306,11 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             if (state == ModelProviderCredentialWriteClaimState.Published)
                 await store.AcknowledgePublicationAsync(request, Receipt(request, reference));
             var error = await Assert.ThrowsAsync<PostgresException>(() => db.GetService<IMigrator>().MigrateAsync(previous));
-            Assert.Equal("credential_publication_journal_rollback_blocked", error.MessageText);
+            Assert.Equal(
+                state is ModelProviderCredentialWriteClaimState.PublicationPending or ModelProviderCredentialWriteClaimState.Published
+                    ? "credential_lifecycle_rollback_blocked"
+                    : "credential_publication_journal_rollback_blocked",
+                error.MessageText);
         }
     }
 
@@ -411,6 +415,29 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
     }
 
     [Fact]
+    public async Task EmptyStateLifecycleRollbackRestoresPriorWriteClaimGuard()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        await using (var db = CreateDb(connectionString))
+            await db.GetService<IMigrator>().MigrateAsync("20261119125557_AddCredentialPublicationJournal");
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var fnQuery = new NpgsqlCommand("""
+            SELECT pg_catalog.pg_get_functiondef(p.oid)
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'identity_broker'
+              AND p.proname = 'guard_model_provider_credential_write_claim'
+            """,
+            connection);
+        var fnSource = (string)(await fnQuery.ExecuteScalarAsync())!;
+        Assert.DoesNotContain("dispatched_at", fnSource);
+        Assert.DoesNotContain("pending_secret_version", fnSource);
+        Assert.DoesNotContain("cancelled_at", fnSource);
+    }
+
+    [Fact]
     public async Task LegacyStatesAndFingerprintsSurviveMigrationRoundTrip()
     {
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
@@ -499,15 +526,13 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
             Assert.Equal("credential_write_claim_transition_invalid", error.MessageText);
         }
-        await using (var valid = new NpgsqlCommand("""
-            UPDATE identity_broker.model_provider_credential_write_claims
-            SET state = @state, completed_revision = 1, completed_at = now()
-            WHERE operation_id = @operation
-            """, connection))
+        var validSql = publication
+            ? "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'PublicationPending', pending_secret_version = repeat('a', 32) WHERE operation_id = @operation"
+            : "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Completed', completed_revision = 1, completed_at = now() WHERE operation_id = @operation";
+        await using (var valid = new NpgsqlCommand(validSql, connection))
         {
-            valid.Parameters.AddWithValue("state", publication ? "PublicationPending" : "Completed");
             valid.Parameters.AddWithValue("operation", claim.OperationId);
-            if (!historyMatches)
+            if (!publication && !historyMatches)
             {
                 var error = await Assert.ThrowsAsync<PostgresException>(() => valid.ExecuteNonQueryAsync());
                 Assert.Equal("credential_write_claim_transition_invalid", error.MessageText);
@@ -556,8 +581,8 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         var receipt = Receipt(request, reference);
         var invalidHash = new string('é', 64);
         var hashError = await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Published', published_provider_revision = {receipt.ProviderRevision}, published_configuration_hash = {invalidHash}, published_at = now() WHERE operation_id = {request.Claim.OperationId}"));
-        Assert.Equal("ck_model_provider_credential_write_claims_outcome", hashError.ConstraintName);
+            $"UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Published', completed_revision = 1, completed_at = now(), published_provider_revision = {receipt.ProviderRevision}, published_configuration_hash = {invalidHash}, published_at = now() WHERE operation_id = {request.Claim.OperationId}"));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, hashError.SqlState);
         var otherReference = Ref("provider-key", 'b');
         var changedReceipts = new[]
         {
@@ -638,7 +663,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         var pending = await store.CompletePublicationWriteAsync(request, pendingReference);
         Assert.Equal(ModelProviderCredentialWriteClaimStatus.PublicationPending, pending.Status);
         Assert.Null(pending.PublishedProviderRevision);
-        Assert.Equal(pendingReference, (await store.ReadCurrentAsync(identity)).Credential!.Reference);
+        Assert.Equal(oldReference, (await store.ReadCurrentAsync(identity)).Credential!.Reference);
         Assert.Equal(oldReference, (await store.ReadPinnedAsync(identity, oldReference)).Credential!.Reference);
         Assert.Equal(pendingReference, (await store.ReadPinnedAsync(identity, pendingReference)).Credential!.Reference);
         Assert.Equal(ModelProviderCredentialPinnedStatus.NotFound,
@@ -658,7 +683,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         await using var verify = CreateDb(connectionString);
         Assert.Equal(ModelProviderCredentialWriteClaimStatus.PublicationPending,
             (await Store(verify).ClaimPublicationWriteAsync(request)).Status);
-        Assert.Equal(1, await verify.ModelProviderCredentialRevisions.CountAsync());
+        Assert.Equal(0, await verify.ModelProviderCredentialRevisions.CountAsync());
     }
 
     [Fact]
@@ -669,8 +694,8 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         var request = Publication(Claim(Guid.NewGuid(), 0, identity));
         await using (var db = CreateDb(connectionString))
             Assert.True((await Store(db).ClaimPublicationWriteAsync(request)).Acquired);
-        await using (var db = CreateDb(connectionString, new FailCredentialRevisionInsertOnce()))
-            await Assert.ThrowsAsync<DbUpdateException>(() =>
+        await using (var db = CreateDb(connectionString, new FailCommandOnce("UPDATE", "model_provider_credential_write_claims")))
+            await Assert.ThrowsAnyAsync<Exception>(() =>
                 Store(db).CompletePublicationWriteAsync(request, Ref("provider-key", 'a')));
         await using var verify = CreateDb(connectionString);
         var store = Store(verify);
@@ -696,16 +721,38 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             await Store(db).ClaimPublicationWriteAsync(request);
         await using (var db = CreateDb(connectionString, new FailCommandOnce(verb, table)))
         {
-            var error = await Assert.ThrowsAnyAsync<Exception>(() => Store(db).CompletePublicationWriteAsync(request, reference));
-            Assert.True(error is InjectedInsertFailure || error is DbUpdateException { InnerException: InjectedInsertFailure });
+            if (table == "model_provider_credentials")
+            {
+                await Store(CreateDb(connectionString)).CompletePublicationWriteAsync(request, reference);
+                var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+                    Store(db).AcknowledgePublicationAsync(request, Receipt(request, reference)));
+                Assert.True(error is InjectedInsertFailure || error is DbUpdateException { InnerException: InjectedInsertFailure });
+            }
+            else
+            {
+                var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+                    Store(db).CompletePublicationWriteAsync(request, reference));
+                Assert.True(error is InjectedInsertFailure || error is DbUpdateException { InnerException: InjectedInsertFailure });
+            }
         }
         await using var verify = CreateDb(connectionString);
         var store = Store(verify);
         Assert.Empty(await verify.ModelProviderCredentialHeads.ToListAsync());
         Assert.Empty(await verify.ModelProviderCredentialRevisions.ToListAsync());
-        Assert.Equal(ModelProviderCredentialWriteClaimStatus.Claimed, (await store.ClaimPublicationWriteAsync(request)).Status);
-        Assert.Equal(ModelProviderCredentialWriteClaimStatus.PublicationPending,
-            (await store.CompletePublicationWriteAsync(request, reference)).Status);
+        if (table == "model_provider_credentials")
+        {
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.PublicationPending,
+                (await store.ClaimPublicationWriteAsync(request)).Status);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.Published,
+                (await store.AcknowledgePublicationAsync(request, Receipt(request, reference))).Status);
+        }
+        else
+        {
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.Claimed,
+                (await store.ClaimPublicationWriteAsync(request)).Status);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.PublicationPending,
+                (await store.CompletePublicationWriteAsync(request, reference)).Status);
+        }
     }
 
     [Theory]
@@ -726,7 +773,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         Assert.False(replay.Acquired);
         Assert.Equal(afterCommit ? ModelProviderCredentialWriteClaimStatus.PublicationPending :
             ModelProviderCredentialWriteClaimStatus.Claimed, replay.Status);
-        Assert.Equal(afterCommit ? 1 : 0, await verify.ModelProviderCredentialRevisions.CountAsync());
+        Assert.Equal(0, await verify.ModelProviderCredentialRevisions.CountAsync());
         Assert.Equal(afterCommit ? reference : null, replay.Credential?.Reference);
     }
 
@@ -1426,7 +1473,8 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             "published_configuration_hash = repeat('a', 64), published_at = now(), completed_revision = 2");
         await using (var invalidRevision = new NpgsqlCommand("""
             UPDATE identity_broker.model_provider_credential_write_claims
-            SET state = 'Published', published_provider_revision = 13,
+            SET state = 'Published', completed_revision = 1, completed_at = now(),
+                published_provider_revision = 13,
                 published_configuration_hash = repeat('a', 64), published_at = now()
             WHERE operation_id = @operation
             """, connection))
@@ -1434,7 +1482,6 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             invalidRevision.Parameters.AddWithValue("operation", publication.Claim.OperationId);
             var error = await Assert.ThrowsAsync<PostgresException>(() => invalidRevision.ExecuteNonQueryAsync());
             Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
-            Assert.Equal("ck_model_provider_credential_write_claims_outcome", error.ConstraintName);
         }
 
         var receipt = Receipt(publication, reference) with { ConfigurationHash = new string('F', 64) };
@@ -1442,7 +1489,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         Assert.Equal(ModelProviderCredentialWriteClaimStatus.Published, published.Status);
         Assert.Equal(receipt.ConfigurationHash, published.PublishedConfigurationHash);
         await AssertRuntimeTransitionRejectedAsync(connection, publication.Claim.OperationId,
-            "state = 'PublicationPending', published_provider_revision = NULL, published_configuration_hash = NULL, published_at = NULL");
+            "state = 'PublicationPending', completed_revision = NULL, completed_at = NULL, published_provider_revision = NULL, published_configuration_hash = NULL, published_at = NULL");
 
         var directClaim = Publication(Claim(Guid.NewGuid(), 0,
             Identity() with { ProviderId = "provider-runtime-direct" }));
@@ -1452,7 +1499,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             "state = 'Completed', completed_revision = 1, completed_at = now()");
         await using (var pending = new NpgsqlCommand("""
             UPDATE identity_broker.model_provider_credential_write_claims
-            SET state = 'PublicationPending', completed_revision = 1, completed_at = now()
+            SET state = 'PublicationPending', pending_secret_version = repeat('a', 32)
             WHERE operation_id = @operation
             """, connection))
         {
@@ -1461,7 +1508,8 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         }
         await using (var publish = new NpgsqlCommand("""
             UPDATE identity_broker.model_provider_credential_write_claims
-            SET state = 'Published', published_provider_revision = 12,
+            SET state = 'Published', completed_revision = 1, completed_at = now(),
+                published_provider_revision = 12,
                 published_configuration_hash = repeat('a', 64), published_at = now()
             WHERE operation_id = @operation
             """, connection))

@@ -158,6 +158,7 @@ test('Identity Broker snapshot keeps existing clients and adds versioned public 
     'IdentityBroker__RuntimeBootstrap__SourceLifetime',
     'IdentityBroker__SecretRedemption__Audience',
     'IdentityBroker__SecretRedemption__ByokVaultHost',
+    'IdentityBroker__SecretRedemption__ByokVaultUri',
     'IdentityBroker__SecretRedemption__VaultHost',
     'IdentityBroker__SecretRedemption__VaultUri',
     'IdentityBroker__SecretRedemption__WorkloadIdentityClientId',
@@ -197,6 +198,10 @@ test('Identity Broker snapshot keeps existing clients and adds versioned public 
   assert.equal(identityBroker.data.IdentityBroker__WebOrigin, portalOrigin);
   assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId,
     '4ee7e4e8-f5c8-445a-9fa4-5cf13afdb067');
+  assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__ByokVaultHost,
+    'agentweaver-byok-kv-v1.vault.azure.net');
+  assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__ByokVaultUri,
+    'https://agentweaver-byok-kv-v1.vault.azure.net/');
   assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__VaultHost,
     'agentweaver-kv-v1.vault.azure.net');
   assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__VaultUri,
@@ -1106,6 +1111,7 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
     'environment.agentweaver.svc.cluster.local',
     'agentweaver-kv-v1.vault.azure.net',
     'agentweaver-pg.postgres.database.azure.com',
+    'agentweaver-byok-kv-v1.vault.azure.net',
   ]);
   const unresolvedInputs = [...new Set([...JSON.stringify(installation).matchAll(/CHANGEME-[A-Za-z0-9-]+/g)]
     .map(match => match[0]))].sort();

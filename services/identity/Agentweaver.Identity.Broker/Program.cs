@@ -236,7 +236,14 @@ builder.Services.AddSingleton<ISecretVersionWriter>(provider =>
         provider.GetRequiredService<AzureKeyVaultConfiguration>(),
         provider.GetRequiredService<TokenCredential>(),
         provider.GetRequiredService<SecretClientOptions>()));
+builder.Services.AddSingleton<IModelProviderByokVault>(provider =>
+    new AzureKeyVaultByokVaultClient(
+        provider.GetRequiredService<ModelProviderCredentialVaults>(),
+        provider.GetRequiredService<TokenCredential>()));
 builder.Services.AddHttpContextAccessor();
+ModelProviderCredentialEndpoints.SuppressCredentialRequestLogs(
+    builder.Services,
+    new HttpContextAccessor());
 var issueSyncWorker = IssueSyncServiceTransport.AddChannel(builder,
     IssueSyncGrantAuthority.WorkerChannel, "IdentityBroker:IssueSync:WorkerTls", "IdentityBroker", "Orchestrator", true);
 var issueSyncProjects = IssueSyncServiceTransport.AddChannel(builder,
@@ -384,6 +391,12 @@ builder.Services.AddScoped(provider => new BrokerRunBindingAuthority(
         .CreateClient(BrokerRunBindingAuthority.HttpClientName),
     provider.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped(provider => new BrokerModelProviderCredentialPublicationClient(
+    identityOptions,
+    provider.GetRequiredService<X509Certificate2>(),
+    provider.GetRequiredService<IHttpClientFactory>()
+        .CreateClient(BrokerRunBindingAuthority.HttpClientName),
+    provider.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped(provider => new BrokerModelProviderCredentialPublicationV2Client(
     identityOptions,
     provider.GetRequiredService<X509Certificate2>(),
     provider.GetRequiredService<IHttpClientFactory>()
@@ -537,6 +550,7 @@ app.UseAuthorization();
 app.MapIdentityBrokerEndpoints();
 app.MapIssueSyncGrants(issueSyncWorker);
 app.MapIdentitySecretRedemptionEndpoints();
+app.MapModelProviderCredentialEndpoints();
 app.MapCopilotConnectionEndpoints();
 app.MapRemoteMcpOAuthManagementEndpoints();
 app.MapGitHubRepoAppStatusEndpoint();

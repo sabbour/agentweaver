@@ -25,6 +25,10 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
         Set<ModelProviderDraftRevisionRecord>();
     public DbSet<ModelProviderReferenceReservationRecord> ModelProviderReferenceReservations =>
         Set<ModelProviderReferenceReservationRecord>();
+    public DbSet<ModelProviderCredentialOperationRecord> ModelProviderCredentialOperations =>
+        Set<ModelProviderCredentialOperationRecord>();
+    public DbSet<ModelProviderCredentialPreflightRecord> ModelProviderCredentialPreflights =>
+        Set<ModelProviderCredentialPreflightRecord>();
     public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
     public DbSet<ProjectCastingGenerationRequestRecord> CastingGenerationRequests =>
@@ -400,6 +404,107 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.HasIndex(revision => revision.OperationId)
                 .IsUnique()
                 .HasDatabaseName("ux_model_provider_revisions_operation_id");
+        });
+
+        modelBuilder.Entity<ModelProviderCredentialOperationRecord>(entity =>
+        {
+            entity.ToTable("model_provider_credential_operations", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_operations_kind",
+                    "operation_kind IN ('Publish', 'Cancel', 'Disable')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_operations_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_operations_fingerprint",
+                    "request_fingerprint ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_operations_shape",
+                    "(operation_kind = 'Cancel' AND provider_revision IS NULL AND expected_provider_revision IS NULL AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NULL AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash IS NULL) OR " +
+                    "(operation_kind = 'Publish' AND provider_revision > 0 AND expected_provider_revision > 0 AND provider_revision = expected_provider_revision + 1 AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NOT NULL AND credential_secret_id IS NOT NULL AND credential_version ~ '^[0-9a-fA-F]{32}$' AND configuration_hash ~ '^[0-9a-f]{64}$') OR " +
+                    "(operation_kind = 'Disable' AND provider_revision > 0 AND original_provider_revision > 0 AND provider_revision = original_provider_revision + 1 AND original_credential_revision > 0 AND (expected_provider_revision IS NULL OR expected_provider_revision = original_provider_revision) AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash ~ '^[0-9a-f]{64}$')");
+            });
+            entity.HasKey(op => op.OperationId).HasName("pk_model_provider_credential_operations");
+            entity.Property(op => op.OperationId).HasColumnName("operation_id");
+            entity.Property(op => op.OperationKind).HasColumnName("operation_kind")
+                .HasConversion<string>().HasMaxLength(16).IsRequired();
+            entity.Property(op => op.ProviderId).HasColumnName("provider_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProviderId).IsRequired();
+            entity.Property(op => op.Scope).HasColumnName("scope")
+                .HasConversion<string>().HasMaxLength(16).IsRequired();
+            entity.Property(op => op.ProjectId).HasColumnName("project_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProjectId);
+            entity.Property(op => op.ProviderRevision).HasColumnName("provider_revision");
+            entity.Property(op => op.ExpectedProviderRevision).HasColumnName("expected_provider_revision");
+            entity.Property(op => op.OriginalProviderRevision).HasColumnName("original_provider_revision");
+            entity.Property(op => op.OriginalCredentialRevision).HasColumnName("original_credential_revision");
+            entity.Property(op => op.CredentialSlotId).HasColumnName("credential_slot_id");
+            entity.Property(op => op.CredentialSecretId).HasColumnName("credential_secret_id")
+                .HasMaxLength(256);
+            entity.Property(op => op.CredentialVersion).HasColumnName("credential_version")
+                .HasMaxLength(32);
+            entity.Property(op => op.ConfigurationHash).HasColumnName("configuration_hash")
+                .HasMaxLength(ModelProviderDraftLimits.Hash);
+            entity.Property(op => op.OriginalTenant).HasColumnName("original_tenant")
+                .HasMaxLength(256).IsRequired();
+            entity.Property(op => op.OriginalMembershipId).HasColumnName("original_membership_id");
+            entity.Property(op => op.OriginalMembershipRevision).HasColumnName("original_membership_revision");
+            entity.Property(op => op.CurrentMembershipId).HasColumnName("current_membership_id");
+            entity.Property(op => op.CurrentMembershipRevision).HasColumnName("current_membership_revision");
+            entity.Property(op => op.CurrentAssignmentId).HasColumnName("current_assignment_id");
+            entity.Property(op => op.CurrentAssignmentRevision).HasColumnName("current_assignment_revision");
+            entity.Property(op => op.Issuer).HasColumnName("issuer").HasMaxLength(2048).IsRequired();
+            entity.Property(op => op.ActorId).HasColumnName("actor_id")
+                .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
+            entity.Property(op => op.RequestFingerprint).HasColumnName("request_fingerprint")
+                .HasMaxLength(ModelProviderDraftLimits.Hash).IsRequired();
+            entity.Property(op => op.RecordedAt).HasColumnName("recorded_at");
+            entity.Property<string>("WriteTransactionId").HasColumnName("write_transaction_id")
+                .HasColumnType("text").HasDefaultValue("legacy").IsRequired().ValueGeneratedOnAddOrUpdate();
+            entity.HasIndex(op => new { op.ProviderId, op.RecordedAt })
+                .HasDatabaseName("ix_model_provider_credential_operations_provider_recorded");
+        });
+
+        modelBuilder.Entity<ModelProviderCredentialPreflightRecord>(entity =>
+        {
+            entity.ToTable("model_provider_credential_preflights", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_preflights_mode",
+                    "mode IN ('draft-snapshot', 'authority-only')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_preflights_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_preflights_consumed",
+                    "(consumed_at IS NULL AND consumed_by_kind IS NULL) OR " +
+                    "(consumed_at IS NOT NULL AND consumed_by_kind IN ('Publish', 'Cancel', 'Disable'))");
+            });
+            entity.HasKey(p => p.PreflightId).HasName("pk_model_provider_credential_preflights");
+            entity.Property(p => p.PreflightId).HasColumnName("preflight_id");
+            entity.Property(p => p.OperationId).HasColumnName("operation_id");
+            entity.Property(p => p.Mode).HasColumnName("mode").HasMaxLength(16).IsRequired();
+            entity.Property(p => p.Scope).HasColumnName("scope")
+                .HasConversion<string>().HasMaxLength(16).IsRequired();
+            entity.Property(p => p.ProjectId).HasColumnName("project_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProjectId);
+            entity.Property(p => p.ProviderId).HasColumnName("provider_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProviderId).IsRequired();
+            entity.Property(p => p.Issuer).HasColumnName("issuer").HasMaxLength(2048).IsRequired();
+            entity.Property(p => p.ActorId).HasColumnName("actor_id")
+                .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
+            entity.Property(p => p.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
+            entity.Property(p => p.MembershipId).HasColumnName("membership_id");
+            entity.Property(p => p.MembershipRevision).HasColumnName("membership_revision");
+            entity.Property(p => p.AssignmentId).HasColumnName("assignment_id");
+            entity.Property(p => p.AssignmentRevision).HasColumnName("assignment_revision");
+            entity.Property(p => p.IssuedAt).HasColumnName("issued_at");
+            entity.Property(p => p.ConsumedAt).HasColumnName("consumed_at");
+            entity.Property(p => p.ConsumedByKind).HasColumnName("consumed_by_kind")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.HasIndex(p => new { p.OperationId, p.IssuedAt })
+                .HasDatabaseName("ix_model_provider_credential_preflights_operation_issued");
         });
 
         modelBuilder.Entity<ProjectRunSelectionRecord>(entity =>

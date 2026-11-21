@@ -132,18 +132,40 @@ historical reads return references from history rows recorded while the slot
 was Enabled. A historical read returns reference metadata only. Key Vault must
 still contain the exact version for redemption.
 
-The Broker store defines an internal write-claim API for Key Vault writes; no
-management route calls it. The caller first persists a claim that binds the
-operation ID, expected revision, credential slot, vault source and URI, secret
-name, request fingerprint, and actor. Only the request that acquires the claim
-may write to Key Vault. An exact replay of an unresolved claim returns no write
-permission. A process crash can leave the row in `Claimed`; replay treats that
-claim as quarantined. When a timeout leaves the outcome uncertain, the caller
-can move the claim to `Quarantined`. Neither state permits a retry, a reference
-write, disable, or reuse of the provider slot. Legacy completion stores the
-exact version, advances the head, appends the history row, and marks the claim
-`Completed` in one PostgreSQL transaction. A quarantined claim rejects late
-completion.
+The Broker exposes write-only `PUT` and `DELETE` credential endpoints for
+platform and project BYOK providers (`/api/platform/byok-providers/{providerId}/credential`
+and `/api/projects/{projectId}/byok-providers/{providerId}/credential`), proxied
+through Gateway. Raw API keys are never logged, traced, hashed into audit
+records, or returned in responses. Existing-vault reference attachment is
+rejected (`400 existing_vault_reference_not_supported`).
+
+Before writing to the dedicated BYOK Key Vault, the Broker validates the caller
+bearer and runs two Projects & Config v2 preflights, acquires a claim in
+`model_provider_credential_write_claims`, and commits a `dispatched_at` marker.
+It makes at most one Key Vault `SetSecret` call (`MaxRetries = 0`) with
+`agentweaver_operation_id` and `agentweaver_credential_slot_id` tags and
+readback verification. An uncertain write moves to `Quarantined` and never
+re-sends to Key Vault; callers can recover with `recoverySecretVersion` after
+provenance verification or cancel via `DELETE ...?operationId=<guid>&cancel=true`.
+A completed or recovered Vault write stores `pending_secret_version` in the
+journal (`PublicationPending`) without advancing `model_provider_credential_heads`
+until Projects & Config returns a matching publication receipt. Pinned reads
+redeem `PublicationPending` versions during the cross-owner acknowledgement
+window. Cancellation is final unless Projects & Config already committed a
+matching receipt, in which case the receipt wins; otherwise cancellation
+preserves the former current head and releases the slot only after Projects &
+Config confirms cancellation. `DELETE` without an in-flight write claim
+validates the Broker slot, expected revision, and absence of active write
+claims before calling Projects & Config `/disable`, then disables the Broker
+slot from the durable original revision in the receipt while keeping earlier
+`Enabled` history revisions redeemable.
+
+Migration `AddCredentialLifecycleDispatchAndCancel` supports empty-state
+rollback by restoring the prior `guard_model_provider_credential_write_claim()`
+trigger, and refuses downgrade (`credential_lifecycle_rollback_blocked`) if any
+lifecycle records (`Cancelled`, `dispatched_at`, `recovered_at`, `cancelled_at`,
+or `pending_secret_version`) exist. Once lifecycle data exists, operators must
+fix forward rather than roll back.
 
 The internal publication-bound claim also binds the original Projects provider
 revision, issuer, tenant, actor and publication purpose. Completion commits the

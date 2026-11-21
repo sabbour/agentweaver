@@ -295,6 +295,56 @@ public sealed class ModelProviderGuardMigrationPostgresTests
         }
     }
 
+    [Fact]
+    public async Task CredentialOperationsV2DowngradeSucceedsOnEmptyStateAndRefusesIncompatibleRecords()
+    {
+        await using var fixture = await PreGuardDatabase.StartAsync();
+        await ProjectsConfigMigrator.MigrateAsync(fixture.Migration, fixture.Options);
+
+        await using (var db = new ProjectsConfigDbContext(fixture.Options))
+        {
+            await db.GetService<IMigrator>().MigrateAsync("20261119175249_BindProviderInstallationIdentity");
+        }
+
+        Assert.True(await fixture.ScalarAsync("""
+            SELECT to_regclass('projects_config.model_provider_credential_operations') IS NULL
+               AND to_regclass('projects_config.model_provider_credential_preflights') IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM pg_catalog.pg_proc p
+                   JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'projects_config'
+                     AND p.proname = 'lock_credential_publication_authority')
+               AND EXISTS (
+                   SELECT 1 FROM pg_catalog.pg_proc p
+                   JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'projects_config'
+                     AND p.proname = 'check_model_provider_pair'
+                     AND pg_catalog.pg_get_functiondef(p.oid) NOT LIKE '%model_provider_credential_operations%')
+            """));
+
+        await ProjectsConfigMigrator.MigrateAsync(fixture.Migration, fixture.Options);
+        await fixture.ExecuteAsync("""
+            INSERT INTO projects_config.model_provider_credential_preflights
+            (preflight_id, operation_id, mode, scope, project_id, provider_id, issuer, actor_id,
+             tenant_id, membership_id, membership_revision, assignment_id, assignment_revision, issued_at)
+            VALUES (gen_random_uuid(), gen_random_uuid(), 'authority-only', 'Platform', NULL,
+                    'provider-1', 'https://issuer.example/', 'actor-1', 'tenant-1',
+                    gen_random_uuid(), 1, gen_random_uuid(), 1, now())
+            """);
+
+        await using (var db = new ProjectsConfigDbContext(fixture.Options))
+        {
+            var error = await Assert.ThrowsAsync<PostgresException>(() =>
+                db.GetService<IMigrator>().MigrateAsync("20261119175249_BindProviderInstallationIdentity"));
+            Assert.Equal("credential_operations_v2_rollback_blocked", error.MessageText);
+        }
+
+        Assert.True(await fixture.ScalarAsync("""
+            SELECT to_regclass('projects_config.model_provider_credential_preflights') IS NOT NULL
+               AND (SELECT count(*) FROM projects_config.model_provider_credential_preflights) = 1
+            """));
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

@@ -73,6 +73,245 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderCredentialOperationRecord", b =>
+                {
+                    b.Property<Guid>("OperationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ConfigurationHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("configuration_hash");
+
+                    b.Property<string>("CredentialSecretId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("credential_secret_id");
+
+                    b.Property<Guid?>("CredentialSlotId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("credential_slot_id");
+
+                    b.Property<string>("CredentialVersion")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("credential_version");
+
+                    b.Property<Guid>("CurrentAssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("current_assignment_id");
+
+                    b.Property<long>("CurrentAssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("current_assignment_revision");
+
+                    b.Property<Guid>("CurrentMembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("current_membership_id");
+
+                    b.Property<long>("CurrentMembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("current_membership_revision");
+
+                    b.Property<long?>("ExpectedProviderRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("expected_provider_revision");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("issuer");
+
+                    b.Property<string>("OperationKind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("operation_kind");
+
+                    b.Property<Guid>("OriginalMembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("original_membership_id");
+
+                    b.Property<long>("OriginalMembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("original_membership_revision");
+
+                    b.Property<long?>("OriginalCredentialRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("original_credential_revision");
+
+                    b.Property<long?>("OriginalProviderRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("original_provider_revision");
+
+                    b.Property<string>("OriginalTenant")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("original_tenant");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<long?>("ProviderRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("provider_revision");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy")
+                        .HasColumnName("write_transaction_id");
+
+                    b.HasKey("OperationId")
+                        .HasName("pk_model_provider_credential_operations");
+
+                    b.HasIndex("ProviderId", "RecordedAt")
+                        .HasDatabaseName("ix_model_provider_credential_operations_provider_recorded");
+
+                    b.ToTable("model_provider_credential_operations", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_provider_credential_operations_fingerprint", "request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_operations_kind", "operation_kind IN ('Publish', 'Cancel', 'Disable')");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_operations_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_operations_shape", "(operation_kind = 'Cancel' AND provider_revision IS NULL AND expected_provider_revision IS NULL AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NULL AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash IS NULL) OR (operation_kind = 'Publish' AND provider_revision > 0 AND expected_provider_revision > 0 AND provider_revision = expected_provider_revision + 1 AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NOT NULL AND credential_secret_id IS NOT NULL AND credential_version ~ '^[0-9a-fA-F]{32}$' AND configuration_hash ~ '^[0-9a-f]{64}$') OR (operation_kind = 'Disable' AND provider_revision > 0 AND original_provider_revision > 0 AND provider_revision = original_provider_revision + 1 AND original_credential_revision > 0 AND (expected_provider_revision IS NULL OR expected_provider_revision = original_provider_revision) AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash ~ '^[0-9a-f]{64}$')");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderCredentialPreflightRecord", b =>
+                {
+                    b.Property<Guid>("PreflightId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("preflight_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<Guid>("AssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("assignment_id");
+
+                    b.Property<long>("AssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("assignment_revision");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("consumed_at");
+
+                    b.Property<string>("ConsumedByKind")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("consumed_by_kind");
+
+                    b.Property<DateTimeOffset>("IssuedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("issued_at");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("issuer");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.Property<long>("MembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("membership_revision");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("mode");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("PreflightId")
+                        .HasName("pk_model_provider_credential_preflights");
+
+                    b.HasIndex("OperationId", "IssuedAt")
+                        .HasDatabaseName("ix_model_provider_credential_preflights_operation_issued");
+
+                    b.ToTable("model_provider_credential_preflights", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_provider_credential_preflights_consumed", "(consumed_at IS NULL AND consumed_by_kind IS NULL) OR (consumed_at IS NOT NULL AND consumed_by_kind IN ('Publish', 'Cancel', 'Disable'))");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_preflights_mode", "mode IN ('draft-snapshot', 'authority-only')");
+
+                            t.HasCheckConstraint("ck_model_provider_credential_preflights_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderDraftHeadRecord", b =>
                 {
                     b.Property<string>("ProviderId")
