@@ -127,6 +127,33 @@ public sealed class ProjectsAuthorizationContextClient(
         if (tenant is not null)
             request.Headers.TryAddWithoutValidation(TenantSelectorHeader, tenant);
 
+        await SendAuthorizationCheckAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Asks Projects to check current, unbound PlatformAdmin authority before manual rate-card write.</summary>
+    public async Task AuthorizePlatformModelPricingRateCardWriteAsync(
+        HttpContext context,
+        string ownerAudience,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireUnboundPlatformAdminCaller(context, ownerAudience);
+        var tenant = ReadTenantSelector(context);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(RequireOwnerUri(options), "/api/authorization/platform/model-pricing-rate-cards"));
+        request.Headers.Authorization = RequireBearer(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation(TenantSelectorHeader, tenant);
+
+        await SendAuthorizationCheckAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SendAuthorizationCheckAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
         HttpResponseMessage response;
         try
         {
@@ -349,6 +376,24 @@ public sealed class ProjectsAuthorizationContextClient(
         if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
             !context.User.FindAll("aud").Any(claim => claim.Value == ownerAudience))
             throw new ProjectsAuthorizationContextException("caller_scope_invalid", HttpStatusCode.Forbidden);
+    }
+
+    private static void RequireUnboundPlatformAdminCaller(HttpContext context, string? ownerAudience)
+    {
+        var subjects = context.User.FindAll("sub").Take(2).ToArray();
+        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .ToArray();
+        if (context.User.Identity?.IsAuthenticated != true ||
+            subjects.Length != 1 || !Guid.TryParseExact(subjects[0].Value, "D", out _) ||
+            string.IsNullOrWhiteSpace(ownerAudience) ||
+            !context.User.FindAll("aud").Any(claim => string.Equals(claim.Value, ownerAudience, StringComparison.Ordinal)) ||
+            !scopes.Contains("api.read", StringComparer.Ordinal) ||
+            !scopes.Contains("projects.admin", StringComparer.Ordinal))
+            throw new ProjectsAuthorizationContextException("caller_scope_invalid", HttpStatusCode.Forbidden);
+
+        if (context.User.HasClaim(claim => claim.Type is "project_id" or "run_id" or "purpose"))
+            throw new ProjectsAuthorizationContextException("caller_binding_mismatch", HttpStatusCode.Forbidden);
     }
 
     /// <summary>Validates optional project/run bindings without relaxing the existing run-only caller path.</summary>

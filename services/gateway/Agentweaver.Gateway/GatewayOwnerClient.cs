@@ -82,13 +82,31 @@ public sealed partial class GatewayOwnerClient(
     {
         try
         {
-            if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" or "readPlatformNativeAcsPolicy" ||
+            if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" or
+                    "readPlatformNativeAcsPolicy" or "savePlatformManualRuntimeRateCard" ||
                 IsModelProviderDraftRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(
                 cancellationToken,
                 route.OperationId == "dispatchCoordinatorExecution" ? DispatchRequestTimeout : null);
+            if (route.OperationId == "savePlatformManualRuntimeRateCard")
+            {
+                if (!IsValidManualRateCardWriteRequest(context))
+                {
+                    await WriteProblemAsync(
+                        context, "rate_card_request_invalid", StatusCodes.Status400BadRequest)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                if (!IsSupportedManualRateCardJsonContentType(context.Request.ContentType))
+                {
+                    await WriteProblemAsync(
+                        context, "unsupported_media_type", StatusCodes.Status415UnsupportedMediaType)
+                        .ConfigureAwait(false);
+                    return;
+                }
+            }
             if (route.OperationId == "readPlatformNativeAcsPolicy")
             {
                 if (context.Request.QueryString.HasValue)
@@ -2195,6 +2213,39 @@ public sealed partial class GatewayOwnerClient(
     }
 
     /// <summary>Uses the Gateway problem contract when an inbound request exceeds its route bound.</summary>
+    private static bool IsValidManualRateCardWriteRequest(HttpContext context)
+    {
+        if (context.Request.Query.Count != 0 || context.Request.QueryString.HasValue)
+            return false;
+
+        var id = context.Request.RouteValues["id"]?.ToString();
+        var version = context.Request.RouteValues["version"]?.ToString();
+        if (!IsLiteralRateCardKey(id, 128) || !IsLiteralRateCardKey(version, 64))
+            return false;
+
+        var expectedPath = $"{context.Request.PathBase.Value}/api/v1/platform/model-pricing/rate-cards/{id}/{version}";
+        var rawTarget = context.Features.Get<IHttpRequestFeature>()?.RawTarget;
+        return !string.IsNullOrEmpty(rawTarget)
+            ? string.Equals(rawTarget, expectedPath, StringComparison.Ordinal)
+            : string.Equals(context.Request.Path.Value, expectedPath, StringComparison.Ordinal);
+    }
+
+    private static bool IsLiteralRateCardKey(string? value, int maxLength) =>
+        value is { Length: > 0 } && value.Length <= maxLength &&
+        char.IsAsciiLetterOrDigit(value[0]) &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-');
+
+    private static bool IsSupportedManualRateCardJsonContentType(string? contentType)
+    {
+        if (string.IsNullOrWhiteSpace(contentType) ||
+            !MediaTypeHeaderValue.TryParse(contentType, out var parsed) ||
+            !string.Equals(parsed.MediaType, "application/json", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return string.IsNullOrEmpty(parsed.CharSet) ||
+            string.Equals(parsed.CharSet.Trim('"'), "utf-8", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static GatewayOwnerFailureException RequestBodyTooLarge() =>
         new(StatusCodes.Status413PayloadTooLarge, "application/problem+json",
             ProblemBody("request_body_too_large", StatusCodes.Status413PayloadTooLarge));

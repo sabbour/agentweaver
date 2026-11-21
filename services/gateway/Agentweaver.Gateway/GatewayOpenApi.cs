@@ -154,6 +154,8 @@ internal static partial class GatewayOpenApi
             ["readProjectMetrics"] = C(null, "ProjectMetrics", "200"),
             ["readProjectUsage"] = C(null, "ProjectUsage", "200"),
             ["searchProjectAzureRetailPrices"] = C(null, "AzureRetailPriceLookupResult", "200"),
+            ["savePlatformManualRuntimeRateCard"] = C(
+                "ManualRuntimeRateCardWriteRequest", "RuntimeRateCard", "200", "201"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["createProjectRun"] = C("CreateProjectRunRequest", "CreateProjectRunResponse", "201"),
             ["startProjectRun"] = C(null, "StartProjectRunResponse", "200"),
@@ -490,7 +492,7 @@ internal static partial class GatewayOpenApi
                          "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
-                        "searchProjectAzureRetailPrices" or
+                        "searchProjectAzureRetailPrices" or "savePlatformManualRuntimeRateCard" or
                         "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
                         "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
                         "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
@@ -498,7 +500,8 @@ internal static partial class GatewayOpenApi
                         "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         route.OperationId == "getAuthorizationTargetContext" ||
-                        IsModelProviderDraftRoute(route.OperationId)) && status == "200")
+                        IsModelProviderDraftRoute(route.OperationId)) && status == "200") ||
+                        (route.OperationId == "savePlatformManualRuntimeRateCard" && status is "200" or "201")
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
@@ -527,6 +530,8 @@ internal static partial class GatewayOpenApi
                                                 "Private repository team-sync responses are not cacheable.",
                                             "searchProjectAzureRetailPrices" =>
                                                 "Azure Retail price search responses are not cacheable.",
+                                            "savePlatformManualRuntimeRateCard" =>
+                                                "Manual runtime price-card responses are not cacheable.",
                                             "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
                                             "writePlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
                                             "readPlatformNativeAcsPolicyRevision" =>
@@ -572,6 +577,14 @@ internal static partial class GatewayOpenApi
         {
             responses["400"] = ProblemResponse("The region and search query are missing, invalid, repeated, or unknown.");
             responses["503"] = ProblemResponse("Azure Retail pricing is unavailable.");
+        }
+        if (route.OperationId == "savePlatformManualRuntimeRateCard")
+        {
+            responses["400"] = ProblemResponse("The path keys, query string, or manual runtime price-card body are invalid.");
+            responses["409"] = ProblemResponse("A different rate card or legacy row already exists at that ID and version.");
+            responses["413"] = ProblemResponse("The request body exceeds the 65536-byte route limit.");
+            responses["415"] = ProblemResponse("The request content type must be application/json.");
+            responses["503"] = ProblemResponse("Rate-card authorization or storage is unavailable.");
         }
         if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent" or
             "setAllProjectBacklogTasksReady" or "setProjectBacklogTaskPosition" or
@@ -1104,6 +1117,15 @@ else if (route.OperationId is
                 "region contains 1 to 64 ASCII letters or digits; search contains 1 to 64 " +
                 "ASCII letters, digits, periods, hyphens, or spaces. A null usdPer1M means the meter does not use " +
                 "a supported per-token unit or base tier. Responses are no-store.";
+        }
+        else if (route.OperationId == "savePlatformManualRuntimeRateCard")
+        {
+            description +=
+                " Requires api.read, projects.admin, active membership, an unbound request, and current " +
+                "PlatformAdmin authority checked through Projects before reading the 64 KiB UTF-8 JSON body. " +
+                "Rejects encoded path aliases and query parameters. Returns 201 for a new version, 200 for " +
+                "identical canonical content, and 409 for conflicting content or a legacy row, with a strong " +
+                "SHA-256 ETag and Cache-Control: no-store.";
         }
         else if (route.OperationId == "listProjectRuns")
         {
@@ -2608,6 +2630,34 @@ else if (route.OperationId is
             ["region", "sourceUrl", "retrievedOn", "items"],
             ("region", Str()), ("sourceUrl", new { type = "string", format = "uri" }),
             ("retrievedOn", Date()), ("items", Arr(Ref("AzureRetailMeterCandidate")))),
+        ["RuntimeRateCardBody"] = StrictObj(
+            ["id", "version", "meterSource", "unit", "nanoUnitsPerUnit", "modelMultipliers"],
+            ("id", new { type = "string", minLength = 1, maxLength = 128, pattern = "^[A-Za-z0-9][A-Za-z0-9._-]*$" }),
+            ("version", new { type = "string", minLength = 1, maxLength = 64, pattern = "^[A-Za-z0-9][A-Za-z0-9._-]*$" }),
+            ("meterSource", new { type = "string", @enum = new[] { "byok.tokens" } }),
+            ("unit", new { type = "string", @enum = new[] { "USD" } }),
+            ("nanoUnitsPerUnit", new { type = "number", @enum = new[] { 1000000 } }),
+            ("modelMultipliers", new
+            {
+                type = "object",
+                minProperties = 1,
+                additionalProperties = new { type = "number", exclusiveMinimum = 0 },
+            })),
+        ["ManualRuntimeRateCardProvenance"] = StrictObj(
+            ["source", "sourceUrl", "retrievedOn"],
+            ("source", new { type = "string", @enum = new[] { "manual" } }),
+            ("sourceUrl", new { type = "string", format = "uri" }),
+            ("retrievedOn", Date())),
+        ["ManualRuntimeRateCardWriteRequest"] = StrictObj(
+            ["runtimeRateCardSchemaVersion", "rateCard", "provenance"],
+            ("runtimeRateCardSchemaVersion", new { type = "integer", @enum = new[] { 1 } }),
+            ("rateCard", Ref("RuntimeRateCardBody")),
+            ("provenance", Ref("ManualRuntimeRateCardProvenance"))),
+        ["RuntimeRateCard"] = StrictObj(
+            ["runtimeRateCardSchemaVersion", "rateCard", "provenance"],
+            ("runtimeRateCardSchemaVersion", new { type = "integer", @enum = new[] { 1 } }),
+            ("rateCard", Ref("RuntimeRateCardBody")),
+            ("provenance", Ref("ManualRuntimeRateCardProvenance"))),
         ["BindChiefOfStaffConversationRequest"] = StrictObj(["projectId", "runId"],
             ("projectId", Str()), ("runId", Str())),
         // An unavailable conversation keeps only its identifier, access, and creation time.

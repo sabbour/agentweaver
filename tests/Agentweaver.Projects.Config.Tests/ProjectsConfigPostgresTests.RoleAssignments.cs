@@ -485,6 +485,67 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task PlatformModelPricingRateCardWriteAuthorizationChecksUnboundPlatformAdminAndScopes()
+    {
+        await using var db = CreateDbContext();
+        var authorizationOwner = new ProjectAuthorizationOwner(
+            db, new ProjectsConfigIdentityOptions(TestIssuer));
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+
+        var tenantId = "tenant-" + Guid.NewGuid().ToString("N");
+        var platformAdminSubject = Guid.NewGuid().ToString("D");
+        var adminMembership = await authority.GrantMembershipAsync(
+            TestIssuer, platformAdminSubject, tenantId, "test");
+        await authority.AssignRoleAsync(
+            adminMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin,
+            "test");
+
+        var tenantAdminSubject = Guid.NewGuid().ToString("D");
+        var tenantAdminMembership = await authority.GrantMembershipAsync(
+            TestIssuer, tenantAdminSubject, tenantId, "test");
+        await authority.AssignRoleAsync(
+            tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin,
+            "test");
+
+        async Task<int?> Authorize(
+            string subject,
+            string scopes = "api.read projects.admin",
+            string? boundProjectId = null,
+            string query = "")
+        {
+            var claims = new List<Claim>
+            {
+                new("sub", subject),
+                new("scope", scopes),
+            };
+            if (boundProjectId is not null)
+                claims.Add(new Claim("project_id", boundProjectId));
+            var context = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"))
+            };
+            context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader] = tenantId;
+            if (!string.IsNullOrEmpty(query))
+                context.Request.QueryString = new QueryString(query);
+            var result = await ProjectConfigEndpoints.AuthorizePlatformModelPricingRateCardWriteAsync(
+                context, authorizationOwner, CancellationToken.None);
+            return Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode;
+        }
+
+        Assert.Equal(StatusCodes.Status204NoContent, await Authorize(platformAdminSubject));
+        Assert.Equal(StatusCodes.Status403Forbidden, await Authorize(platformAdminSubject, scopes: "api.read"));
+        Assert.Equal(StatusCodes.Status403Forbidden, await Authorize(platformAdminSubject, boundProjectId: "project-1"));
+        Assert.Equal(StatusCodes.Status403Forbidden, await Authorize(platformAdminSubject, query: "?x=1"));
+        Assert.Equal(StatusCodes.Status403Forbidden, await Authorize(tenantAdminSubject));
+    }
+
+    [Fact]
     public async Task RuntimeAuthorityGateAcceptsOnlyTheExactRoleAssignmentGrantSet()
     {
         var suffix = Guid.NewGuid().ToString("N");

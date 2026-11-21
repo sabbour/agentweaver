@@ -335,6 +335,7 @@ app.MapEventsAndSessionsEndpoints();
 // Project usage reads are available even when native usage ingestion is disabled.
 app.MapProjectUsageEndpoints();
 app.MapAzureRetailPriceEndpoints();
+app.MapRuntimeRateCardManualWriteEndpoints();
 app.MapAcceptedEffectEndpoints();
 app.MapAddressedMessageEndpoints();
 if (nativeUsageEnabled)

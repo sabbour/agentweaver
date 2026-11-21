@@ -218,6 +218,17 @@ subject. The response contains the canonical card and provenance, a strong
 ETag with the quoted lowercase SHA-256 of those exact bytes, and
 `Cache-Control: no-store`. The route reads the immutable store; it does not
 write cards or publish pricing through Gateway.
+
+The `PUT /api/platform/model-pricing/rate-cards/{id}/{version}` route (proxied
+through Gateway as `PUT /api/v1/platform/model-pricing/rate-cards/{id}/{version}`)
+lets an unbound PlatformAdmin with `api.read`, `projects.admin`, and active
+membership save an exact immutable manual price version in `RuntimeRateCardStore`.
+Events checks current authority through Projects
+(`GET /api/authorization/platform/model-pricing-rate-cards`) before reading the
+bounded 64 KiB UTF-8 JSON body, rejects encoded aliases and query parameters,
+and returns `201` for a new version, `200` for an identical canonical replay, or
+`409` for conflicting content or a legacy row, with a strong SHA-256 ETag and
+`Cache-Control: no-store`.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
 receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`
