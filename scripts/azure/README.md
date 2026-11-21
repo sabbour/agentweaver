@@ -22,7 +22,7 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`5c86cef91709525ed3716f8f6c7d316f83b513248f265bae957ae105458f2ed7`.
+`9046cb00c7c2bf35de536e9c4ea2f32de1ade31391fd9adf002846ae839ed764`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16, 18-33, and 35-51; 034 is not in the
@@ -339,7 +339,7 @@ The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 Events requires versions 1 through 11 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 148 tables and fourteen exact row-lock columns.
+The plan lists 150 tables and fourteen exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

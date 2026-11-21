@@ -515,6 +515,12 @@ public sealed partial class ProjectsConfigPostgresTests
             await OwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.model_provider_reference_reservations TO \"{roleName}\"");
             await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.model_provider_credential_operations TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.model_provider_credential_preflights TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT UPDATE (consumed_at, consumed_by_kind) ON projects_config.model_provider_credential_preflights TO \"{roleName}\"");
+            await OwnerSqlAsync(
                 $"GRANT SELECT ON projects_config.installation_identity TO \"{roleName}\"");
             await OwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");
@@ -526,7 +532,8 @@ public sealed partial class ProjectsConfigPostgresTests
                 GRANT EXECUTE ON FUNCTION
                     projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint),
                     projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint),
-                    projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])
+                    projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[]),
+                    projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text)
                 TO "{roleName}"
                 """);
             await using var runtime = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
@@ -603,6 +610,11 @@ public sealed partial class ProjectsConfigPostgresTests
                 await OwnerSqlAsync($"""
                     REVOKE ALL ON FUNCTION projects_config.lock_native_acs_policy_authority(
                         uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])
+                    FROM "{roleName}"
+                    """);
+                await OwnerSqlAsync($"""
+                    REVOKE ALL ON FUNCTION projects_config.lock_credential_publication_authority(
+                        uuid, text, text, text, bigint, uuid, bigint, text, text)
                     FROM "{roleName}"
                     """);
                 await OwnerSqlAsync($"""
