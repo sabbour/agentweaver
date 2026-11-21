@@ -1220,9 +1220,11 @@ store prices or change a project's rate cards.
 | `PUT /api/v1/platform/model-pricing/rate-cards/{id}/{version}` | Events & Sessions `/api/platform/model-pricing/rate-cards/{id}/{version}` | `savePlatformManualRuntimeRateCard` |
 
 The caller needs `api.read`, `projects.admin`, active membership, an unbound
-token, and current PlatformAdmin authority. Events & Sessions checks authority
-through Projects & Config (`GET /api/authorization/platform/model-pricing-rate-cards`)
-before reading the request body.
+token, and current PlatformAdmin authority. Gateway validates the caller token,
+tenant header, and route constraints, then checks Projects & Config
+(`GET /api/authorization/platform/model-pricing-rate-cards`) before forwarding
+the request body. Events & Sessions repeats that authority check before reading
+or saving the body.
 
 Both Gateway and Events accept literal ASCII keys matching
 `[A-Za-z0-9][A-Za-z0-9._-]*` up to 128 characters for `id` and 64 characters for
