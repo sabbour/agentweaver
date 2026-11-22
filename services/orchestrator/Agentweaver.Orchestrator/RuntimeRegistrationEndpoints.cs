@@ -47,6 +47,9 @@ public static class RuntimeRegistrationEndpoints
         services.AddScoped(serviceProvider => new RuntimeResumeBootstrapHttpClient(
             serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
             serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));
+        services.AddScoped(serviceProvider => new RunEgressEnvironmentClient(
+            serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
+            serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));
         services.AddScoped<RuntimeRegistrationOwner>();
         services.AddScoped<RuntimeSkillContentOwner>();
         services.AddScoped<RuntimeActionOwner>();

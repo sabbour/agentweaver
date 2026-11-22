@@ -337,6 +337,7 @@ var app = builder.Build();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 var readinessFailureLogger = new ReadinessFailureLogger(app.Logger);
 await CoordinationOwnerMigrator.VerifyAsync(dataSource, schema);
+app.UseRunEgressNoStore();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));

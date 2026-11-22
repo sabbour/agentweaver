@@ -348,6 +348,53 @@ public sealed class ProjectRunReadStore
     }
 
     /// <summary>
+    /// Resolves the single visible project that owns <paramref name="runId"/> in <paramref name="tenantId"/>,
+    /// or returns null when zero or multiple visible matches exist.
+    /// </summary>
+    internal async Task<string?> ResolveVisibleRunProjectAsync(
+        string tenantId,
+        string runId,
+        string? boundProjectId,
+        bool allProjectsVisible,
+        ImmutableArray<string> visibleProjectIds,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        CoordinationIdentity.ValidateIdentity(runId, "run_id");
+        if (boundProjectId is not null)
+            CoordinationIdentity.ValidateIdentity(boundProjectId, "project_id");
+        if (!allProjectsVisible && visibleProjectIds.IsDefaultOrEmpty)
+            return null;
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT project_id
+            FROM {_runs}
+            WHERE tenant_id = @tenant
+              AND run_id = @run
+              AND (@bound_project::varchar IS NULL OR project_id = @bound_project)
+              AND (@all_projects OR project_id = ANY(@visible_projects))
+            LIMIT 2
+            """, connection);
+        command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, tenantId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue("bound_project", NpgsqlDbType.Varchar, (object?)boundProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("all_projects", NpgsqlDbType.Boolean, allProjectsVisible);
+        command.Parameters.AddWithValue(
+            "visible_projects",
+            NpgsqlDbType.Array | NpgsqlDbType.Varchar,
+            allProjectsVisible ? Array.Empty<string>() : visibleProjectIds.ToArray());
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        var projectId = reader.GetString(0);
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        return projectId;
+    }
+
+    /// <summary>
     /// Decodes a cursor and rejects it unless it was issued for the same project, page size, filters, and caller.
     /// </summary>
     /// <exception cref="CoordinationException">The cursor is malformed or belongs to another query.</exception>

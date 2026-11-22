@@ -252,6 +252,7 @@ var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 var dbOptions = app.Services.GetRequiredService<DbContextOptions<EnvironmentDbContext>>();
 await EnvironmentMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
 await EnvironmentMigrator.VerifyRuntimeAuthorityAsync(dataSource);
+app.UseRunEgressNoStore();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));

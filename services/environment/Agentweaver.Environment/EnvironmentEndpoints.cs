@@ -15,6 +15,7 @@ public static class EnvironmentEndpoints
     /// <summary>Registers the authenticated Environment API routes and their service dependencies.</summary>
     public static IEndpointRouteBuilder MapEnvironmentEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapRunEgressEndpoints();
         var environments = endpoints.MapGroup("/api/projects/{projectId}/runs/{runId}/environments")
             .RequireAuthorization();
         environments.MapGet("", async (

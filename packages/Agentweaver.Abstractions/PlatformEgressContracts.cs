@@ -363,3 +363,31 @@ public static class PlatformEgressExcludedRanges
         return ranges.Any(range => range.Contains(address));
     }
 }
+
+/// <summary>Coverage state and pagination bounds for stored run egress queries.</summary>
+public static class RunEgressContract
+{
+    public const string CoverageUnavailable = "Unavailable";
+    public const int DefaultPageSize = 50;
+    public const int MaximumPageSize = 100;
+    public const int MaximumCursorLength = 2048;
+    public const int MaximumResponseBytes = 512 * 1024;
+}
+
+/// <summary>Projected attributed egress record for one run without raw workload labels or fingerprints.</summary>
+public sealed record RunEgressRecord(
+    string? Host,
+    string? Address,
+    int Port,
+    EgressFlowVerdict Verdict,
+    DateTimeOffset FirstSeen,
+    DateTimeOffset LastSeen,
+    long Count);
+
+/// <summary>Bounded keyset-paged stored outbound traffic for one run.</summary>
+public sealed record RunEgressPage(
+    string RunId,
+    string Coverage,
+    DateTimeOffset? DelayedUntil,
+    ImmutableArray<RunEgressRecord> Items,
+    string? NextCursor);

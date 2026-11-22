@@ -13,6 +13,33 @@ public static class GatewayEndpoints
     private static bool IsTargetContextPath(PathString path) => string.Equals(
         path.Value?.TrimEnd('/'), "/api/v1/authorization/target-context", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsRunEgressPath(PathString path)
+    {
+        var value = path.Value?.TrimEnd('/');
+        if (string.IsNullOrEmpty(value))
+            return false;
+        var segments = value.Split('/', StringSplitOptions.None);
+        return segments.Length == 6 &&
+            string.IsNullOrEmpty(segments[0]) &&
+            string.Equals(segments[1], "api", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(segments[2], "v1", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(segments[3], "runs", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(segments[4]) &&
+            string.Equals(segments[5], "egress", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Sets Cache-Control: no-store on run egress responses before authentication runs.</summary>
+    public static IApplicationBuilder UseRunEgressNoStore(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            if (IsRunEgressPath(context.Request.Path))
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.XContentTypeOptions = "nosniff";
+            }
+            await next(context).ConfigureAwait(false);
+        });
+
     /// <summary>Excludes target-context request paths from hosting diagnostics.</summary>
     public static void SuppressTargetContextRequestLogs(IServiceCollection services, IHttpContextAccessor accessor) =>
         services.PostConfigure<LoggerFilterOptions>(options =>

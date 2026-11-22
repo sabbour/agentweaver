@@ -148,6 +148,7 @@ internal static partial class GatewayOpenApi
             ["readSourceControlOutputCaptureFile"] = C(null, "SourceControlOutputFileContent", "200"),
             ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
             ["getProjectRunHistorySessions"] = C(null, "SessionTreeSnapshot", "200"),
+            ["readRunEgress"] = C(null, "RunEgressPage", "200"),
             ["listProjectIssues"] = C(null, "ProjectIssuePage", "200"),
             ["listProjectPullRequests"] = C(null, "ProjectPullRequestPage", "200"),
             // Reporting contracts stay separate across the two data owners.
@@ -455,6 +456,14 @@ internal static partial class GatewayOpenApi
             responses["502"] = CoordinationReadErrorResponse("Projects authority or selection is unavailable.");
             responses["503"] = CoordinationReadErrorResponse("The retained recovery events are unavailable or invalid.");
         }
+        if (route.OperationId == "readRunEgress")
+        {
+            responses["400"] = ProblemResponse("The run ID, limit, or cursor is invalid.");
+            responses["401"] = ProblemResponse("The caller is not authenticated.");
+            responses["403"] = ProblemResponse("The caller lacks current read authority or has conflicting token bindings.");
+            responses["404"] = ProblemResponse("No unique visible run matched the supplied run ID.");
+            responses["503"] = ProblemResponse("The authorization, coordination, or environment egress store is unavailable.");
+        }
         if (route.OperationId == "getAuthorizationTargetContext")
         {
             responses.Remove("default");
@@ -490,7 +499,7 @@ internal static partial class GatewayOpenApi
                             : "Owner response; returned by the owning service.",
                         (route.Owner == GatewayOwner.Environment && status is ("200" or "202")) ||
                         ((route.OperationId is "readRuntimeObservationV1" or "readRuntimeObservationV2" or
-                         "readExecutionPlan" or "readCheckpointRecoveryEvents" or
+                         "readExecutionPlan" or "readCheckpointRecoveryEvents" or "readRunEgress" or
                          "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
@@ -1445,6 +1454,10 @@ else if (route.OperationId is
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId == "readRunEgress")
+            return name == "limit"
+                ? new { type = "integer", minimum = 1, maximum = 100, @default = 50 }
+                : new { type = "string", minLength = 1, maxLength = 2048 };
         if (operationId == "readCheckpointRecoveryEvents")
             return name == "limit"
                 ? new { type = "integer", minimum = 1, maximum = 200, @default = 100 }
@@ -2601,6 +2614,22 @@ else if (route.OperationId is
             ("startedBy", Ref("ProjectRunStartedBy"))),
         ["ProjectRunPage"] = StrictObj(["projectId", "items", "nextCursor"],
             ("projectId", Str()), ("items", Arr(Ref("ProjectRunSummary"))), ("nextCursor", NullableStr())),
+        ["RunEgressRecord"] = StrictObj(
+            ["host", "address", "port", "verdict", "firstSeen", "lastSeen", "count"],
+            ("host", NullableStr()),
+            ("address", NullableStr()),
+            ("port", Int()),
+            ("verdict", Enum("allowed", "denied")),
+            ("firstSeen", Date()),
+            ("lastSeen", Date()),
+            ("count", new { type = "integer", format = "int64" })),
+        ["RunEgressPage"] = StrictObj(
+            ["runId", "coverage", "delayedUntil", "items", "nextCursor"],
+            ("runId", Str()),
+            ("coverage", Enum("Unavailable")),
+            ("delayedUntil", Nullable(Date())),
+            ("items", Arr(Ref("RunEgressRecord"))),
+            ("nextCursor", NullableStr())),
         ["ProjectSourceControlRepository"] = StrictObj(["owner", "name"], ("owner", Str()), ("name", Str())),
         ["ProjectIssueSummary"] = StrictObj(
             ["taskId", "taskState", "providerId", "repository", "number", "title", "state", "createdAt", "updatedAt"],

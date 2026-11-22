@@ -1056,6 +1056,23 @@ This read uses fresh project authority, so an authorized project reader does
 not need to be the actor who accepted the run. A run-bound token remains limited
 to its bound run. The Gateway route returns `Cache-Control: no-store`.
 
+### Run egress
+
+| Method | Native path | Auth | Purpose | Gateway path |
+| --- | --- | --- | --- | --- |
+| GET | `/api/runs/{runId}/egress` (Orchestrator); `/api/projects/{projectId}/runs/{runId}/egress` (Environment) | Read (`api.read` + project/tenant `ReadProjects`, or unbound `api.read` + `projects.admin` + `Platform/default` `ReadPlatformRuntimeDefaults`) | Read stored attributed outbound traffic for one visible run. | `/api/v1/runs/{runId}/egress` (`readRunEgress`) |
+
+Accepts `limit` (1–100, default 50) and `cursor` (max 2048 characters).
+Orchestrator resolves the run in the selected tenant across visible projects
+and returns `404 run_not_found` for zero or multiple visible matches, ignoring
+hidden duplicates. Environment revalidates current authority with Projects &
+Config before reading attributed rows. Responses set `Cache-Control: no-store`,
+`coverage: "Unavailable"`, `delayedUntil: null`, and items ordered by
+`first_seen DESC, flow_id DESC` without raw labels, fingerprints, or
+unattributed rows. Invalid queries or cursors return `400`; missing or invalid
+tokens return `401`; scope or binding denials return `403`; dependency failures
+return `503`. See [Read stored run egress](../architecture/environment-egress.md#read-stored-run-egress).
+
 ### Project issue and pull request lists
 
 These reads return Agentweaver's stored data. They make no source control

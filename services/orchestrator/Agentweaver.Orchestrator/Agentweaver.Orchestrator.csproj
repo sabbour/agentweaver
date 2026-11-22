@@ -71,5 +71,6 @@
     <EmbeddedResource Include="Migrations\049_runtime_observation_v2_cursors.sql" />
     <EmbeddedResource Include="Migrations\050_checkpoint_recovery_supersession.sql" />
     <EmbeddedResource Include="Migrations\051_native_child_rebind.sql" />
+    <EmbeddedResource Include="Migrations\052_accepted_runs_tenant_run_index.sql" />
   </ItemGroup>
 </Project>
