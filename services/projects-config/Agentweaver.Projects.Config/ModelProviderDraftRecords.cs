@@ -168,6 +168,10 @@ public sealed class ModelProviderCredentialOperationRecord
     public string? CredentialSecretId { get; set; }
     public string? CredentialVersion { get; set; }
     public string? ConfigurationHash { get; set; }
+    public string? ProviderState { get; set; }
+    public string? RateCardId { get; set; }
+    public string? RateCardVersion { get; set; }
+    public string? RateCardPinHash { get; set; }
     public required string OriginalTenant { get; set; }
     public Guid OriginalMembershipId { get; set; }
     public long OriginalMembershipRevision { get; set; }

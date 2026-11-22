@@ -62,7 +62,8 @@ internal sealed class BrokerModelProviderCredentialPublicationV2Client(
                        receipt.ProviderRevision == request.ExpectedProviderRevision + 1 &&
                        receipt.CredentialVersion == request.CredentialVersion &&
                        receipt.CredentialIdentity == request.CredentialIdentity &&
-                       receipt.CredentialReference == request.CredentialReference,
+                       receipt.CredentialReference == request.CredentialReference &&
+                       receipt.ProviderState is null or "Draft" or "Available",
             cancellationToken);
 
     internal Task<ModelProviderCredentialCancelResponse> CancelAsync(

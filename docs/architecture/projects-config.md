@@ -13,8 +13,12 @@ resources. This page describes source, not a release or deployment. The
 and the acceptance transaction.
 
 Projects & Config stores customer-provided model-provider metadata as immutable
-revisions. New providers start as `Draft`. Credential publication and provider
-activation are unavailable. Existing `Available` revisions and accepted run
+revisions. New providers start as `Draft`. Broker v2 credential publication
+verifies the saved key version and checks the locked revision's `rate_card_id`
+and `rate_card_version` against Events (`RuntimeRateCardOwnerClient.ReadPinAsync`).
+A verified rate card transitions the provider to `Available` in the same
+transaction; missing, invalid, or unavailable pricing leaves the provider `Draft`
+while still saving the proved key. Existing `Available` revisions and accepted run
 pins remain readable. The public Gateway exposes list, read, create, and update routes
 for platform and project providers. Every operation requires `api.read` and
 `projects.admin`; platform requests must be unbound and made by a current
@@ -148,28 +152,33 @@ role assignment rows (`FOR SHARE NOWAIT` via
 record an immutable operation row in
 `projects_config.model_provider_credential_operations` in the same transaction;
 replays check current authority separately from the original operation
-fingerprint. `cancel` records final cancellation unless a matching `Publish`
+fingerprint. When `publish` runs, Projects reads `rate_card_id` and
+`rate_card_version` from the locked revision and calls
+`RuntimeRateCardOwnerClient.ReadPinAsync` within its short deadline. A verified
+pin transitions the head to `Available` and stores `rate_card_pin_json` on the
+revision; missing, invalid, or unavailable pricing (including an Events owner
+timeout) leaves the head `Draft` and still saves the proved key. Caller
+cancellation cancels the write. `cancel` records final cancellation unless a matching `Publish`
 receipt already exists, in which case the receipt wins. `disable` clears the
-credential reference under the same `model_providers` row lock used by run
-selection (`AcceptRunSelectionAsync`) and records the original provider and
-credential revisions in the durable receipt, blocking new pins while leaving
-existing accepted run selections redeemable.
+credential reference and `rate_card_pin_json` under the same `model_providers`
+row lock used by run selection (`AcceptRunSelectionAsync`), returns the head to
+`Draft`, and records the original provider and credential revisions in the
+durable receipt, blocking new pins while leaving existing accepted run
+selections redeemable.
 
-Migration `AddModelProviderCredentialOperationsV2` supports empty-state rollback
-by restoring the prior `check_model_provider_pair()` trigger, and refuses
-downgrade (`credential_operations_v2_rollback_blocked`) if any rows exist in
-`model_provider_credential_operations` or `model_provider_credential_preflights`,
-or if any provider head or revision holds non-`Draft` state or credential
-fields. Once lifecycle data exists, operators must fix forward rather than roll
-back.
+Migrations `AddModelProviderCredentialOperationsV2` and
+`VerifyProviderAvailabilityOnPublication` enforce the `check_model_provider_pair()`
+database guard: `Available` is permitted only with a matching Broker v2 `Publish`
+receipt, non-null credential reference, saved `rate_card_id`/`rate_card_version`,
+and verified `rate_card_pin_json` in the same transaction. Once lifecycle data
+exists, operators must fix forward rather than roll back.
 
 PostgreSQL requires each Draft head change and its matching revision in the
 same transaction. A Draft edit preserves the existing credential version,
 slot, and secret identifier. Existing revisions and accepted run pins remain
 readable. Gateway reads expose only `hasCredential`.
 
-Provider activation stays frozen until the authorized V2 publication path is
-available. An old Projects binary can still make a legacy write that keeps the
+An old Projects binary can still make a legacy write that keeps the
 same credential. Drain every old owner before applying the migration.
 
 Before deployment, an operator must:

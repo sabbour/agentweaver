@@ -527,6 +527,11 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("published_provider_revision");
 
+                    b.Property<string>("PublishedProviderState")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("published_provider_state");
+
                     b.Property<string>("Purpose")
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")

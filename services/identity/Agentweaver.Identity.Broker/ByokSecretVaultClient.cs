@@ -25,6 +25,12 @@ internal interface IModelProviderByokVault
         Guid operationId,
         Guid credentialSlotId,
         CancellationToken cancellationToken);
+
+    Task<SecretRef?> VerifyStoredVersionAsync(
+        string secretName,
+        string secretVersion,
+        Guid credentialSlotId,
+        CancellationToken cancellationToken);
 }
 
 internal sealed class AzureKeyVaultByokVaultClient : IModelProviderByokVault
@@ -128,6 +134,36 @@ internal sealed class AzureKeyVaultByokVaultClient : IModelProviderByokVault
                 string.IsNullOrEmpty(stored.Value) ||
                 !stored.Properties.Tags.TryGetValue(OperationIdTag, out var taggedOp) ||
                 !string.Equals(taggedOp, operationId.ToString("D"), StringComparison.Ordinal) ||
+                !stored.Properties.Tags.TryGetValue(CredentialSlotIdTag, out var taggedSlot) ||
+                !string.Equals(taggedSlot, credentialSlotId.ToString("D"), StringComparison.Ordinal))
+                return null;
+
+            return new SecretRef(secretName, secretVersion);
+        }
+        catch (RequestFailedException ex) when (ex.Status is 404 or 403)
+        {
+            return null;
+        }
+    }
+
+    public async Task<SecretRef?> VerifyStoredVersionAsync(
+        string secretName,
+        string secretVersion,
+        Guid credentialSlotId,
+        CancellationToken cancellationToken)
+    {
+        if (_client is null)
+            throw ModelProviderCredentialException.VaultUnavailable();
+
+        try
+        {
+            var stored = (await _client.GetSecretAsync(secretName, secretVersion, cancellationToken)
+                .ConfigureAwait(false)).Value;
+            if (stored is null ||
+                stored.Properties.Enabled != true ||
+                !string.Equals(stored.Name, secretName, StringComparison.Ordinal) ||
+                !string.Equals(stored.Properties.Version, secretVersion, StringComparison.Ordinal) ||
+                string.IsNullOrEmpty(stored.Value) ||
                 !stored.Properties.Tags.TryGetValue(CredentialSlotIdTag, out var taggedSlot) ||
                 !string.Equals(taggedSlot, credentialSlotId.ToString("D"), StringComparison.Ordinal))
                 return null;

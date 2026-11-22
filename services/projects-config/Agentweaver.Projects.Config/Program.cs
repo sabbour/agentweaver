@@ -244,6 +244,7 @@ builder.Services.AddHttpClient(RuntimeRateCardOwnerClient.HttpClientName, client
     .RedactLoggedHeaders(["Authorization"])
     .ConfigurePrimaryHttpMessageHandler(
         Agentweaver.Identity.RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+builder.Services.AddSingleton<IRuntimeRateCardOwnerClient, RuntimeRateCardOwnerClient>();
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
 
