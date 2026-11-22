@@ -332,7 +332,7 @@ public static class GatewayRouteCatalog
             "readRunEgress", "Read stored outbound traffic for one run",
             ["limit", "cursor"], forwardTenantSelector: true,
             exposedResponseHeaders: ["Cache-Control"],
-            maximumResponseBytes: RunEgressContract.MaximumResponseBytes);
+            maximumResponseBytes: RunEgressContract.MaximumResponseBytes, excludeFromMcp: true);
         // Stored Source Control reads make no provider call. Issues come from backlog content that issue
         // sync stored. Pull requests come from records that runs wrote on create or reuse; a run-bound
         // token is narrowed to its run.
