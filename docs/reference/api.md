@@ -74,13 +74,23 @@ Deactivation requires `expectedSettingsRevision`.
 
 Credential `PUT` routes are write-only and store raw API keys in the dedicated
 BYOK Key Vault (`byok-<scope>-<providerId>`). Responses and logs never include
-the key, key hashes, or vault secret names. Existing-vault reference attachment
-is rejected (`400 existing_vault_reference_not_supported`). An uncertain Key
+the key, key hashes, or vault secret names. Each `PUT` accepts `operationId`,
+`expectedProviderRevision`, `expectedCredentialRevision`, and one mode: `apiKey`
+(upload or rotate), `recoverySecretVersion` (recover a quarantined write for the
+same `operationId`), or `recheckExistingVersion: true` (verify the stored,
+enabled Vault version against the current provider revision without uploading a
+key or creating a new Vault version). Existing-vault reference attachment
+is rejected (`400 existing_vault_reference_not_supported`). On publication,
+Projects checks the locked revision's `rate_card_id` and `rate_card_version`
+against Events; a verified card transitions the provider to `Available`, while
+missing, invalid, or unavailable pricing leaves it `Draft` with the proved key
+saved. Responses include `providerState` (`Draft` or `Available`). An uncertain Key
 Vault write is quarantined and never re-sent; callers can recover with
 `recoverySecretVersion` after verifying operation provenance, or cancel with
 `DELETE ...?operationId=<guid>&cancel=true`. Cancellation is final unless
 Projects & Config already committed a matching publication receipt, in which
-case the receipt wins. `DELETE` disables the credential slot and blocks new
+case the receipt wins. `DELETE` disables the credential slot, returns the
+provider head to `Draft`, and blocks new
 run-selection pins under the provider lock while keeping earlier accepted pins
 redeemable. The legacy
 private Projects publication path returns `503 credential_publication_unavailable`.
