@@ -260,7 +260,6 @@ BEGIN
                 IS DISTINCT FROM ROW(NEW.updated_by_actor_id, NEW.updated_at)))
            OR (TG_OP = 'UPDATE' AND
                (OLD.state NOT IN ('Draft', 'Available') OR
-                NEW.state <> OLD.state OR
                 NEW.current_revision <> OLD.current_revision + 1 OR
                 ROW(NEW.provider_id, NEW.scope, NEW.project_id, NEW.created_by_actor_id, NEW.created_at)
                 IS DISTINCT FROM
@@ -285,43 +284,91 @@ BEGIN
             RAISE EXCEPTION 'provider transition is unavailable'
                 USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
         END IF;
-        IF NEW.provider_revision = 1 THEN
-            IF NEW.credential_version IS NOT NULL OR NEW.credential_slot_id IS NOT NULL
-               OR NEW.credential_secret_id IS NOT NULL THEN
-                RAISE EXCEPTION 'provider transition is unavailable'
-                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
-            END IF;
-        ELSE
-            SELECT * INTO previous FROM projects_config.model_provider_revisions
-            WHERE provider_id = NEW.provider_id AND provider_revision = NEW.provider_revision - 1;
-            IF previous.provider_id IS NULL THEN
-                RAISE EXCEPTION 'provider transition is unavailable'
-                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
-            END IF;
-            IF ROW(NEW.credential_version, NEW.credential_slot_id, NEW.credential_secret_id)
-               IS DISTINCT FROM
-               ROW(previous.credential_version, previous.credential_slot_id, previous.credential_secret_id) THEN
-                SELECT * INTO op FROM projects_config.model_provider_credential_operations
-                WHERE operation_id = NEW.operation_id
-                  AND write_transaction_id = transaction_id
-                  AND provider_id = NEW.provider_id
-                  AND provider_revision = NEW.provider_revision
-                  AND scope = NEW.scope
-                  AND project_id IS NOT DISTINCT FROM NEW.project_id;
-                IF op.operation_id IS NULL OR
-                   NOT ((op.operation_kind = 'Publish' AND
-                         NEW.credential_version = op.credential_version AND
-                         NEW.credential_slot_id = op.credential_slot_id AND
-                         NEW.credential_secret_id = op.credential_secret_id) OR
-                        (op.operation_kind = 'Disable' AND
-                         NEW.credential_version IS NULL AND
-                         NEW.credential_slot_id IS NULL AND
-                         NEW.credential_secret_id IS NULL)) THEN
-                    RAISE EXCEPTION 'provider transition is unavailable'
-                        USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
-                END IF;
-            END IF;
-        END IF;
+                        IF NEW.provider_revision = 1 THEN
+                            IF h.state <> 'Draft'
+                               OR NEW.credential_version IS NOT NULL OR NEW.credential_slot_id IS NOT NULL
+                               OR NEW.credential_secret_id IS NOT NULL OR NEW.rate_card_pin_json IS NOT NULL THEN
+                                RAISE EXCEPTION 'provider transition is unavailable'
+                                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+                            END IF;
+                        ELSE
+                            SELECT * INTO previous FROM projects_config.model_provider_revisions
+                            WHERE provider_id = NEW.provider_id AND provider_revision = NEW.provider_revision - 1;
+                            IF previous.provider_id IS NULL THEN
+                                RAISE EXCEPTION 'provider transition is unavailable'
+                                    USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+                            END IF;
+
+                            SELECT * INTO op FROM projects_config.model_provider_credential_operations
+                            WHERE operation_id = NEW.operation_id
+                              AND write_transaction_id = transaction_id
+                              AND provider_id = NEW.provider_id
+                              AND provider_revision = NEW.provider_revision
+                              AND scope = NEW.scope
+                              AND project_id IS NOT DISTINCT FROM NEW.project_id;
+
+                            IF h.state = 'Available' THEN
+                                IF op.operation_id IS NULL
+                                   OR op.operation_kind IS DISTINCT FROM 'Publish'
+                                   OR op.provider_state IS DISTINCT FROM 'Available'
+                                   OR NEW.credential_version IS NULL OR NEW.credential_slot_id IS NULL OR NEW.credential_secret_id IS NULL
+                                   OR NEW.credential_version IS DISTINCT FROM op.credential_version
+                                   OR NEW.credential_slot_id IS DISTINCT FROM op.credential_slot_id
+                                   OR NEW.credential_secret_id IS DISTINCT FROM op.credential_secret_id
+                                   OR NEW.configuration_hash IS DISTINCT FROM previous.configuration_hash
+                                   OR NEW.configuration_hash IS DISTINCT FROM op.configuration_hash
+                                   OR NEW.rate_card_id IS NULL OR length(NEW.rate_card_id) = 0
+                                   OR NEW.rate_card_version IS NULL OR length(NEW.rate_card_version) = 0
+                                   OR NEW.rate_card_id IS DISTINCT FROM previous.rate_card_id
+                                   OR NEW.rate_card_version IS DISTINCT FROM previous.rate_card_version
+                                   OR NEW.rate_card_pin_json IS NULL
+                                   OR pg_catalog.jsonb_typeof(NEW.rate_card_pin_json) <> 'object'
+                                   OR (NEW.rate_card_pin_json ->> 'rateCardId') IS DISTINCT FROM NEW.rate_card_id
+                                   OR (NEW.rate_card_pin_json ->> 'rateCardVersion') IS DISTINCT FROM NEW.rate_card_version
+                                   OR COALESCE(NEW.rate_card_pin_json ->> 'contentHash', '') !~ '^[0-9a-f]{64}$'
+                                   OR pg_catalog.jsonb_typeof(NEW.rate_card_pin_json -> 'provenance') <> 'object'
+                                   OR COALESCE(NEW.rate_card_pin_json -> 'provenance' ->> 'source', '') NOT IN ('manual', 'azure-retail-prices')
+                                   OR op.rate_card_id IS DISTINCT FROM NEW.rate_card_id
+                                   OR op.rate_card_version IS DISTINCT FROM NEW.rate_card_version
+                                   OR op.rate_card_pin_hash IS DISTINCT FROM (NEW.rate_card_pin_json ->> 'contentHash') THEN
+                                    RAISE EXCEPTION 'provider transition is unavailable'
+                                        USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+                                END IF;
+                            ELSE
+                                IF NEW.rate_card_pin_json IS NOT NULL THEN
+                                    RAISE EXCEPTION 'provider transition is unavailable'
+                                        USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+                                END IF;
+                                IF ROW(NEW.credential_version, NEW.credential_slot_id, NEW.credential_secret_id)
+                                   IS DISTINCT FROM
+                                   ROW(previous.credential_version, previous.credential_slot_id, previous.credential_secret_id) THEN
+                                    IF op.operation_id IS NULL OR
+                                       NOT ((op.operation_kind = 'Publish' AND
+                                             op.provider_state IS NOT DISTINCT FROM 'Draft' AND
+                                             NEW.credential_version IS NOT DISTINCT FROM op.credential_version AND
+                                             NEW.credential_slot_id IS NOT DISTINCT FROM op.credential_slot_id AND
+                                             NEW.credential_secret_id IS NOT DISTINCT FROM op.credential_secret_id AND
+                                             NEW.configuration_hash IS NOT DISTINCT FROM op.configuration_hash) OR
+                                            (op.operation_kind = 'Disable' AND
+                                             op.provider_state IS NOT DISTINCT FROM 'Draft' AND
+                                             NEW.credential_version IS NULL AND
+                                             NEW.credential_slot_id IS NULL AND
+                                             NEW.credential_secret_id IS NULL AND
+                                             NEW.configuration_hash IS NOT DISTINCT FROM op.configuration_hash)) THEN
+                                        RAISE EXCEPTION 'provider transition is unavailable'
+                                            USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+                                    END IF;
+                                ELSIF previous.rate_card_pin_json IS NOT NULL THEN
+                                    IF op.operation_id IS NULL
+                                       OR op.operation_kind IS DISTINCT FROM 'Publish'
+                                       OR op.provider_state IS DISTINCT FROM 'Draft'
+                                       OR NEW.configuration_hash IS DISTINCT FROM op.configuration_hash THEN
+                                        RAISE EXCEPTION 'provider transition is unavailable'
+                                            USING ERRCODE = '23514', CONSTRAINT = 'ck_model_provider_write_guard';
+                                    END IF;
+                                END IF;
+                            END IF;
+                        END IF;
     END IF;
     RETURN NULL;
 END;`;
