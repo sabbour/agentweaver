@@ -7,6 +7,9 @@ using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -422,6 +425,446 @@ public sealed partial class ProjectsConfigPostgresTests
         response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         response.Headers.ETag = new EntityTagHeaderValue($"\"{hash}\"", isWeak: false);
         return response;
+    }
+
+    [Fact]
+    public async Task UpgradeFromV2CredentialOperations_PreservesPreExistingPublishAndDisableReceipts_AndReplaysPublishAsDraft()
+    {
+        var isolated = new ProjectsConfigPostgresFixture();
+        try
+        {
+            await isolated.InitializeToAsync("20261120231128_AddModelProviderCredentialOperationsV2");
+
+            await using var db = new ProjectsConfigDbContext(
+                new DbContextOptionsBuilder<ProjectsConfigDbContext>().UseNpgsql(isolated.DataSource).Options);
+            var store = new ProjectsConfigPrivilegedAuthorityStore(
+                new DbContextOptionsBuilder<ProjectsConfigDbContext>().UseNpgsql(isolated.DataSource).Options,
+                TimeProvider.System);
+            var suffix = Guid.NewGuid().ToString("N")[..8];
+            var tenantId = "upg-tenant-" + suffix;
+            var actorId = "upg-admin-" + suffix;
+            var caller = await SeedCallerAsync(db, store, actorId, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+
+            var membership = await db.TenantMemberships.AsNoTracking()
+                .SingleAsync(m => m.Issuer == caller.Issuer && m.Subject == actorId && m.TenantId == tenantId);
+            var assignment = await db.RoleAssignments.AsNoTracking()
+                .SingleAsync(a => a.MembershipId == membership.MembershipId && a.Role == ProjectAuthorityRole.PlatformAdmin);
+
+            // Seed two providers at rev 1 using raw SQL (model omits new columns on downgraded schema).
+            var disabledProviderId = "upg-dis-" + suffix;
+            var replayProviderId = "upg-rep-" + suffix;
+            var configHash = new string('b', 64);
+            var credVersion = new string('a', 32);
+            var slot1 = Guid.NewGuid();
+            var slot2 = Guid.NewGuid();
+            var publishOp1 = Guid.NewGuid();
+            var disableOp1 = Guid.NewGuid();
+            var publishOp2 = Guid.NewGuid();
+            var secret1 = $"byok-platform-{disabledProviderId}";
+            var secret2 = $"byok-platform-{replayProviderId}";
+
+            // Exact fingerprint matching ModelProviderCredentialPublicationV2Service.PublishAsync
+            var replayFingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                kind = "publish-v2",
+                OperationId = publishOp2,
+                ExpectedProviderRevision = 1L,
+                Scope = ModelProviderBindingScope.Platform,
+                ProjectId = (string?)null,
+                ProviderId = replayProviderId,
+                CredentialVersion = credVersion,
+                slotId = slot2,
+                secretId = secret2,
+                caller.Issuer,
+                ActorId = actorId,
+                OriginalTenant = tenantId,
+            }))).ToLowerInvariant();
+
+            await using (var conn = await isolated.DataSource.OpenConnectionAsync())
+            {
+                async Task SeedProviderAsync(string pid)
+                {
+                    await using var tx = await conn.BeginTransactionAsync();
+                    await using var cmd = new NpgsqlCommand("""
+                        INSERT INTO projects_config.model_providers
+                          (provider_id, scope, display_name, type, base_url, deployment, reasoning_efforts,
+                           state, current_revision, created_by_actor_id, created_at, updated_by_actor_id, updated_at)
+                        VALUES (@id, 'Platform', 'Legacy', 'openai', 'https://example.test', 'gpt-5', ARRAY['high'],
+                                'Draft', 1, @actor, transaction_timestamp(), @actor, transaction_timestamp());
+                        INSERT INTO projects_config.model_provider_revisions
+                          (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                           display_name, type, base_url, deployment, reasoning_efforts, configuration_hash,
+                           created_by_actor_id, created_at)
+                        SELECT h.provider_id, 1, h.scope, h.project_id, @op, repeat('a', 64),
+                               h.display_name, h.type, h.base_url, h.deployment, h.reasoning_efforts, @cfg,
+                               h.updated_by_actor_id, h.updated_at
+                        FROM projects_config.model_providers h WHERE h.provider_id = @id;
+                        """, conn, tx);
+                    cmd.Parameters.AddWithValue("id", pid);
+                    cmd.Parameters.AddWithValue("actor", actorId);
+                    cmd.Parameters.AddWithValue("op", Guid.NewGuid());
+                    cmd.Parameters.AddWithValue("cfg", configHash);
+                    await cmd.ExecuteNonQueryAsync();
+                    await tx.CommitAsync();
+                }
+
+                await SeedProviderAsync(disabledProviderId);
+                await SeedProviderAsync(replayProviderId);
+
+                // Pre-existing Publish + Disable on disabledProviderId
+                await using (var tx = await conn.BeginTransactionAsync())
+                {
+                    await using var cmd = new NpgsqlCommand("""
+                        UPDATE projects_config.model_providers
+                        SET current_revision = 2, updated_by_actor_id = @actor, updated_at = transaction_timestamp()
+                        WHERE provider_id = @id;
+                        INSERT INTO projects_config.model_provider_credential_operations
+                          (operation_id, operation_kind, provider_id, scope, project_id, provider_revision,
+                           expected_provider_revision, credential_slot_id, credential_secret_id, credential_version,
+                           configuration_hash, original_tenant, original_membership_id, original_membership_revision,
+                           current_membership_id, current_membership_revision, current_assignment_id,
+                           current_assignment_revision, issuer, actor_id, request_fingerprint, recorded_at)
+                        VALUES
+                          (@op, 'Publish', @id, 'Platform', NULL, 2, 1, @slot, @secret, @cred, @cfg,
+                           @tenant, @mid, @mrev, @mid, @mrev, @aid, @arev, @issuer, @actor, repeat('c', 64), transaction_timestamp());
+                        INSERT INTO projects_config.model_provider_revisions
+                          (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                           display_name, type, base_url, deployment, reasoning_efforts, configuration_hash,
+                           credential_version, credential_slot_id, credential_secret_id, created_by_actor_id, created_at)
+                        SELECT h.provider_id, 2, h.scope, h.project_id, @op, repeat('c', 64),
+                               h.display_name, h.type, h.base_url, h.deployment, h.reasoning_efforts, @cfg,
+                               @cred, @slot, @secret, h.updated_by_actor_id, h.updated_at
+                        FROM projects_config.model_providers h WHERE h.provider_id = @id;
+                        """, conn, tx);
+                    cmd.Parameters.AddWithValue("id", disabledProviderId);
+                    cmd.Parameters.AddWithValue("op", publishOp1);
+                    cmd.Parameters.AddWithValue("slot", slot1);
+                    cmd.Parameters.AddWithValue("secret", secret1);
+                    cmd.Parameters.AddWithValue("cred", credVersion);
+                    cmd.Parameters.AddWithValue("cfg", configHash);
+                    cmd.Parameters.AddWithValue("tenant", tenantId);
+                    cmd.Parameters.AddWithValue("mid", membership.MembershipId);
+                    cmd.Parameters.AddWithValue("mrev", membership.Revision);
+                    cmd.Parameters.AddWithValue("aid", assignment.AssignmentId);
+                    cmd.Parameters.AddWithValue("arev", assignment.Revision);
+                    cmd.Parameters.AddWithValue("issuer", caller.Issuer);
+                    cmd.Parameters.AddWithValue("actor", actorId);
+                    await cmd.ExecuteNonQueryAsync();
+                    await tx.CommitAsync();
+                }
+
+                await using (var tx = await conn.BeginTransactionAsync())
+                {
+                    await using var cmd = new NpgsqlCommand("""
+                        UPDATE projects_config.model_providers
+                        SET current_revision = 3, updated_by_actor_id = @actor, updated_at = transaction_timestamp()
+                        WHERE provider_id = @id;
+                        INSERT INTO projects_config.model_provider_credential_operations
+                          (operation_id, operation_kind, provider_id, scope, project_id, provider_revision,
+                           expected_provider_revision, original_provider_revision, original_credential_revision,
+                           credential_slot_id, credential_secret_id, credential_version, configuration_hash,
+                           original_tenant, original_membership_id, original_membership_revision,
+                           current_membership_id, current_membership_revision, current_assignment_id,
+                           current_assignment_revision, issuer, actor_id, request_fingerprint, recorded_at)
+                        VALUES
+                          (@op, 'Disable', @id, 'Platform', NULL, 3, 2, 2, 1, @slot, NULL, NULL, @cfg,
+                           @tenant, @mid, @mrev, @mid, @mrev, @aid, @arev, @issuer, @actor, repeat('d', 64), transaction_timestamp());
+                        INSERT INTO projects_config.model_provider_revisions
+                          (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                           display_name, type, base_url, deployment, reasoning_efforts, configuration_hash,
+                           credential_version, credential_slot_id, credential_secret_id, created_by_actor_id, created_at)
+                        SELECT h.provider_id, 3, h.scope, h.project_id, @op, repeat('d', 64),
+                               h.display_name, h.type, h.base_url, h.deployment, h.reasoning_efforts, @cfg,
+                               NULL, NULL, NULL, h.updated_by_actor_id, h.updated_at
+                        FROM projects_config.model_providers h WHERE h.provider_id = @id;
+                        """, conn, tx);
+                    cmd.Parameters.AddWithValue("id", disabledProviderId);
+                    cmd.Parameters.AddWithValue("op", disableOp1);
+                    cmd.Parameters.AddWithValue("slot", slot1);
+                    cmd.Parameters.AddWithValue("cfg", configHash);
+                    cmd.Parameters.AddWithValue("tenant", tenantId);
+                    cmd.Parameters.AddWithValue("mid", membership.MembershipId);
+                    cmd.Parameters.AddWithValue("mrev", membership.Revision);
+                    cmd.Parameters.AddWithValue("aid", assignment.AssignmentId);
+                    cmd.Parameters.AddWithValue("arev", assignment.Revision);
+                    cmd.Parameters.AddWithValue("issuer", caller.Issuer);
+                    cmd.Parameters.AddWithValue("actor", actorId);
+                    await cmd.ExecuteNonQueryAsync();
+                    await tx.CommitAsync();
+                }
+
+                // Pre-existing Publish on replayProviderId
+                await using (var tx = await conn.BeginTransactionAsync())
+                {
+                    await using var cmd = new NpgsqlCommand("""
+                        UPDATE projects_config.model_providers
+                        SET current_revision = 2, updated_by_actor_id = @actor, updated_at = transaction_timestamp()
+                        WHERE provider_id = @id;
+                        INSERT INTO projects_config.model_provider_credential_operations
+                          (operation_id, operation_kind, provider_id, scope, project_id, provider_revision,
+                           expected_provider_revision, credential_slot_id, credential_secret_id, credential_version,
+                           configuration_hash, original_tenant, original_membership_id, original_membership_revision,
+                           current_membership_id, current_membership_revision, current_assignment_id,
+                           current_assignment_revision, issuer, actor_id, request_fingerprint, recorded_at)
+                        VALUES
+                          (@op, 'Publish', @id, 'Platform', NULL, 2, 1, @slot, @secret, @cred, @cfg,
+                           @tenant, @mid, @mrev, @mid, @mrev, @aid, @arev, @issuer, @actor, @fp, transaction_timestamp());
+                        INSERT INTO projects_config.model_provider_revisions
+                          (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                           display_name, type, base_url, deployment, reasoning_efforts, configuration_hash,
+                           credential_version, credential_slot_id, credential_secret_id, created_by_actor_id, created_at)
+                        SELECT h.provider_id, 2, h.scope, h.project_id, @op, @fp,
+                               h.display_name, h.type, h.base_url, h.deployment, h.reasoning_efforts, @cfg,
+                               @cred, @slot, @secret, h.updated_by_actor_id, h.updated_at
+                        FROM projects_config.model_providers h WHERE h.provider_id = @id;
+                        """, conn, tx);
+                    cmd.Parameters.AddWithValue("id", replayProviderId);
+                    cmd.Parameters.AddWithValue("op", publishOp2);
+                    cmd.Parameters.AddWithValue("slot", slot2);
+                    cmd.Parameters.AddWithValue("secret", secret2);
+                    cmd.Parameters.AddWithValue("cred", credVersion);
+                    cmd.Parameters.AddWithValue("cfg", configHash);
+                    cmd.Parameters.AddWithValue("tenant", tenantId);
+                    cmd.Parameters.AddWithValue("mid", membership.MembershipId);
+                    cmd.Parameters.AddWithValue("mrev", membership.Revision);
+                    cmd.Parameters.AddWithValue("aid", assignment.AssignmentId);
+                    cmd.Parameters.AddWithValue("arev", assignment.Revision);
+                    cmd.Parameters.AddWithValue("issuer", caller.Issuer);
+                    cmd.Parameters.AddWithValue("actor", actorId);
+                    cmd.Parameters.AddWithValue("fp", replayFingerprint);
+                    await cmd.ExecuteNonQueryAsync();
+                    await tx.CommitAsync();
+                }
+            }
+
+            // Upgrade to VerifyProviderAvailabilityOnPublication
+            var migrationOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+                .UseNpgsql(isolated.MigrationDataSource, npgsql =>
+                    npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema))
+                .Options;
+            await ProjectsConfigMigrator.MigrateAsync(isolated.MigrationDataSource, migrationOptions);
+            await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(isolated.DataSource, migrationOptions);
+            var runtimeConnectionString = new NpgsqlConnectionStringBuilder(isolated.ConnectionString)
+            {
+                Options = "-c role=agentweaver-id-projects-config",
+            }.ConnectionString;
+            await using (var runtimeDataSource = NpgsqlDataSource.Create(runtimeConnectionString))
+                await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(runtimeDataSource);
+
+            // Pre-existing rows remain unchanged (provider_state IS NULL).
+            await using (var conn = await isolated.DataSource.OpenConnectionAsync())
+            await using (var check = new NpgsqlCommand("""
+                SELECT count(*) FROM projects_config.model_provider_credential_operations
+                WHERE operation_id = ANY(@ops) AND provider_state IS NULL
+                """, conn))
+            {
+                check.Parameters.AddWithValue("ops", new[] { publishOp1, disableOp1, publishOp2 });
+                Assert.Equal(3L, (long)(await check.ExecuteScalarAsync())!);
+            }
+
+            // Replay pre-existing Publish receipt -> returns ProviderState = "Draft".
+            var pubService = new ModelProviderCredentialPublicationV2Service(db, TimeProvider.System);
+            var replayPreflight = await pubService.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    publishOp2, ModelProviderBindingScope.Platform, null, replayProviderId,
+                    caller.Issuer, actorId, tenantId, null, null, "authority-only"),
+                CancellationToken.None);
+            Assert.NotNull(replayPreflight.ExistingReceipt);
+            Assert.Equal("Draft", replayPreflight.ExistingReceipt!.ProviderState);
+
+            var replayReceipt = await pubService.PublishAsync(
+                new ModelProviderCredentialPublicationV2Request(
+                    publishOp2, replayPreflight.PreflightId, 1, ModelProviderBindingScope.Platform, null, replayProviderId,
+                    credVersion, new ModelCredentialIdentity(slot2, ModelProviderBindingScope.Platform, null, replayProviderId),
+                    new SecretRef(secret2, credVersion), caller.Issuer, actorId, tenantId,
+                    replayPreflight.MembershipId, replayPreflight.MembershipRevision, tenantId, null),
+                CancellationToken.None);
+            Assert.Equal("Draft", replayReceipt.ProviderState);
+            Assert.Equal(2, replayReceipt.ProviderRevision);
+        }
+        finally
+        {
+            await isolated.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task DowngradeFromAvailability_WithoutAvailablePins_RestoresPreAvailabilityGuardAndAllowsPublishAndDisable()
+    {
+        var isolated = new ProjectsConfigPostgresFixture();
+        try
+        {
+            await isolated.InitializeToAsync(null);
+
+            await using var db = new ProjectsConfigDbContext(
+                new DbContextOptionsBuilder<ProjectsConfigDbContext>().UseNpgsql(isolated.DataSource).Options);
+            var store = new ProjectsConfigPrivilegedAuthorityStore(
+                new DbContextOptionsBuilder<ProjectsConfigDbContext>().UseNpgsql(isolated.DataSource).Options,
+                TimeProvider.System);
+            var suffix = Guid.NewGuid().ToString("N")[..8];
+            var tenantId = "dng-tenant-" + suffix;
+            var actorId = "dng-admin-" + suffix;
+            var caller = await SeedCallerAsync(db, store, actorId, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+
+            var draftService = new ModelProviderDraftService(db, TimeProvider.System);
+            var providerId = "dng-prov-" + suffix;
+            await draftService.SaveAsync(caller, ModelProviderBindingScope.Platform, null, providerId,
+                new SaveModelProviderDraftRequest(
+                    Guid.NewGuid(), 0, "Downgrade Provider", "openai", "https://api.openai.com/v1", "gpt-5",
+                    WireApi: "responses", ReasoningEfforts: ["high"]),
+                CancellationToken.None);
+
+            // Publish without pricing -> Draft (no Available pins).
+            var pubService = new ModelProviderCredentialPublicationV2Service(db, TimeProvider.System);
+            var op1 = Guid.NewGuid();
+            var slotId = Guid.NewGuid();
+            var credVersion = new string('e', 32);
+            var pre1 = await pubService.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    op1, ModelProviderBindingScope.Platform, null, providerId,
+                    caller.Issuer, actorId, tenantId, null, null, "draft-snapshot"),
+                CancellationToken.None);
+            var rec1 = await pubService.PublishAsync(
+                new ModelProviderCredentialPublicationV2Request(
+                    op1, pre1.PreflightId, 1, ModelProviderBindingScope.Platform, null, providerId,
+                    credVersion, new ModelCredentialIdentity(slotId, ModelProviderBindingScope.Platform, null, providerId),
+                    new SecretRef($"byok-platform-{providerId}", credVersion), caller.Issuer, actorId, tenantId,
+                    pre1.MembershipId, pre1.MembershipRevision, tenantId, null),
+                CancellationToken.None);
+            Assert.Equal("Draft", rec1.ProviderState);
+
+            // Downgrade to pre-availability migration.
+            var migrationOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+                .UseNpgsql(isolated.MigrationDataSource, npgsql =>
+                    npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema))
+                .Options;
+            await using (var migCtx = new ProjectsConfigDbContext(migrationOptions))
+            {
+                await migCtx.GetService<IMigrator>()
+                    .MigrateAsync("20261120231128_AddModelProviderCredentialOperationsV2");
+            }
+
+            // Columns removed and restored guard allows actual Publish and Disable.
+            await using var conn = await isolated.DataSource.OpenConnectionAsync();
+            await using (var colCheck = new NpgsqlCommand("""
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'projects_config'
+                  AND table_name = 'model_provider_credential_operations'
+                  AND column_name IN ('provider_state', 'rate_card_id', 'rate_card_version', 'rate_card_pin_hash')
+                """, conn))
+            {
+                Assert.Equal(0L, (long)(await colCheck.ExecuteScalarAsync())!);
+            }
+
+            var membership = await db.TenantMemberships.AsNoTracking()
+                .SingleAsync(m => m.Issuer == caller.Issuer && m.Subject == actorId && m.TenantId == tenantId);
+            var assignment = await db.RoleAssignments.AsNoTracking()
+                .SingleAsync(a => a.MembershipId == membership.MembershipId && a.Role == ProjectAuthorityRole.PlatformAdmin);
+            var rotatedVersion = new string('f', 32);
+            var rotatedSlot = Guid.NewGuid();
+            var configHash = rec1.ConfigurationHash;
+
+            // Actual Publish under restored guard (rev 3)
+            await using (var tx = await conn.BeginTransactionAsync())
+            {
+                await using var cmd = new NpgsqlCommand("""
+                    SET LOCAL ROLE "agentweaver-id-projects-config";
+                    UPDATE projects_config.model_providers
+                    SET current_revision = 3, updated_by_actor_id = @actor, updated_at = transaction_timestamp()
+                    WHERE provider_id = @id;
+                    INSERT INTO projects_config.model_provider_credential_operations
+                      (operation_id, operation_kind, provider_id, scope, project_id, provider_revision,
+                       expected_provider_revision, credential_slot_id, credential_secret_id, credential_version,
+                       configuration_hash, original_tenant, original_membership_id, original_membership_revision,
+                       current_membership_id, current_membership_revision, current_assignment_id,
+                       current_assignment_revision, issuer, actor_id, request_fingerprint, recorded_at)
+                    VALUES
+                      (@op, 'Publish', @id, 'Platform', NULL, 3, 2, @slot, @secret, @cred, @cfg,
+                       @tenant, @mid, @mrev, @mid, @mrev, @aid, @arev, @issuer, @actor, repeat('1', 64), transaction_timestamp());
+                    INSERT INTO projects_config.model_provider_revisions
+                      (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                       display_name, type, base_url, deployment, wire_api, reasoning_efforts, configuration_hash,
+                       credential_version, credential_slot_id, credential_secret_id, created_by_actor_id, created_at)
+                    SELECT h.provider_id, 3, h.scope, h.project_id, @op, repeat('1', 64),
+                           h.display_name, h.type, h.base_url, h.deployment, h.wire_api, h.reasoning_efforts, @cfg,
+                           @cred, @slot, @secret, h.updated_by_actor_id, h.updated_at
+                    FROM projects_config.model_providers h WHERE h.provider_id = @id;
+                    """, conn, tx);
+                cmd.Parameters.AddWithValue("id", providerId);
+                cmd.Parameters.AddWithValue("op", Guid.NewGuid());
+                cmd.Parameters.AddWithValue("slot", rotatedSlot);
+                cmd.Parameters.AddWithValue("secret", $"byok-platform-{providerId}");
+                cmd.Parameters.AddWithValue("cred", rotatedVersion);
+                cmd.Parameters.AddWithValue("cfg", configHash);
+                cmd.Parameters.AddWithValue("tenant", tenantId);
+                cmd.Parameters.AddWithValue("mid", membership.MembershipId);
+                cmd.Parameters.AddWithValue("mrev", membership.Revision);
+                cmd.Parameters.AddWithValue("aid", assignment.AssignmentId);
+                cmd.Parameters.AddWithValue("arev", assignment.Revision);
+                cmd.Parameters.AddWithValue("issuer", caller.Issuer);
+                cmd.Parameters.AddWithValue("actor", actorId);
+                await cmd.ExecuteNonQueryAsync();
+                await tx.CommitAsync();
+            }
+
+            // Actual Disable under restored guard (rev 4)
+            await using (var tx = await conn.BeginTransactionAsync())
+            {
+                await using var cmd = new NpgsqlCommand("""
+                    SET LOCAL ROLE "agentweaver-id-projects-config";
+                    UPDATE projects_config.model_providers
+                    SET current_revision = 4, updated_by_actor_id = @actor, updated_at = transaction_timestamp()
+                    WHERE provider_id = @id;
+                    INSERT INTO projects_config.model_provider_credential_operations
+                      (operation_id, operation_kind, provider_id, scope, project_id, provider_revision,
+                       expected_provider_revision, original_provider_revision, original_credential_revision,
+                       credential_slot_id, credential_secret_id, credential_version, configuration_hash,
+                       original_tenant, original_membership_id, original_membership_revision,
+                       current_membership_id, current_membership_revision, current_assignment_id,
+                       current_assignment_revision, issuer, actor_id, request_fingerprint, recorded_at)
+                    VALUES
+                      (@op, 'Disable', @id, 'Platform', NULL, 4, 3, 3, 2, @slot, NULL, NULL, @cfg,
+                       @tenant, @mid, @mrev, @mid, @mrev, @aid, @arev, @issuer, @actor, repeat('2', 64), transaction_timestamp());
+                    INSERT INTO projects_config.model_provider_revisions
+                      (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                       display_name, type, base_url, deployment, wire_api, reasoning_efforts, configuration_hash,
+                       credential_version, credential_slot_id, credential_secret_id, created_by_actor_id, created_at)
+                    SELECT h.provider_id, 4, h.scope, h.project_id, @op, repeat('2', 64),
+                           h.display_name, h.type, h.base_url, h.deployment, h.wire_api, h.reasoning_efforts, @cfg,
+                           NULL, NULL, NULL, h.updated_by_actor_id, h.updated_at
+                    FROM projects_config.model_providers h WHERE h.provider_id = @id;
+                    """, conn, tx);
+                cmd.Parameters.AddWithValue("id", providerId);
+                cmd.Parameters.AddWithValue("op", Guid.NewGuid());
+                cmd.Parameters.AddWithValue("slot", rotatedSlot);
+                cmd.Parameters.AddWithValue("cfg", configHash);
+                cmd.Parameters.AddWithValue("tenant", tenantId);
+                cmd.Parameters.AddWithValue("mid", membership.MembershipId);
+                cmd.Parameters.AddWithValue("mrev", membership.Revision);
+                cmd.Parameters.AddWithValue("aid", assignment.AssignmentId);
+                cmd.Parameters.AddWithValue("arev", assignment.Revision);
+                cmd.Parameters.AddWithValue("issuer", caller.Issuer);
+                cmd.Parameters.AddWithValue("actor", actorId);
+                await cmd.ExecuteNonQueryAsync();
+                await tx.CommitAsync();
+            }
+
+            await using var revCheck = new NpgsqlCommand(
+                "SELECT current_revision, state FROM projects_config.model_providers WHERE provider_id = @id", conn);
+            revCheck.Parameters.AddWithValue("id", providerId);
+            await using var reader = await revCheck.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(4L, reader.GetInt64(0));
+            Assert.Equal("Draft", reader.GetString(1));
+        }
+        finally
+        {
+            await isolated.DisposeAsync();
+        }
     }
 
     private sealed class DelegateRateCardHandler(

@@ -196,21 +196,25 @@ public sealed class ModelProviderWriteGuardPostgresTests(ProjectsConfigPostgresF
     [Theory]
     [InlineData("available-without-op")]
     [InlineData("available-with-draft-op")]
+    [InlineData("available-op-null-state")]
     [InlineData("available-without-pin")]
     [InlineData("available-pin-mismatch")]
     [InlineData("available-op-hash-mismatch")]
+    [InlineData("available-rate-card-mismatch")]
+    [InlineData("available-config-hash-mismatch")]
     [InlineData("disable-leaving-available")]
     public async Task RestrictedRoleCannotBypassAvailableProviderGuards(string attack)
     {
         var id = $"guard-{Guid.NewGuid():N}";
-        await CreateDraftAsync(id);
+        await CreateDraftAsync(id, "card-1", "v1");
         var slotId = Guid.NewGuid();
         var opId = Guid.NewGuid();
         var credVersion = new string('1', 32);
-        var configHash = new string('b', 64);
+        var configHash = attack == "available-config-hash-mismatch" ? new string('f', 64) : new string('b', 64);
+        var revCardId = attack == "available-rate-card-mismatch" ? "card-2" : "card-1";
         var pinHash = new string('c', 64);
         var otherPinHash = new string('d', 64);
-        var validPinJson = $$$"""{"rateCardId":"card-1","rateCardVersion":"v1","contentHash":"{{{pinHash}}}","provenance":{"source":"manual","sourceUrl":"https://pricing.example/card","retrievedOn":"2026-11-22"}}""";
+        var validPinJson = $$$"""{"rateCardId":"{{{revCardId}}}","rateCardVersion":"v1","contentHash":"{{{pinHash}}}","provenance":{"source":"manual","sourceUrl":"https://pricing.example/card","retrievedOn":"2026-11-22"}}""";
         var mismatchedPinJson = $$$"""{"rateCardId":"other-card","rateCardVersion":"v1","contentHash":"{{{pinHash}}}","provenance":{"source":"manual","sourceUrl":"https://pricing.example/card","retrievedOn":"2026-11-22"}}""";
 
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -238,10 +242,15 @@ public sealed class ModelProviderWriteGuardPostgresTests(ProjectsConfigPostgresF
             if (attack != "available-without-op")
             {
                 var opKind = attack == "disable-leaving-available" ? "Disable" : "Publish";
-                var opState = attack is "available-with-draft-op" or "disable-leaving-available" ? "Draft" : "Available";
+                var opState = attack switch
+                {
+                    "available-op-null-state" => (string?)null,
+                    "available-with-draft-op" or "disable-leaving-available" => "Draft",
+                    _ => "Available",
+                };
                 var opCredVersion = opKind == "Disable" ? (string?)null : credVersion;
                 var opSecretId = opKind == "Disable" ? (string?)null : $"byok-platform-{id}";
-                var opCardId = opState == "Available" ? "card-1" : null;
+                var opCardId = opState == "Available" ? revCardId : null;
                 var opCardVersion = opState == "Available" ? "v1" : null;
                 var opPinHash = opState == "Available" ? (attack == "available-op-hash-mismatch" ? otherPinHash : pinHash) : null;
 
@@ -270,7 +279,7 @@ public sealed class ModelProviderWriteGuardPostgresTests(ProjectsConfigPostgresF
                 opCmd.Parameters.AddWithValue("secret", (object?)opSecretId ?? DBNull.Value);
                 opCmd.Parameters.AddWithValue("cred", (object?)opCredVersion ?? DBNull.Value);
                 opCmd.Parameters.AddWithValue("cfg", configHash);
-                opCmd.Parameters.AddWithValue("pstate", opState);
+                opCmd.Parameters.AddWithValue("pstate", (object?)opState ?? DBNull.Value);
                 opCmd.Parameters.AddWithValue("rcid", (object?)opCardId ?? DBNull.Value);
                 opCmd.Parameters.AddWithValue("rcver", (object?)opCardVersion ?? DBNull.Value);
                 opCmd.Parameters.AddWithValue("rchash", (object?)opPinHash ?? DBNull.Value);
@@ -289,7 +298,7 @@ public sealed class ModelProviderWriteGuardPostgresTests(ProjectsConfigPostgresF
                 SELECT h.provider_id, h.current_revision, h.scope, h.project_id, @op, repeat('a', 64),
                        h.display_name, h.type, h.base_url, h.deployment, h.wire_api, h.azure_api_version,
                        h.reasoning_efforts, h.prompt_capacity_tokens, @cfg, @cred, @slot, @secret,
-                       'card-1', 'v1', @pin::jsonb, h.updated_by_actor_id, h.updated_at
+                       @rcid, 'v1', @pin::jsonb, h.updated_by_actor_id, h.updated_at
                 FROM projects_config.model_providers h WHERE h.provider_id = @id
                 """, connection, transaction);
             revCmd.Parameters.AddWithValue("id", id);
@@ -298,6 +307,7 @@ public sealed class ModelProviderWriteGuardPostgresTests(ProjectsConfigPostgresF
             revCmd.Parameters.AddWithValue("cred", attack == "disable-leaving-available" ? (object)DBNull.Value : credVersion);
             revCmd.Parameters.AddWithValue("slot", attack == "disable-leaving-available" ? (object)DBNull.Value : slotId);
             revCmd.Parameters.AddWithValue("secret", attack == "disable-leaving-available" ? (object)DBNull.Value : $"byok-platform-{id}");
+            revCmd.Parameters.AddWithValue("rcid", revCardId);
             revCmd.Parameters.AddWithValue("pin", (object?)revisionPinJson ?? DBNull.Value);
             await revCmd.ExecuteNonQueryAsync();
 
@@ -308,6 +318,95 @@ public sealed class ModelProviderWriteGuardPostgresTests(ProjectsConfigPostgresF
         Assert.Equal("ck_model_provider_write_guard", failure.ConstraintName);
         if (!attemptedCommit)
             await transaction.RollbackAsync();
+    }
+
+    [Fact]
+    public async Task RestrictedRoleCanTransitionDraftToAvailableWithMatchingReceiptAndPreviousPin()
+    {
+        var id = $"guard-{Guid.NewGuid():N}";
+        await CreateDraftAsync(id, "card-1", "v1");
+        var slotId = Guid.NewGuid();
+        var opId = Guid.NewGuid();
+        var credVersion = new string('1', 32);
+        var configHash = new string('b', 64);
+        var pinHash = new string('c', 64);
+        var pinJson = $$$"""{"rateCardId":"card-1","rateCardVersion":"v1","contentHash":"{{{pinHash}}}","provenance":{"source":"manual","sourceUrl":"https://pricing.example/card","retrievedOn":"2026-11-22"}}""";
+
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await ExecuteAsync(connection, transaction, """SET LOCAL ROLE "agentweaver-id-projects-config" """, id);
+
+        await ExecuteAsync(connection, transaction, """
+            UPDATE projects_config.model_providers
+            SET current_revision = current_revision + 1,
+                state = 'Available',
+                updated_by_actor_id = 'actor',
+                updated_at = transaction_timestamp()
+            WHERE provider_id = @id
+            """, id);
+
+        await using (var opCmd = new NpgsqlCommand("""
+            INSERT INTO projects_config.model_provider_credential_operations
+              (operation_id, operation_kind, provider_id, scope, project_id, provider_revision,
+               expected_provider_revision, original_provider_revision, original_credential_revision,
+               credential_slot_id, credential_secret_id, credential_version, configuration_hash,
+               provider_state, rate_card_id, rate_card_version, rate_card_pin_hash,
+               original_tenant, original_membership_id, original_membership_revision,
+               current_membership_id, current_membership_revision, current_assignment_id,
+               current_assignment_revision, issuer, actor_id, request_fingerprint, recorded_at)
+            VALUES
+              (@op, 'Publish', @id, 'Platform', NULL, 2, 1, NULL, NULL,
+               @slot, @secret, @cred, @cfg,
+               'Available', 'card-1', 'v1', @rchash,
+               'tenant-1', @m, 1, @m, 1, @a, 1, 'https://issuer.example', 'actor', repeat('e', 64), transaction_timestamp())
+            """, connection, transaction))
+        {
+            opCmd.Parameters.AddWithValue("op", opId);
+            opCmd.Parameters.AddWithValue("id", id);
+            opCmd.Parameters.AddWithValue("slot", slotId);
+            opCmd.Parameters.AddWithValue("secret", $"byok-platform-{id}");
+            opCmd.Parameters.AddWithValue("cred", credVersion);
+            opCmd.Parameters.AddWithValue("cfg", configHash);
+            opCmd.Parameters.AddWithValue("rchash", pinHash);
+            opCmd.Parameters.AddWithValue("m", Guid.NewGuid());
+            opCmd.Parameters.AddWithValue("a", Guid.NewGuid());
+            await opCmd.ExecuteNonQueryAsync();
+        }
+
+        await using (var revCmd = new NpgsqlCommand("""
+            INSERT INTO projects_config.model_provider_revisions
+              (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+               display_name, type, base_url, deployment, wire_api, azure_api_version, reasoning_efforts,
+               prompt_capacity_tokens, configuration_hash, credential_version, credential_slot_id,
+               credential_secret_id, rate_card_id, rate_card_version, rate_card_pin_json,
+               created_by_actor_id, created_at)
+            SELECT h.provider_id, h.current_revision, h.scope, h.project_id, @op, repeat('a', 64),
+                   h.display_name, h.type, h.base_url, h.deployment, h.wire_api, h.azure_api_version,
+                   h.reasoning_efforts, h.prompt_capacity_tokens, @cfg, @cred, @slot, @secret,
+                   'card-1', 'v1', @pin::jsonb, h.updated_by_actor_id, h.updated_at
+            FROM projects_config.model_providers h WHERE h.provider_id = @id
+            """, connection, transaction))
+        {
+            revCmd.Parameters.AddWithValue("id", id);
+            revCmd.Parameters.AddWithValue("op", opId);
+            revCmd.Parameters.AddWithValue("cfg", configHash);
+            revCmd.Parameters.AddWithValue("cred", credVersion);
+            revCmd.Parameters.AddWithValue("slot", slotId);
+            revCmd.Parameters.AddWithValue("secret", $"byok-platform-{id}");
+            revCmd.Parameters.AddWithValue("pin", pinJson);
+            await revCmd.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+
+        await using var verify = new NpgsqlCommand(
+            "SELECT state, current_revision FROM projects_config.model_providers WHERE provider_id = @id",
+            connection);
+        verify.Parameters.AddWithValue("id", id);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("Available", reader.GetString(0));
+        Assert.Equal(2, reader.GetInt64(1));
     }
 
     [Fact]
@@ -563,13 +662,29 @@ public sealed class ModelProviderWriteGuardPostgresTests(ProjectsConfigPostgresF
         }
     }
 
-    private async Task CreateDraftAsync(string id)
+    private async Task CreateDraftAsync(string id, string? rateCardId = null, string? rateCardVersion = null)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
         await ExecuteAsync(connection, transaction, """SET LOCAL ROLE "agentweaver-id-projects-config" """, id);
         await ExecuteAsync(connection, transaction, InsertHead, id);
-        await ExecuteAsync(connection, transaction, InsertRevision, id);
+        await using var revCmd = new NpgsqlCommand("""
+            INSERT INTO projects_config.model_provider_revisions
+              (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+               display_name, type, base_url, deployment, wire_api, azure_api_version, reasoning_efforts,
+               prompt_capacity_tokens, configuration_hash, credential_version, credential_slot_id,
+               credential_secret_id, rate_card_id, rate_card_version, created_by_actor_id, created_at)
+            SELECT h.provider_id, h.current_revision, h.scope, h.project_id, @operation, repeat('a', 64),
+                   h.display_name, h.type, h.base_url, h.deployment, h.wire_api, h.azure_api_version,
+                   h.reasoning_efforts, h.prompt_capacity_tokens, repeat('b', 64), NULL, NULL, NULL,
+                   @rcid, @rcver, h.updated_by_actor_id, h.updated_at
+            FROM projects_config.model_providers h WHERE h.provider_id = @id
+            """, connection, transaction);
+        revCmd.Parameters.AddWithValue("id", id);
+        revCmd.Parameters.AddWithValue("operation", Guid.NewGuid());
+        revCmd.Parameters.AddWithValue("rcid", (object?)rateCardId ?? DBNull.Value);
+        revCmd.Parameters.AddWithValue("rcver", (object?)rateCardVersion ?? DBNull.Value);
+        await revCmd.ExecuteNonQueryAsync();
         await transaction.CommitAsync();
     }
 

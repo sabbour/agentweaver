@@ -708,7 +708,7 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
             new ModelCredentialIdentity(op.CredentialSlotId!.Value, op.Scope, op.ProjectId, op.ProviderId),
             new SecretRef(op.CredentialSecretId!, op.CredentialVersion!))
         {
-            ProviderState = op.ProviderState,
+            ProviderState = op.ProviderState ?? nameof(ModelProviderDraftState.Draft),
         };
 
     private static ModelProviderCredentialDisableReceipt ToDisableReceipt(ModelProviderCredentialOperationRecord op) =>
