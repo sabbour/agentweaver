@@ -94,5 +94,32 @@ command with the same operation ID and fields. The API replays the original
 write. Use a new operation ID for a new write. Do not reuse an operation ID
 with changed fields.
 
+## Recheck availability for a saved credential
+
+If a credential `PUT` saved the API key but left the provider in `Draft` because
+pricing was missing or unavailable, update the provider's rate card and run a
+same-version recheck with a new `operationId` using
+[`agentweaver rest`](./cli.md#make-a-direct-gateway-request).
+`agentweaver rest` sends your `--body` JSON as-is and rejects sensitive or
+reserved `--header` values before network access. Set `recheckExistingVersion`
+to `true` and pass the current `expectedProviderRevision` and positive
+`expectedCredentialRevision` without `apiKey` or `recoverySecretVersion`:
+
+```powershell
+$operationId = [guid]::NewGuid().ToString()
+$body = @{
+  operationId = $operationId
+  expectedProviderRevision = [long]$expectedProviderRevision
+  expectedCredentialRevision = [long]$expectedCredentialRevision
+  recheckExistingVersion = $true
+} | ConvertTo-Json -Compress
+
+agentweaver rest --method PUT --url "/api/v1/projects/$projectId/byok-providers/$providerId/credential" --project-id $projectId --scope projects.admin --body $body
+```
+
+The Broker verifies the stored, enabled Key Vault version without uploading a
+key or creating a new Vault version, and Projects transitions `providerState`
+to `Available` when the saved rate card verifies against Events.
+
 For command syntax and metadata options, see
 [Manage project BYOK provider drafts](./cli.md#manage-project-byok-provider-drafts).
