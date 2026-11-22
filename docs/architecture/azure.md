@@ -217,7 +217,8 @@ ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 49 Core migration versions (1 through 16, 18
 through 33, and 35-51), with version 17 excluded and reserved version 34
-skipped, 12 Events versions, and 16 Environment versions. The initializer
+skipped, 13 Events versions, and 16 Environment versions. Roll out compatible
+Events & Sessions runtime and migration catalog versions together. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
 `7ffd96578ffc27a5d369e8577e20d27dae3f22625f33642066910846b5959595`.
