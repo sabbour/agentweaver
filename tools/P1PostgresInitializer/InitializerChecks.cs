@@ -367,7 +367,7 @@ internal static class InitializerChecks
                 var expectedType = marker ? (providerHead ? 23 : 7) : (providerHead ? 21 : 5);
                 var expectedHash = marker
                     ? "251d3b422db7283268c1264b4743de38b0af2454e34fc23330e1a0d9eba11c18"
-                    : "1278c505c829b9c7d828dcd20b079faefe871b65be652e15e2f9ca202be698bd";
+                    : "5499524241b6b4a25e0185ed40b6f552119a1521a4fd6191715f1fc737b77e93";
                 return (providerHead || providerRevision) && (marker || pair)
                     && guard.Trigger == $"{name}_write_{(marker ? "marker" : "pair")}"
                     && guard.TriggerType == expectedType && guard.Deferrable == pair
