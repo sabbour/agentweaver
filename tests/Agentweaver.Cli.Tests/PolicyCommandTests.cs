@@ -648,6 +648,242 @@ public sealed class PolicyCommandTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProjectValidateReadsProjectExportWithUnboundAdminIdentity(bool exact)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ProjectExportInput(exact));
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Body = """{"isValid":true,"diagnostics":[],"private":"POLICY_PRIVATE_CANARY"}""",
+        };
+        try
+        {
+            Assert.Equal(0, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+
+            Assert.Equal("POST", fixture.PolicyMethod);
+            Assert.Equal($"/api/v1/policies/projects/{ProjectId}/validate", fixture.PolicyPath);
+            Assert.True(string.IsNullOrEmpty(fixture.PolicyQuery));
+            Assert.Null(fixture.PolicyProjectAuthorizationHeader);
+            var request = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            Assert.Equal(["artifact"], request.Select(pair => pair.Key));
+            Assert.DoesNotContain(Canary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.Null(fixture.Authentication.Identity!.ProjectId);
+            Assert.Null(fixture.Authentication.Identity.RunId);
+            Assert.Equal(
+                ["openid", "api.read", "offline_access", "projects.admin"],
+                fixture.Authentication.Identity.Scopes);
+            Assert.Equal(InteractionPolicy.Never, fixture.Authentication.Interaction);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectValidateReturnsOnlySafeBoundedDiagnostics()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ProjectExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Status = HttpStatusCode.UnprocessableEntity,
+            Body = $$"""{"code":"native_acs_policy_invalid","detail":"{{Canary}}","diagnostics":[{"code":"file_path","message":"The path is unsafe.","relativePath":"../{{Canary}}","line":2,"column":3,"private":"{{Canary}}"}],"manifestBytes":[67,65,78,65,82,89]}""",
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+
+            var result = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.False(result["isValid"]!.GetValue<bool>());
+            var diagnostic = Assert.Single(result["diagnostics"]!.AsArray())!.AsObject();
+            Assert.Equal(["code", "column", "line", "message", "relativePath"],
+                diagnostic.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Null(diagnostic["relativePath"]);
+            Assert.DoesNotContain(Canary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Client!.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectValidateRejectsScopeProjectAndDigestBeforeDiscovery()
+    {
+        var inputPath = NewInputPath();
+        try
+        {
+            var wrongScope = JsonNode.Parse(ProjectExportInput(exact: false))!.AsObject();
+            wrongScope["scopeType"] = "platform";
+            wrongScope["scopeId"] = "default";
+            await File.WriteAllTextAsync(inputPath, wrongScope.ToJsonString());
+            var fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+
+            var wrongProject = JsonNode.Parse(ProjectExportInput(exact: false))!.AsObject();
+            wrongProject["scopeId"] = "00000000000000000000000000000043";
+            await File.WriteAllTextAsync(inputPath, wrongProject.ToJsonString());
+            fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+
+            var wrongHash = JsonNode.Parse(ProjectExportInput(exact: false))!.AsObject();
+            wrongHash["artifact"]!["manifestBytes"]![0] = 66;
+            await File.WriteAllTextAsync(inputPath, wrongHash.ToJsonString());
+            fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("project-id")]
+    [InlineData("00000000-0000-0000-0000-000000000042")]
+    public async Task ProjectValidateRejectsNonCanonicalProjectIdBeforeDiscovery(string projectId)
+    {
+        var fixture = new Fixture();
+
+        Assert.Equal(1, await fixture.Run(
+            "validate", "--scope", "project", "--project-id", projectId, "--input", "missing.json"));
+        Assert.Equal(0, fixture.RequestCount);
+    }
+
+    [Fact]
+    public async Task ProjectValidateRejectsRunBindingBeforeDiscovery()
+    {
+        var fixture = new Fixture();
+
+        Assert.Equal(1, await fixture.Run(
+            "validate", "--scope", "project", "--project-id", ProjectId,
+            "--input", "missing.json", "--run-id", "run-a"));
+        Assert.Equal(0, fixture.RequestCount);
+    }
+
+    [Fact]
+    public async Task ProjectValidateRejectsCompactRequestAboveFiveMiBBeforeDiscovery()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ProjectExportInputWithRequestSize(5242881));
+        var fixture = new Fixture();
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Empty(fixture.Output.ToString());
+            Assert.DoesNotContain(ArtifactCanary, fixture.Error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectValidateHonorsSmallerAdvertisedRequestLimit()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ProjectExportInput(exact: false));
+        var fixture = new Fixture { ProjectValidationRequestBound = 1 };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+            Assert.Equal(1, fixture.RequestCount);
+            Assert.Null(fixture.PolicyPath);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("wrong-reference")]
+    [InlineData("inline")]
+    [InlineData("missing")]
+    [InlineData("missing-component")]
+    [InlineData("optional-artifact")]
+    public async Task ProjectValidateRejectsIncompatiblePublishedSchemaBeforeAuthOrPost(string mutation)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ProjectExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            ProjectValidationSchemaMutation = mutation,
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+
+            Assert.Equal(1, fixture.RequestCount);
+            Assert.Equal(0, fixture.PolicyRequestCount);
+            Assert.Null(fixture.PolicyPath);
+            Assert.Null(fixture.Authentication.Identity);
+            Assert.Empty(fixture.Output.ToString());
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectValidateRedactsTransportExceptionText()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ProjectExportInput(exact: false));
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            PolicyException = new HttpRequestException(Canary),
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "validate", "--scope", "project", "--project-id", ProjectId, "--input", inputPath));
+            var evidence = fixture.Client!.Calls.Last();
+            Assert.Equal("[REDACTED]", evidence["error"]!.GetValue<string>());
+            Assert.DoesNotContain(Canary, evidence.ToJsonString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+        }
+    }
+
+    [Theory]
     [InlineData("4", 4L)]
     [InlineData("none", null)]
     public async Task ApplySendsPlatformArtifactWithDurableIdsAndProjectsReceipt(string expectedText, long? expectedRevision)
@@ -1534,6 +1770,15 @@ public sealed class PolicyCommandTests
             Environment.NewLine;
     }
 
+    private static string ProjectExportInput(bool exact)
+    {
+        var export = JsonNode.Parse(ExportInput(exact))!.AsObject();
+        export["scopeType"] = "project";
+        export["scopeId"] = ProjectId;
+        return export.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) +
+            Environment.NewLine;
+    }
+
     private static string ShowBodyWithCanary(bool exact)
     {
         var body = JsonNode.Parse(ShowBody(exact))!.AsObject();
@@ -1593,6 +1838,15 @@ public sealed class PolicyCommandTests
         RehashExport(export);
         request = new JsonObject { ["artifact"] = artifact.DeepClone() };
         Assert.Equal(requestBytes, Encoding.UTF8.GetByteCount(request.ToJsonString(options)));
+        return export.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) +
+            Environment.NewLine;
+    }
+
+    private static string ProjectExportInputWithRequestSize(int requestBytes)
+    {
+        var export = JsonNode.Parse(ExportInputWithRequestSize(requestBytes))!.AsObject();
+        export["scopeType"] = "project";
+        export["scopeId"] = ProjectId;
         return export.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) +
             Environment.NewLine;
     }
@@ -1663,13 +1917,17 @@ public sealed class PolicyCommandTests
         public string? UnsafeOperation;
         public bool UnsafeValidationRequestBound;
         public bool WrongValidationPath;
+        public int? ProjectValidationRequestBound;
+        public string? ProjectValidationSchemaMutation;
         public bool WrongPath;
         public bool UseGatewayContract;
+        public Exception? PolicyException;
         public int RequestCount;
         public string? PolicyPath;
         public string? PolicyQuery;
         public string? PolicyMethod;
         public string? PolicyBody;
+        public string? PolicyProjectAuthorizationHeader;
         public int PolicyRequestCount;
         private int _applyRequestCount;
         public int ApplyRequestCount => Volatile.Read(ref _applyRequestCount);
@@ -1705,6 +1963,12 @@ public sealed class PolicyCommandTests
             PolicyQuery = request.RequestUri.Query;
             PolicyMethod = request.Method.Method;
             PolicyBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            PolicyProjectAuthorizationHeader =
+                request.Headers.TryGetValues("X-Agentweaver-Project-Authorization", out var projectBearer)
+                    ? string.Join(',', projectBearer)
+                    : null;
+            if (PolicyException is not null)
+                throw PolicyException;
             if (path == "/api/v1/policies/platform" && request.Method == HttpMethod.Put)
             {
                 BeforePolicyApply?.Invoke(PolicyBody!);
@@ -1724,7 +1988,37 @@ public sealed class PolicyCommandTests
             {
                 var type = typeof(GatewayEndpoints).Assembly.GetType("Agentweaver.Gateway.GatewayOpenApi")!;
                 var emitted = type.GetMethod("CreateDocument", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, null);
-                return JsonSerializer.Serialize(emitted, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                var publishedDocument = JsonNode.Parse(
+                    JsonSerializer.Serialize(emitted, new JsonSerializerOptions(JsonSerializerDefaults.Web)))!.AsObject();
+                if (ProjectValidationSchemaMutation is not null)
+                {
+                    var schema = publishedDocument["paths"]!["/api/v1/policies/projects/{projectId}/validate"]!
+                        ["post"]!["requestBody"]!["content"]!["application/json"]!["schema"]!.AsObject();
+                    switch (ProjectValidationSchemaMutation)
+                    {
+                        case "wrong-reference":
+                            schema["$ref"] = "#/components/schemas/NativeAcsArtifact";
+                            break;
+                        case "inline":
+                            schema.Remove("$ref");
+                            schema["type"] = "object";
+                            break;
+                        case "missing":
+                            schema.Parent!.AsObject().Remove("schema");
+                            break;
+                        case "missing-component":
+                            publishedDocument["components"]!["schemas"]!.AsObject()
+                                .Remove("NativeAcsPolicyValidationRequest");
+                            break;
+                        case "optional-artifact":
+                            publishedDocument["components"]!["schemas"]!["NativeAcsPolicyValidationRequest"]!
+                                ["required"] = new JsonArray();
+                            break;
+                        default:
+                            throw new InvalidOperationException();
+                    }
+                }
+                return publishedDocument.ToJsonString();
             }
             var response = """{"200":{"content":{"application/json":{"schema":{"type":"object"}}}},"403":{"content":{"application/problem+json":{"schema":{"type":"object"}}}}}""";
             var tenant = """{"name":"X-Agentweaver-Tenant","in":"header","required":true,"schema":{"type":"string"}}""";
@@ -1734,11 +2028,14 @@ public sealed class PolicyCommandTests
             var historyParameters = """{"name":"pageSize","in":"query","schema":{"type":"integer"}},{"name":"cursor","in":"query","schema":{"type":"string"}},""" + tenant;
             var revisionParameters = """{"name":"revision","in":"path","required":true,"schema":{"type":"string"}},""" + tenant;
             var validationResponse = """{"200":{"content":{"application/json":{"schema":{"type":"object"}}}},"403":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"422":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"429":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"503":{"content":{"application/problem+json":{"schema":{"type":"object"}}}}}""";
-            var validationRequestBody = """{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}}""";
+            var validationRequestBody = """{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/NativeAcsPolicyValidationRequest"}}}}""";
+            var projectValidationParameters =
+                """{"name":"projectId","in":"path","required":true,"schema":{"type":"string"}},""" + tenant;
             var validationPath = WrongValidationPath
                 ? "/api/v1/policies/platform/invalid"
                 : "/api/v1/policies/platform/validate";
             var requestLimit = UnsafeValidationRequestBound ? 6000000 : 5242880;
+            var projectRequestLimit = ProjectValidationRequestBound ?? 5242880;
             var applyPath = WrongPolicyApplyPath
                 ? "/api/v1/policies/platform/invalid-write"
                 : "/api/v1/policies/platform";
@@ -1748,7 +2045,7 @@ public sealed class PolicyCommandTests
             var applyRequestBody = """{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}}""";
             var applyResponse = """{"200":{"content":{"application/json":{"schema":{"type":"object"}}}},"403":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"409":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"422":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"429":{"content":{"application/problem+json":{"schema":{"type":"object"}}}},"503":{"content":{"application/problem+json":{"schema":{"type":"object"}}}}}""";
             var document = JsonNode.Parse(
-                """{"openapi":"3.1.0","security":[{"Bearer":[]}],"components":{"securitySchemes":{"Bearer":{"type":"http","scheme":"bearer"}}}}""")!.AsObject();
+                """{"openapi":"3.1.0","security":[{"Bearer":[]}],"components":{"securitySchemes":{"Bearer":{"type":"http","scheme":"bearer"}},"schemas":{"NativeAcsArtifact":{"type":"object"},"NativeAcsPolicyValidationRequest":{"type":"object","additionalProperties":false,"required":["artifact"],"properties":{"artifact":{"$ref":"#/components/schemas/NativeAcsArtifact"}}}}}}""")!.AsObject();
             var paths = new JsonObject
             {
                 ["/api/v1/authorization/context"] = new JsonObject { ["get"] = JsonNode.Parse(Operation("getAuthorizationContext", tenant)) },
@@ -1759,6 +2056,11 @@ public sealed class PolicyCommandTests
                 {
                     ["post"] = JsonNode.Parse(
                         $$"""{"operationId":"validatePlatformNativeAcsPolicy","x-agentweaver-max-request-body-bytes":{{requestLimit}},"x-agentweaver-max-response-bytes":5242880,"parameters":[{{tenant}}],"requestBody":{{validationRequestBody}},"responses":{{validationResponse}}}"""),
+                },
+                ["/api/v1/policies/projects/{projectId}/validate"] = new JsonObject
+                {
+                    ["post"] = JsonNode.Parse(
+                        $$"""{"operationId":"validateProjectNativeAcsPolicy","x-agentweaver-max-request-body-bytes":{{projectRequestLimit}},"x-agentweaver-max-response-bytes":5242880,"parameters":[{{projectValidationParameters}}],"requestBody":{{validationRequestBody}},"responses":{{validationResponse}}}"""),
                 },
             };
             if (paths[applyPath] is not JsonObject applyPathItem)

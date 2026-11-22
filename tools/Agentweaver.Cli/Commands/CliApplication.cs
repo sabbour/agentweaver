@@ -529,6 +529,7 @@ public static class CliApplication
           agentweaver policy show --scope platform [--revision <revision>] [target options]
           agentweaver policy export --scope platform --output <new-file> [--revision <revision>] [target options]
           agentweaver policy validate --scope platform --input <export-file> [target options]
+          agentweaver policy validate --scope project --project-id <id> --input <export-file> [target options]
           agentweaver policy apply --scope platform --input <export-file> --expected-revision <revision|none> --reason <text> [target options]
           agentweaver policy history --scope platform [--page-size <1-100>] [--cursor <token>] [target options]
           agentweaver platform byok list [target options]

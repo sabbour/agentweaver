@@ -329,16 +329,39 @@ path, not artifact bytes. The command does not overwrite an existing file.
 
 ### Validate a Project Policy artifact
 
-Use the Gateway API to validate a Project artifact. You need current Project
-Owner or TenantAdmin authority and an unbound identity with `api.read` and
-`projects.admin`. Do not set a project or run target binding; `PROJECT_ID`
-selects the route.
+Project validation requires current Project Owner or TenantAdmin authority and
+an unbound identity with `api.read` and `projects.admin`. Clear any Project
+and run defaults before you sign in:
 
-In a .NET application that references the source project
-`packages\Agentweaver.Policy.Acs\Agentweaver.Policy.Acs.csproj`, create the
-request file. The empty action list below denies all actions. The constructor
-retains the pinned native manifest and modules, omits Platform network data,
-and computes the hash over the submitted bytes.
+```powershell
+Remove-Item Env:AGENTWEAVER_PROJECT_ID, Env:AGENTWEAVER_RUN_ID -ErrorAction SilentlyContinue
+agentweaver auth login --scope projects.admin
+```
+
+Replace `PROJECT_ID` with the 32-character ID from the Project list. Pass a
+current or exact-revision file from `policy export`:
+
+```powershell
+agentweaver policy validate --scope project --project-id PROJECT_ID --input .\project-policy.json
+```
+
+The CLI checks the export scope, Project ID, and artifact hash before Gateway
+discovery. It rejects files larger than 64 MiB and compact JSON request bodies
+larger than 5 MiB. It sends no query or secondary Project bearer. The command
+uses an unbound identity and rejects `--run-id`.
+
+The command prints only `isValid` and bounded `diagnostics`. It exits with code
+0 for a valid artifact and code 1 for an invalid artifact or failed request.
+Validation checks the submitted artifact without reading, saving, or activating
+Policy. Unsafe diagnostic paths are returned as null.
+
+#### Validate a new Project artifact without an export
+
+Use the Gateway API for an artifact that has no export. In a .NET application
+that references `packages\Agentweaver.Policy.Acs\Agentweaver.Policy.Acs.csproj`,
+create the request file. The empty action list denies all actions. The
+constructor retains the pinned manifest and modules, omits Platform network
+data, and computes the hash over the submitted bytes.
 
 ```csharp
 using System.Text.Json;
@@ -351,20 +374,15 @@ await JsonSerializer.SerializeAsync(
     file, new { artifact }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 ```
 
-Replace `PROJECT_ID` with the 32-character ID returned by the Project list.
-Run these commands from the directory containing the new request file:
+Use the same unbound sign-in and Project ID as above:
 
 ```powershell
-agentweaver auth login --scope projects.admin
 agentweaver api invoke validateProjectNativeAcsPolicy --path projectId=PROJECT_ID --scope projects.admin --body '@.\project-policy-validation.json'
 ```
 
-The route returns `isValid` and diagnostics. Validation checks the submitted
-artifact, not its effective permission or the current Platform baseline. It
-does not save or activate Policy. `api invoke` accepts a JSON body up to 1 MiB;
-the Gateway HTTP limit is 5 MiB. For the v2 profile, use
-`NativeAcsUnifiedPolicyProfile.CreateProjectArtifact` with actions, model-use,
-and Guardrails data.
+`api invoke` accepts a JSON body up to 1 MiB. The Gateway HTTP limit is 5 MiB.
+For the v2 profile, use `NativeAcsUnifiedPolicyProfile.CreateProjectArtifact`
+with actions, model-use, and Guardrails data.
 
 ## Discover and invoke API operations
 

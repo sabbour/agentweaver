@@ -48,11 +48,11 @@ internal static class PolicyCommands
                 name != "run-id" && (name != "project-id" || projectScope && !projectList))).ToArray());
         if (scope is not ("platform" or "project") ||
             scope == "platform" && command == "list" ||
-            projectScope && command is not ("list" or "show" or "history" or "export"))
+            projectScope && command is not ("list" or "show" or "history" or "export" or "validate"))
             throw new CliUsageException("Use `--scope platform` for Platform commands or `--scope project` for Project reads.");
         if (!projectScope && options.Many("project-id").Count > 0)
             throw new CliUsageException("Platform Policy commands use an unbound identity. Do not set --project-id.");
-        var projectId = projectScope && command is ("show" or "history" or "export")
+        var projectId = projectScope && command is ("show" or "history" or "export" or "validate")
             ? ProjectIdArgument(options.Single("project-id"))
             : null;
         var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
@@ -86,7 +86,17 @@ internal static class PolicyCommands
             throw new CliUsageException("--cursor must be a non-empty cursor within the API limit.");
         var inputArtifact = inputPath is null
             ? null
-            : await ReadInputArtifactAsync(inputPath, ct, requirePlatform: command == "apply").ConfigureAwait(false);
+            : await ReadInputArtifactAsync(
+                inputPath,
+                projectScope ? "project" : "platform",
+                projectId ?? "default",
+                ct).ConfigureAwait(false);
+        var validationBody = command == "validate"
+            ? new JsonObject { ["artifact"] = inputArtifact!.DeepClone() }
+            : null;
+        if (projectScope && command == "validate" &&
+            GatewayClient.SerializeRequestBody(validationBody!).Length > MaximumResponseBytes)
+            throw new PolicyFailureException("The policy validation request exceeds the 5 MiB limit.");
         var artifactHash = command == "apply" ? Hash(inputArtifact!) : null;
 
         var operationId = projectScope
@@ -94,6 +104,7 @@ internal static class PolicyCommands
             {
                 "list" => "listProjectNativeAcsPolicies",
                 "history" => "listProjectNativeAcsPolicyRevisions",
+                "validate" => "validateProjectNativeAcsPolicy",
                 _ => revision is null ? "readProjectNativeAcsPolicy" : "readProjectNativeAcsPolicyRevision",
             }
             : command switch
@@ -108,6 +119,7 @@ internal static class PolicyCommands
             {
                 "list" => "/api/v1/policies/projects",
                 "history" => "/api/v1/policies/projects/{projectId}/revisions",
+                "validate" => "/api/v1/policies/projects/{projectId}/validate",
                 _ => revision is null
                     ? "/api/v1/policies/projects/{projectId}"
                     : "/api/v1/policies/projects/{projectId}/revisions/{revision}",
@@ -133,7 +145,7 @@ internal static class PolicyCommands
         var expectedScopeId = projectId ?? "default";
 
         var identity = CliConfiguration.ReadIdentity(
-            command == "apply" ? ["projects.admin"] : null,
+            command == "apply" || projectScope && command == "validate" ? ["projects.admin"] : null,
             options: options,
             unbound: true);
         var gateway = (runtime.GatewayClientFactory ?? new GatewayClientFactory(httpClient, runtime.Authentication))
@@ -142,16 +154,21 @@ internal static class PolicyCommands
         PolicyApplyJournalEntry? applyJournal = null;
         try
         {
-            var operations = GatewayContract.Parse(await gateway.DiscoverAsync(ct).ConfigureAwait(false));
+            var discovery = await gateway.DiscoverAsync(ct).ConfigureAwait(false);
+            var operations = GatewayContract.Parse(discovery);
             if (!operations.TryGetValue(operationId, out var operation) || operation.Path != path ||
                 operation.Parameters.Any(p => p.Location == "header" &&
                     p.Name.Equals("X-Agentweaver-Project-Authorization", StringComparison.OrdinalIgnoreCase)) ||
-                !ValidOperation(command, operation))
+                !ValidOperation(command, operation) ||
+                projectScope && command == "validate" &&
+                    !HasProjectValidationRequestSchema(discovery, operation))
                 throw new PolicyFailureException("The Gateway does not support this policy operation.");
             GatewayInvocation invocation;
             if (command == "validate")
             {
-                invocation = new GatewayInvocation(Body: new JsonObject { ["artifact"] = inputArtifact!.DeepClone() });
+                invocation = new GatewayInvocation(
+                    pathParameters.Count == 0 ? null : pathParameters,
+                    Body: validationBody);
             }
             else if (command == "apply")
             {
@@ -181,8 +198,8 @@ internal static class PolicyCommands
             {
                 result = response.Status switch
                 {
-                    200 => ProjectValidationSuccess(response.Body),
-                    422 => ProjectValidationFailure(response.Body),
+                    200 => ProjectValidationSuccess(response.Body, projectScope),
+                    422 => ProjectValidationFailure(response.Body, projectScope),
                     _ => throw new PolicyFailureException(ValidationErrorMessage(response.Status, response.Body)),
                 };
             }
@@ -263,6 +280,20 @@ internal static class PolicyCommands
                  operation.MaximumResponseBytes <= MaximumResponseBytes,
         };
 
+    private static bool HasProjectValidationRequestSchema(JsonNode discovery, GatewayOperation operation) =>
+        operation.Document["requestBody"]?["content"]?["application/json"]?["schema"] is JsonObject schema &&
+        GatewayContract.String(schema, "$ref") == "#/components/schemas/NativeAcsPolicyValidationRequest" &&
+        discovery["components"] is JsonObject components &&
+        components["schemas"] is JsonObject schemas &&
+        schemas["NativeAcsPolicyValidationRequest"] is JsonObject request &&
+        GatewayContract.String(request, "type") == "object" &&
+        request["required"] is JsonArray { Count: 1 } required &&
+        required[0] is JsonValue field && field.TryGetValue<string>(out var name) && name == "artifact" &&
+        request["properties"] is JsonObject { Count: 1 } properties &&
+        properties["artifact"] is JsonObject artifact &&
+        GatewayContract.String(artifact, "$ref") == "#/components/schemas/NativeAcsArtifact" &&
+        schemas["NativeAcsArtifact"] is JsonObject;
+
     private static string InputFilePath(string? value, string command)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -300,8 +331,9 @@ internal static class PolicyCommands
 
     private static async Task<JsonObject> ReadInputArtifactAsync(
         string path,
-        CancellationToken ct,
-        bool requirePlatform = false)
+        string expectedScopeType,
+        string expectedScopeId,
+        CancellationToken ct)
     {
         try
         {
@@ -329,10 +361,6 @@ internal static class PolicyCommands
                     obj.Count != expectedFields.Length ||
                     obj.Any(pair => !expectedFields.Contains(pair.Key, StringComparer.Ordinal)))
                     throw UnexpectedInput();
-                if (requirePlatform &&
-                    (String(obj, "scopeType") != "platform" || String(obj, "scopeId") != "default"))
-                    throw UnexpectedInput();
-
                 var revision = PositiveNumber(obj, "revision");
                 _ = Timestamp(obj, hasCreatedAt ? "createdAt" : "updatedAt");
                 if (obj["artifact"] is not JsonObject artifact ||
@@ -342,7 +370,7 @@ internal static class PolicyCommands
                     files.Any(item => item is not JsonObject file ||
                         file.Count != 2 || file.Any(pair => pair.Key is not ("relativePath" or "bytes"))))
                     throw UnexpectedInput();
-                var exported = ProjectExport(obj, hasCreatedAt ? revision : null);
+                var exported = ProjectExport(obj, hasCreatedAt ? revision : null, expectedScopeType, expectedScopeId);
                 return (JsonObject)exported["artifact"]!.DeepClone();
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -507,27 +535,27 @@ internal static class PolicyCommands
         };
     }
 
-    private static JsonObject ProjectValidationSuccess(JsonNode? body)
+    private static JsonObject ProjectValidationSuccess(JsonNode? body, bool projectScope)
     {
         if (body is not JsonObject obj ||
             obj["isValid"] is not JsonValue isValidValue ||
             !isValidValue.TryGetValue<bool>(out var isValid) || !isValid ||
             obj["diagnostics"] is not JsonArray diagnostics)
             throw UnexpectedResponse();
-        return new JsonObject { ["isValid"] = true, ["diagnostics"] = ProjectDiagnostics(diagnostics) };
+        return new JsonObject { ["isValid"] = true, ["diagnostics"] = ProjectDiagnostics(diagnostics, projectScope) };
     }
 
-    private static JsonObject ProjectValidationFailure(JsonNode? body)
+    private static JsonObject ProjectValidationFailure(JsonNode? body, bool projectScope)
     {
         if (body is not JsonObject obj ||
             obj["code"] is not JsonValue codeValue ||
             !codeValue.TryGetValue<string>(out var code) || code != "native_acs_policy_invalid" ||
             obj["diagnostics"] is not JsonArray diagnostics)
             throw UnexpectedResponse();
-        return new JsonObject { ["isValid"] = false, ["diagnostics"] = ProjectDiagnostics(diagnostics) };
+        return new JsonObject { ["isValid"] = false, ["diagnostics"] = ProjectDiagnostics(diagnostics, projectScope) };
     }
 
-    private static JsonArray ProjectDiagnostics(JsonArray diagnostics)
+    private static JsonArray ProjectDiagnostics(JsonArray diagnostics, bool projectScope)
     {
         if (diagnostics.Count > MaximumDiagnosticCount)
             throw UnexpectedResponse();
@@ -541,16 +569,32 @@ internal static class PolicyCommands
             if (code.Length is 0 or > MaximumDiagnosticCodeLength ||
                 message.Length is 0 or > MaximumDiagnosticMessageLength)
                 throw UnexpectedResponse();
+            var relativePath = OptionalString(diagnostic, "relativePath");
+            if (projectScope && relativePath is JsonValue path &&
+                (!path.TryGetValue<string>(out var text) || !IsCanonicalRelativePath(text)))
+                relativePath = null;
             projected.Add(new JsonObject
             {
                 ["code"] = code,
                 ["message"] = message,
-                ["relativePath"] = OptionalString(diagnostic, "relativePath"),
+                ["relativePath"] = relativePath,
                 ["line"] = OptionalInt32(diagnostic, "line"),
                 ["column"] = OptionalInt32(diagnostic, "column"),
             });
         }
         return projected;
+    }
+
+    private static bool IsCanonicalRelativePath(string path)
+    {
+        if (path.Length > 256 || path.StartsWith('/') || path.Contains('\\') || path.Contains(':') ||
+            path.Any(char.IsControl))
+            return false;
+        return path.Split('/').All(segment =>
+            segment.Length > 0 &&
+            segment is not ("." or "..") &&
+            segment.All(character =>
+                char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-'));
     }
 
     private static JsonNode? OptionalString(JsonObject obj, string name) =>

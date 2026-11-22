@@ -720,8 +720,8 @@ public sealed partial class GatewayClient : IGatewayClient
                 ValidateBoundSelector("runId", runId);
         }
 
-        var bodyBytes = invocation.Body?.ToJsonString(JsonOptions) is { } json
-            ? Encoding.UTF8.GetBytes(json)
+        var bodyBytes = invocation.Body is { } requestBody
+            ? SerializeRequestBody(requestBody)
             : null;
         if (bodyBytes?.Length > operation.MaximumRequestBytes)
             throw new InvalidOperationException($"The JSON request body exceeds the advertised {operation.MaximumRequestBytes}-byte limit.");
@@ -859,7 +859,8 @@ public sealed partial class GatewayClient : IGatewayClient
     {
         var requestId = Guid.NewGuid();
         var started = Stopwatch.GetTimestamp();
-        var hidePolicyRequest = operationId is "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
+        var hidePolicyRequest = operationId is
+            "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
         var evidence = new JsonObject
         {
             ["requestId"] = requestId.ToString("D"),
@@ -877,7 +878,7 @@ public sealed partial class GatewayClient : IGatewayClient
         var hidePolicyEvidence = operationId is
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
-            "validatePlatformNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
+            "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 
@@ -1028,7 +1029,9 @@ public sealed partial class GatewayClient : IGatewayClient
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            evidence["error"] = RedactText(exception.Message);
+            evidence["error"] = operationId == "validateProjectNativeAcsPolicy"
+                ? "[REDACTED]"
+                : RedactText(exception.Message);
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 throw;
             throw new GatewayTransportException(
@@ -1291,6 +1294,9 @@ public sealed partial class GatewayClient : IGatewayClient
         redacted = SecretAssignmentRegex().Replace(redacted, "$1[REDACTED]");
         return SecretCanaryRegex().Replace(redacted, "[REDACTED_CANARY]");
     }
+
+    internal static byte[] SerializeRequestBody(JsonNode body) =>
+        Encoding.UTF8.GetBytes(body.ToJsonString(JsonOptions));
 
     private static string SanitizeUrl(Match match) =>
         Uri.TryCreate(match.Value, UriKind.Absolute, out var url)
