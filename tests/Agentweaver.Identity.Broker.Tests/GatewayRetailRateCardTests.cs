@@ -171,6 +171,61 @@ public sealed class GatewayRetailRateCardTests
     }
 
     [Fact]
+    public async Task PropagatesProjects401BeforeReadingStreamingBodyOverHttp11()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        var eventsCalls = 0;
+
+        await using var gateway = await StartHttp11GatewayAsync(
+            key,
+            () => new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            {
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+            }),
+            (_, _, _) => { eventsCalls++; return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)); });
+
+        var address = gateway.Client.BaseAddress!;
+        using var tcp = new TcpClient(address.Host, address.Port);
+        await using var stream = tcp.GetStream();
+        var headers =
+            "PUT /api/v1/platform/model-pricing/azure-retail/rate-cards/azure-retail-prices.standard.eastus/v1 HTTP/1.1\r\n" +
+            $"Host: {address.Authority}\r\n" +
+            $"Authorization: Bearer {bearer}\r\n" +
+            "X-Agentweaver-Tenant: tenant-1\r\n" +
+            "Content-Type: application/json\r\n" +
+            "Transfer-Encoding: chunked\r\n" +
+            "\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(headers));
+        await stream.FlushAsync();
+
+        using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+        using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var statusLine = await reader.ReadLineAsync(readTimeout.Token);
+        var responseText = await ReadHeadersAndBodyPrefixAsync(reader, readTimeout.Token);
+        Assert.Equal("HTTP/1.1 401 Unauthorized", statusLine);
+        Assert.Contains("projects_authorization_unauthorized", responseText, StringComparison.Ordinal);
+        Assert.Equal(0, eventsCalls);
+    }
+
+    private static async Task<string> ReadHeadersAndBodyPrefixAsync(StreamReader reader, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        var buffer = new char[1024];
+        while (sb.Length < 4096)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+            if (read == 0)
+                break;
+            sb.Append(buffer, 0, read);
+            if (sb.ToString().Contains("projects_authorization_unauthorized", StringComparison.Ordinal))
+                break;
+        }
+        return sb.ToString();
+    }
+
+    [Fact]
     public async Task RejectsStreamedBodyOver64KiBWith413()
     {
         using var rsa = RSA.Create(2048);

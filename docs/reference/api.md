@@ -1262,13 +1262,20 @@ slot contains `meterId` (1 to 128 characters, unique ignoring case) and a
 positive decimal `expectedUsdPer1M`.
 
 Events verifies one eligible tier-zero USD Consumption `1K` or `1M` row per
-selected meter across all pages of the fixed Azure Retail endpoint. Missing or
-ambiguous meters or Azure Retail failures return `503 pricing_unavailable`.
-Unique prices that differ from `expectedUsdPer1M` return `409 pricing_changed`.
+selected meter across all pages of the fixed Azure Retail endpoint. Before
+returning `503 pricing_unavailable` (missing or ambiguous meters, or an Azure
+Retail failure) or `409 pricing_changed` (unique prices that differ from
+`expectedUsdPer1M`), Events checks the store once more. If a matching winner
+already committed at `{id}/{version}`, that winner takes precedence and returns
+`200` with the stored card; if a conflicting or legacy row committed, Events
+returns `409 rate_card_conflict`; if the store check fails, Events returns
+`503 rate_card_storage_unavailable`.
+
 A new version returns `201`. An exact canonical request replay returns `200`
 with the stored card without calling Azure. Conflicting requests or legacy rows
 return `409 rate_card_conflict`. Both successes return canonical JSON, a strong
-SHA-256 `ETag`, and `Cache-Control: no-store`.
+SHA-256 `ETag`, and `Cache-Control: no-store`. Retry the exact request after an
+uncertain result, and use a new `version` for changed requests.
 
 ### Chief of Staff
 

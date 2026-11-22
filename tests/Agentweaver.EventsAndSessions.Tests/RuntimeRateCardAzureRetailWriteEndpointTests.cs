@@ -203,6 +203,12 @@ public sealed class RuntimeRateCardAzureRetailWriteEndpointTests : IAsyncLifetim
     [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":1},"output":{"meterId":"m2","expectedUsdPer1M":2},"cachedInput":null}""")]
     [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":1},"output":{"meterId":"m2","expectedUsdPer1M":2},"extra":true}""")]
     [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":1},"output":{"meterId":"m2","expectedUsdPer1M":2}}""")]
+    [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":1.00000000000000000000000000001},"output":{"meterId":"m2","expectedUsdPer1M":2}}""")]
+    [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":1.23456789012345678901234567895},"output":{"meterId":"m2","expectedUsdPer1M":2}}""")]
+    [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":79228162514264337593543950336},"output":{"meterId":"m2","expectedUsdPer1M":2}}""")]
+    [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":1e1000000},"output":{"meterId":"m2","expectedUsdPer1M":2}}""")]
+    [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":1e-29},"output":{"meterId":"m2","expectedUsdPer1M":2}}""")]
+    [InlineData("azure-retail-prices.standard.eastus", """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":-1},"output":{"meterId":"m2","expectedUsdPer1M":2}}""")]
     public async Task RejectsMalformedDuplicateNullOrMismatchedRequestBodies(string id, string body)
     {
         var azureCalls = 0;
@@ -217,6 +223,34 @@ public sealed class RuntimeRateCardAzureRetailWriteEndpointTests : IAsyncLifetim
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(0, azureCalls);
+    }
+
+    [Fact]
+    public void KeepsEqualDecimalLiteralSpellingsReplayEquivalentAndAcceptsExactBounds()
+    {
+        const string id = "azure-retail-prices.standard.eastus";
+        var spellings = new[] { "1", "1.0", "1e0", "1.000e0", "0.1e1" };
+        string? firstDigest = null;
+
+        foreach (var literal in spellings)
+        {
+            var json =
+                $$$"""{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":{{{literal}}}},"output":{"meterId":"m2","expectedUsdPer1M":2}}""";
+            Assert.True(RuntimeRateCardAzureRetailWriteEndpoint.TryParseRequest(
+                id, Encoding.UTF8.GetBytes(json), out var parsed));
+            Assert.Equal(1m, parsed.Input.ExpectedUsdPer1M);
+
+            var digest = RuntimeRateCardAzureRetailWriteEndpoint.ComputeRequestDigest(id, "v1", parsed);
+            firstDigest ??= digest;
+            Assert.Equal(firstDigest, digest);
+        }
+
+        const string boundaryJson =
+            """{"region":"eastus","modelId":"gpt-4o","input":{"meterId":"m1","expectedUsdPer1M":0.0000000000000000000000000001},"output":{"meterId":"m2","expectedUsdPer1M":79228162514264337593543950335}}""";
+        Assert.True(RuntimeRateCardAzureRetailWriteEndpoint.TryParseRequest(
+            id, Encoding.UTF8.GetBytes(boundaryJson), out var boundaryParsed));
+        Assert.Equal(0.0000000000000000000000000001m, boundaryParsed.Input.ExpectedUsdPer1M);
+        Assert.Equal(decimal.MaxValue, boundaryParsed.Output.ExpectedUsdPer1M);
     }
 
     [Fact]

@@ -121,7 +121,11 @@ public sealed partial class GatewayOwnerClient(
                     context.Request.ContentLength > maximumBytes)
                     throw RequestBodyTooLarge();
 
-                await AuthorizeRateCardUploadAsync(context, bearer, timeout.Token)
+                await AuthorizeRateCardUploadAsync(
+                    context,
+                    bearer,
+                    mapUnauthorizedTo401: route.OperationId == "savePlatformAzureRetailRuntimeRateCard",
+                    timeout.Token)
                     .ConfigureAwait(false);
             }
             if (route.OperationId == "readPlatformNativeAcsPolicy")
@@ -2271,6 +2275,7 @@ public sealed partial class GatewayOwnerClient(
     private async Task AuthorizeRateCardUploadAsync(
         HttpContext context,
         AuthenticationHeaderValue bearer,
+        bool mapUnauthorizedTo401,
         CancellationToken cancellationToken)
     {
         RequireUnboundPlatformAdminCaller(context, options.IdentityAudience);
@@ -2311,6 +2316,8 @@ public sealed partial class GatewayOwnerClient(
 
         using (response)
         {
+            if (mapUnauthorizedTo401 && response.StatusCode == HttpStatusCode.Unauthorized)
+                throw RateCardFailure(StatusCodes.Status401Unauthorized, "projects_authorization_unauthorized");
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
                 throw RateCardFailure(StatusCodes.Status403Forbidden, "projects_authorization_denied");
             if (IsRedirect(response.StatusCode))

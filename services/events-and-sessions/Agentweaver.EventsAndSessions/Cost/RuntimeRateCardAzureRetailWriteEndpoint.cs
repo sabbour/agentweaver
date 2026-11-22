@@ -431,9 +431,7 @@ public static partial class RuntimeRateCardAzureRetailWriteEndpoint
                     meterId = parsedMeterId;
                     break;
                 case "expectedUsdPer1M":
-                    if (property.Value.ValueKind != JsonValueKind.Number ||
-                        !property.Value.TryGetDecimal(out var parsedPrice) ||
-                        parsedPrice <= 0)
+                    if (!TryParseExactPositiveDecimal(property.Value, out var parsedPrice))
                         return false;
                     expectedUsdPer1M = parsedPrice;
                     break;
@@ -447,6 +445,123 @@ public static partial class RuntimeRateCardAzureRetailWriteEndpoint
 
         slot = new ParsedMeterSelection(meterId, expectedUsdPer1M.Value);
         return true;
+    }
+
+    private static bool TryParseExactPositiveDecimal(JsonElement element, out decimal value)
+    {
+        value = default;
+        if (element.ValueKind != JsonValueKind.Number)
+            return false;
+
+        var raw = element.GetRawText();
+        Span<char> rawDigits = stackalloc char[29];
+        if (!TryExtractCanonicalBaseTen(raw, rawDigits, out var rawLength, out var rawExponent) ||
+            !element.TryGetDecimal(out var parsed) ||
+            parsed <= 0m)
+            return false;
+
+        var normalized = NormalizeDecimal(parsed).ToString("G29", CultureInfo.InvariantCulture);
+        Span<char> parsedDigits = stackalloc char[29];
+        if (!TryExtractCanonicalBaseTen(normalized, parsedDigits, out var parsedLength, out var parsedExponent))
+            return false;
+
+        if (rawLength != parsedLength ||
+            rawExponent != parsedExponent ||
+            !rawDigits[..rawLength].SequenceEqual(parsedDigits[..parsedLength]))
+            return false;
+
+        value = parsed;
+        return true;
+    }
+
+    private static bool TryExtractCanonicalBaseTen(
+        ReadOnlySpan<char> raw,
+        Span<char> significantDigits,
+        out int significantLength,
+        out long exponent10)
+    {
+        significantLength = 0;
+        exponent10 = 0;
+        if (raw.IsEmpty || raw[0] == '-')
+            return false;
+
+        var seenDot = false;
+        var seenNonZero = false;
+        long fractionalDigits = 0;
+        long trailingZeros = 0;
+        var index = 0;
+
+        for (; index < raw.Length; index++)
+        {
+            var ch = raw[index];
+            if (ch == '.')
+            {
+                if (seenDot)
+                    return false;
+                seenDot = true;
+                continue;
+            }
+            if (ch is 'e' or 'E')
+                break;
+            if (ch is < '0' or > '9')
+                return false;
+
+            if (seenDot)
+                fractionalDigits++;
+
+            if (ch == '0')
+            {
+                if (seenNonZero)
+                    trailingZeros++;
+                continue;
+            }
+
+            seenNonZero = true;
+            if (trailingZeros > 0)
+            {
+                if (significantLength + trailingZeros >= significantDigits.Length)
+                    return false;
+                significantDigits.Slice(significantLength, (int)trailingZeros).Fill('0');
+                significantLength += (int)trailingZeros;
+                trailingZeros = 0;
+            }
+
+            if (significantLength >= significantDigits.Length)
+                return false;
+            significantDigits[significantLength++] = ch;
+        }
+
+        if (!seenNonZero)
+            return false;
+
+        long parsedExponent = 0;
+        if (index < raw.Length)
+        {
+            index++;
+            var negativeExponent = false;
+            if (index < raw.Length && raw[index] is '+' or '-')
+            {
+                negativeExponent = raw[index] == '-';
+                index++;
+            }
+            if (index == raw.Length)
+                return false;
+
+            const long exponentCap = 1_000_000_000L;
+            for (; index < raw.Length; index++)
+            {
+                var ch = raw[index];
+                if (ch is < '0' or > '9')
+                    return false;
+                if (parsedExponent < exponentCap)
+                    parsedExponent = Math.Min(exponentCap, parsedExponent * 10 + (ch - '0'));
+            }
+            if (negativeExponent)
+                parsedExponent = -parsedExponent;
+        }
+
+        exponent10 = trailingZeros - fractionalDigits + parsedExponent;
+        return exponent10 is >= -28 and <= 28;
     }
 
     private static bool IsValidRegion(string value) =>
