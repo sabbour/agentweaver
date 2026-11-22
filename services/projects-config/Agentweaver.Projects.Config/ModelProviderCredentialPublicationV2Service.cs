@@ -1,6 +1,7 @@
 using System.Data;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -32,9 +33,16 @@ internal sealed class ModelProviderCredentialPublicationV2Exception(string code,
 
 internal sealed class ModelProviderCredentialPublicationV2Service(
     ProjectsConfigDbContext db,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IRuntimeRateCardOwnerClient? rateCardOwnerClient = null)
 {
     private const int MaxRetries = 3;
+    private static readonly JsonSerializerOptions RateCardPinJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        MaxDepth = 16,
+    };
 
     internal Task<ModelProviderCredentialPublicationPreflightResponse> PreflightAsync(
         ModelProviderCredentialPublicationPreflightRequest request,
@@ -183,11 +191,29 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 .SingleAsync(r => r.ProviderId == head.ProviderId && r.ProviderRevision == head.CurrentRevision, cancellationToken)
                 .ConfigureAwait(false);
 
+            RuntimeRateCardPin? verifiedPin = null;
+            if (current.RateCardId is { Length: > 0 } rateCardId &&
+                current.RateCardVersion is { Length: > 0 } rateCardVersion &&
+                rateCardOwnerClient is not null)
+            {
+                verifiedPin = await rateCardOwnerClient
+                    .ReadPinAsync(rateCardId, rateCardVersion, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            var nextState = verifiedPin is not null
+                ? ModelProviderDraftState.Available
+                : ModelProviderDraftState.Draft;
+            var rateCardPinJson = verifiedPin is not null
+                ? JsonSerializer.Serialize(verifiedPin, RateCardPinJsonOptions)
+                : null;
+
             var nextRevision = head.CurrentRevision + 1;
 
             var updated = await db.ModelProviderDrafts
                 .Where(h => h.ProviderId == head.ProviderId && h.CurrentRevision == head.CurrentRevision)
                 .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(h => h.State, nextState)
                     .SetProperty(h => h.CurrentRevision, nextRevision)
                     .SetProperty(h => h.UpdatedByActorId, request.ActorId)
                     .SetProperty(h => h.UpdatedAt, now), cancellationToken)
@@ -208,6 +234,10 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 CredentialSecretId = request.CredentialReference.Id,
                 CredentialVersion = request.CredentialVersion,
                 ConfigurationHash = current.ConfigurationHash,
+                ProviderState = nextState.ToString(),
+                RateCardId = verifiedPin?.RateCardId,
+                RateCardVersion = verifiedPin?.RateCardVersion,
+                RateCardPinHash = verifiedPin?.ContentHash,
                 OriginalTenant = request.OriginalTenant,
                 OriginalMembershipId = request.OriginalMembershipId,
                 OriginalMembershipRevision = request.OriginalMembershipRevision,
@@ -243,7 +273,7 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 CredentialSecretId = request.CredentialReference.Id,
                 RateCardId = current.RateCardId,
                 RateCardVersion = current.RateCardVersion,
-                RateCardPinJson = current.RateCardPinJson,
+                RateCardPinJson = rateCardPinJson,
                 CreatedByActorId = request.ActorId,
                 CreatedAt = now,
             });
@@ -399,6 +429,7 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
             var updated = await db.ModelProviderDrafts
                 .Where(h => h.ProviderId == head.ProviderId && h.CurrentRevision == head.CurrentRevision)
                 .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(h => h.State, ModelProviderDraftState.Draft)
                     .SetProperty(h => h.CurrentRevision, nextRevision)
                     .SetProperty(h => h.UpdatedByActorId, request.ActorId)
                     .SetProperty(h => h.UpdatedAt, now), cancellationToken)
@@ -421,6 +452,7 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 CredentialSecretId = null,
                 CredentialVersion = null,
                 ConfigurationHash = current.ConfigurationHash,
+                ProviderState = nameof(ModelProviderDraftState.Draft),
                 OriginalTenant = authority.Membership.TenantId,
                 OriginalMembershipId = authority.Membership.MembershipId,
                 OriginalMembershipRevision = authority.Membership.Revision,
@@ -456,7 +488,7 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 CredentialSecretId = null,
                 RateCardId = current.RateCardId,
                 RateCardVersion = current.RateCardVersion,
-                RateCardPinJson = current.RateCardPinJson,
+                RateCardPinJson = null,
                 CreatedByActorId = request.ActorId,
                 CreatedAt = now,
             });
@@ -674,7 +706,10 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
             op.CredentialVersion!,
             op.ConfigurationHash!,
             new ModelCredentialIdentity(op.CredentialSlotId!.Value, op.Scope, op.ProjectId, op.ProviderId),
-            new SecretRef(op.CredentialSecretId!, op.CredentialVersion!));
+            new SecretRef(op.CredentialSecretId!, op.CredentialVersion!))
+        {
+            ProviderState = op.ProviderState,
+        };
 
     private static ModelProviderCredentialDisableReceipt ToDisableReceipt(ModelProviderCredentialOperationRecord op) =>
         new(

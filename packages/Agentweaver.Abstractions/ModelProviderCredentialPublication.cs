@@ -69,6 +69,8 @@ public sealed record ModelProviderCredentialPublicationReceipt(
     ModelCredentialIdentity CredentialIdentity,
     SecretRef CredentialReference)
 {
+    public string? ProviderState { get; init; }
+
     [JsonIgnore]
     public bool IsValid =>
         OperationId != Guid.Empty &&
@@ -89,7 +91,8 @@ public sealed record ModelProviderCredentialPublicationReceipt(
         CredentialVersion is { Length: 32 } &&
         CredentialVersion.All(Uri.IsHexDigit) &&
         ConfigurationHash is { Length: 64 } &&
-        ConfigurationHash.All(Uri.IsHexDigit);
+        ConfigurationHash.All(Uri.IsHexDigit) &&
+        ProviderState is null or "Draft" or "Available";
 
     private static bool IsIdentifier(string? value, int maximumLength) =>
         value is { Length: > 0 } &&

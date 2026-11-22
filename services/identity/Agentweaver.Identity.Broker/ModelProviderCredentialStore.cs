@@ -88,6 +88,115 @@ internal sealed class ModelProviderCredentialStore(
         CancellationToken cancellationToken = default) =>
         ClaimWriteCoreAsync(request, null, cancellationToken);
 
+    internal async Task<ModelProviderCredentialPublicationClaimResult> ClaimRecheckPublicationAsync(
+        ClaimModelProviderCredentialPublication request,
+        SecretRef verifiedReference,
+        CancellationToken cancellationToken = default)
+    {
+        ValidatePublicationClaim(request);
+        ValidateReference(verifiedReference);
+        if (!request.IsRecheck || request.Claim.ExpectedRevision <= 0)
+            throw ModelProviderCredentialException.InvalidRequest();
+        var claim = request.Claim;
+        if (!StringComparer.Ordinal.Equals(claim.SecretName, verifiedReference.Id))
+            throw ModelProviderCredentialException.Conflict();
+
+        var vaultUri = vaults.Resolve(claim.VaultSource);
+        var fingerprint = BuildClaimFingerprint(claim, request, vaultUri);
+        var replay = await ReadWriteClaimReplayAsync(claim.OperationId, fingerprint, true, cancellationToken)
+            .ConfigureAwait(false);
+        if (replay is not null)
+            return await ToPublicationResultAsync(claim.OperationId, replay, cancellationToken).ConfigureAwait(false);
+        if (await db.ModelProviderCredentialRevisions.AsNoTracking()
+                .AnyAsync(row => row.OperationId == claim.OperationId, cancellationToken)
+                .ConfigureAwait(false))
+            throw ModelProviderCredentialException.Conflict();
+
+        try
+        {
+            await using var transaction = await db.Database
+                .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+                .ConfigureAwait(false);
+            await LockCredentialWriteAsync(claim.ProviderId, claim.CredentialSlotId, claim.OperationId, cancellationToken)
+                .ConfigureAwait(false);
+            if (await db.ModelProviderCredentialRevisions.AsNoTracking()
+                    .AnyAsync(row => row.OperationId == claim.OperationId, cancellationToken)
+                    .ConfigureAwait(false))
+                throw ModelProviderCredentialException.Conflict();
+            if (await db.ModelProviderCredentialWriteClaims.AsNoTracking()
+                    .AnyAsync(row => row.OperationId == claim.OperationId ||
+                        ((row.ProviderId == claim.ProviderId ||
+                          row.CredentialSlotId == claim.CredentialSlotId) &&
+                         (row.State == ModelProviderCredentialWriteClaimState.Claimed ||
+                          row.State == ModelProviderCredentialWriteClaimState.Quarantined ||
+                          row.State == ModelProviderCredentialWriteClaimState.PublicationPending)), cancellationToken)
+                    .ConfigureAwait(false))
+                throw ModelProviderCredentialException.Conflict();
+
+            var head = await db.ModelProviderCredentialHeads.AsNoTracking()
+                .SingleOrDefaultAsync(row => row.CredentialSlotId == claim.CredentialSlotId, cancellationToken)
+                .ConfigureAwait(false);
+            if (head is null)
+                throw ModelProviderCredentialException.Conflict();
+            RequireIdentity(head, claim.CredentialSlotId, claim.Scope, claim.ProjectId, claim.ProviderId);
+            vaults.RequireConfigured(head.VaultSource, head.VaultUri);
+            if (head.VaultSource != claim.VaultSource ||
+                !StringComparer.Ordinal.Equals(head.VaultUri, vaultUri) ||
+                head.State != ModelProviderCredentialState.Enabled ||
+                head.Revision != claim.ExpectedRevision ||
+                !StringComparer.Ordinal.Equals(head.CurrentVersion, verifiedReference.Version))
+                throw ModelProviderCredentialException.Conflict();
+
+            db.ModelProviderCredentialWriteClaims.Add(new ModelProviderCredentialWriteClaim
+            {
+                OperationId = claim.OperationId,
+                CredentialSlotId = claim.CredentialSlotId,
+                Scope = claim.Scope,
+                ProjectId = claim.ProjectId,
+                ProviderId = claim.ProviderId,
+                VaultSource = claim.VaultSource,
+                VaultUri = vaultUri,
+                SecretName = claim.SecretName,
+                ExpectedRevision = claim.ExpectedRevision,
+                RequestFingerprint = fingerprint,
+                ActorId = claim.ActorId,
+                State = ModelProviderCredentialWriteClaimState.Claimed,
+                ClaimedAt = timeProvider.GetUtcNow(),
+                ExpectedProviderRevision = request.ExpectedProviderRevision,
+                Purpose = request.Purpose,
+                Issuer = request.Issuer,
+                Tenant = request.Tenant,
+            });
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            var stagedUpdate = await db.ModelProviderCredentialWriteClaims
+                .Where(item => item.OperationId == claim.OperationId &&
+                    item.RequestFingerprint == fingerprint &&
+                    item.State == ModelProviderCredentialWriteClaimState.Claimed)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.State, ModelProviderCredentialWriteClaimState.PublicationPending)
+                    .SetProperty(item => item.PendingSecretVersion, verifiedReference.Version), cancellationToken)
+                .ConfigureAwait(false);
+            if (stagedUpdate != 1)
+                throw ModelProviderCredentialException.Conflict();
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+            var staged = await ReadWriteClaimReplayAsync(claim.OperationId, fingerprint, true, cancellationToken)
+                .ConfigureAwait(false) ?? throw ModelProviderCredentialException.Conflict();
+            return await ToPublicationResultAsync(claim.OperationId, staged, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            DetachCredentialEntities();
+            if (!IsConflict(exception))
+                throw;
+            var concurrentReplay = await ReadWriteClaimReplayAsync(claim.OperationId, fingerprint, true, cancellationToken)
+                .ConfigureAwait(false);
+            return concurrentReplay is not null
+                ? await ToPublicationResultAsync(claim.OperationId, concurrentReplay, cancellationToken).ConfigureAwait(false)
+                : throw ModelProviderCredentialException.Conflict();
+        }
+    }
+
     internal async Task<ModelProviderCredentialPublicationClaimResult> ClaimPublicationWriteAsync(
         ClaimModelProviderCredentialPublication request,
         CancellationToken cancellationToken = default)
@@ -401,6 +510,7 @@ internal sealed class ModelProviderCredentialStore(
                     .SetProperty(row => row.CompletedAt, now)
                     .SetProperty(row => row.PublishedProviderRevision, receipt.ProviderRevision)
                     .SetProperty(row => row.PublishedConfigurationHash, receipt.ConfigurationHash)
+                    .SetProperty(row => row.PublishedProviderState, receipt.ProviderState)
                     .SetProperty(row => row.PublishedAt, now), cancellationToken).ConfigureAwait(false);
             if (updated != 1)
                 throw ModelProviderCredentialException.Conflict();
@@ -1096,7 +1206,8 @@ internal sealed class ModelProviderCredentialStore(
             result = await ReadWriteClaimReplayAsync(operationId, claim.RequestFingerprint, true, cancellationToken)
                 .ConfigureAwait(false) ?? throw ModelProviderCredentialException.Conflict();
         return new(result.Status, result.Acquired, result.Credential,
-            claim.PublishedProviderRevision, claim.PublishedConfigurationHash, claim.PublishedAt);
+            claim.PublishedProviderRevision, claim.PublishedConfigurationHash, claim.PublishedAt,
+            claim.PublishedProviderState);
     }
 
     private static void ValidatePublicationClaim(ClaimModelProviderCredentialPublication request)
@@ -1125,7 +1236,8 @@ internal sealed class ModelProviderCredentialStore(
             return BuildWriteClaimFingerprint(request, vaultUri);
         var fields = new string?[]
         {
-            "credential-write-claim-v2", request.OperationId.ToString("D"),
+            publication.IsRecheck ? "credential-recheck-claim-v2" : "credential-write-claim-v2",
+            request.OperationId.ToString("D"),
             request.ExpectedRevision.ToString(CultureInfo.InvariantCulture), request.CredentialSlotId.ToString("D"),
             request.Scope.ToString(), request.ProjectId, request.ProviderId, request.VaultSource.ToString(),
             vaultUri, request.SecretName, request.ActorId,

@@ -75,7 +75,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         bool grantRoleAssignmentWrites = true,
         bool useKestrel = false,
         ILoggerProvider? loggerProvider = null,
-        bool enableProviderReferences = false)
+        bool enableProviderReferences = false,
+        Action<IServiceCollection>? configureServices = null)
     {
         if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))
             throw new ArgumentException(
@@ -192,6 +193,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 else
                     services.AddScoped<ModelProviderDraftService>();
                 services.AddScoped<ModelProviderCredentialPublicationV2Service>();
+                configureServices?.Invoke(services);
                 services.AddScoped<ProjectRoleAssignmentService>();
                 services.AddScoped<ProjectSetupAuthorityAuditService>();
                 // Preserve service binding while failing fast if the test host reaches a remote Knowledge owner.

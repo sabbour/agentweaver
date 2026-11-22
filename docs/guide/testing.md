@@ -128,8 +128,8 @@ Run the legacy shutdown, Broker transport, and PostgreSQL guard tests after
 building the solution:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~ModelProviderCredentialPublicationEndpointTests|FullyQualifiedName~ModelProviderCredentialPublicationContractTests|FullyQualifiedName~ModelProviderWriteGuardPostgresTests|FullyQualifiedName~ModelProviderGuardMigrationPostgresTests"
-dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerModelProviderCredentialPublicationClientTests
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~ModelProviderCredentialPublicationEndpointTests|FullyQualifiedName~ModelProviderCredentialPublicationContractTests|FullyQualifiedName~ModelProviderWriteGuardPostgresTests|FullyQualifiedName~ModelProviderGuardMigrationPostgresTests|FullyQualifiedName~PublicationV2_"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~BrokerModelProviderCredentialPublicationClientTests|FullyQualifiedName~SameVersionRecheckTransitionsDraftToAvailableWithoutNewVaultVersionAndKeepsReplayAndRecoveryDistinct"
 ```
 
 The client test uses a local HTTP handler. The guard tests use disposable

@@ -943,6 +943,274 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         return await client.SendAsync(request);
     }
 
+    private sealed class StubRateCardOwnerClient : ProjectsConfig::Agentweaver.Projects.Config.IRuntimeRateCardOwnerClient
+    {
+        public Func<string, string, CancellationToken, Task<RuntimeRateCardPin?>>? OnReadPinAsync { get; set; }
+        public int Calls { get; private set; }
+
+        public Task<RuntimeRateCardPin?> ReadPinAsync(string id, string version, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return OnReadPinAsync is null
+                ? Task.FromResult<RuntimeRateCardPin?>(null)
+                : OnReadPinAsync(id, version, cancellationToken);
+        }
+
+        public async Task<bool> VerifyAsync(string id, string version, CancellationToken cancellationToken) =>
+            await ReadPinAsync(id, version, cancellationToken).ConfigureAwait(false) is not null;
+    }
+
+    [Fact]
+    public async Task SameVersionRecheckTransitionsDraftToAvailableWithoutNewVaultVersionAndKeepsReplayAndRecoveryDistinct()
+    {
+        using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var rateCardClient = new StubRateCardOwnerClient();
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString,
+            new X509SecurityKey(signingCert),
+            brokerRunBindingAudience: BrokerRunBindingAudience,
+            brokerRunBindingServerCertificate: _runBindingTlsAuthority.ServerCertificate,
+            configureServices: services =>
+            {
+                services.RemoveAll<ProjectsConfig::Agentweaver.Projects.Config.IRuntimeRateCardOwnerClient>();
+                services.AddSingleton<ProjectsConfig::Agentweaver.Projects.Config.IRuntimeRateCardOwnerClient>(rateCardClient);
+            });
+
+        var fakeVault = new FakeByokVault();
+        await using var broker = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                settings["IdentityBroker__RunBinding__ProjectsOwnerAddress"] = projects.BaseAddress.AbsoluteUri;
+                settings["IdentityBroker__SecretRedemption__ByokVaultUri"] =
+                    "https://agentweaver-byok-kv-v1.vault.azure.net/";
+                settings["IdentityBroker__SecretRedemption__ByokVaultHost"] =
+                    "agentweaver-byok-kv-v1.vault.azure.net";
+                for (var i = 0; i < ProjectScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                services.RemoveAll<IModelProviderByokVault>();
+                services.AddSingleton<IModelProviderByokVault>(fakeVault);
+                services.RemoveAll<ModelProviderCredentialRedemptionBackends>();
+                services.AddSingleton(new ModelProviderCredentialRedemptionBackends(fakeVault));
+            });
+
+        using var brokerClient = broker.CreateClient();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(signingCert),
+            () => new ForwardToClientHandler(projects.Client),
+            async (owner, req, ct) =>
+            {
+                var client = owner == GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker
+                    ? brokerClient
+                    : projects.Client;
+                using var clone = new HttpRequestMessage(req.Method, req.RequestUri!.PathAndQuery);
+                foreach (var header in req.Headers)
+                {
+                    if (!string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase))
+                        clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                if (req.Content is not null)
+                {
+                    var bytes = await req.Content.ReadAsByteArrayAsync(ct);
+                    clone.Content = new ByteArrayContent(bytes);
+                    foreach (var header in req.Content.Headers)
+                        clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                var resp = await client.SendAsync(clone, ct);
+                resp.RequestMessage = req;
+                return resp;
+            });
+
+        var adminToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, null, null, ["platform_admin"]))
+            .GetProperty("access_token").GetString()!;
+        var adminSub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(adminToken).Claims, "sub");
+        var adminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, adminSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            adminMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+
+        // 1. Create platform provider draft without pricing.
+        using var createResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, "/api/v1/platform/byok-providers", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0,
+                name = "Recheck Flow Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-5",
+                wire_api = "responses",
+                reasoning_efforts = new[] { "high" },
+            });
+        Assert.Equal(HttpStatusCode.OK, createResp.StatusCode);
+        using var createDoc = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync());
+        var providerId = createDoc.RootElement.GetProperty("id").GetString()!;
+
+        // 2. Upload key while pricing is absent -> Draft, key saved (1 Vault write).
+        var initialOp = Guid.NewGuid();
+        using var putResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = initialOp,
+                expectedProviderRevision = 1,
+                expectedCredentialRevision = 0,
+                apiKey = "sk-recheck-secret-12345",
+            });
+        Assert.Equal(HttpStatusCode.OK, putResp.StatusCode);
+        using var putDoc = JsonDocument.Parse(await putResp.Content.ReadAsStringAsync());
+        Assert.Equal("published", putDoc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("Draft", putDoc.RootElement.GetProperty("providerState").GetString());
+        var savedVersion = putDoc.RootElement.GetProperty("credentialVersion").GetString()!;
+        Assert.Equal(1, fakeVault.WriteCalls);
+
+        // 3. Invalid recheck requests rejected (400).
+        using (var badRecheck = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 2,
+                expectedCredentialRevision = 0,
+                recheckExistingVersion = true,
+            }))
+            Assert.Equal(HttpStatusCode.BadRequest, badRecheck.StatusCode);
+
+        using (var mixedRecheck = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 2,
+                expectedCredentialRevision = 1,
+                apiKey = "sk-should-not-mix",
+                recheckExistingVersion = true,
+            }))
+            Assert.Equal(HttpStatusCode.BadRequest, mixedRecheck.StatusCode);
+
+        // Reusing initial key-upload operationId with recheckExistingVersion=true conflicts (409).
+        using (var wrongModeReplay = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = initialOp,
+                expectedProviderRevision = 1,
+                expectedCredentialRevision = 0,
+                recheckExistingVersion = true,
+            }))
+            Assert.Equal(HttpStatusCode.BadRequest, wrongModeReplay.StatusCode);
+
+        // 4. Attach rate card to draft (rev 3).
+        using var updateResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 2,
+                name = "Recheck Flow Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-5",
+                wire_api = "responses",
+                reasoning_efforts = new[] { "high" },
+                rate_card_id = "manual:broker-card",
+                rate_card_version = "2026-11-22",
+            });
+        Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
+
+        // 5. Same-version recheck with verified card -> Available, NO new Vault version.
+        rateCardClient.OnReadPinAsync = (id, version, _) => Task.FromResult<RuntimeRateCardPin?>(
+            new RuntimeRateCardPin(
+                id,
+                version,
+                new string('a', 64),
+                new ManualRuntimeRateCardReadProvenance("https://example.com/prices", new DateOnly(2026, 11, 22))));
+
+        var recheckOp = Guid.NewGuid();
+        using var recheckResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = recheckOp,
+                expectedProviderRevision = 3,
+                expectedCredentialRevision = 1,
+                recheckExistingVersion = true,
+            });
+        var recheckBody = await recheckResp.Content.ReadAsStringAsync();
+        Assert.True(recheckResp.StatusCode == HttpStatusCode.OK, $"Expected 200, got {(int)recheckResp.StatusCode}: {recheckBody}");
+        using var recheckDoc = JsonDocument.Parse(recheckBody);
+        Assert.Equal("published", recheckDoc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("Available", recheckDoc.RootElement.GetProperty("providerState").GetString());
+        Assert.Equal(4, recheckDoc.RootElement.GetProperty("providerRevision").GetInt64());
+        Assert.Equal(2, recheckDoc.RootElement.GetProperty("credentialRevision").GetInt64());
+        Assert.Equal(savedVersion, recheckDoc.RootElement.GetProperty("credentialVersion").GetString());
+        Assert.Equal(1, fakeVault.WriteCalls);
+        Assert.Equal(1, fakeVault.VerifyStoredCalls);
+        Assert.Equal(1, rateCardClient.Calls);
+
+        // Exact replay of recheck returns saved receipt without calling Vault or Events again.
+        using var recheckReplay = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = recheckOp,
+                expectedProviderRevision = 3,
+                expectedCredentialRevision = 1,
+                recheckExistingVersion = true,
+            });
+        Assert.Equal(HttpStatusCode.OK, recheckReplay.StatusCode);
+        using var replayDoc = JsonDocument.Parse(await recheckReplay.Content.ReadAsStringAsync());
+        Assert.Equal("Available", replayDoc.RootElement.GetProperty("providerState").GetString());
+        Assert.Equal(1, fakeVault.VerifyStoredCalls);
+        Assert.Equal(1, rateCardClient.Calls);
+
+        // 6. Disabled Vault version rejects recheck (409).
+        fakeVault.SetEnabled($"byok-platform-{providerId}", savedVersion, false);
+        using var disabledVaultRecheck = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 4,
+                expectedCredentialRevision = 2,
+                recheckExistingVersion = true,
+            });
+        Assert.Equal(HttpStatusCode.Conflict, disabledVaultRecheck.StatusCode);
+
+        // 7. Disable credential returns provider head to Draft.
+        using var delResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{providerId}/credential?operationId={Guid.NewGuid():D}&expectedProviderRevision=4&expectedCredentialRevision=2",
+            adminToken, null);
+        Assert.Equal(HttpStatusCode.OK, delResp.StatusCode);
+        using var delDoc = JsonDocument.Parse(await delResp.Content.ReadAsStringAsync());
+        Assert.Equal("disabled", delDoc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("Draft", delDoc.RootElement.GetProperty("providerState").GetString());
+
+        using var readAfterDisable = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get, $"/api/v1/platform/byok-providers/{providerId}", adminToken, null);
+        Assert.Equal(HttpStatusCode.OK, readAfterDisable.StatusCode);
+        using var afterDisableDoc = JsonDocument.Parse(await readAfterDisable.Content.ReadAsStringAsync());
+        Assert.Equal("Draft", afterDisableDoc.RootElement.GetProperty("state").GetString());
+    }
+
     private sealed class ForwardToClientHandler(HttpClient target) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -970,11 +1238,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private sealed class FakeByokVault : IModelProviderByokVault, ISecretRedemption
     {
-        private readonly Dictionary<(string Name, string Version), (string Value, Guid OpId, Guid SlotId)> _secrets = new();
+        private readonly Dictionary<(string Name, string Version), (string Value, Guid OpId, Guid SlotId, bool Enabled)> _secrets = new();
         public bool IsConfigured => true;
         public bool FailNextWriteAmbiguously { get; set; }
         public int WriteCalls { get; private set; }
+        public int VerifyStoredCalls { get; private set; }
         public string? LastWrittenVersion { get; private set; }
+
+        public void SetEnabled(string secretName, string secretVersion, bool enabled)
+        {
+            if (_secrets.TryGetValue((secretName, secretVersion), out var entry))
+                _secrets[(secretName, secretVersion)] = entry with { Enabled = enabled };
+        }
 
         public Task<SecretRef> WriteVersionAsync(
             string secretName,
@@ -985,7 +1260,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             WriteCalls++;
             var version = Guid.NewGuid().ToString("N");
-            _secrets[(secretName, version)] = (credential.GetValue(), operationId, credentialSlotId);
+            _secrets[(secretName, version)] = (credential.GetValue(), operationId, credentialSlotId, true);
             LastWrittenVersion = version;
             if (FailNextWriteAmbiguously)
             {
@@ -1003,7 +1278,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             CancellationToken cancellationToken)
         {
             if (_secrets.TryGetValue((secretName, secretVersion), out var entry) &&
+                entry.Enabled &&
                 entry.OpId == operationId &&
+                entry.SlotId == credentialSlotId)
+                return Task.FromResult<SecretRef?>(new SecretRef(secretName, secretVersion));
+            return Task.FromResult<SecretRef?>(null);
+        }
+
+        public Task<SecretRef?> VerifyStoredVersionAsync(
+            string secretName,
+            string secretVersion,
+            Guid credentialSlotId,
+            CancellationToken cancellationToken)
+        {
+            VerifyStoredCalls++;
+            if (_secrets.TryGetValue((secretName, secretVersion), out var entry) &&
+                entry.Enabled &&
+                !string.IsNullOrEmpty(entry.Value) &&
                 entry.SlotId == credentialSlotId)
                 return Task.FromResult<SecretRef?>(new SecretRef(secretName, secretVersion));
             return Task.FromResult<SecretRef?>(null);

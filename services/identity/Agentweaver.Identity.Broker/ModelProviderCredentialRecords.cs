@@ -123,6 +123,7 @@ public sealed class ModelProviderCredentialWriteClaim
     public string? Tenant { get; set; }
     public long? PublishedProviderRevision { get; set; }
     public string? PublishedConfigurationHash { get; set; }
+    public string? PublishedProviderState { get; set; }
     public DateTimeOffset? PublishedAt { get; set; }
 }
 
@@ -162,7 +163,8 @@ internal sealed record ClaimModelProviderCredentialPublication(
     long ExpectedProviderRevision,
     string Purpose,
     string Issuer,
-    string Tenant);
+    string Tenant,
+    bool IsRecheck = false);
 
 internal sealed record ModelProviderCredentialPublicationClaimResult(
     ModelProviderCredentialWriteClaimStatus Status,
@@ -170,7 +172,8 @@ internal sealed record ModelProviderCredentialPublicationClaimResult(
     ModelProviderCredentialReference? Credential,
     long? PublishedProviderRevision,
     string? PublishedConfigurationHash,
-    DateTimeOffset? PublishedAt);
+    DateTimeOffset? PublishedAt,
+    string? PublishedProviderState = null);
 
 public sealed record ModelProviderCredentialIdentity(
     Guid CredentialSlotId,

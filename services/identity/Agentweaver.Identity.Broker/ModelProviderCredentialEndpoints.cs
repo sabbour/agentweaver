@@ -35,6 +35,7 @@ internal static class ModelProviderCredentialEndpoints
         public long ExpectedCredentialRevision { get; init; }
         public string? ApiKey { get; init; }
         public string? RecoverySecretVersion { get; init; }
+        public bool? RecheckExistingVersion { get; init; }
         public string? KeyVaultSecret { get; init; }
         public string? KeyVaultVersion { get; init; }
         public string? VaultSource { get; init; }
@@ -58,7 +59,8 @@ internal static class ModelProviderCredentialEndpoints
         long? ProviderRevision,
         long? CredentialRevision,
         string? CredentialVersion,
-        string? ConfigurationHash);
+        string? ConfigurationHash,
+        string? ProviderState = null);
 
     internal static bool IsCredentialPath(PathString path)
     {
@@ -212,9 +214,12 @@ internal static class ModelProviderCredentialEndpoints
 
         var hasApiKey = !string.IsNullOrWhiteSpace(body.ApiKey);
         var hasRecovery = body.RecoverySecretVersion is not null;
-        if (hasApiKey == hasRecovery ||
+        var hasRecheck = body.RecheckExistingVersion == true;
+        var modeCount = (hasApiKey ? 1 : 0) + (hasRecovery ? 1 : 0) + (hasRecheck ? 1 : 0);
+        if (modeCount != 1 ||
             (body.ApiKey is not null && string.IsNullOrWhiteSpace(body.ApiKey)) ||
-            (hasRecovery && !IsHexVersion(body.RecoverySecretVersion!)))
+            (hasRecovery && !IsHexVersion(body.RecoverySecretVersion!)) ||
+            (hasRecheck && body.ExpectedCredentialRevision <= 0))
             return Error("credential_request_invalid", 400);
 
         var credScope = scope == ModelProviderBindingScope.Platform
@@ -251,7 +256,7 @@ internal static class ModelProviderCredentialEndpoints
                 if (!StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
                     return Error("forbidden", 403);
 
-                var pubClaim = ToPublicationClaim(existingClaim);
+                var pubClaim = ToPublicationClaim(existingClaim, hasRecheck);
 
                 if (existingClaim.State == ModelProviderCredentialWriteClaimState.Cancelled)
                     return Error("credential_operation_cancelled", 409);
@@ -262,7 +267,8 @@ internal static class ModelProviderCredentialEndpoints
                         .ConfigureAwait(false);
                     return Results.Ok(ToResponse(body.OperationId, "published", scope, projectId, providerId,
                         replay.PublishedProviderRevision, replay.Credential?.Revision,
-                        replay.Credential?.Reference.Version, replay.PublishedConfigurationHash));
+                        replay.Credential?.Reference.Version, replay.PublishedConfigurationHash,
+                        replay.PublishedProviderState));
                 }
 
                 if (existingClaim.State == ModelProviderCredentialWriteClaimState.PublicationPending)
@@ -309,10 +315,68 @@ internal static class ModelProviderCredentialEndpoints
             }
 
             // New operation (or Claimed with DispatchedAt == null before any Vault dispatch).
-            if (!hasApiKey)
+            if (!hasApiKey && !hasRecheck)
                 return Error("credential_request_invalid", 400);
             if (!byokVault.IsConfigured)
                 return Error("credential_vault_unavailable", 503);
+
+            if (hasRecheck)
+            {
+                if (await store.HasActiveWriteClaimForProviderAsync(providerId, cancellationToken)
+                        .ConfigureAwait(false))
+                    return Error("credential_slot_conflict", 409);
+
+                var storedHead = await store.ReadHeadByProviderAsync(credScope, projectId, providerId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (storedHead is null)
+                    return Error("credential_slot_not_found", 404);
+                if (storedHead.State != ModelProviderCredentialState.Enabled ||
+                    storedHead.Revision != body.ExpectedCredentialRevision)
+                    return Error("credential_slot_conflict", 409);
+
+                var recheckPreflight = await publicationClient.PreflightAsync(
+                    new ModelProviderCredentialPublicationPreflightRequest(
+                        body.OperationId, scope, projectId, providerId,
+                        caller!.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                        caller.BoundProjectId, "draft-snapshot"),
+                    cancellationToken).ConfigureAwait(false);
+                if (recheckPreflight.IsCancelled)
+                    return Error("credential_operation_cancelled", 409);
+                if (recheckPreflight.ProviderRevision != body.ExpectedProviderRevision)
+                    return Error("model_provider_draft_conflict", 409);
+
+                var verifiedStored = await byokVault.VerifyStoredVersionAsync(
+                    storedHead.SecretName, storedHead.CurrentVersion, storedHead.CredentialSlotId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (verifiedStored is null)
+                    return Error("credential_slot_conflict", 409);
+
+                var recheckClaim = new ClaimModelProviderCredentialPublication(
+                    new ClaimModelProviderCredentialWrite(
+                        body.OperationId,
+                        body.ExpectedCredentialRevision,
+                        storedHead.CredentialSlotId,
+                        credScope,
+                        projectId,
+                        providerId,
+                        storedHead.VaultSource,
+                        storedHead.SecretName,
+                        caller.ActorId),
+                    body.ExpectedProviderRevision,
+                    BrokerModelProviderCredentialPublicationClient.Purpose,
+                    caller.Issuer,
+                    recheckPreflight.ResolvedTenant,
+                    IsRecheck: true);
+
+                var stagedRecheck = await store.ClaimRecheckPublicationAsync(
+                    recheckClaim, verifiedStored, cancellationToken).ConfigureAwait(false);
+                if (stagedRecheck.Status == ModelProviderCredentialWriteClaimStatus.Cancelled)
+                    return Error("credential_operation_cancelled", 409);
+
+                return await PublishAndAcknowledgeAsync(
+                    recheckClaim, stagedRecheck.Credential!, caller, store, publicationClient, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             var preflight1 = await publicationClient.PreflightAsync(
                 new ModelProviderCredentialPublicationPreflightRequest(
@@ -622,7 +686,7 @@ internal static class ModelProviderCredentialEndpoints
 
             return Results.Ok(ToResponse(operationId, "disabled", scope, projectId, providerId,
                 disableReceipt.ProviderRevision, disabled.Revision,
-                null, disableReceipt.ConfigurationHash));
+                null, disableReceipt.ConfigurationHash, "Draft"));
         }
         catch (ModelProviderCredentialException ex)
         {
@@ -713,10 +777,13 @@ internal static class ModelProviderCredentialEndpoints
             ack.PublishedProviderRevision,
             ack.Credential?.Revision,
             ack.Credential?.Reference.Version,
-            ack.PublishedConfigurationHash));
+            ack.PublishedConfigurationHash,
+            ack.PublishedProviderState ?? receipt.ProviderState));
     }
 
-    private static ClaimModelProviderCredentialPublication ToPublicationClaim(ModelProviderCredentialWriteClaim claim) =>
+    private static ClaimModelProviderCredentialPublication ToPublicationClaim(
+        ModelProviderCredentialWriteClaim claim,
+        bool isRecheck = false) =>
         new(
             new ClaimModelProviderCredentialWrite(
                 claim.OperationId,
@@ -731,7 +798,8 @@ internal static class ModelProviderCredentialEndpoints
             claim.ExpectedProviderRevision!.Value,
             claim.Purpose!,
             claim.Issuer!,
-            claim.Tenant!);
+            claim.Tenant!,
+            isRecheck);
 
     private static CredentialOperationResponse ToResponse(
         Guid operationId,
@@ -742,7 +810,8 @@ internal static class ModelProviderCredentialEndpoints
         long? providerRevision,
         long? credentialRevision,
         string? credentialVersion,
-        string? configurationHash) =>
+        string? configurationHash,
+        string? providerState = null) =>
         new(
             operationId,
             status,
@@ -752,7 +821,8 @@ internal static class ModelProviderCredentialEndpoints
             providerRevision,
             credentialRevision,
             credentialVersion,
-            configurationHash);
+            configurationHash,
+            providerState);
 
     private sealed record ValidatedCaller(
         string Issuer,

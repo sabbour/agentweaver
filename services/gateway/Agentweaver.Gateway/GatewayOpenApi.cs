@@ -2415,7 +2415,8 @@ else if (route.OperationId is
             ("expectedProviderRevision", new { type = "integer", format = "int64", minimum = 1L, maximum = long.MaxValue - 1 }),
             ("expectedCredentialRevision", new { type = "integer", format = "int64", minimum = 0L, maximum = long.MaxValue - 1 }),
             ("apiKey", NullableStr()),
-            ("recoverySecretVersion", NullableStr())),
+            ("recoverySecretVersion", NullableStr()),
+            ("recheckExistingVersion", Nullable(Bool()))),
         ["ModelProviderCredentialDeleteRequest"] = StrictObj(
             ["operationId"],
             ("operationId", Uuid()),
@@ -2432,7 +2433,8 @@ else if (route.OperationId is
             ("providerRevision", Nullable(new { type = "integer", format = "int64" })),
             ("credentialRevision", Nullable(new { type = "integer", format = "int64" })),
             ("credentialVersion", NullableStr()),
-            ("configurationHash", NullableStr())),
+            ("configurationHash", NullableStr()),
+            ("providerState", Nullable(Enum("Draft", "Available")))),
         ["ModelProviderDraftPlatformCreateRequest"] = WithReferencePin(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64", @const = 0 }),

@@ -171,6 +171,19 @@ provider at its current revision returns `503 model_provider_draft_unavailable`.
 Owner responses use
 `Cache-Control: no-store`.
 
+The authenticated credential routes (`PUT /api/v1/platform/byok-providers/{providerId}/credential`
+and `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}/credential`,
+routed to Identity Broker) accept `operationId`, `expectedProviderRevision`,
+`expectedCredentialRevision`, and exactly one of `apiKey` (upload or rotate),
+`recoverySecretVersion` (recover a quarantined write for the same `operationId`),
+or `recheckExistingVersion: true` (verify the stored, enabled Key Vault version
+against the current provider revision without uploading a key or creating a new
+Vault version). Responses include `providerState` (`Draft` or `Available`).
+When `rate_card_id` and `rate_card_version` verify against Events, `providerState`
+becomes `Available`; otherwise the provider stays `Draft` with the proved key
+saved. `DELETE` on the same routes cancels an unfinished operation (`cancel: true`)
+or disables the credential and returns the provider to `Draft`.
+
 <span id="p1-invocation-setup-receipt"></span>
 
 ## Invocation setup receipt

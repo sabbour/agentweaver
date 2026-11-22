@@ -421,9 +421,16 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                     "request_fingerprint ~ '^[0-9a-f]{64}$'");
                 table.HasCheckConstraint(
                     "ck_model_provider_credential_operations_shape",
-                    "(operation_kind = 'Cancel' AND provider_revision IS NULL AND expected_provider_revision IS NULL AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NULL AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash IS NULL) OR " +
-                    "(operation_kind = 'Publish' AND provider_revision > 0 AND expected_provider_revision > 0 AND provider_revision = expected_provider_revision + 1 AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NOT NULL AND credential_secret_id IS NOT NULL AND credential_version ~ '^[0-9a-fA-F]{32}$' AND configuration_hash ~ '^[0-9a-f]{64}$') OR " +
-                    "(operation_kind = 'Disable' AND provider_revision > 0 AND original_provider_revision > 0 AND provider_revision = original_provider_revision + 1 AND original_credential_revision > 0 AND (expected_provider_revision IS NULL OR expected_provider_revision = original_provider_revision) AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash ~ '^[0-9a-f]{64}$')");
+                    "(operation_kind = 'Cancel' AND provider_revision IS NULL AND expected_provider_revision IS NULL AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NULL AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash IS NULL AND provider_state IS NULL) OR " +
+                    "(operation_kind = 'Publish' AND provider_revision > 0 AND expected_provider_revision > 0 AND provider_revision = expected_provider_revision + 1 AND original_provider_revision IS NULL AND original_credential_revision IS NULL AND credential_slot_id IS NOT NULL AND credential_secret_id IS NOT NULL AND credential_version ~ '^[0-9a-fA-F]{32}$' AND configuration_hash ~ '^[0-9a-f]{64}$' AND provider_state IN ('Draft', 'Available')) OR " +
+                    "(operation_kind = 'Disable' AND provider_revision > 0 AND original_provider_revision > 0 AND provider_revision = original_provider_revision + 1 AND original_credential_revision > 0 AND (expected_provider_revision IS NULL OR expected_provider_revision = original_provider_revision) AND credential_secret_id IS NULL AND credential_version IS NULL AND configuration_hash ~ '^[0-9a-f]{64}$' AND provider_state = 'Draft')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_operations_provider_state",
+                    "provider_state IS NULL OR provider_state IN ('Draft', 'Available')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_credential_operations_rate_card",
+                    "(provider_state = 'Available' AND operation_kind = 'Publish' AND rate_card_id IS NOT NULL AND length(rate_card_id) > 0 AND rate_card_version IS NOT NULL AND length(rate_card_version) > 0 AND rate_card_pin_hash ~ '^[0-9a-f]{64}$') OR " +
+                    "(provider_state IS DISTINCT FROM 'Available' AND rate_card_id IS NULL AND rate_card_version IS NULL AND rate_card_pin_hash IS NULL)");
             });
             entity.HasKey(op => op.OperationId).HasName("pk_model_provider_credential_operations");
             entity.Property(op => op.OperationId).HasColumnName("operation_id");
@@ -445,6 +452,14 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(op => op.CredentialVersion).HasColumnName("credential_version")
                 .HasMaxLength(32);
             entity.Property(op => op.ConfigurationHash).HasColumnName("configuration_hash")
+                .HasMaxLength(ModelProviderDraftLimits.Hash);
+            entity.Property(op => op.ProviderState).HasColumnName("provider_state")
+                .HasMaxLength(16);
+            entity.Property(op => op.RateCardId).HasColumnName("rate_card_id")
+                .HasMaxLength(128);
+            entity.Property(op => op.RateCardVersion).HasColumnName("rate_card_version")
+                .HasMaxLength(64);
+            entity.Property(op => op.RateCardPinHash).HasColumnName("rate_card_pin_hash")
                 .HasMaxLength(ModelProviderDraftLimits.Hash);
             entity.Property(op => op.OriginalTenant).HasColumnName("original_tenant")
                 .HasMaxLength(256).IsRequired();
