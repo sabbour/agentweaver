@@ -150,9 +150,37 @@ public sealed class ProjectsAuthorizationContextClient(
         await SendAuthorizationCheckAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Checks bearer expiration and current, unbound PlatformAdmin authority through Projects
+    /// for Azure Retail rate-card writes, mapping invalid or expired bearers to 401.
+    /// </summary>
+    public async Task AuthorizePlatformModelPricingRetailRateCardWriteAsync(
+        HttpContext context,
+        string ownerAudience,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireUnexpiredBearer(context, timeProvider);
+        RequireUnboundPlatformAdminCaller(context, ownerAudience);
+        var tenant = ReadTenantSelector(context);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(RequireOwnerUri(options), "/api/authorization/platform/model-pricing-rate-cards"));
+        request.Headers.Authorization = RequireBearer(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation(TenantSelectorHeader, tenant);
+
+        await SendAuthorizationCheckAsync(request, cancellationToken, mapUnauthorizedTo401: true)
+            .ConfigureAwait(false);
+    }
+
     private async Task SendAuthorizationCheckAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool mapUnauthorizedTo401 = false)
     {
         HttpResponseMessage response;
         try
@@ -177,6 +205,9 @@ public sealed class ProjectsAuthorizationContextClient(
 
         using (response)
         {
+            if (mapUnauthorizedTo401 && response.StatusCode == HttpStatusCode.Unauthorized)
+                throw new ProjectsAuthorizationContextException(
+                    "projects_authorization_unauthorized", HttpStatusCode.Unauthorized);
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
                 throw new ProjectsAuthorizationContextException("projects_authorization_denied", HttpStatusCode.Forbidden);
             if (response.StatusCode != HttpStatusCode.NoContent)
@@ -376,6 +407,19 @@ public sealed class ProjectsAuthorizationContextClient(
         if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
             !context.User.FindAll("aud").Any(claim => claim.Value == ownerAudience))
             throw new ProjectsAuthorizationContextException("caller_scope_invalid", HttpStatusCode.Forbidden);
+    }
+
+    private static void RequireUnexpiredBearer(HttpContext context, TimeProvider timeProvider)
+    {
+        var expClaim = context.User.FindFirst("exp")?.Value;
+        if (expClaim is not null &&
+            long.TryParse(
+                expClaim,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var unixExpiration) &&
+            unixExpiration <= timeProvider.GetUtcNow().ToUnixTimeSeconds())
+            throw new ProjectsAuthorizationContextException("bearer_expired", HttpStatusCode.Unauthorized);
     }
 
     private static void RequireUnboundPlatformAdminCaller(HttpContext context, string? ownerAudience)

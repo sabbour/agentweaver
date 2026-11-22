@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Azure Retail price search",
-  "alt": "A project caller sends a model price query through Gateway to Events & Sessions. Events asks Projects & Config to load current membership and role assignments. Projects allows PlatformAdmin or exact project Owner authority and rejects other roles, mismatched projects, and run-bound callers. Events calls the fixed Azure Retail endpoint only after a no-store authorization success. A denial or Projects failure stops the lookup. Events returns bounded price candidates without changing rate cards.",
+  "title": "Azure Retail price search and save",
+  "alt": "Gateway proxies read-only Azure Retail price search and PlatformAdmin rate-card writes to Events & Sessions. For search, Events checks current Projects & Config authority before calling the fixed Azure Retail endpoint and returns no-store candidates without changing rate cards. For save, Gateway runs a bodyless PlatformAdmin check before streaming the 64 KiB body, Events rechecks authority and checks the canonical request digest for 200 replay, verifies one eligible 1K/1M tier-0 USD row per meter on miss, rechecks expiration and authority, and atomically saves the immutable card with a strong ETag.",
   "autonumber": true,
   "participants": [
     {
@@ -48,163 +48,97 @@
   ],
   "steps": [
     {
-      "type": "note",
-      "over": ["gateway"],
-      "label": "Caller with api.read: GET /api/v1/projects/{projectId}/model-pricing/azure-retail?region=...&search=..."
-    },
-    {
-      "type": "message",
-      "from": "gateway",
-      "to": "events",
-      "label": "Forward bearer, tenant selector, project ID, and query",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "events",
-      "to": "events",
-      "label": "Validate query and caller audience",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
       "type": "fragment",
       "operator": "alt",
-      "label": "Current Projects authorization",
+      "label": "Search or Save",
       "sections": [
         {
-          "label": "PlatformAdmin or Owner of this project",
+          "label": "Search: GET /api/v1/projects/{projectId}/model-pricing/azure-retail",
           "steps": [
+            {
+              "type": "message",
+              "from": "gateway",
+              "to": "events",
+              "label": "Forward bearer, tenant, project ID, and query",
+              "line": "solid",
+              "arrow": "filled"
+            },
             {
               "type": "message",
               "from": "events",
               "to": "projects",
-              "label": "GET /api/authorization/projects/{projectId}/model-pricing-search",
+              "label": "GET model-pricing-search (204 no-store or 403/502)",
               "line": "solid",
               "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "projects",
-              "to": "projects",
-              "label": "Reload active membership, bindings, and role assignments",
-              "line": "solid",
-              "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "projects",
-              "to": "events",
-              "label": "204 No Content; Cache-Control: no-store",
-              "line": "dashed",
-              "arrow": "open"
             },
             {
               "type": "message",
               "from": "events",
               "to": "retail",
-              "label": "Search fixed USD Foundry Models consumption meters",
+              "label": "Search USD Foundry Models Consumption meters",
               "line": "solid",
               "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "retail",
-              "to": "events",
-              "label": "Bounded meter pages",
-              "line": "dashed",
-              "arrow": "open"
             },
             {
               "type": "message",
               "from": "events",
               "to": "gateway",
-              "label": "200 typed result; no-store",
+              "label": "200 typed result; Cache-Control: no-store",
               "line": "dashed",
               "arrow": "open"
-            },
-            {
-              "type": "message",
-              "from": "gateway",
-              "to": "gateway",
-              "label": "Forward owner status, headers, and body",
-              "line": "solid",
-              "arrow": "filled"
             }
           ]
         },
         {
-          "label": "Role or binding denied",
+          "label": "Save: PUT /api/v1/platform/model-pricing/azure-retail/rate-cards/{id}/{version}",
           "steps": [
             {
               "type": "message",
-              "from": "events",
+              "from": "gateway",
               "to": "projects",
-              "label": "GET current role check",
+              "label": "Bodyless PlatformAdmin check before streaming body",
               "line": "solid",
               "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "projects",
-              "to": "events",
-              "label": "403 Forbidden; no-store",
-              "line": "dashed",
-              "arrow": "open"
-            },
-            {
-              "type": "message",
-              "from": "events",
-              "to": "gateway",
-              "label": "403; skip Azure Retail",
-              "line": "dashed",
-              "arrow": "open"
             },
             {
               "type": "message",
               "from": "gateway",
-              "to": "gateway",
-              "label": "Return no-store denial to caller",
+              "to": "events",
+              "label": "Stream 64 KiB JSON body with bearer and tenant",
               "line": "solid",
               "arrow": "filled"
-            }
-          ]
-        },
-        {
-          "label": "Projects is unavailable",
-          "steps": [
+            },
             {
               "type": "message",
               "from": "events",
               "to": "projects",
-              "label": "GET current role check",
+              "label": "Check authority before body/store; check replay digest",
               "line": "solid",
               "arrow": "filled"
             },
             {
               "type": "message",
-              "from": "projects",
-              "to": "events",
-              "label": "Unavailable, redirected, or invalid response",
-              "line": "dashed",
-              "arrow": "cross"
+              "from": "events",
+              "to": "retail",
+              "label": "On miss: verify one eligible 1K/1M tier-0 USD row per meter",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "events",
+              "to": "projects",
+              "label": "Recheck token expiration and authority before insert",
+              "line": "solid",
+              "arrow": "filled"
             },
             {
               "type": "message",
               "from": "events",
               "to": "gateway",
-              "label": "502; skip Azure Retail",
+              "label": "201/200 canonical card + ETag; 409/503 on change/error",
               "line": "dashed",
               "arrow": "open"
-            },
-            {
-              "type": "message",
-              "from": "gateway",
-              "to": "gateway",
-              "label": "Return no-store error to caller",
-              "line": "solid",
-              "arrow": "filled"
             }
           ]
         }

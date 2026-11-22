@@ -375,6 +375,12 @@ public static class GatewayRouteCatalog
             "Save a manual runtime price card", body: true, maximumRequestBodyBytes: 64 * 1024,
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control", "ETag"],
             maximumResponseBytes: 256 * 1024, excludeFromMcp: true);
+        Add("PUT", GatewayOwner.Events, "/platform/model-pricing/azure-retail/rate-cards/{id}/{version}",
+            "/api/platform/model-pricing/azure-retail/rate-cards/{id}/{version}",
+            "savePlatformAzureRetailRuntimeRateCard",
+            "Save an Azure Retail runtime price card", body: true, maximumRequestBodyBytes: 64 * 1024,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control", "ETag"],
+            maximumResponseBytes: 256 * 1024, excludeFromMcp: true);
         // Chief of Staff routes are caller-private and require an unbound token.
         var chiefOfStaff = "/chief-of-staff";
         Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations", "/api" + chiefOfStaff + "/conversations",

@@ -36,7 +36,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var command = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".sessions_schema_migrations
             """, connection);
-        Assert.Equal(12, Convert.ToInt32(await command.ExecuteScalarAsync()));
+        Assert.Equal(13, Convert.ToInt32(await command.ExecuteScalarAsync()));
         await using var index = new NpgsqlCommand("""
             SELECT indexdef FROM pg_indexes WHERE schemaname = @schema
                 AND indexname = 'ix_usage_ledger_project_occurred'
@@ -119,7 +119,88 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(7L, reader.GetInt64(0));
-        Assert.Equal(12L, reader.GetInt64(1));
+        Assert.Equal(13L, reader.GetInt64(1));
+    }
+
+    [Fact]
+    public async Task MigratingFromVersion12AddsNullableRetailDigestAndCheckConstraint()
+    {
+        foreach (var migration in new[]
+                 {
+                     "001_sessions_journal.sql",
+                     "002_addressed_messages.sql",
+                     "003_project_facts.sql",
+                     "004_explicit_session_forks.sql",
+                     "005_copilot_usage.sql",
+                     "006_native_sdk_usage.sql",
+                     "007_native_usage_receipts.sql",
+                     "008_row_lock_record_updates.sql",
+                     "009_project_usage_index.sql",
+                     "010_session_object_inventory.sql",
+                     "011_messaging_binding_row_lock.sql",
+                     "012_provider_model_cost_bindings.sql",
+                 })
+            await ApplyMigrationAsync($"Agentweaver.EventsAndSessions.Migrations.{migration}");
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using (var seed = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".sessions_schema_migrations (version)
+                SELECT generate_series(1, 12);
+            INSERT INTO "{_schema}".usage_rate_cards (
+                card_id, version, meter_source, unit, nano_units_per_unit,
+                model_multipliers, canonical_input, payload)
+            VALUES (
+                'manual-v12', 'v1', 'byok.tokens', 'USD', 1000000,
+                @multipliers, 'canonical', @payload);
+            """, connection))
+        {
+            seed.Parameters.AddWithValue("multipliers", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"gpt-4o|input":1.5}""");
+            seed.Parameters.AddWithValue("payload", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"id":"manual-v12"}""");
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
+        await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
+
+        await using (var checkNull = new NpgsqlCommand($"""
+            SELECT azure_retail_request_digest
+            FROM "{_schema}".usage_rate_cards
+            WHERE card_id = 'manual-v12' AND version = 'v1'
+            """, connection))
+            Assert.IsType<DBNull>(await checkNull.ExecuteScalarAsync());
+
+        // Invalid digest format is rejected by ck_usage_rate_cards_azure_retail_request_digest.
+        await using (var invalid = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".usage_rate_cards (
+                card_id, version, meter_source, unit, nano_units_per_unit,
+                model_multipliers, canonical_input, payload, azure_retail_request_digest)
+            VALUES (
+                'bad-digest', 'v1', 'byok.tokens', 'USD', 1000000,
+                @multipliers, 'canonical', @payload, 'v2:invalid');
+            """, connection))
+        {
+            invalid.Parameters.AddWithValue("multipliers", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"gpt-4o|input":1.5}""");
+            invalid.Parameters.AddWithValue("payload", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"id":"bad-digest"}""");
+            var ex = await Assert.ThrowsAsync<PostgresException>(() => invalid.ExecuteNonQueryAsync());
+            Assert.Equal("23514", ex.SqlState);
+        }
+
+        // Valid v1 lowercase SHA-256 hex digest is accepted.
+        var validDigest = "v1:" + new string('a', 64);
+        await using (var valid = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".usage_rate_cards (
+                card_id, version, meter_source, unit, nano_units_per_unit,
+                model_multipliers, canonical_input, payload, azure_retail_request_digest)
+            VALUES (
+                'good-digest', 'v1', 'byok.tokens', 'USD', 1000000,
+                @multipliers, 'canonical', @payload, @digest);
+            """, connection))
+        {
+            valid.Parameters.AddWithValue("multipliers", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"gpt-4o|input":1.5}""");
+            valid.Parameters.AddWithValue("payload", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"id":"good-digest"}""");
+            valid.Parameters.AddWithValue("digest", validDigest);
+            await valid.ExecuteNonQueryAsync();
+        }
     }
 
     /// <summary>Preserves admitted owner records and migration history while upgrading to project reporting.</summary>
@@ -174,7 +255,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(9L, reader.GetInt64(0));
-        Assert.Equal(12L, reader.GetInt64(1));
+        Assert.Equal(13L, reader.GetInt64(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
         Assert.True(reader.GetBoolean(4));

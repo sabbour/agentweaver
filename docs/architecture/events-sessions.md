@@ -229,6 +229,20 @@ bounded 64 KiB UTF-8 JSON body, rejects encoded aliases and query parameters,
 and returns `201` for a new version, `200` for an identical canonical replay, or
 `409` for conflicting content or a legacy row, with a strong SHA-256 ETag and
 `Cache-Control: no-store`.
+
+The `PUT /api/platform/model-pricing/azure-retail/rate-cards/{id}/{version}`
+route (proxied through Gateway as
+`PUT /api/v1/platform/model-pricing/azure-retail/rate-cards/{id}/{version}`) lets
+an unbound PlatformAdmin save an immutable `byok.tokens` USD rate card verified
+against Azure Retail Prices. Events checks Projects authority before reading the
+64 KiB JSON body, checks `RuntimeRateCardStore` by `(id, version)` and a
+versioned canonical request digest (`v1:` plus lowercase SHA-256 hex) to return
+`200` on exact replays without calling Azure, resolves one eligible tier-zero
+`1K` or `1M` Consumption row per selected meter over the fixed HTTPS endpoint,
+rechecks token expiration and Projects authority, and atomically inserts the
+verified card and digest. Migration `013_retail_rate_card_digest.sql` adds the
+nullable `azure_retail_request_digest` column and check constraint to
+`usage_rate_cards`; manual and legacy rows leave the digest null.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
 receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`

@@ -34,7 +34,7 @@ const goodLogs = {
 };
 const defaultSchemaRanges = {
   [digest('a')]: coreRange(),
-  [digest('b')]: range(12, 12),
+  [digest('b')]: range(13, 13),
   [digest('d')]: range(16, 16),
   [digest('f')]: range(10, 10),
 };
@@ -243,7 +243,7 @@ test('the reviewed plan includes 035 through 051, skips reserved Core 034, and m
   assert.ok(plan.coreVersions.includes(41));
   assert.ok(plan.coreVersions.includes(42));
   assert.equal(Math.max(...plan.coreVersions), 51);
-  assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: 16 }, (_, index) => index + 1));
 });
 
@@ -958,7 +958,7 @@ test('Core 047 requires the target owner before migration even when schema order
         'events-and-sessions': eventsImage('b') },
       state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
         data: { handoverPrincipalObjectId: PRINCIPAL_ID, ...(current ? { 'orchestrator.schema': String(current) } : {}) } },
-      schemaRanges: { [digest('a')]: coreRange(), [digest('e')]: range(31, 32), [digest('b')]: range(12, 12) },
+      schemaRanges: { [digest('a')]: coreRange(), [digest('e')]: range(31, 32), [digest('b')]: range(13, 13) },
     });
     try {
       const request = { ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
@@ -983,7 +983,7 @@ test('Core 047 requires the target owner before migration even when schema order
 test('a matching or absent old target image cannot bypass the Core 047 compatibility gate', async () => {
   for (const running of [undefined, imageReference('Agentweaver.Orchestrator', digest('a'))]) {
     const fake = world({ appImages: { orchestrator: running },
-      schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(12, 12) } });
+      schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(13, 13) } });
     try {
       await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
         receiptDir: fake.receiptDir }, fake.deps), /accepts schema 31-32, not 51 from the reviewed plan/);
@@ -1006,7 +1006,7 @@ test('an image schema range is read from its source label and the source at that
   };
   const read = (overrides = {}) => readImageSchemaRange({ image: eventsImage('b'), component: 'Agentweaver.EventsAndSessions',
     readImage: async () => ({ sourceSha: sha }), exec: fakeGit(), repoRoot: '.', ...overrides });
-  assert.deepEqual(await read(), { ...range(12, 12), sourceSha: sha });
+  assert.deepEqual(await read(), { ...range(13, 13), sourceSha: sha });
   // A missing commit is fetched by name once, then read.
   assert.deepEqual(gitCalls.map(args => args[0]), ['cat-file', 'fetch', 'show']);
   assert.deepEqual(gitCalls[2], ['show', `${sha}:services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs`]);
@@ -1032,7 +1032,7 @@ test('a target digest built for another schema stops the run before any change',
   const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(8, 8) } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--deploy-apps']),
-      receiptDir: fake.receiptDir }, fake.deps), /accepts schema 8-8, not 12 from the reviewed plan/);
+      receiptDir: fake.receiptDir }, fake.deps), /accepts schema 8-8, not 13 from the reviewed plan/);
     assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
   } finally { fake.done(); }
 });
@@ -1040,7 +1040,7 @@ test('a target digest built for another schema stops the run before any change',
 test('deploy-first moves a service to an image that accepts the current schema before any migration Job', async () => {
   const fake = appWorld({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
       data: { handoverPrincipalObjectId: PRINCIPAL_ID, 'events-and-sessions.schema': '8' } },
-    schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(8, 12) } });
+    schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(8, 13) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps);
@@ -1055,7 +1055,7 @@ test('deploy-first moves a service to an image that accepts the current schema b
 });
 
 test('migrate-first keeps a running image that accepts the target schema when no deploy is asked for', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(12, 12), [digest('e')]: range(8, 12) } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(13, 13), [digest('e')]: range(8, 13) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
       receiptDir: fake.receiptDir }, fake.deps);
