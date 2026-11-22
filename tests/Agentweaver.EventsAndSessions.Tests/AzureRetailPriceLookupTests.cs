@@ -246,7 +246,29 @@ public sealed class AzureRetailPriceLookupTests
     }
 
     [Fact]
-    public async Task PropagatesCallerCancellationAndUsesANewDeadlineForEachSearch()
+    public async Task SearchPropagatesCallerCancellation()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new QueueHandler(async (_, _, cancellationToken) =>
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return Ok(Envelope([Row()]));
+        });
+        using var lookup = Create(handler, timeout: TimeSpan.FromSeconds(20));
+        using var callerCancellation = new CancellationTokenSource();
+
+        var search = lookup.SearchAsync(Region, "model", callerCancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        callerCancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => search.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task UsesANewDeadlineForEachSearch()
     {
         var wait = true;
         var handler = new QueueHandler(async (_, _, cancellationToken) =>
@@ -256,12 +278,6 @@ public sealed class AzureRetailPriceLookupTests
             return Ok(Envelope([Row()]));
         });
         using var lookup = Create(handler, timeout: TimeSpan.FromMilliseconds(100));
-        using var callerCancellation = new CancellationTokenSource();
-        callerCancellation.CancelAfter(TimeSpan.FromMilliseconds(10));
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            lookup.SearchAsync(Region, "model", callerCancellation.Token));
-        Assert.Single(handler.Requests);
 
         var deadlineError = await Assert.ThrowsAsync<AzureRetailPriceLookupException>(() =>
             lookup.SearchAsync(Region, "model"));
@@ -270,7 +286,7 @@ public sealed class AzureRetailPriceLookupTests
         wait = false;
         var retry = await lookup.SearchAsync(Region, "model");
         Assert.Single(retry.Items);
-        Assert.Equal(3, handler.Requests.Count);
+        Assert.Equal(2, handler.Requests.Count);
     }
 
     [Fact]
@@ -410,7 +426,7 @@ public sealed class AzureRetailPriceLookupTests
     }
 
     [Fact]
-    public async Task ResolveMetersEnforcesDeadlineAndPropagatesCallerCancellation()
+    public async Task ResolveMetersEnforcesDeadline()
     {
         var handler = new QueueHandler(async (_, _, cancellationToken) =>
         {
@@ -422,10 +438,27 @@ public sealed class AzureRetailPriceLookupTests
         var deadlineError = await Assert.ThrowsAsync<AzureRetailPriceLookupException>(
             () => lookup.ResolveMetersAsync(Region, ["m-in", "m-out"]));
         Assert.Equal("deadline_exceeded", deadlineError.Reason);
+    }
 
-        using var callerCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
+    [Fact]
+    public async Task ResolveMetersPropagatesCallerCancellation()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new QueueHandler(async (_, _, cancellationToken) =>
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return Ok(Envelope([]));
+        });
+        using var lookup = Create(handler, resolveTimeout: TimeSpan.FromSeconds(20));
+        using var callerCts = new CancellationTokenSource();
+
+        var resolution = lookup.ResolveMetersAsync(Region, ["m-in", "m-out"], callerCts.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        callerCts.Cancel();
+
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => lookup.ResolveMetersAsync(Region, ["m-in", "m-out"], callerCts.Token));
+            () => resolution.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     private static string Envelope(IEnumerable<JsonObject> rows, string? nextPage = null)
