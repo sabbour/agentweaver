@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 
 namespace Agentweaver.Environment;
@@ -48,8 +49,8 @@ internal static class EnvironmentRunEgressEndpoints
         string projectId,
         string runId,
         HttpContext context,
-        IProjectsConfigClient projects,
-        IEnvironmentEgressAuditStore auditStore,
+        [FromServices] IProjectsConfigClient projects,
+        [FromServices] IEnvironmentEgressAuditStore auditStore,
         CancellationToken cancellationToken)
     {
         context.Response.Headers.CacheControl = "no-store";
