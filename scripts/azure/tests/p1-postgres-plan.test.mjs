@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
@@ -426,6 +427,42 @@ test('Initializer protected-table count matches the plan', () => {
   assert.ok(checks.includes(`protectedTables.Length != ${protectedTables.length} ||`));
   assert.ok(checks.includes(`lockTables.Length != ${lockTables.length} ||`));
   assert.ok(checks.includes(`appendOnlyLedgers != ${appendOnlyLedgers}`));
+
+  const projectsService = plan.services.find(service => service.schema === 'projects_config');
+  const pairGuard = projectsService.tables
+    .find(table => table.table === 'model_providers')
+    .mutationDenialGuards.find(guard => guard.function === 'check_model_provider_pair()');
+  const normalizeGuardSource = source => {
+    let result = '';
+    let quote = '\0';
+    let whitespace = false;
+    for (let i = 0; i < source.length; i++) {
+      const c = source[i];
+      if (quote !== '\0') {
+        if (c === '\\') return source;
+        result += c;
+        if (c === quote) {
+          if (i + 1 < source.length && source[i + 1] === quote) result += source[++i];
+          else quote = '\0';
+        }
+      } else if (/\s/.test(c)) {
+        whitespace = result.length > 0;
+      } else {
+        if (c === '$') return source;
+        if (whitespace) result += ' ';
+        whitespace = false;
+        result += c;
+        if (c === '\'' || c === '"') quote = c;
+      }
+    }
+    return result.replace(/;+$/, '');
+  };
+  const pairHash = createHash('sha256').update(normalizeGuardSource(pairGuard.functionSource), 'utf8').digest('hex');
+  const grantPlan = readFileSync(
+    new URL('../../../services/projects-config/Agentweaver.Projects.Config/ProjectsConfigRuntimeGrantPlan.cs', import.meta.url),
+    'utf8');
+  assert.ok(checks.includes(pairHash), 'InitializerChecks.cs must match the planned check_model_provider_pair() hash');
+  assert.ok(grantPlan.includes(pairHash), 'ProjectsConfigRuntimeGrantPlan.cs must match the planned check_model_provider_pair() hash');
 });
 
 test('Current source catalog preserves exact Core and Events versions and embedded resources', () => {
