@@ -198,6 +198,70 @@ receipts for non-root origins remain available through
 `ReadCurrentReceiptAsync`; a new root origin has a different target ID and
 cannot reuse the old reservation.
 
+## Read stored run egress
+
+Call `GET /api/v1/runs/{runId}/egress` through the Gateway to read stored
+attributed outbound traffic for one run. Gateway sets `Cache-Control: no-store`
+early and forwards the caller bearer token and optional `X-Agentweaver-Tenant`
+header to Orchestrator (`GET /api/runs/{runId}/egress`).
+
+Orchestrator validates the caller token, scopes, and explicit `tenant_id`,
+`project_id`, and `run_id` bindings, rejects purpose-bound or duplicate-claim
+tokens, and reads current authority from Projects & Config. The caller needs
+either:
+
+- `api.read` and a current project or tenant `ReadProjects` grant with a
+  positive revision; or
+- an unbound token with `api.read` and `projects.admin`, plus the current
+  `Platform/default` `ReadPlatformRuntimeDefaults` grant with a positive
+  revision.
+
+Orchestrator resolves at most two visible matches for `runId` in the selected
+tenant's `accepted_runs` table, ignoring hidden duplicates in projects the
+caller cannot read. Zero or multiple visible matches return `404 run_not_found`.
+
+Orchestrator forwards the original caller bearer and validated tenant selector
+to Environment (`GET /api/projects/{projectId}/runs/{runId}/egress`).
+Environment rejects duplicate `X-Agentweaver-Tenant` headers, revalidates the
+token claims and current Projects & Config authority, and joins
+`environment.sandbox_egress_flows_attributed` with
+`environment.sandbox_owner_mappings` filtered by the authorized tenant, project,
+and run.
+
+Responses return `Cache-Control: no-store`, `coverage: "Unavailable"`,
+`delayedUntil: null`, and attributed records ordered by
+`first_seen DESC, flow_id DESC`. Each record contains nullable `host` and
+`address`, `port`, `verdict`, `firstSeen`, `lastSeen`, and `count`. Raw
+workload labels, owner fingerprints, flow IDs, and unattributed rows are
+excluded. Page size (`limit`) defaults to 50 and accepts 1–100. The opaque
+`nextCursor` is bound to the authorized scope, sort order, page size, and
+anchor.
+
+```mermaid
+sequenceDiagram
+    participant Caller as Caller
+    participant Gateway as Gateway
+    participant Orch as Orchestrator
+    participant Projects as Projects & Config
+    participant Env as Environment
+    participant DB as Environment PostgreSQL
+    Caller->>Gateway: GET /api/v1/runs/{runId}/egress
+    Gateway->>Gateway: Set no-store; validate bearer
+    Gateway->>Orch: GET /api/runs/{runId}/egress (bearer, tenant)
+    Orch->>Projects: GET /api/authorization/context
+    Projects-->>Orch: Current tenant, grants, bindings
+    Orch->>Orch: Resolve <= 2 visible runs in accepted_runs
+    Orch->>Env: GET /api/projects/{projectId}/runs/{runId}/egress (bearer, tenant)
+    Env->>Projects: GET /api/authorization/context
+    Projects-->>Env: Current tenant, grants, bindings
+    Env->>DB: Query attributed flows joined on owner_fingerprint
+    DB-->>Env: Bounded page (first_seen DESC, flow_id DESC)
+    Env-->>Orch: RunEgressPage (no-store, coverage Unavailable)
+    Orch-->>Gateway: RunEgressPage (no-store)
+    Gateway-->>Caller: 200 RunEgressPage (no-store)
+```
+
+
 The logical ID includes the configured Kubernetes API origin, namespace, and
 policy name. Different API origins can refer to the same physical cluster; the
 database fence does not recognize those aliases. The saved physical target,

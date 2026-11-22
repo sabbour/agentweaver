@@ -382,6 +382,16 @@ public sealed partial class RuntimeResumeBootstrapTests
             EgressFlowObservation flow,
             CancellationToken cancellationToken) =>
             Task.FromResult(new EnvironmentEgressAuditWriteResult(new string('a', 64), Attributed: false));
+
+        public Task<RunEgressPage> ReadRunEgressAsync(
+            string tenantId,
+            string projectId,
+            string runId,
+            int pageSize,
+            string? cursor,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new RunEgressPage(
+                runId, RunEgressContract.CoverageUnavailable, null, [], null));
     }
 
     private static SecretCredential NewP1Credential() =>

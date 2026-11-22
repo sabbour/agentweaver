@@ -88,7 +88,7 @@ public sealed partial class GatewayOwnerClient(
         try
         {
             if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" or
-                    "readPlatformNativeAcsPolicy" ||
+                    "readPlatformNativeAcsPolicy" or "readRunEgress" ||
                 IsRateCardWriteRoute(route) ||
                 IsModelProviderDraftRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
@@ -195,7 +195,13 @@ public sealed partial class GatewayOwnerClient(
             using var response = await SendAsync(route.Owner, request, timeout.Token).ConfigureAwait(false);
             if (IsRedirect(response.StatusCode))
             {
-                await WriteProblemAsync(context, "owner_redirect_rejected", StatusCodes.Status502BadGateway)
+                var status = route.OperationId == "readRunEgress"
+                    ? StatusCodes.Status503ServiceUnavailable
+                    : StatusCodes.Status502BadGateway;
+                var code = route.OperationId == "readRunEgress"
+                    ? "run_egress_unavailable"
+                    : "owner_redirect_rejected";
+                await WriteProblemAsync(context, code, status)
                     .ConfigureAwait(false);
                 return;
             }
@@ -301,7 +307,13 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+            var status = route.OperationId == "readRunEgress"
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status504GatewayTimeout;
+            var code = route.OperationId == "readRunEgress"
+                ? "run_egress_unavailable"
+                : "owner_timeout";
+            await WriteProblemAsync(context, code, status)
                 .ConfigureAwait(false);
         }
         catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
@@ -315,7 +327,13 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (HttpRequestException)
         {
-            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+            var status = route.OperationId == "readRunEgress"
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status502BadGateway;
+            var code = route.OperationId == "readRunEgress"
+                ? "run_egress_unavailable"
+                : "owner_unavailable";
+            await WriteProblemAsync(context, code, status)
                 .ConfigureAwait(false);
         }
         catch (InvalidDataException)
@@ -328,7 +346,13 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (IOException)
         {
-            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+            var status = route.OperationId == "readRunEgress"
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status502BadGateway;
+            var code = route.OperationId == "readRunEgress"
+                ? "run_egress_unavailable"
+                : "owner_unavailable";
+            await WriteProblemAsync(context, code, status)
                 .ConfigureAwait(false);
         }
     }

@@ -88,6 +88,14 @@ Use the [HTTP API reference](../reference/api.md#environment-discovery-and-recov
 for the route table, required authority, pagination limits, and recovery request
 contracts. The Gateway does not expose these routes as MCP tools.
 
+To read stored attributed outbound traffic for one run, call
+`GET /api/v1/runs/{runId}/egress` (`readRunEgress`). Gateway sets
+`Cache-Control: no-store` before authentication and forwards the caller bearer
+and optional `X-Agentweaver-Tenant` header to Orchestrator, which resolves a
+single visible run and forwards the request to Environment. See
+[Read stored run egress](../architecture/environment-egress.md#read-stored-run-egress)
+and [Run egress](../reference/api.md#run-egress).
+
 ## Configure the Gateway
 
 Set the following configuration before you start the host:

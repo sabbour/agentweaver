@@ -195,6 +195,25 @@ and orchestration tests check admission for task overrides, matching delivery
 to the runtime, and denial when the BYOK hard USD budget is missing or
 unpriced. These tests do not call a live provider or create paid usage.
 
+## Test stored run egress reads
+
+Run the Environment, Orchestrator, Gateway, and OpenAPI parity tests from the
+repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --configuration Release --filter "FullyQualifiedName~EnvironmentRunEgressTests"
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~RunEgressEndpointTests"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayRunEgressTests"
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayOpenApiParityTests"
+```
+
+The Environment and Orchestrator tests use disposable PostgreSQL databases and
+local test servers. They check duplicate tenant header rejection, current
+Projects authority revalidation, `Platform/default` admin and project/tenant
+read grants, visible-run resolution with hidden duplicates, keyset pagination
+with equal timestamps, cursor scope binding, `Cache-Control: no-store`, and
+`503` dependency errors.
+
 ## Run the standard test suites
 
 Run the following commands to restore, build, and test the main .NET and Node.js

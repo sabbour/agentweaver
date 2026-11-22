@@ -347,6 +347,32 @@ public static class ProjectRunEndpoints
         new(["state", "startedBy", "cursor", "pageSize"], StringComparer.Ordinal);
     private static readonly HashSet<string> NoQueryNames = new([], StringComparer.Ordinal);
 
+    /// <summary>Sets Cache-Control: no-store on run egress responses before authentication runs.</summary>
+    public static IApplicationBuilder UseRunEgressNoStore(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            if (IsRunEgressPath(context.Request.Path))
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.XContentTypeOptions = "nosniff";
+            }
+            await next(context).ConfigureAwait(false);
+        });
+
+    private static bool IsRunEgressPath(PathString path)
+    {
+        var value = path.Value?.TrimEnd('/');
+        if (string.IsNullOrEmpty(value))
+            return false;
+        var segments = value.Split('/', StringSplitOptions.None);
+        return segments.Length == 5 &&
+            string.IsNullOrEmpty(segments[0]) &&
+            string.Equals(segments[1], "api", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(segments[2], "runs", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(segments[3]) &&
+            string.Equals(segments[4], "egress", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Registers <c>GET /api/projects/{projectId}/runs</c>.
     /// </summary>
@@ -358,6 +384,9 @@ public static class ProjectRunEndpoints
         app.MapGet(
             "/api/projects/{projectId}/runs/{runId}/history/sessions",
             ReadProjectRunSessionTreeAsync).RequireAuthorization();
+        app.MapGet(
+            "/api/runs/{runId}/egress",
+            ReadRunEgressAsync).RequireAuthorization();
         app.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/p1-invocation-binding",
             ReadP1InvocationBindingAsync).RequireAuthorization();
@@ -388,6 +417,102 @@ public static class ProjectRunEndpoints
                 actor, selection, cancellationToken).ConfigureAwait(false);
             return Results.Ok(binding);
         }, cancellationToken);
+
+    /// <summary>Reads stored outbound traffic for one visible run via Environment.</summary>
+    internal static Task<IResult> ReadRunEgressAsync(
+        string runId,
+        HttpContext context,
+        ProjectsRunSelectionClient projects,
+        ProjectRunReadStore store,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        CoordinationEndpoints.ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            if (context.Request.ContentLength is > 0 ||
+                context.Request.Headers.TransferEncoding.Count != 0 ||
+                context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true &&
+                await HasRequestBodyBytesAsync(context.Request, cancellationToken).ConfigureAwait(false))
+                throw new CoordinationException("run_egress_query_invalid", StatusCodes.Status400BadRequest);
+
+            CoordinationIdentity.ValidateIdentity(runId, "run_id");
+            Dictionary<string, string> query;
+            try
+            {
+                query = ReadSingleValuedQuery(context.Request.Query, new(["limit", "cursor"], StringComparer.Ordinal));
+            }
+            catch (CoordinationException exception) when (exception.Code == "query_invalid")
+            {
+                throw new CoordinationException("run_egress_query_invalid", StatusCodes.Status400BadRequest, exception);
+            }
+
+            var pageSize = RunEgressContract.DefaultPageSize;
+            if (query.TryGetValue("limit", out var rawLimit))
+            {
+                if (!int.TryParse(rawLimit, System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out var parsed) ||
+                    parsed is < 1 or > RunEgressContract.MaximumPageSize)
+                    throw new CoordinationException("run_egress_query_invalid", StatusCodes.Status400BadRequest);
+                pageSize = parsed;
+            }
+
+            if (query.TryGetValue("cursor", out var cursor) &&
+                (string.IsNullOrWhiteSpace(cursor) || cursor.Length > RunEgressContract.MaximumCursorLength))
+                throw new CoordinationException("run_egress_cursor_invalid", StatusCodes.Status400BadRequest);
+
+            var authority = await projects.ReadRunEgressAuthorityAsync(
+                context, runId, cancellationToken).ConfigureAwait(false);
+
+            string? projectId;
+            try
+            {
+                projectId = await store.ResolveVisibleRunProjectAsync(
+                    authority.TenantId,
+                    runId,
+                    authority.BoundProjectId,
+                    authority.AllProjectsVisible,
+                    authority.VisibleProjectIds,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Npgsql.NpgsqlException exception)
+            {
+                throw new CoordinationException(
+                    "run_egress_unavailable", StatusCodes.Status503ServiceUnavailable, exception);
+            }
+
+            if (projectId is null)
+                throw new CoordinationException("run_not_found", StatusCodes.Status404NotFound);
+
+            var environmentClient = context.RequestServices.GetService<RunEgressEnvironmentClient>()
+                ?? throw new CoordinationException("run_egress_unavailable", StatusCodes.Status503ServiceUnavailable);
+
+            var actor = await RuntimeRunStartDispatcher.CreateActorAsync(context, timeProvider).ConfigureAwait(false);
+            try
+            {
+                var forwardedActor = actor.TenantSelector is null
+                    ? new RuntimeActorAuthorization(actor.Bearer, authority.TenantId)
+                    : actor;
+                var page = await environmentClient.ReadRunEgressAsync(
+                    forwardedActor,
+                    projectId,
+                    runId,
+                    pageSize,
+                    cursor,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(page);
+            }
+            finally
+            {
+                actor.Bearer.Invalidate();
+            }
+        }, cancellationToken);
+
+    private static async Task<bool> HasRequestBodyBytesAsync(HttpRequest request, CancellationToken cancellationToken)
+    {
+        var probe = new byte[1];
+        return await request.Body.ReadAsync(probe, cancellationToken).ConfigureAwait(false) > 0;
+    }
 
     /// <summary>Reads a run's session tree for a caller with current project read authority.</summary>
     internal static Task<IResult> ReadProjectRunSessionTreeAsync(

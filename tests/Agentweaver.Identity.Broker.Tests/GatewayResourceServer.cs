@@ -118,6 +118,7 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
         var app = builder.Build();
         app.UseRouting();
         GatewayHost::Agentweaver.Gateway.GatewayEndpoints.UseTargetContextGuard(app);
+        GatewayHost::Agentweaver.Gateway.GatewayEndpoints.UseRunEgressNoStore(app);
         app.UseCors();
         app.UseAuthentication();
         app.UseAuthorization();

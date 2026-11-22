@@ -122,9 +122,9 @@ internal static class CoordinationIdentity
     }
 
     /// <summary>
-    /// Checks whether a tenant selector uses the bounded opaque identifier syntax.
+    /// Checks whether an identifier uses the bounded opaque identifier syntax.
     /// </summary>
-    private static bool IsOpaqueIdentifier(string? value) =>
+    internal static bool IsOpaqueIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');

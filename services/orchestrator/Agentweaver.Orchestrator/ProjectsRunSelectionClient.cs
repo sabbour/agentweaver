@@ -1081,6 +1081,125 @@ internal sealed class ProjectsRunSelectionClient(
         return authorization;
     }
 
+    internal sealed record RunEgressAuthority(
+        string TenantId,
+        string? BoundProjectId,
+        bool AllProjectsVisible,
+        ImmutableArray<string> VisibleProjectIds);
+
+    /// <summary>
+    /// Resolves fresh Projects authority for reading stored run egress across visible runs in one tenant.
+    /// </summary>
+    internal async Task<RunEgressAuthority> ReadRunEgressAuthorityAsync(
+        HttpContext context,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        CoordinationIdentity.RequireReadScope(context.User);
+        var boundTenants = context.User.FindAll("tenant_id")
+            .Concat(context.User.FindAll("tid"))
+            .Concat(context.User.FindAll("http://schemas.microsoft.com/identity/claims/tenantid"))
+            .Take(2)
+            .ToArray();
+        var boundProjects = context.User.FindAll("project_id").Take(2).ToArray();
+        var boundRuns = context.User.FindAll("run_id").Take(2).ToArray();
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (!HasAudience(context.User, options.Audience) ||
+            !HasAudience(context.User, options.ProjectsAudience) ||
+            context.User.HasClaim(claim => claim.Type == "purpose") ||
+            boundTenants.Length > 1 ||
+            (boundTenants.Length == 1 && (!CoordinationIdentity.IsOpaqueIdentifier(boundTenants[0].Value) ||
+                (tenant is not null && !string.Equals(boundTenants[0].Value, tenant, StringComparison.Ordinal)))) ||
+            boundProjects.Length > 1 ||
+            (boundProjects.Length == 1 && !CoordinationIdentity.IsOpaqueIdentifier(boundProjects[0].Value)) ||
+            boundRuns.Length > 1 ||
+            (boundRuns.Length == 1 && (boundProjects.Length != 1 ||
+                !CoordinationIdentity.IsOpaqueIdentifier(boundRuns[0].Value) ||
+                !string.Equals(boundRuns[0].Value, runId, StringComparison.Ordinal))))
+            throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        var bearer = CoordinationIdentity.RequireBearer(context);
+        ProjectsAuthorizationContext authorization;
+        try
+        {
+            authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (CoordinationException exception) when (exception.StatusCode >= StatusCodes.Status500InternalServerError)
+        {
+            throw new CoordinationException("run_egress_unavailable", StatusCodes.Status503ServiceUnavailable, exception);
+        }
+        var boundTenantId = boundTenants.Length == 1 ? boundTenants[0].Value : null;
+        var boundProjectId = boundProjects.Length == 1 ? boundProjects[0].Value : null;
+        var boundRunId = boundRuns.Length == 1 ? boundRuns[0].Value : null;
+        if (authorization.ContractVersion != 1 ||
+            !string.Equals(authorization.Issuer, options.Issuer, StringComparison.Ordinal) ||
+            !string.Equals(authorization.ActorId, caller.Subject, StringComparison.Ordinal) ||
+            !CoordinationIdentity.IsOpaqueIdentifier(authorization.TenantId) ||
+            (tenant is not null && !string.Equals(authorization.TenantId, tenant, StringComparison.Ordinal)) ||
+            (boundTenantId is not null && !string.Equals(authorization.TenantId, boundTenantId, StringComparison.Ordinal)) ||
+            authorization.MembershipRevision < 1 ||
+            authorization.EffectiveAuthority.IsDefault ||
+            !string.Equals(authorization.BoundProjectId, boundProjectId, StringComparison.Ordinal) ||
+            !string.Equals(authorization.BoundRunId, boundRunId, StringComparison.Ordinal) ||
+            (authorization.BoundRunId is not null &&
+             (!string.Equals(authorization.BoundRunId, runId, StringComparison.Ordinal) ||
+              authorization.BoundProjectId is null)))
+            throw new CoordinationException("run_egress_permission_denied", StatusCodes.Status403Forbidden);
+
+        var scopes = context.User.FindAll("scope")
+            .Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .ToHashSet(StringComparer.Ordinal);
+        var isPlatformAdmin =
+            scopes.Contains("api.read") &&
+            scopes.Contains("projects.admin") &&
+            boundTenantId is null &&
+            boundProjectId is null &&
+            boundRunId is null &&
+            authorization.BoundProjectId is null &&
+            authorization.BoundRunId is null &&
+            authorization.EffectiveAuthority.Any(authority =>
+                authority.ResourceType == "platform" &&
+                authority.ResourceId == "default" &&
+                !authority.Permissions.IsDefault &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission == "readPlatformRuntimeDefaults" &&
+                    permission.RoleRevision > 0));
+        var hasTenantRead =
+            !authorization.EffectiveAuthority.IsDefault &&
+            authorization.EffectiveAuthority.Any(authority =>
+                authority.ResourceType == "tenant" &&
+                authority.ResourceId == authorization.TenantId &&
+                !authority.Permissions.IsDefault &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission == "readProjects" &&
+                    permission.RoleRevision > 0));
+        var visibleProjectIds = authorization.EffectiveAuthority.IsDefault
+            ? []
+            : authorization.EffectiveAuthority
+                .Where(authority =>
+                    authority.ResourceType == "project" &&
+                    !authority.Permissions.IsDefault &&
+                    (authorization.BoundProjectId is null || authority.ResourceId == authorization.BoundProjectId) &&
+                    authority.Permissions.Any(permission =>
+                        permission.Permission == "readProjects" &&
+                        permission.RoleRevision > 0))
+                .Select(authority => authority.ResourceId)
+                .Distinct(StringComparer.Ordinal)
+                .ToImmutableArray();
+
+        if (!isPlatformAdmin && !hasTenantRead && visibleProjectIds.IsEmpty)
+            throw new CoordinationException("run_egress_permission_denied", StatusCodes.Status403Forbidden);
+
+        return new RunEgressAuthority(
+            authorization.TenantId,
+            authorization.BoundProjectId,
+            isPlatformAdmin || hasTenantRead,
+            visibleProjectIds);
+    }
+
     /// <summary>
     /// Reads fresh Projects authorization for a caller-scoped read that spans projects.
     /// </summary>
