@@ -162,6 +162,21 @@ literal key and encoded-alias rejection, 64 KiB body bounds, `415` media-type
 checks, `201`/`200`/`409` immutability semantics, strong SHA-256 ETags, and
 existing `RuntimeRateCardOwnerReadEndpoint` compatibility.
 
+## Test Azure Retail runtime price-card writes
+
+Run the Events, Gateway, and migration regressions from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter "FullyQualifiedName~AzureRetailPriceLookupTests|FullyQualifiedName~RuntimeRateCardAzureRetailWriteEndpointTests|FullyQualifiedName~EventsAndSessionsMigrationTests"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayRetailRateCardTests"
+```
+
+These tests use disposable PostgreSQL databases and local HTTP fixtures. They
+check exact meter resolution across pages, `1K`/`1M` normalization, missing and
+ambiguous meters, `409 pricing_changed`, `503 pricing_unavailable`, token expiry
+and authority revocation during lookup, canonical request digest replay and
+insert races, and migration `013_retail_rate_card_digest.sql`.
+
 ## Test revision-backed BYOK run admission
 
 Run the contract and orchestration tests after the Release build:

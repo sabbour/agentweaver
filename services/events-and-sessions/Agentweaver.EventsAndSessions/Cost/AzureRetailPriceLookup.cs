@@ -47,40 +47,52 @@ public sealed class AzureRetailPriceLookup : IDisposable
     private const int MaxTextLength = 512;
     private const int MaxMeterIdLength = 128;
     private static readonly TimeSpan SearchTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ResolveTimeout = TimeSpan.FromSeconds(10);
 
     private readonly HttpClient _client;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _searchTimeout;
+    private readonly TimeSpan _resolveTimeout;
     private bool _disposed;
 
     public AzureRetailPriceLookup(TimeProvider? timeProvider = null)
-        : this(new HttpClient(CreateHandler()), timeProvider ?? TimeProvider.System, SearchTimeout)
+        : this(
+            new HttpClient(CreateHandler()),
+            timeProvider ?? TimeProvider.System,
+            SearchTimeout,
+            ResolveTimeout)
     {
     }
 
     internal AzureRetailPriceLookup(
         HttpMessageHandler handler,
         TimeProvider? timeProvider = null,
-        TimeSpan? searchTimeout = null)
+        TimeSpan? searchTimeout = null,
+        TimeSpan? resolveTimeout = null)
         : this(
             new HttpClient(handler, disposeHandler: true),
             timeProvider ?? TimeProvider.System,
-            searchTimeout ?? SearchTimeout)
+            searchTimeout ?? SearchTimeout,
+            resolveTimeout ?? ResolveTimeout)
     {
     }
 
     private AzureRetailPriceLookup(
         HttpClient client,
         TimeProvider timeProvider,
-        TimeSpan searchTimeout)
+        TimeSpan searchTimeout,
+        TimeSpan resolveTimeout)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(timeProvider);
         if (searchTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(searchTimeout));
+        if (resolveTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(resolveTimeout));
         _client = client;
         _timeProvider = timeProvider;
         _searchTimeout = searchTimeout;
+        _resolveTimeout = resolveTimeout;
     }
 
     public async Task<AzureRetailPriceLookupResult> SearchAsync(
@@ -91,13 +103,92 @@ public sealed class AzureRetailPriceLookup : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         var normalizedRegion = ValidateRegion(region);
         var normalizedSearch = ValidateSearch(search);
-        using var deadline = new CancellationTokenSource(_searchTimeout, _timeProvider);
+        var filter = $"serviceName eq 'Foundry Models' and armRegionName eq '{normalizedRegion}' and " +
+            $"priceType eq 'Consumption' and contains(meterName, '{normalizedSearch}')";
+        var items = await FetchAllPagesAsync(normalizedRegion, filter, _searchTimeout, cancellationToken)
+            .ConfigureAwait(false);
+        var ordered = items
+            .OrderBy(item => item.ProductName, StringComparer.Ordinal)
+            .ThenBy(item => item.MeterName, StringComparer.Ordinal)
+            .ThenBy(item => item.MeterId, StringComparer.Ordinal)
+            .ThenBy(item => item.SkuName, StringComparer.Ordinal)
+            .ThenBy(item => item.UnitOfMeasure, StringComparer.Ordinal)
+            .ThenBy(item => item.TierMinimumUnits)
+            .ThenBy(item => item.RetailPrice)
+            .ToImmutableArray();
+        return new AzureRetailPriceLookupResult(
+            normalizedRegion,
+            Endpoint,
+            DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime),
+            ordered);
+    }
+
+    /// <summary>
+    /// Resolves each selected meter ID across all pages of the fixed Azure Retail endpoint
+    /// and requires precisely one eligible tier-zero USD 1K/1M Consumption row per meter.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, decimal>> ResolveMetersAsync(
+        string region,
+        IReadOnlyList<string> meterIds,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(meterIds);
+        var normalizedRegion = ValidateRegion(region);
+        if (meterIds.Count == 0)
+            throw new ArgumentException("At least one meter ID is required.", nameof(meterIds));
+
+        var eligibleByMeter = new Dictionary<string, List<decimal>>(StringComparer.Ordinal);
+        var seenIgnoreCase = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var meterId in meterIds)
+        {
+            if (string.IsNullOrEmpty(meterId) || meterId.Length > MaxMeterIdLength ||
+                !meterId.All(character => char.IsAsciiLetterOrDigit(character) ||
+                    character is '.' or '_' or '-' or ':'))
+                throw new ArgumentException("A valid meter ID is required.", nameof(meterIds));
+            if (!seenIgnoreCase.Add(meterId))
+                throw new ArgumentException("Meter IDs must be unique ignoring case.", nameof(meterIds));
+            eligibleByMeter.Add(meterId, []);
+        }
+
+        var meterClause = string.Join(" or ", meterIds.Select(id => $"meterId eq '{id}'"));
+        var filter = $"serviceName eq 'Foundry Models' and armRegionName eq '{normalizedRegion}' and " +
+            $"priceType eq 'Consumption' and ({meterClause})";
+        var items = await FetchAllPagesAsync(normalizedRegion, filter, _resolveTimeout, cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var item in items)
+        {
+            if (item.UsdPer1M is { } usdPer1M &&
+                eligibleByMeter.TryGetValue(item.MeterId, out var matches))
+                matches.Add(usdPer1M);
+        }
+
+        var resolved = new Dictionary<string, decimal>(meterIds.Count, StringComparer.Ordinal);
+        foreach (var meterId in meterIds)
+        {
+            var matches = eligibleByMeter[meterId];
+            if (matches.Count == 0)
+                throw Unavailable("meter_not_found");
+            if (matches.Count > 1)
+                throw Unavailable("ambiguous_meter");
+            resolved.Add(meterId, matches[0]);
+        }
+
+        return resolved;
+    }
+
+    private async Task<List<AzureRetailMeterCandidate>> FetchAllPagesAsync(
+        string normalizedRegion,
+        string filter,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var deadline = new CancellationTokenSource(timeout, _timeProvider);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
 
         try
         {
-            var filter = $"serviceName eq 'Foundry Models' and armRegionName eq '{normalizedRegion}' and " +
-                $"priceType eq 'Consumption' and contains(meterName, '{normalizedSearch}')";
             string? nextPage = $"{Endpoint}?currencyCode=USD&$filter={Uri.EscapeDataString(filter)}";
             var visited = new HashSet<string>(StringComparer.Ordinal);
             var items = new List<AzureRetailMeterCandidate>();
@@ -159,20 +250,7 @@ public sealed class AzureRetailPriceLookup : IDisposable
             }
 
             linked.Token.ThrowIfCancellationRequested();
-            var ordered = items
-                .OrderBy(item => item.ProductName, StringComparer.Ordinal)
-                .ThenBy(item => item.MeterName, StringComparer.Ordinal)
-                .ThenBy(item => item.MeterId, StringComparer.Ordinal)
-                .ThenBy(item => item.SkuName, StringComparer.Ordinal)
-                .ThenBy(item => item.UnitOfMeasure, StringComparer.Ordinal)
-                .ThenBy(item => item.TierMinimumUnits)
-                .ThenBy(item => item.RetailPrice)
-                .ToImmutableArray();
-            return new AzureRetailPriceLookupResult(
-                normalizedRegion,
-                Endpoint,
-                DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime),
-                ordered);
+            return items;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

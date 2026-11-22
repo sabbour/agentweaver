@@ -344,8 +344,89 @@ public sealed class AzureRetailPriceLookupTests
     private static AzureRetailPriceLookup Create(
         HttpMessageHandler handler,
         TimeProvider? timeProvider = null,
-        TimeSpan? timeout = null) =>
-        new(handler, timeProvider ?? TimeProvider.System, timeout);
+        TimeSpan? timeout = null,
+        TimeSpan? resolveTimeout = null) =>
+        new(handler, timeProvider ?? TimeProvider.System, timeout, resolveTimeout);
+
+    [Fact]
+    public async Task ResolveMetersNormalizesUnitsAndIgnoresIneligibleRowsAcrossPages()
+    {
+        var handler = new QueueHandler((request, number, _) =>
+        {
+            if (number == 1)
+            {
+                var filter = Uri.UnescapeDataString(request.RequestUri!.Query);
+                Assert.Contains("meterId eq 'm-in'", filter, StringComparison.Ordinal);
+                Assert.Contains("meterId eq 'm-out'", filter, StringComparison.Ordinal);
+                return Task.FromResult(Ok(Envelope(
+                    [
+                        Row("m-in", "Input", unit: "1K", price: 0.0025m, tier: 0m),
+                        Row("m-in", "Input Tiered", unit: "1K", price: 0.001m, tier: 100m),
+                    ],
+                    $"{Endpoint}?$skip=1")));
+            }
+            return Task.FromResult(Ok(Envelope(
+                [
+                    Row("m-out", "Output", unit: "1M", price: 10m, tier: 0m),
+                    Row("m-out", "Output Bad Unit", unit: "100", price: 1m, tier: 0m),
+                ])));
+        });
+        using var lookup = Create(handler);
+
+        var resolved = await lookup.ResolveMetersAsync(Region, ["m-in", "m-out"]);
+
+        Assert.Equal(2.5m, resolved["m-in"]);
+        Assert.Equal(10m, resolved["m-out"]);
+    }
+
+    [Fact]
+    public async Task ResolveMetersRejectsMissingAndAmbiguousMetersAfterFullPaging()
+    {
+        var missingHandler = new QueueHandler((_, _, _) =>
+            Task.FromResult(Ok(Envelope([Row("m-in", "Input", unit: "1M", price: 2.5m, tier: 0m)]))));
+        using (var missingLookup = Create(missingHandler))
+        {
+            var error = await Assert.ThrowsAsync<AzureRetailPriceLookupException>(
+                () => missingLookup.ResolveMetersAsync(Region, ["m-in", "m-out"]));
+            Assert.Equal("meter_not_found", error.Reason);
+        }
+
+        // Duplicate eligible row on page 2 must still be rejected even if page 1 matched.
+        var ambiguousHandler = new QueueHandler((_, number, _) => number == 1
+            ? Task.FromResult(Ok(Envelope(
+                [
+                    Row("m-in", "Input", unit: "1M", price: 2.5m, tier: 0m),
+                    Row("m-out", "Output", unit: "1M", price: 10m, tier: 0m),
+                ],
+                $"{Endpoint}?$skip=1")))
+            : Task.FromResult(Ok(Envelope(
+                [Row("m-in", "Input Duplicate", unit: "1M", price: 3.0m, tier: 0m)]))));
+        using var ambiguousLookup = Create(ambiguousHandler);
+
+        var ambiguousError = await Assert.ThrowsAsync<AzureRetailPriceLookupException>(
+            () => ambiguousLookup.ResolveMetersAsync(Region, ["m-in", "m-out"]));
+        Assert.Equal("ambiguous_meter", ambiguousError.Reason);
+        Assert.Equal(2, ambiguousHandler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task ResolveMetersEnforcesDeadlineAndPropagatesCallerCancellation()
+    {
+        var handler = new QueueHandler(async (_, _, cancellationToken) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return Ok(Envelope([]));
+        });
+        using var lookup = Create(handler, resolveTimeout: TimeSpan.FromMilliseconds(50));
+
+        var deadlineError = await Assert.ThrowsAsync<AzureRetailPriceLookupException>(
+            () => lookup.ResolveMetersAsync(Region, ["m-in", "m-out"]));
+        Assert.Equal("deadline_exceeded", deadlineError.Reason);
+
+        using var callerCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => lookup.ResolveMetersAsync(Region, ["m-in", "m-out"], callerCts.Token));
+    }
 
     private static string Envelope(IEnumerable<JsonObject> rows, string? nextPage = null)
     {

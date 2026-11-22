@@ -336,6 +336,7 @@ app.MapEventsAndSessionsEndpoints();
 app.MapProjectUsageEndpoints();
 app.MapAzureRetailPriceEndpoints();
 app.MapRuntimeRateCardManualWriteEndpoints();
+app.MapRuntimeRateCardAzureRetailWriteEndpoints();
 app.MapAcceptedEffectEndpoints();
 app.MapAddressedMessageEndpoints();
 if (nativeUsageEnabled)

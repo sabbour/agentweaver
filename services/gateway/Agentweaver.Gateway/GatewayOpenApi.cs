@@ -156,6 +156,8 @@ internal static partial class GatewayOpenApi
             ["searchProjectAzureRetailPrices"] = C(null, "AzureRetailPriceLookupResult", "200"),
             ["savePlatformManualRuntimeRateCard"] = C(
                 "ManualRuntimeRateCardWriteRequest", "RuntimeRateCard", "200", "201"),
+            ["savePlatformAzureRetailRuntimeRateCard"] = C(
+                "AzureRetailRuntimeRateCardWriteRequest", "AzureRetailRuntimeRateCard", "200", "201"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["createProjectRun"] = C("CreateProjectRunRequest", "CreateProjectRunResponse", "201"),
             ["startProjectRun"] = C(null, "StartProjectRunResponse", "200"),
@@ -501,7 +503,8 @@ internal static partial class GatewayOpenApi
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         route.OperationId == "getAuthorizationTargetContext" ||
                         IsModelProviderDraftRoute(route.OperationId)) && status == "200") ||
-                        (route.OperationId == "savePlatformManualRuntimeRateCard" && status is "200" or "201")
+                        ((route.OperationId is "savePlatformManualRuntimeRateCard" or "savePlatformAzureRetailRuntimeRateCard") &&
+                         status is "200" or "201")
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
@@ -532,6 +535,8 @@ internal static partial class GatewayOpenApi
                                                 "Azure Retail price search responses are not cacheable.",
                                             "savePlatformManualRuntimeRateCard" =>
                                                 "Manual runtime price-card responses are not cacheable.",
+                                            "savePlatformAzureRetailRuntimeRateCard" =>
+                                                "Azure Retail runtime price-card responses are not cacheable.",
                                             "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
                                             "writePlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
                                             "readPlatformNativeAcsPolicyRevision" =>
@@ -585,6 +590,14 @@ internal static partial class GatewayOpenApi
             responses["413"] = ProblemResponse("The request body exceeds the 65536-byte route limit.");
             responses["415"] = ProblemResponse("The request content type must be application/json.");
             responses["503"] = ProblemResponse("Rate-card authorization or storage is unavailable.");
+        }
+        if (route.OperationId == "savePlatformAzureRetailRuntimeRateCard")
+        {
+            responses["400"] = ProblemResponse("The path keys, query string, or Azure Retail runtime price-card body are invalid.");
+            responses["409"] = ProblemResponse("The verified Azure Retail price changed or a different rate card or legacy row already exists at that ID and version.");
+            responses["413"] = ProblemResponse("The request body exceeds the 65536-byte route limit.");
+            responses["415"] = ProblemResponse("The request content type must be application/json.");
+            responses["503"] = ProblemResponse("Azure Retail pricing or rate-card storage is unavailable.");
         }
         if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent" or
             "setAllProjectBacklogTasksReady" or "setProjectBacklogTaskPosition" or
@@ -1125,6 +1138,17 @@ else if (route.OperationId is
                 "PlatformAdmin authority checked through Projects before reading the 64 KiB UTF-8 JSON body. " +
                 "Rejects encoded path aliases and query parameters. Returns 201 for a new version, 200 for " +
                 "identical canonical content, and 409 for conflicting content or a legacy row, with a strong " +
+                "SHA-256 ETag and Cache-Control: no-store.";
+        }
+        else if (route.OperationId == "savePlatformAzureRetailRuntimeRateCard")
+        {
+            description +=
+                " Requires api.read, projects.admin, active membership, an unbound request, and current " +
+                "PlatformAdmin authority checked through Projects before reading the 64 KiB UTF-8 JSON body " +
+                "and again after Azure Retail verification. Rejects encoded path aliases and query parameters. " +
+                "Verifies one eligible tier-zero USD Consumption 1K/1M meter per selected slot, returns 201 " +
+                "for a new version, 200 for an exact replay without calling Azure, 409 for changed prices or " +
+                "conflicting content, and 503 when Azure Retail or storage is unavailable, with a strong " +
                 "SHA-256 ETag and Cache-Control: no-store.";
         }
         else if (route.OperationId == "listProjectRuns")
@@ -2658,6 +2682,33 @@ else if (route.OperationId is
             ("runtimeRateCardSchemaVersion", new { type = "integer", @enum = new[] { 1 } }),
             ("rateCard", Ref("RuntimeRateCardBody")),
             ("provenance", Ref("ManualRuntimeRateCardProvenance"))),
+        ["AzureRetailMeterSelection"] = StrictObj(
+            ["meterId", "expectedUsdPer1M"],
+            ("meterId", new { type = "string", minLength = 1, maxLength = 128, pattern = "^[A-Za-z0-9._:-]+$" }),
+            ("expectedUsdPer1M", new { type = "number", exclusiveMinimum = 0 })),
+        ["AzureRetailRuntimeRateCardWriteRequest"] = StrictObj(
+            ["region", "modelId", "input", "output"],
+            ("region", new { type = "string", minLength = 1, maxLength = 63, pattern = "^[a-z][a-z0-9]{0,62}$" }),
+            ("modelId", new { type = "string", minLength = 1, maxLength = 256, pattern = "^[A-Za-z0-9._:-]+$" }),
+            ("input", Ref("AzureRetailMeterSelection")),
+            ("output", Ref("AzureRetailMeterSelection")),
+            ("cachedInput", Ref("AzureRetailMeterSelection"))),
+        ["AzureRetailRuntimeRateCardProvenance"] = StrictObj(
+            ["source", "region", "meterIds"],
+            ("source", new { type = "string", @enum = new[] { "azure-retail-prices" } }),
+            ("region", new { type = "string", minLength = 1, maxLength = 63, pattern = "^[a-z][a-z0-9]{0,62}$" }),
+            ("meterIds", new
+            {
+                type = "array",
+                minItems = 2,
+                maxItems = 3,
+                items = new { type = "string", minLength = 1, maxLength = 128, pattern = "^[A-Za-z0-9._:-]+$" },
+            })),
+        ["AzureRetailRuntimeRateCard"] = StrictObj(
+            ["runtimeRateCardSchemaVersion", "rateCard", "provenance"],
+            ("runtimeRateCardSchemaVersion", new { type = "integer", @enum = new[] { 1 } }),
+            ("rateCard", Ref("RuntimeRateCardBody")),
+            ("provenance", Ref("AzureRetailRuntimeRateCardProvenance"))),
         ["BindChiefOfStaffConversationRequest"] = StrictObj(["projectId", "runId"],
             ("projectId", Str()), ("runId", Str())),
         // An unavailable conversation keeps only its identifier, access, and creation time.

@@ -15,6 +15,8 @@ public sealed class RuntimeRateCardStore
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
+    private static readonly Regex DigestPattern = new(
+        "^v1:[0-9a-f]{64}\\z", RegexOptions.CultureInvariant);
     private readonly NpgsqlDataSource _dataSource;
     private readonly string _quotedSchema;
 
@@ -60,7 +62,8 @@ public sealed class RuntimeRateCardStore
             var stored = await ReadStoredAsync(connection, card.Id, card.Version, cancellationToken)
                 ?? throw new InvalidOperationException("The saved runtime rate card could not be read.");
             var storedRateCard = RuntimeRateCardContract.DeserializeRuntimePayload(stored.Payload);
-            if (storedRateCard is null ||
+            if (stored.AzureRetailRequestDigest is not null ||
+                storedRateCard is null ||
                 !string.Equals(stored.CanonicalCard, canonicalCard, StringComparison.Ordinal) ||
                 !string.Equals(
                     RuntimeRateCardContract.SerializeCanonical(storedRateCard),
@@ -70,6 +73,66 @@ public sealed class RuntimeRateCardStore
                     "A runtime rate-card ID and version cannot be reused with different immutable content.");
             return inserted == 1;
         }
+    }
+
+    public async Task<RuntimeRateCard?> TryGetRetailByDigestAsync(
+        string id,
+        string version,
+        string digest,
+        CancellationToken cancellationToken = default)
+    {
+        RuntimeRateCardContract.ValidateIdentity(id, version);
+        ValidateDigest(digest);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        var stored = await ReadStoredAsync(connection, id, version, cancellationToken);
+        if (stored is null)
+            return null;
+
+        return ValidateRetailMatch(id, version, digest, stored);
+    }
+
+    public async Task<(bool Inserted, RuntimeRateCard RateCard)> SaveRetailAsync(
+        RuntimeRateCard runtimeRateCard,
+        string digest,
+        CancellationToken cancellationToken = default)
+    {
+        RuntimeRateCardContract.Validate(runtimeRateCard);
+        ValidateDigest(digest);
+        if (runtimeRateCard.Provenance is not AzureRetailRateCardProvenance)
+            throw new ArgumentException("Azure Retail provenance is required.", nameof(runtimeRateCard));
+
+        var card = runtimeRateCard.RateCard;
+        var canonicalCard = CostRateCardContract.SerializeCanonical(card);
+        var canonicalRuntimeCard = RuntimeRateCardContract.SerializeCanonical(runtimeRateCard);
+        var multipliers = JsonSerializer.Serialize(card.ModelMultipliers, JsonOptions);
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var insert = new NpgsqlCommand($"""
+            INSERT INTO {_quotedSchema}.usage_rate_cards (
+                card_id, version, meter_source, unit, nano_units_per_unit,
+                model_multipliers, canonical_input, payload, azure_retail_request_digest)
+            VALUES (
+                @card_id, @version, @meter_source, @unit, @nano_units_per_unit,
+                @model_multipliers, @canonical_input, @payload, @azure_retail_request_digest)
+            ON CONFLICT DO NOTHING
+            """, connection);
+        insert.Parameters.AddWithValue("card_id", NpgsqlDbType.Varchar, card.Id);
+        insert.Parameters.AddWithValue("version", NpgsqlDbType.Varchar, card.Version);
+        insert.Parameters.AddWithValue("meter_source", NpgsqlDbType.Varchar, card.MeterSource);
+        insert.Parameters.AddWithValue("unit", NpgsqlDbType.Varchar, card.Unit);
+        insert.Parameters.AddWithValue("nano_units_per_unit", NpgsqlDbType.Numeric, card.NanoUnitsPerUnit);
+        insert.Parameters.AddWithValue("model_multipliers", NpgsqlDbType.Jsonb, multipliers);
+        insert.Parameters.AddWithValue("canonical_input", NpgsqlDbType.Text, canonicalCard);
+        insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, canonicalRuntimeCard);
+        insert.Parameters.AddWithValue("azure_retail_request_digest", NpgsqlDbType.Varchar, digest);
+        var inserted = await insert.ExecuteNonQueryAsync(cancellationToken);
+        var stored = await ReadStoredAsync(connection, card.Id, card.Version, cancellationToken)
+            ?? throw new InvalidOperationException("The saved runtime rate card could not be read.");
+
+        if (inserted == 1)
+            return (true, runtimeRateCard);
+
+        return (false, ValidateRetailMatch(card.Id, card.Version, digest, stored));
     }
 
     public async Task<RuntimeRateCard?> GetAsync(
@@ -96,6 +159,28 @@ public sealed class RuntimeRateCardStore
         return runtimeRateCard;
     }
 
+    private static RuntimeRateCard ValidateRetailMatch(
+        string id,
+        string version,
+        string digest,
+        StoredRateCard stored)
+    {
+        if (!string.Equals(stored.AzureRetailRequestDigest, digest, StringComparison.Ordinal))
+            throw new RuntimeRateCardConflictException(
+                "A runtime rate-card ID and version cannot be reused with a different or legacy request.");
+
+        var storedRateCard = RuntimeRateCardContract.DeserializeRuntimePayload(stored.Payload);
+        if (storedRateCard is null ||
+            storedRateCard.RateCard.Id != id ||
+            storedRateCard.RateCard.Version != version ||
+            !string.Equals(
+                stored.CanonicalCard,
+                CostRateCardContract.SerializeCanonical(storedRateCard.RateCard),
+                StringComparison.Ordinal))
+            throw new InvalidOperationException("The stored runtime rate card does not match its key or canonical content.");
+        return storedRateCard;
+    }
+
     private async Task<StoredRateCard?> ReadStoredAsync(
         NpgsqlConnection connection,
         string id,
@@ -103,7 +188,7 @@ public sealed class RuntimeRateCardStore
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT canonical_input, payload::text
+            SELECT canonical_input, payload::text, azure_retail_request_digest
             FROM {_quotedSchema}.usage_rate_cards
             WHERE card_id = @card_id AND version = @version
             """, connection);
@@ -111,8 +196,18 @@ public sealed class RuntimeRateCardStore
         command.Parameters.AddWithValue("version", NpgsqlDbType.Varchar, version);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new StoredRateCard(reader.GetString(0), reader.GetString(1))
+            ? new StoredRateCard(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2))
             : null;
+    }
+
+    private static void ValidateDigest(string digest)
+    {
+        ArgumentNullException.ThrowIfNull(digest);
+        if (!DigestPattern.IsMatch(digest))
+            throw new ArgumentException("A v1 lowercase SHA-256 request digest is required.", nameof(digest));
     }
 
     private static void ValidateSchema(string schema)
@@ -123,5 +218,5 @@ public sealed class RuntimeRateCardStore
             throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
     }
 
-    private sealed record StoredRateCard(string CanonicalCard, string Payload);
+    private sealed record StoredRateCard(string CanonicalCard, string Payload, string? AzureRetailRequestDigest);
 }

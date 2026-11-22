@@ -36,6 +36,11 @@ public sealed partial class GatewayOwnerClient(
 {
     private const long MaximumProxyResponseBytes = 8 * 1024 * 1024;
     private static readonly TimeSpan DispatchRequestTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan RetailRateCardRequestTimeout = TimeSpan.FromSeconds(40);
+    private static readonly TimeSpan RateCardProjectsCheckTimeout = TimeSpan.FromSeconds(5);
+
+    private static bool IsRateCardWriteRoute(GatewayRoute route) =>
+        route.OperationId is "savePlatformManualRuntimeRateCard" or "savePlatformAzureRetailRuntimeRateCard";
 
     private static async Task<bool> HasP1SetupBodyAsync(
         HttpRequest request, CancellationToken cancellationToken)
@@ -83,23 +88,29 @@ public sealed partial class GatewayOwnerClient(
         try
         {
             if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" or
-                    "readPlatformNativeAcsPolicy" or "savePlatformManualRuntimeRateCard" ||
+                    "readPlatformNativeAcsPolicy" ||
+                IsRateCardWriteRoute(route) ||
                 IsModelProviderDraftRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(
                 cancellationToken,
-                route.OperationId == "dispatchCoordinatorExecution" ? DispatchRequestTimeout : null);
-            if (route.OperationId == "savePlatformManualRuntimeRateCard")
+                route.OperationId switch
+                {
+                    "dispatchCoordinatorExecution" => DispatchRequestTimeout,
+                    "savePlatformAzureRetailRuntimeRateCard" => RetailRateCardRequestTimeout,
+                    _ => null,
+                });
+            if (IsRateCardWriteRoute(route))
             {
-                if (!IsValidManualRateCardWriteRequest(context))
+                if (!IsValidRateCardWriteRequest(context, route))
                 {
                     await WriteProblemAsync(
                         context, "rate_card_request_invalid", StatusCodes.Status400BadRequest)
                         .ConfigureAwait(false);
                     return;
                 }
-                if (!IsSupportedManualRateCardJsonContentType(context.Request.ContentType))
+                if (!IsSupportedRateCardJsonContentType(context.Request.ContentType))
                 {
                     await WriteProblemAsync(
                         context, "unsupported_media_type", StatusCodes.Status415UnsupportedMediaType)
@@ -110,7 +121,7 @@ public sealed partial class GatewayOwnerClient(
                     context.Request.ContentLength > maximumBytes)
                     throw RequestBodyTooLarge();
 
-                await AuthorizeManualRateCardUploadAsync(context, bearer, timeout.Token)
+                await AuthorizeRateCardUploadAsync(context, bearer, timeout.Token)
                     .ConfigureAwait(false);
             }
             if (route.OperationId == "readPlatformNativeAcsPolicy")
@@ -2191,8 +2202,8 @@ public sealed partial class GatewayOwnerClient(
         if (context.Request.ContentLength > maximumBytes)
             throw RequestBodyTooLarge();
 
-        // Stream manual price uploads directly to Events so authority runs before reading the body.
-        if (route.OperationId == "savePlatformManualRuntimeRateCard")
+        // Stream rate-card price uploads directly to Events so authority runs before reading the body.
+        if (IsRateCardWriteRoute(route))
             return null;
 
         var body = new MemoryStream();
@@ -2232,7 +2243,7 @@ public sealed partial class GatewayOwnerClient(
     }
 
     /// <summary>Uses the Gateway problem contract when an inbound request exceeds its route bound.</summary>
-    private static bool IsValidManualRateCardWriteRequest(HttpContext context)
+    private static bool IsValidRateCardWriteRequest(HttpContext context, GatewayRoute route)
     {
         if (context.Request.Query.Count != 0 || context.Request.QueryString.HasValue)
             return false;
@@ -2242,7 +2253,10 @@ public sealed partial class GatewayOwnerClient(
         if (!IsLiteralRateCardKey(id, 128) || !IsLiteralRateCardKey(version, 64))
             return false;
 
-        var expectedPath = $"{context.Request.PathBase.Value}/api/v1/platform/model-pricing/rate-cards/{id}/{version}";
+        var prefix = route.OperationId == "savePlatformAzureRetailRuntimeRateCard"
+            ? "/api/v1/platform/model-pricing/azure-retail/rate-cards"
+            : "/api/v1/platform/model-pricing/rate-cards";
+        var expectedPath = $"{context.Request.PathBase.Value}{prefix}/{id}/{version}";
         var rawTarget = context.Features.Get<IHttpRequestFeature>()?.RawTarget;
         return !string.IsNullOrEmpty(rawTarget)
             ? string.Equals(rawTarget, expectedPath, StringComparison.Ordinal)
@@ -2254,13 +2268,13 @@ public sealed partial class GatewayOwnerClient(
         char.IsAsciiLetterOrDigit(value[0]) &&
         value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-');
 
-    private async Task AuthorizeManualRateCardUploadAsync(
+    private async Task AuthorizeRateCardUploadAsync(
         HttpContext context,
         AuthenticationHeaderValue bearer,
         CancellationToken cancellationToken)
     {
         RequireUnboundPlatformAdminCaller(context, options.IdentityAudience);
-        var tenant = ReadManualRateCardTenantSelector(context);
+        var tenant = ReadRateCardTenantSelector(context);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
@@ -2269,35 +2283,42 @@ public sealed partial class GatewayOwnerClient(
         if (tenant is not null)
             request.Headers.TryAddWithoutValidation(TenantSelectorHeader, tenant);
 
+        using var projectsTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        projectsTimeout.CancelAfter(RateCardProjectsCheckTimeout);
+
         HttpResponseMessage response;
         try
         {
-            response = await SendAsync(GatewayOwner.Projects, request, cancellationToken)
+            response = await SendAsync(GatewayOwner.Projects, request, projectsTimeout.Token)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
+        catch (OperationCanceledException)
+        {
+            throw RateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
+        }
         catch (HttpRequestException)
         {
-            throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
+            throw RateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
         }
         catch (IOException)
         {
-            throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
+            throw RateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
         }
 
         using (response)
         {
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
-                throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "projects_authorization_denied");
+                throw RateCardFailure(StatusCodes.Status403Forbidden, "projects_authorization_denied");
             if (IsRedirect(response.StatusCode))
-                throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_redirect_rejected");
+                throw RateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_redirect_rejected");
             if (response.StatusCode != HttpStatusCode.NoContent)
-                throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
+                throw RateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_unavailable");
             if (response.Headers.CacheControl?.NoStore != true)
-                throw ManualRateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_cache_policy_invalid");
+                throw RateCardFailure(StatusCodes.Status502BadGateway, "projects_authorization_cache_policy_invalid");
         }
     }
 
@@ -2313,19 +2334,19 @@ public sealed partial class GatewayOwnerClient(
             !context.User.FindAll("aud").Any(claim => string.Equals(claim.Value, ownerAudience, StringComparison.Ordinal)) ||
             !scopes.Contains("api.read", StringComparer.Ordinal) ||
             !scopes.Contains("projects.admin", StringComparer.Ordinal))
-            throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "caller_scope_invalid");
+            throw RateCardFailure(StatusCodes.Status403Forbidden, "caller_scope_invalid");
 
         if (context.User.HasClaim(claim => claim.Type is "project_id" or "run_id" or "purpose"))
-            throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "caller_binding_mismatch");
+            throw RateCardFailure(StatusCodes.Status403Forbidden, "caller_binding_mismatch");
     }
 
-    private static string? ReadManualRateCardTenantSelector(HttpContext context)
+    private static string? ReadRateCardTenantSelector(HttpContext context)
     {
         var selectors = context.Request.Headers[TenantSelectorHeader];
         if (selectors.Count == 0)
             return null;
         if (selectors.Count != 1 || !IsOpaqueProjectTenantIdentifier(selectors[0]))
-            throw ManualRateCardFailure(StatusCodes.Status403Forbidden, "projects_authorization_tenant_invalid");
+            throw RateCardFailure(StatusCodes.Status403Forbidden, "projects_authorization_tenant_invalid");
         return selectors[0];
     }
 
@@ -2334,10 +2355,10 @@ public sealed partial class GatewayOwnerClient(
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    private static GatewayOwnerFailureException ManualRateCardFailure(int statusCode, string code) =>
+    private static GatewayOwnerFailureException RateCardFailure(int statusCode, string code) =>
         new(statusCode, "application/problem+json", ProblemBody(code, statusCode));
 
-    private static bool IsSupportedManualRateCardJsonContentType(string? contentType)
+    private static bool IsSupportedRateCardJsonContentType(string? contentType)
     {
         if (string.IsNullOrWhiteSpace(contentType) ||
             !MediaTypeHeaderValue.TryParse(contentType, out var parsed) ||
@@ -2509,7 +2530,7 @@ public sealed partial class GatewayOwnerClient(
                     "application/problem+json",
                     ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
             }
-            var stream = requestBody ?? (route.OperationId == "savePlatformManualRuntimeRateCard" &&
+            var stream = requestBody ?? (IsRateCardWriteRoute(route) &&
                 route.MaximumRequestBodyBytes is { } streamLimit
                 ? new BoundedRequestStream(context.Request.Body, streamLimit)
                 : context.Request.Body);

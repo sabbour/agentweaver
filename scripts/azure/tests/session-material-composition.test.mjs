@@ -297,7 +297,7 @@ function assertSourceComposition(input) {
     ports.ports?.some(port => port.port === '5432' && port.protocol === 'TCP')));
 
   // Migration 010, its inventory grant, and the maintenance Job share one hashed plan; runtime keeps its separate identity.
-  assert.match(input.eventsMigrator, /CurrentSchemaVersion\s*=\s*12/);
+  assert.match(input.eventsMigrator, /CurrentSchemaVersion\s*=\s*13/);
   assert.match(input.eventsMigrator,
     /SupportedVersions[\s\S]*Enumerable\.Range\(1,\s*CurrentSchemaVersion\)/,
     'the migrator version catalog must include migration 011');
@@ -309,6 +309,7 @@ function assertSourceComposition(input) {
   assert.ok(input.generatedPostgresPlan.eventsVersions.includes(10));
   assert.ok(input.generatedPostgresPlan.eventsVersions.includes(11));
   assert.ok(input.generatedPostgresPlan.eventsVersions.includes(12));
+  assert.ok(input.generatedPostgresPlan.eventsVersions.includes(13));
   const eventsPlan = input.generatedPostgresPlan.services.find(service =>
     service.service === 'events-and-sessions');
   assert.ok(eventsPlan);
@@ -513,11 +514,11 @@ test('Events session material source composition rejects broken links', async co
     }],
     ['Events migrator catalog excludes migration 010', input => {
       input.eventsMigrator = input.eventsMigrator.replace(
-        'CurrentSchemaVersion = 12', 'CurrentSchemaVersion = 9');
+        'CurrentSchemaVersion = 13', 'CurrentSchemaVersion = 9');
     }],
     ['Events migrator catalog excludes migration 011', input => {
       input.eventsMigrator = input.eventsMigrator.replace(
-        'CurrentSchemaVersion = 12', 'CurrentSchemaVersion = 10');
+        'CurrentSchemaVersion = 13', 'CurrentSchemaVersion = 10');
     }],
     ['Events migration 010 does not create its inventory', input => {
       input.eventsMigration = input.eventsMigration.replace(

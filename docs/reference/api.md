@@ -1238,6 +1238,38 @@ A new version returns `201`. An identical canonical replay returns `200`.
 Conflicting content or a legacy row at that key returns `409`. Both successes
 return canonical JSON, a strong SHA-256 `ETag`, and `Cache-Control: no-store`.
 
+### Azure Retail runtime price cards
+
+| Method and Gateway path | Owner path | Operation ID |
+| --- | --- | --- |
+| `PUT /api/v1/platform/model-pricing/azure-retail/rate-cards/{id}/{version}` | Events & Sessions `/api/platform/model-pricing/azure-retail/rate-cards/{id}/{version}` | `savePlatformAzureRetailRuntimeRateCard` |
+
+The caller needs `api.read`, `projects.admin`, active membership, an unbound
+token, and current PlatformAdmin authority. Gateway validates the caller token,
+tenant header, and route constraints, then checks Projects & Config
+(`GET /api/authorization/platform/model-pricing-rate-cards`) before forwarding
+the request body. Events & Sessions checks current authority before reading the
+body, reading the store, or calling Azure Retail, and rechecks expiration and
+Projects authority after lookup and before saving a new card.
+
+Both Gateway and Events accept literal ASCII keys matching
+`[A-Za-z0-9][A-Za-z0-9._-]*` up to 128 characters for `id` and 64 characters for
+`version`, and reject encoded path aliases and query parameters (`400`). The
+route requires `id` to equal `azure-retail-prices.standard.{region}`. Requests
+require `application/json` (`415`) and a 64 KiB maximum UTF-8 JSON body (`413`)
+with `region`, `modelId`, `input`, `output`, and optional `cachedInput`. Each
+slot contains `meterId` (1 to 128 characters, unique ignoring case) and a
+positive decimal `expectedUsdPer1M`.
+
+Events verifies one eligible tier-zero USD Consumption `1K` or `1M` row per
+selected meter across all pages of the fixed Azure Retail endpoint. Missing or
+ambiguous meters or Azure Retail failures return `503 pricing_unavailable`.
+Unique prices that differ from `expectedUsdPer1M` return `409 pricing_changed`.
+A new version returns `201`. An exact canonical request replay returns `200`
+with the stored card without calling Azure. Conflicting requests or legacy rows
+return `409 rate_card_conflict`. Both successes return canonical JSON, a strong
+SHA-256 `ETag`, and `Cache-Control: no-store`.
+
 ### Chief of Staff
 
 Native prefix: `/api/chief-of-staff`.
