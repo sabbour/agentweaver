@@ -974,7 +974,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                       AND created_at = '2026-10-20T00:00:00Z'),
                 -- A pre-033 owner rejects repository identity and later Core migrations.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
-                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47,48,49,50,51)),
+                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47,48,49,50,51,52)),
                 to_regclass(@obsolete) IS NULL
             """, connection);
         check.Parameters.AddWithValue("obsolete", $"{_schema}.uq_chief_of_staff_priority_links_target");
