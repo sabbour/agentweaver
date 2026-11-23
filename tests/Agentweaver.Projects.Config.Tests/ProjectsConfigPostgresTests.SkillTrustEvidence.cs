@@ -345,7 +345,7 @@ public sealed partial class ProjectsConfigPostgresTests
         await AssertImmutableAsync(
             "DELETE FROM projects_config.project_skill_trust_evidence WHERE evidence_id = '" +
             saved.EvidenceId.ToString("D") + "'");
-        await AssertImmutableAsync("TRUNCATE TABLE projects_config.project_skill_trust_evidence");
+        await AssertImmutableAsync("TRUNCATE TABLE projects_config.project_skill_trust_evidence CASCADE");
 
         var decisions = await db.GovernanceDecisions.AsNoTracking()
             .Where(item =>

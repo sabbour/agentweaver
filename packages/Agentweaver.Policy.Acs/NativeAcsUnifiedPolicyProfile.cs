@@ -140,7 +140,7 @@ public static class NativeAcsUnifiedPolicyProfile
             return Invalid(diagnostics, "unified_file_closure",
                 "The unified ACS artifact must contain only the reviewed domain files.");
 
-        var legacyToolPermissions = Matches(
+        var legacyToolPermissions = !skillsEnabled && Matches(
             files[ToolPermissionsModulePath], LegacyToolPermissionsModuleBytes);
         if (!Matches(files[NativeAcsComposableDomainsProfile.ActionsModulePath], ActionsModuleBytes) ||
             !Matches(files[NativeAcsComposableDomainsProfile.NetworkModulePath], NetworkModuleBytes) ||

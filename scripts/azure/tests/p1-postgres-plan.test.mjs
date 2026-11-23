@@ -558,7 +558,8 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 154);\n  const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
+  assert.equal(plan.services.flatMap(service => service.tables).length, 154);
+  const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'installation_identity').privileges, ['SELECT']);
   const reservation = projectsConfig.tables.find(table => table.table === 'model_provider_reference_reservations');
   assert.match(reservation.mutationDenialGuards.find(guard =>

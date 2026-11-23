@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 
 namespace Agentweaver.Projects.Config;
@@ -637,33 +638,36 @@ public sealed class SkillContentService(
             // PostgreSQL stores timestamps at microsecond precision, so retries use one stable decision time.
             CreatedAt = ToPostgresTimestampPrecision(timeProvider.GetUtcNow()),
         };
-        try
+        if (policy is not null)
         {
-            var refreshedReports =
-                JsonSerializer.Deserialize<ImmutableArray<PromptContentScanReportV1>>(
-                    reportSetJson, JsonOptions);
-            SkillContentScanAdmission.RequirePassingReports(
-                SkillContentScanAdmission.CreateInputs(
-                    content,
-                    SkillContentScanAdmission.StoredOwnerId(current.ProjectId, current.SkillId),
-                    current.Revision,
-                    current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
-                        ? PromptContentScanProvenance.Git
-                        : PromptContentScanProvenance.Authored,
-                    current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
-                        ? current.SourceRevision
-                        : null,
-                    current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
-                        ? current.ResolvedCommitSha
-                        : null),
-                refreshedReports,
-                DateTimeOffset.MinValue,
-                record.CreatedAt);
-        }
-        catch (JsonException)
-        {
-            throw SkillAdmissionService.AdmissionUnavailable(
-                "The required Skill admission evidence is corrupt.");
+            try
+            {
+                var refreshedReports =
+                    JsonSerializer.Deserialize<ImmutableArray<PromptContentScanReportV1>>(
+                        reportSetJson, JsonOptions);
+                SkillContentScanAdmission.RequirePassingReports(
+                    SkillContentScanAdmission.CreateInputs(
+                        content,
+                        SkillContentScanAdmission.StoredOwnerId(current.ProjectId, current.SkillId),
+                        current.Revision,
+                        current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                            ? PromptContentScanProvenance.Git
+                            : PromptContentScanProvenance.Authored,
+                        current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                            ? current.SourceRevision
+                            : null,
+                        current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                            ? current.ResolvedCommitSha
+                            : null),
+                    refreshedReports,
+                    DateTimeOffset.MinValue,
+                    record.CreatedAt.AddMicroseconds(1));
+            }
+            catch (JsonException)
+            {
+                throw SkillAdmissionService.AdmissionUnavailable(
+                    "The required Skill admission evidence is corrupt.");
+            }
         }
         db.SkillTrustEvidence.Add(record);
         try
@@ -1134,7 +1138,7 @@ public sealed class SkillContentService(
         try
         {
             SkillContentScanAdmission.RequirePassingReports(
-                inputs, reports, DateTimeOffset.MinValue, evidence.CreatedAt);
+                inputs, reports, DateTimeOffset.MinValue, evidence.CreatedAt.AddMicroseconds(1));
         }
         catch (SkillContentServiceException)
         {
@@ -1168,14 +1172,24 @@ public sealed class SkillContentService(
         var admissionService = new SkillAdmissionService(
             db, timeProvider, evaluator: policyEvaluator);
         ProjectSkillAdmissionFenceRecord? fence = null;
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction?)db.Database.CurrentTransaction?.GetDbTransaction();
+        var opened = connection.State != ConnectionState.Open;
+        if (opened)
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            fence = await admissionService.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+            await using var fenceExists = new NpgsqlCommand(
+                "SELECT to_regclass('projects_config.project_skill_admission_fence') IS NOT NULL",
+                connection,
+                transaction);
+            if (await fenceExists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
+                fence = await admissionService.LockFenceAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (PostgresException exception) when (
-            exception.SqlState == PostgresErrorCodes.UndefinedTable)
+        finally
         {
-            fence = null;
+            if (opened)
+                await connection.CloseAsync().ConfigureAwait(false);
         }
         if (fence?.State == ProjectSkillAdmissionFenceState.Draining)
             throw SkillAdmissionService.AdmissionUnavailable(
