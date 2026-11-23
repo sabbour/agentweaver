@@ -294,6 +294,7 @@ test('Only reviewed owner functions receive direct runtime EXECUTE', () => {
   const functions = buildP1PostgresPlan().services.flatMap(service =>
     service.functions.filter(item => item.execute).map(item => `${service.schema}.${item.signature}`));
   assert.deepEqual(functions, [
+    'projects_config.register_verified_skill_release(uuid, text, text, text, text, text, text, text, timestamp with time zone)',
     'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
     'projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])',
     'projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text)',
@@ -557,8 +558,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 151);
-  const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
+  assert.equal(plan.services.flatMap(service => service.tables).length, 154);\n  const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'installation_identity').privileges, ['SELECT']);
   const reservation = projectsConfig.tables.find(table => table.table === 'model_provider_reference_reservations');
   assert.match(reservation.mutationDenialGuards.find(guard =>
@@ -574,6 +574,13 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     'project_skill_trust_evidence_immutable',
     'project_skill_trust_evidence_no_truncate',
   ]);
+  assert.deepEqual(projectsConfig.tables.find(table =>
+    table.table === 'project_skill_admissions').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(projectsConfig.tables.find(table =>
+    table.table === 'project_skill_builtin_releases').privileges, ['SELECT']);
+  assert.deepEqual(projectsConfig.tables.find(table =>
+    table.table === 'project_skill_admission_fence').privileges,
+    ['SELECT', 'INSERT', 'UPDATE']);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
   assert.deepEqual(orchestrator.tables.find(table => table.table === 'project_run_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -586,8 +593,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [20, 7, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 61);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [22, 7, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 63);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });
@@ -670,7 +677,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
       .flatMap(file => [...readFileSync(new URL(file, directory), 'utf8').matchAll(
         /CREATE(?: OR REPLACE)? FUNCTION (?:"?\{schema\}"?|projects_config|environment)\.([a-z_0-9]+)\(([\s\S]*?)\)/g)]
         .map(match => `${match[1]}(${match[2].trim() ? match[2].split(',')
-          .map(parameter => parameter.trim().split(/\s+/).at(-1)).join(', ') : ''})`));
+          .map(parameter => parameter.trim().split(/\s+/).at(-1)
+            .replace('timestamptz', 'timestamp with time zone')).join(', ') : ''})`));
     const duplicates = functions.filter((name, position) => functions.indexOf(name) !== position);
     assert.deepEqual(duplicates,
       owner.startsWith('projects-config/')
@@ -682,7 +690,7 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
       plan.services[index].functions.map(item => item.signature).sort());
   }
   assert.equal(plan.services.flatMap(service =>
-    service.functions.filter(item => item.execute)).length, 5);
+    service.functions.filter(item => item.execute)).length, 6);
 });
 
 test('Old and new guards retain distinct SQL states and row and truncate protections', () => {

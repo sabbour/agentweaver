@@ -282,22 +282,17 @@ public sealed class RuntimeNativePolicyGateTests
             Artifact("allow", skillsEnabled: true));
         var gate = new RuntimeNativePolicyGate(
             source, new FixtureAdmissionStore(), evaluator);
-        var services = new ServiceCollection()
-            .AddSingleton(gate)
-            .BuildServiceProvider();
-        var owner = new RuntimeActionOwner(
-            null!, null!, null!, null!, null!, null!, null!, null!, services,
-            new OrchestratorOptions(
-                "https://issuer.test/",
-                "orchestrator",
-                "https://projects.test/",
-                "projects",
-                "https://events.test/",
-                "events"));
         var (registration, accepted) = RunBinding("byok-model");
+        var request = ModelTurnRequest(registration);
 
-        await RequireModelSendAsync(
-            owner, gate, registration, accepted, ModelTurnRequest(registration));
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, request, default);
+        var guardrailsHash = await RequireClearGuardrailsAsync(
+            gate, preparation, registration, request);
+        await gate.CommitAsync(preparation, guardrailsHash, default);
+
+        Assert.NotNull(await gate.RequireVerifyAsync(
+            registration, accepted, request, default));
     }
 
     [RuntimeNativePolicyFact]

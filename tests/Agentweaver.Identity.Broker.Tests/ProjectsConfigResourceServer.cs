@@ -449,6 +449,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO \"{runtimeRole}\"",
+            $"GRANT EXECUTE ON FUNCTION projects_config.register_verified_skill_release(uuid, text, text, text, text, text, text, text, timestamp with time zone) TO \"{runtimeRole}\"",
         };
         if (grantRoleAssignmentWrites)
             statements =
