@@ -1152,9 +1152,11 @@ else if (route.OperationId is
             description +=
                 " Requires api.read, projects.admin, active membership, an unbound request, and current " +
                 "PlatformAdmin authority checked through Projects before reading the 64 KiB UTF-8 JSON body. " +
-                "Rejects encoded path aliases and query parameters. Returns 201 for a new version, 200 for " +
-                "identical canonical content, and 409 for conflicting content or a legacy row, with a strong " +
-                "SHA-256 ETag and Cache-Control: no-store.";
+                "Rejects encoded path aliases and query parameters. Decimal rates are forwarded without " +
+                "JavaScript number conversion and parsed as exact decimals by the owner. Returns 201 for a " +
+                "new version, 200 for identical canonical content, and 409 for conflicting content or a " +
+                "legacy row; choose a new version instead of overwriting the conflicting card. Responses " +
+                "include a strong SHA-256 ETag and Cache-Control: no-store.";
         }
         else if (route.OperationId == "savePlatformAzureRetailRuntimeRateCard")
         {
@@ -2428,7 +2430,8 @@ else if (route.OperationId is
             ("azure_api_version", NullableStr()),
             ("reasoning_efforts", BoundedArray(
                 Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
-            ("prompt_capacity_tokens", NullableInt())),
+            ("prompt_capacity_tokens", NullableInt()),
+            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr())),
         ["ModelProviderCredentialPutRequest"] = StrictObj(
             ["operationId", "expectedProviderRevision"],
             ("operationId", Uuid()),
@@ -2465,6 +2468,7 @@ else if (route.OperationId is
             ("reasoning_efforts", BoundedArray(
                 Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
             ("prompt_capacity_tokens", NullableInt()),
+            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr()),
             ("reference", new { type = "string", minLength = 1, maxLength = 256,
                 pattern = "^(?!.*__)[A-Za-z0-9.-](?:[A-Za-z0-9._-]{0,254}[A-Za-z0-9.-])?(?![\\s\\S])" }),
             ("targetInstallationId", new { type = "string", format = "uuid",
@@ -2478,11 +2482,13 @@ else if (route.OperationId is
             ("azure_api_version", NullableStr()),
             ("reasoning_efforts", BoundedArray(
                 Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
-            ("prompt_capacity_tokens", NullableInt())),
+            ("prompt_capacity_tokens", NullableInt()),
+            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr())),
         ["ModelProviderDraft"] = StrictObj(
             ["id", "name", "type", "base_url", "model", "wire_api", "azure_api_version",
                 "reasoning_efforts", "prompt_capacity_tokens", "scope", "projectId", "state",
-                "revision", "configurationHash", "has_api_key", "is_active", "hasCredential"],
+                "revision", "configurationHash", "rate_card_id", "rate_card_version",
+                "has_api_key", "is_active", "hasCredential"],
             ("id", Str()), ("name", Str()), ("type", Enum("openai", "azure", "anthropic")),
             ("base_url", Str()), ("model", Str()), ("wire_api", Nullable(Enum("completions", "responses"))),
             ("azure_api_version", NullableStr()), ("reasoning_efforts", Arr(Enum("none", "minimal", "low", "medium", "high", "xhigh"))),

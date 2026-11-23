@@ -63,6 +63,7 @@ project Owner or PlatformAdmin. Every operation requires `api.read` and
 | `DELETE /api/v1/platform/byok-providers/{providerId}/credential` | Identity Broker `DELETE /api/platform/byok-providers/{providerId}/credential` | `disablePlatformByokProviderCredential` |
 | `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}/credential` | Identity Broker `PUT /api/projects/{projectId}/byok-providers/{providerId}/credential` | `setProjectByokProviderCredential` |
 | `DELETE /api/v1/projects/{projectId}/byok-providers/{providerId}/credential` | Identity Broker `DELETE /api/projects/{projectId}/byok-providers/{providerId}/credential` | `disableProjectByokProviderCredential` |
+| `PUT /api/v1/platform/model-pricing/rate-cards/{id}/{version}` | Events `PUT /api/platform/model-pricing/rate-cards/{id}/{version}` | `savePlatformManualRuntimeRateCard` |
 
 List routes accept only `pageSize` and `afterProviderId`. Saves use an
 operation ID and expected revision; create uses revision `0`, while update
@@ -101,8 +102,7 @@ inactive Drafts. `ProjectsConfig:ProviderReferenceReservationsEnabled`
 defaults to `false`; an authorized replay still works when it is off. See the
 [reference reservation contract](./contracts.md#model-provider-draft-metadata)
 for syntax, conflicts, and recovery.
-Public metadata requests do not accept rate-card references. The public
-response `state` is `Draft` or `Available`; the provider revision rules are in the
+The public response `state` is `Draft` or `Available`; the provider revision rules are in the
 [service contract](./contracts.md#customer-provided-model-provider-draft-contract).
 See the [contract details](./contracts.md#customer-provided-model-provider-draft-contract).
 
@@ -118,6 +118,16 @@ installation base and managed task fallbacks. Deactivation restores the shipped
 hosted Copilot task choices and keeps the provider and credential. Explicit
 project, role, agent, and task model choices stay in place. Accepted runs keep
 their saved selections; a settings revision applies only to fresh starts.
+
+Platform provider metadata accepts `rate_card_id` and `rate_card_version` as a
+pair. Update preserves a pair when both fields are omitted. Send both fields as
+`null` to clear it. Platform list and read responses return the saved pair.
+
+Manual pricing writes accept exact JSON decimal rates and immutable `{id,
+version}` keys. A `409` rate-card conflict means that the key and version
+already identify different content. Save the prices under a new version;
+do not overwrite the existing version. The provider can link the new version
+in the next metadata save.
 
 ## Periodic issue sync
 

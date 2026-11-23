@@ -82,6 +82,8 @@ public static partial class RuntimeRateCardManualWriteEndpoint
         string canonical;
         try
         {
+            if (!HasExactlyRepresentableMultipliers(payload))
+                return Problem(StatusCodes.Status400BadRequest, "rate_card_invalid");
             var parsed = RuntimeRateCardReadContract.Deserialize(payload);
             if (parsed is null ||
                 parsed.Provenance is not ManualRuntimeRateCardReadProvenance manual ||
@@ -153,6 +155,28 @@ public static partial class RuntimeRateCardManualWriteEndpoint
 
         return string.IsNullOrEmpty(parsed.CharSet) ||
             string.Equals(parsed.CharSet.Trim('"'), "utf-8", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasExactlyRepresentableMultipliers(ReadOnlyMemory<byte> payload)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty("rateCard", out var rateCard) ||
+                !rateCard.TryGetProperty("modelMultipliers", out var multipliers) ||
+                multipliers.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return false;
+
+            foreach (var multiplier in multipliers.EnumerateObject())
+                if (!RuntimeRateCardAzureRetailWriteEndpoint.TryParseExactPositiveDecimal(
+                        multiplier.Value, out _))
+                    return false;
+            return true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     private static async Task<byte[]> ReadBoundedAsync(Stream body, CancellationToken cancellationToken)

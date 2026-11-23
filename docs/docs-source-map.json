@@ -25,6 +25,7 @@
     "docs/guide/cli.md",
     "docs/guide/manage-agenthost-egress.md",
     "docs/guide/manage-model-providers.md",
+    "docs/guide/manage-platform-byok-settings.md",
     "docs/guide/manage-project-byok-provider-metadata.md",
     "docs/guide/configure-providers.md",
     "docs/guide/configure-knowledge.md",

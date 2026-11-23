@@ -3,6 +3,27 @@ import { AgentweaverGatewayClient, copilotGatewayBaseUrl } from './api';
 import type { KnowledgeRecordTransferBundle, ProjectConfiguration } from './contracts';
 
 describe('Gateway API client', () => {
+  it('sends platform BYOK pricing decimals as the exact JSON body', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('{"runtimeRateCardSchemaVersion":1}', {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const body = '{"modelMultipliers":{"model-1|input":0.123456789123456789}}';
+
+    await client.savePlatformManualRuntimeRateCard(
+      'token', 'card-1', '2', body, 'tenant-1',
+    );
+
+    expect(String(fetcher.mock.calls[0][0])).toBe(
+      'https://gateway.example.test/api/v1/platform/model-pricing/rate-cards/card-1/2',
+    );
+    expect(fetcher.mock.calls[0][1]?.body).toBe(body);
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-Agentweaver-Tenant'))
+      .toBe('tenant-1');
+  });
+
   it.each([
     [
       'API hostname',

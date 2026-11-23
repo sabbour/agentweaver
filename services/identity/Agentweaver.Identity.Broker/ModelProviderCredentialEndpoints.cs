@@ -218,8 +218,7 @@ internal static class ModelProviderCredentialEndpoints
         var modeCount = (hasApiKey ? 1 : 0) + (hasRecovery ? 1 : 0) + (hasRecheck ? 1 : 0);
         if (modeCount != 1 ||
             (body.ApiKey is not null && string.IsNullOrWhiteSpace(body.ApiKey)) ||
-            (hasRecovery && !IsHexVersion(body.RecoverySecretVersion!)) ||
-            (hasRecheck && body.ExpectedCredentialRevision <= 0))
+            (hasRecovery && !IsHexVersion(body.RecoverySecretVersion!)))
             return Error("credential_request_invalid", 400);
 
         var credScope = scope == ModelProviderBindingScope.Platform
@@ -256,7 +255,9 @@ internal static class ModelProviderCredentialEndpoints
                 if (!StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
                     return Error("forbidden", 403);
 
-                var pubClaim = ToPublicationClaim(existingClaim, hasRecheck);
+                var pubClaim = ToPublicationClaim(
+                    existingClaim,
+                    hasRecheck && existingClaim.ExpectedRevision > 0);
 
                 if (existingClaim.State == ModelProviderCredentialWriteClaimState.Cancelled)
                     return Error("credential_operation_cancelled", 409);
@@ -315,7 +316,8 @@ internal static class ModelProviderCredentialEndpoints
             }
 
             // New operation (or Claimed with DispatchedAt == null before any Vault dispatch).
-            if (!hasApiKey && !hasRecheck)
+            if ((!hasApiKey && !hasRecheck) ||
+                (hasRecheck && body.ExpectedCredentialRevision <= 0))
                 return Error("credential_request_invalid", 400);
             if (!byokVault.IsConfigured)
                 return Error("credential_vault_unavailable", 503);

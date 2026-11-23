@@ -1105,8 +1105,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }))
             Assert.Equal(HttpStatusCode.BadRequest, mixedRecheck.StatusCode);
 
-        // Reusing initial key-upload operationId with recheckExistingVersion=true conflicts (409).
-        using (var wrongModeReplay = await SendCredentialJsonAsync(
+        // The original key-upload operation can replay publication without sending the key.
+        using (var keylessReplay = await SendCredentialJsonAsync(
             gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
             new
             {
@@ -1115,7 +1115,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 expectedCredentialRevision = 0,
                 recheckExistingVersion = true,
             }))
-            Assert.Equal(HttpStatusCode.BadRequest, wrongModeReplay.StatusCode);
+        {
+            Assert.Equal(HttpStatusCode.OK, keylessReplay.StatusCode);
+            using var keylessReplayDoc = JsonDocument.Parse(
+                await keylessReplay.Content.ReadAsStringAsync());
+            Assert.Equal("published", keylessReplayDoc.RootElement.GetProperty("status").GetString());
+            Assert.Equal(1, fakeVault.WriteCalls);
+        }
 
         // 4. Attach rate card to draft (rev 3).
         using var updateResp = await SendCredentialJsonAsync(

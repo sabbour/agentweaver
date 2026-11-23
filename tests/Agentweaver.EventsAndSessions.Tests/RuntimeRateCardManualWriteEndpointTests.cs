@@ -173,6 +173,39 @@ public sealed class RuntimeRateCardManualWriteEndpointTests : IAsyncLifetime
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
     }
 
+    [Fact]
+    public void BrowserGeneratedManualPricePayloadParsesWithTheEventsContract()
+    {
+        const string payload = """{"runtimeRateCardSchemaVersion":1,"rateCard":{"id":"browser-card","version":"1","meterSource":"byok.tokens","unit":"USD","nanoUnitsPerUnit":1000000,"modelMultipliers":{"model-2|input":0.123456789123456789,"model-2|output":1.000000000000000001}},"provenance":{"source":"manual","sourceUrl":"https://prices.example.test/model-2","retrievedOn":"2026-11-23"}}""";
+
+        var parsed = RuntimeRateCardReadContract.Deserialize(Encoding.UTF8.GetBytes(payload));
+
+        Assert.NotNull(parsed);
+        Assert.Equal(new DateOnly(2026, 11, 23),
+            Assert.IsType<ManualRuntimeRateCardReadProvenance>(parsed.Provenance).RetrievedOn);
+    }
+
+    [Theory]
+    [InlineData("1.000000000000000001", HttpStatusCode.Created)]
+    [InlineData("1.00000000000000000000000000001", HttpStatusCode.BadRequest)]
+    public async Task ManualRateRejectsValuesThatDecimalWouldRound(
+        string rate,
+        HttpStatusCode expectedStatus)
+    {
+        using var host = await StartTestHostAsync(_ => NoContent());
+        using var client = host.GetTestClient();
+        var id = "exact-" + Guid.NewGuid().ToString("N");
+        var body = ValidBody(id, "v1").Replace(
+            "\"gpt-4o|input\": 2.5",
+            $"\"gpt-4o|input\": {rate}",
+            StringComparison.Ordinal);
+        using var request = CreatePutRequest(
+            $"/api/platform/model-pricing/rate-cards/{id}/v1", body);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+    }
+
     [Theory]
     [InlineData("api.read", null, null, null, HttpStatusCode.Forbidden, false)]
     [InlineData("projects.admin", null, null, null, HttpStatusCode.Forbidden, false)]

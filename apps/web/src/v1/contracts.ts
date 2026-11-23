@@ -213,6 +213,8 @@ export interface ProjectModelProviderDraft {
   azure_api_version: string | null;
   reasoning_efforts: string[];
   prompt_capacity_tokens: number | null;
+  rate_card_id?: string | null;
+  rate_card_version?: string | null;
   scope: 'project';
   projectId: string;
   state: 'Draft' | 'Available';
@@ -241,6 +243,56 @@ export interface ProjectModelProviderDraftSaveRequest {
   azure_api_version: string | null;
   reasoning_efforts: string[];
   prompt_capacity_tokens: number | null;
+  rate_card_id?: string | null;
+  rate_card_version?: string | null;
+}
+
+/** Provider Draft metadata returned for the platform scope. */
+export interface PlatformModelProviderDraft extends Omit<ProjectModelProviderDraft, 'scope' | 'projectId'> {
+  scope: 'platform';
+  projectId: null;
+}
+
+/** One platform provider page, including the model-default switch state. */
+export interface PlatformModelProviderDraftPage {
+  switchMode: 'untouched' | 'active' | 'explicitHosted' | 'byok' | 'copilot' | null;
+  activeProviderId: string | null;
+  settingsRevision: number | null;
+  providers: PlatformModelProviderDraft[];
+  nextAfterProviderId: string | null;
+}
+
+export interface ModelProviderCredentialRequest {
+  operationId: string;
+  expectedProviderRevision: number;
+  expectedCredentialRevision: number;
+  apiKey?: string;
+  recoverySecretVersion?: string;
+  recheckExistingVersion?: boolean;
+}
+
+export interface ModelProviderCredentialResponse {
+  operationId: string;
+  status: 'published' | 'quarantined' | 'publication_pending' | 'cancelled' | 'disabled';
+  scope: 'platform' | 'project';
+  projectId: string | null;
+  providerId: string;
+  providerRevision: number | null;
+  credentialRevision: number | null;
+  credentialVersion: string | null;
+  configurationHash: string | null;
+  providerState: 'Draft' | 'Available' | null;
+}
+
+export interface PlatformModelDefaultSwitchRequest {
+  expectedSettingsRevision: number;
+  expectedProviderRevision?: number;
+}
+
+export interface ModelProviderDefaultSwitchResponse {
+  mode: 'untouched' | 'active' | 'explicitHosted' | 'byok' | 'copilot';
+  activeProviderId: string | null;
+  settingsRevision: number;
 }
 
 /** A current owner-confirmed role and its exact tenant or project scope. */

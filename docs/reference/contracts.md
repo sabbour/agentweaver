@@ -51,10 +51,14 @@ the claim selects the project but does not grant a role.
 
 Create and update requests contain `operationId`, `expectedRevision`, `name`,
 `type`, `base_url`, and `model`. Optional fields are `wire_api`,
-`azure_api_version`, `reasoning_efforts`, and `prompt_capacity_tokens`.
+`azure_api_version`, `reasoning_efforts`, `prompt_capacity_tokens`,
+`rate_card_id`, and `rate_card_version`. The two rate-card fields are a pair.
+When an update omits both fields, Projects preserves the existing pair. An
+explicit pair of `null` values clears the pair. Platform reads return the saved
+pair. Project reads leave it `null`.
 Unknown or duplicate fields fail with `400 model_provider_draft_invalid_request`.
-Credential values, headers, vault references, and rate-card references are not
-accepted. Create requires revision `0`; update requires a revision greater
+Credential values, headers, and vault references are not accepted. Create
+requires revision `0`; update requires a revision greater
 than `0`. Create derives a stable provider ID from the operation ID.
 
 Platform create also accepts an optional `reference`. Omit it for an ordinary
