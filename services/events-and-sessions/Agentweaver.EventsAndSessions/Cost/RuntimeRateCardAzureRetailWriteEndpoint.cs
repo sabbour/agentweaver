@@ -447,7 +447,7 @@ public static partial class RuntimeRateCardAzureRetailWriteEndpoint
         return true;
     }
 
-    private static bool TryParseExactPositiveDecimal(JsonElement element, out decimal value)
+    internal static bool TryParseExactPositiveDecimal(JsonElement element, out decimal value)
     {
         value = default;
         if (element.ValueKind != JsonValueKind.Number)

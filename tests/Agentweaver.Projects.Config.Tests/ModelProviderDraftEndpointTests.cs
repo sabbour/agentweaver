@@ -22,6 +22,75 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     [Fact]
+    public async Task PlatformProviderRateCardLinkRoundTripsAndClearsOnlyExplicitly()
+    {
+        await using var db = CreateDbContext();
+        var caller = await CreateReferenceAdminAsync(db);
+        using var host = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs());
+        using var client = CreateDraftEndpointClient(host, caller.ActorId, caller.TenantId);
+        var operation = Guid.NewGuid();
+        var providerId = "byok-" + operation.ToString("N");
+        var createBody = SaveDraftBody(operation, 0, "Priced provider")[..^1] +
+            ""","rate_card_id":"manual-card","rate_card_version":"7"}""";
+
+        using (var create = SaveRequest("/api/platform/byok-providers", createBody))
+        using (var response = await client.SendAsync(create))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("manual-card", json.RootElement.GetProperty("rate_card_id").GetString());
+            Assert.Equal("7", json.RootElement.GetProperty("rate_card_version").GetString());
+        }
+
+        using (var update = SaveRequest(
+            "/api/platform/byok-providers/" + providerId,
+            SaveDraftBody(Guid.NewGuid(), 1, "Renamed provider"),
+            HttpMethod.Put))
+        using (var response = await client.SendAsync(update))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("manual-card", json.RootElement.GetProperty("rate_card_id").GetString());
+            Assert.Equal("7", json.RootElement.GetProperty("rate_card_version").GetString());
+        }
+
+        foreach (var partialRateCard in new[]
+                 {
+                     ""","rate_card_id":null}""",
+                     ""","rate_card_version":null}""",
+                 })
+        {
+            var partialBody = SaveDraftBody(Guid.NewGuid(), 2, "Renamed provider")[..^1] +
+                partialRateCard;
+            using var request = SaveRequest(
+                "/api/platform/byok-providers/" + providerId, partialBody, HttpMethod.Put);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        using (var unchanged = await client.GetAsync(
+            "/api/platform/byok-providers/" + providerId))
+        {
+            Assert.Equal(HttpStatusCode.OK, unchanged.StatusCode);
+            using var json = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync());
+            Assert.Equal("manual-card", json.RootElement.GetProperty("rate_card_id").GetString());
+            Assert.Equal("7", json.RootElement.GetProperty("rate_card_version").GetString());
+        }
+
+        var clearBody = SaveDraftBody(Guid.NewGuid(), 2, "Renamed provider")[..^1] +
+            ""","rate_card_id":null,"rate_card_version":null}""";
+        using (var clear = SaveRequest(
+            "/api/platform/byok-providers/" + providerId, clearBody, HttpMethod.Put))
+        using (var response = await client.SendAsync(clear))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("rate_card_id").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("rate_card_version").ValueKind);
+        }
+    }
+
+    [Fact]
     public async Task PlatformProviderSwitchEndpointsReturnTheSavedRevisionAndListState()
     {
         await using var db = CreateDbContext();

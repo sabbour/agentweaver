@@ -81,6 +81,16 @@ const mocks = vi.hoisted(() => ({
   listProjectIssues: vi.fn(),
   listProjectPullRequests: vi.fn(),
   getPlatformComponents: vi.fn(),
+  listPlatformByokProviderDrafts: vi.fn(),
+  getPlatformByokProviderDraft: vi.fn(),
+  createPlatformByokProviderDraft: vi.fn(),
+  updatePlatformByokProviderDraft: vi.fn(),
+  savePlatformManualRuntimeRateCard: vi.fn(),
+  setPlatformByokProviderCredential: vi.fn(),
+  activatePlatformByokProvider: vi.fn(),
+  deactivatePlatformByokProvider: vi.fn(),
+  sessionActive: true,
+  resolveAuthorizationContext: vi.fn(),
   listMarketplaceDefinitions: vi.fn(),
   packageSkillContent: vi.fn(),
   revokeProjectSkillRevision: vi.fn(),
@@ -148,6 +158,14 @@ vi.mock('./api', () => ({
     listProjectIssues: mocks.listProjectIssues,
     listProjectPullRequests: mocks.listProjectPullRequests,
     getPlatformComponents: mocks.getPlatformComponents,
+    listPlatformByokProviderDrafts: mocks.listPlatformByokProviderDrafts,
+    getPlatformByokProviderDraft: mocks.getPlatformByokProviderDraft,
+    createPlatformByokProviderDraft: mocks.createPlatformByokProviderDraft,
+    updatePlatformByokProviderDraft: mocks.updatePlatformByokProviderDraft,
+    savePlatformManualRuntimeRateCard: mocks.savePlatformManualRuntimeRateCard,
+    setPlatformByokProviderCredential: mocks.setPlatformByokProviderCredential,
+    activatePlatformByokProvider: mocks.activatePlatformByokProvider,
+    deactivatePlatformByokProvider: mocks.deactivatePlatformByokProvider,
     listMarketplaceDefinitions: mocks.listMarketplaceDefinitions,
     packageSkillContent: mocks.packageSkillContent,
     revokeProjectSkillRevision: mocks.revokeProjectSkillRevision,
@@ -200,16 +218,17 @@ vi.mock('./AuthContext', () => {
     session: {
       accessToken: 'broker-token',
       expiresAt: Date.now() + 60_000,
-      binding: null,
+      binding: null as { projectId: string; runId: string } | null,
     },
     authSessionGeneration: 0,
     authSessionEpoch: 0,
-    isActiveSession: () => true,
+    isActiveSession: () => mocks.sessionActive,
     unboundSessionGeneration: 0,
     apiCall: mocks.apiCall,
     authorize: (binding: unknown) => mocks.authorize(binding),
     // Silent sign-in for a run binding. Tests control whether it succeeds.
     ensureSession: (binding: unknown, activate?: boolean) => mocks.ensureSession(binding, activate),
+    resolveAuthorizationContext: () => mocks.resolveAuthorizationContext(),
     signOut: () => {},
     authorizationContext: { tenantId: 'tenant-1' },
     busy: false,
@@ -239,12 +258,15 @@ vi.mock('./AuthContext', () => {
       mocks.authProvider();
       return children;
     },
-    useAuth: () => ({
-      ...auth,
-      session: { ...auth.session, binding: mocks.binding },
-      consent: mocks.consent,
-      error: mocks.authError,
-    }),
+    useAuth: () => {
+      auth.session.binding = mocks.binding;
+      return {
+        ...auth,
+        session: auth.session,
+        consent: mocks.consent,
+        error: mocks.authError,
+      };
+    },
   };
 });
 
@@ -524,6 +546,13 @@ describe('v1 web project scoping', () => {
     // By default the silent run sign-in fails, so tests see the manual sign-in path unless they say otherwise.
     mocks.ensureSession.mockResolvedValue(false);
     mocks.binding = null;
+    mocks.sessionActive = true;
+    mocks.resolveAuthorizationContext.mockReset().mockResolvedValue({
+      issuer: 'https://identity.example.test/',
+      actorId: 'actor-1',
+      tenantId: mocks.tenantSelector,
+      membershipRevision: 1,
+    });
     // Recent runs live in browser storage, so clear them to keep tests independent.
     clearRecentRuns();
     mocks.consent = null;
@@ -541,6 +570,20 @@ describe('v1 web project scoping', () => {
       projectId, coverage: { recordedSince: '2026-01-01T00:00:00Z', includesEarlierPullRequests: false }, items: [], nextCursor: null,
     }));
     mocks.getPlatformComponents.mockReset().mockResolvedValue({ observedAt: '2026-01-01T00:00:00Z', areas: [] });
+    mocks.listPlatformByokProviderDrafts.mockReset().mockResolvedValue({
+      switchMode: 'untouched',
+      activeProviderId: null,
+      settingsRevision: 0,
+      providers: [],
+      nextAfterProviderId: null,
+    });
+    mocks.getPlatformByokProviderDraft.mockReset();
+    mocks.createPlatformByokProviderDraft.mockReset();
+    mocks.updatePlatformByokProviderDraft.mockReset();
+    mocks.savePlatformManualRuntimeRateCard.mockReset().mockResolvedValue({});
+    mocks.setPlatformByokProviderCredential.mockReset();
+    mocks.activatePlatformByokProvider.mockReset();
+    mocks.deactivatePlatformByokProvider.mockReset();
     mocks.listMarketplaceDefinitions.mockReset().mockResolvedValue([]);
     mocks.packageSkillContent.mockReset();
     mocks.revokeProjectSkillRevision.mockReset();
@@ -3815,6 +3858,66 @@ describe('v1 web project scoping', () => {
     await screen.findByText('Knowledge returned records outside the exact project and agent scope.');
     expect(screen.queryByRole('heading', { name: 'valid-record' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'foreign-record' })).toBeNull();
+  });
+
+  it('serves /platform-settings with provider controls and the existing component report', async () => {
+    window.history.replaceState({}, '', '/platform-settings');
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Platform settings' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Model providers' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Platform components' })).toBeTruthy();
+    await waitFor(() => expect(mocks.listPlatformByokProviderDrafts).toHaveBeenCalled());
+  });
+
+  it('blocks platform provider access while the active session is project-bound', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    window.history.replaceState({}, '', '/platform-settings');
+    render(<App />);
+
+    expect(await screen.findByText(/Switch to a platform sign-in before managing providers/)).toBeTruthy();
+    expect(mocks.listPlatformByokProviderDrafts).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Platform Settings report visible when provider access returns 403', async () => {
+    mocks.listPlatformByokProviderDrafts.mockRejectedValue(
+      new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    window.history.replaceState({}, '', '/platform-settings');
+    render(<App />);
+
+    expect(await screen.findByText(/rest of Platform Settings remains available/)).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Platform components' })).toBeTruthy();
+  });
+
+  it('does not upload a platform key after the route session changes during metadata save', async () => {
+    mocks.createPlatformByokProviderDraft.mockImplementationOnce(async () => {
+      mocks.sessionActive = false;
+      return {
+        id: 'provider-2', name: 'New', type: 'openai',
+        base_url: 'https://api.example.test/v1', model: 'model-2',
+        wire_api: 'responses', azure_api_version: null, reasoning_efforts: [],
+        prompt_capacity_tokens: null, rate_card_id: 'card-2', rate_card_version: '1',
+        scope: 'platform', projectId: null, state: 'Draft', revision: 1,
+        configurationHash: 'hash', has_api_key: false, is_active: false, hasCredential: false,
+      };
+    });
+    window.history.replaceState({}, '', '/platform-settings');
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Model providers' });
+    await waitFor(() => expect(mocks.listPlatformByokProviderDrafts).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+    fireEvent.click(screen.getByRole('button', { name: /Custom endpoint/ }));
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New' } });
+    fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://api.example.test/v1' } });
+    fireEvent.change(screen.getByLabelText('Model or deployment'), { target: { value: 'model-2' } });
+    fireEvent.click(screen.getByLabelText('Use a saved rate card'));
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: 'card-2' } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'secret-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
+
+    await waitFor(() => expect(mocks.createPlatformByokProviderDraft).toHaveBeenCalledOnce());
+    expect(mocks.setPlatformByokProviderCredential).not.toHaveBeenCalled();
   });
 
 });

@@ -58,6 +58,7 @@ export default defineConfig({
           items: [
             { text: 'Configure Knowledge memory', link: '/guide/configure-knowledge' },
             { text: 'Manage platform BYOK provider metadata', link: '/guide/manage-model-providers' },
+            { text: 'Manage a platform BYOK provider in Platform Settings', link: '/guide/manage-platform-byok-settings' },
             { text: 'Manage project BYOK provider metadata', link: '/guide/manage-project-byok-provider-metadata' },
             { text: 'Configure an Azure OpenAI BYOK model', link: '/guide/configure-byok-azure-openai' },
             { text: 'Build and configure the web client', link: '/guide/web-client' },

@@ -208,6 +208,13 @@ public sealed class ModelProviderDraftHttpContractTests
         Assert.DoesNotContain("credential-version-secret", json);
         Assert.DoesNotContain("rate-card-secret", json);
         Assert.DoesNotContain("CreatedByActorId", json);
+        Assert.Contains("\"rate_card_id\":null", json);
+        var platform = binding with { Scope = ModelProviderBindingScope.Platform, ProjectId = null };
+        var platformJson = JsonSerializer.Serialize(
+            ModelProviderDraftEndpoints.Project(new ModelProviderDraft(ModelProviderDraftState.Draft, platform)),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Contains("\"rate_card_id\":\"rate-card-secret\"", platformJson);
+        Assert.Contains("\"rate_card_version\":\"7\"", platformJson);
         Assert.Equal("Available", ModelProviderDraftEndpoints.Project(
             new ModelProviderDraft(ModelProviderDraftState.Available, binding)).State);
         Assert.Throws<ModelProviderDraftUnsafeMetadataException>(() =>

@@ -79,6 +79,12 @@ import type {
   ProjectModelProviderDraft,
   ProjectModelProviderDraftPage,
   ProjectModelProviderDraftSaveRequest,
+  PlatformModelProviderDraft,
+  PlatformModelProviderDraftPage,
+  ModelProviderCredentialRequest,
+  ModelProviderCredentialResponse,
+  PlatformModelDefaultSwitchRequest,
+  ModelProviderDefaultSwitchResponse,
   KnowledgeRecordRevisionPage,
   KnowledgeRecordTransferBundle,
   KnowledgeRecordUpdateInput,
@@ -701,6 +707,108 @@ export class AgentweaverGatewayClient {
       { method: 'PUT', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
+    );
+  }
+
+  /** Lists one page of platform provider Draft metadata. */
+  listPlatformByokProviderDrafts(
+    token: string,
+    pageSize = 50,
+    afterProviderId?: string | null,
+    tenantSelector?: string | null,
+  ): Promise<PlatformModelProviderDraftPage> {
+    const query = new URLSearchParams({ pageSize: String(pageSize) });
+    if (afterProviderId) query.set('afterProviderId', afterProviderId);
+    return this.request(
+      token, `/platform/byok-providers?${query}`, {}, this.baseUrl, tenantSelector,
+    );
+  }
+
+  getPlatformByokProviderDraft(
+    token: string,
+    providerId: string,
+    tenantSelector?: string | null,
+  ): Promise<PlatformModelProviderDraft> {
+    return this.request(
+      token, `/platform/${encodeSegments('byok-providers', providerId)}`,
+      {}, this.baseUrl, tenantSelector,
+    );
+  }
+
+  createPlatformByokProviderDraft(
+    token: string,
+    request: ProjectModelProviderDraftSaveRequest,
+    tenantSelector?: string | null,
+  ): Promise<PlatformModelProviderDraft> {
+    return this.request(
+      token, '/platform/byok-providers',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl, tenantSelector,
+    );
+  }
+
+  updatePlatformByokProviderDraft(
+    token: string,
+    providerId: string,
+    request: ProjectModelProviderDraftSaveRequest,
+    tenantSelector?: string | null,
+  ): Promise<PlatformModelProviderDraft> {
+    return this.request(
+      token, `/platform/${encodeSegments('byok-providers', providerId)}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl, tenantSelector,
+    );
+  }
+
+  setPlatformByokProviderCredential(
+    token: string,
+    providerId: string,
+    request: ModelProviderCredentialRequest,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialResponse> {
+    return this.request(
+      token, `/platform/${encodeSegments('byok-providers', providerId, 'credential')}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl, tenantSelector,
+    );
+  }
+
+  activatePlatformByokProvider(
+    token: string,
+    providerId: string,
+    request: PlatformModelDefaultSwitchRequest,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderDefaultSwitchResponse> {
+    return this.request(
+      token, `/platform/${encodeSegments('byok-providers', providerId, 'activate')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl, tenantSelector,
+    );
+  }
+
+  deactivatePlatformByokProvider(
+    token: string,
+    request: PlatformModelDefaultSwitchRequest,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderDefaultSwitchResponse> {
+    return this.request(
+      token, '/platform/byok-providers/deactivate',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl, tenantSelector,
+    );
+  }
+
+  /** Sends an exact JSON price card body so decimal literals never pass through a JavaScript number. */
+  savePlatformManualRuntimeRateCard(
+    token: string,
+    id: string,
+    version: string,
+    body: string,
+    tenantSelector?: string | null,
+  ): Promise<unknown> {
+    return this.request(
+      token, `/platform/${encodeSegments('model-pricing', 'rate-cards', id, version)}`,
+      { method: 'PUT', body }, this.baseUrl, tenantSelector,
     );
   }
 

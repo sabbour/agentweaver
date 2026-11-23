@@ -49,6 +49,12 @@ internal sealed record ModelProviderDraftSaveBody
     [JsonPropertyName("rate_card_version")]
     public string? RateCardVersion { get; init; }
 
+    [JsonIgnore]
+    public bool RateCardIdSpecified { get; init; }
+
+    [JsonIgnore]
+    public bool RateCardVersionSpecified { get; init; }
+
     [JsonPropertyName("reference")]
     public string? Reference { get; init; }
 
@@ -392,6 +398,9 @@ internal static class ModelProviderDraftEndpoints
                 return InvalidRequest();
             if (ValidateSaveBody(body, create) is { } invalid)
                 return invalid;
+            if (scope == ModelProviderBindingScope.Platform && !create &&
+                body.RateCardIdSpecified != body.RateCardVersionSpecified)
+                return InvalidRequest();
             if (!IsSafePublicUrl(body.BaseUrl, body.Type))
                 return InvalidRequest();
 
@@ -404,6 +413,8 @@ internal static class ModelProviderDraftEndpoints
             {
                 Reference = body.Reference,
                 TargetInstallationId = body.TargetInstallationId,
+                PreserveRateCardLink = scope == ModelProviderBindingScope.Platform && !create &&
+                    !body.RateCardIdSpecified && !body.RateCardVersionSpecified,
             };
             var saved = await service.SaveAsync(
                 caller, scope, projectId, id, request, cancellationToken).ConfigureAwait(false);
@@ -468,7 +479,13 @@ internal static class ModelProviderDraftEndpoints
             return null;
         var body = JsonSerializer.Deserialize<ModelProviderDraftSaveBody>(
             document.RootElement.GetRawText(), RequestJsonOptions);
-        return body;
+        return body is null
+            ? null
+            : body with
+            {
+                RateCardIdSpecified = document.RootElement.TryGetProperty("rate_card_id", out _),
+                RateCardVersionSpecified = document.RootElement.TryGetProperty("rate_card_version", out _),
+            };
     }
 
     internal static IResult? ValidateSaveBody(ModelProviderDraftSaveBody? body, bool create) =>
@@ -515,7 +532,9 @@ internal static class ModelProviderDraftEndpoints
             binding.WireApi, binding.AzureApiVersion, binding.ReasoningEfforts, binding.PromptCapacityTokens,
             binding.Scope == ModelProviderBindingScope.Platform ? "platform" : "project",
             binding.ProjectId, draft.State.ToString(), binding.ProviderRevision, binding.ConfigurationHash,
-            null, null, false,
+            binding.Scope == ModelProviderBindingScope.Platform ? binding.RateCardId : null,
+            binding.Scope == ModelProviderBindingScope.Platform ? binding.RateCardVersion : null,
+            false,
             binding.ProviderId == activeProviderId,
             binding.CredentialVersion is not null,
             draft.Reference);

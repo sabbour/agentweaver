@@ -192,6 +192,26 @@ public sealed partial class ModelProviderDraftService
         await AuthorizeAsync(caller, scope, projectId, cancellationToken).ConfigureAwait(false);
         ValidateProviderId(providerId);
         ArgumentNullException.ThrowIfNull(request);
+        if (request.PreserveRateCardLink)
+        {
+            var existing = await db.ModelProviderDraftRevisions.AsNoTracking()
+                .Where(revision =>
+                    revision.ProviderId == providerId &&
+                    revision.Scope == scope &&
+                    revision.ProjectId == projectId &&
+                    revision.ProviderRevision == request.ExpectedRevision)
+                .Select(revision => new { revision.RateCardId, revision.RateCardVersion })
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+                throw ModelProviderDraftException.Conflict();
+            request = request with
+            {
+                RateCardId = existing.RateCardId,
+                RateCardVersion = existing.RateCardVersion,
+                PreserveRateCardLink = false,
+            };
+        }
         var metadata = ValidateAndNormalize(request);
         var fingerprintInput = new MetadataFingerprint(
             providerId,

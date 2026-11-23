@@ -87,6 +87,10 @@ public sealed class GatewayModelProviderDraftTests
 
         Assert.False(schemas.GetProperty("ModelProviderDraftSaveRequest")
             .GetProperty("additionalProperties").GetBoolean());
+        var saveProperties = schemas.GetProperty("ModelProviderDraftSaveRequest")
+            .GetProperty("properties");
+        Assert.Contains(saveProperties.GetProperty("rate_card_id").GetProperty("anyOf")
+            .EnumerateArray(), item => item.GetProperty("type").GetString() == "null");
         var platformCreate = schemas.GetProperty("ModelProviderDraftPlatformCreateRequest");
         Assert.False(platformCreate.GetProperty("additionalProperties").GetBoolean());
         var reference = platformCreate.GetProperty("properties").GetProperty("reference");
@@ -151,6 +155,10 @@ public sealed class GatewayModelProviderDraftTests
         Assert.Contains("hasCredential",
             draftSchema.GetProperty("properties").EnumerateObject()
                 .Select(property => property.Name));
+        Assert.Contains("rate_card_id", draftSchema.GetProperty("required").EnumerateArray()
+            .Select(property => property.GetString()));
+        Assert.Contains("rate_card_version", draftSchema.GetProperty("required").EnumerateArray()
+            .Select(property => property.GetString()));
         Assert.DoesNotContain("credentialVersion",
             draftSchema.GetProperty("properties").EnumerateObject()
                 .Select(property => property.Name));
@@ -162,6 +170,12 @@ public sealed class GatewayModelProviderDraftTests
         Assert.True(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}/activate", out _));
         Assert.False(paths.TryGetProperty("/api/v1/platform/byok-providers/{providerId}", out var item) &&
             item.TryGetProperty("delete", out _));
+
+        var pricing = paths
+            .GetProperty("/api/v1/platform/model-pricing/rate-cards/{id}/{version}")
+            .GetProperty("put").GetProperty("description").GetString()!;
+        Assert.Contains("without JavaScript number conversion", pricing);
+        Assert.Contains("new version instead of overwriting", pricing);
     }
 
     [Fact]

@@ -102,6 +102,7 @@ public sealed record SaveModelProviderDraftRequest(
 {
     public string? Reference { get; init; }
     public string? TargetInstallationId { get; init; }
+    public bool PreserveRateCardLink { get; init; }
 }
 
 public sealed record ModelProviderDraft(
