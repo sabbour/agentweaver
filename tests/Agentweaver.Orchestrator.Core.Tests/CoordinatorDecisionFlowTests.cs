@@ -12,6 +12,87 @@ public sealed class CoordinatorDecisionFlowTests
     private const string Owner = "owner-1";
 
     [Fact]
+    public void ApprovalGateRejectsPendingCollisionAndBindsOneExactOwnerSubject()
+    {
+        var first = CoordinatorDecisionFlow.RequestApproval(
+            CoordinatorDecisionState.Create(7),
+            "approval-turn-1",
+            "subject-turn-1",
+            Owner);
+        Assert.True(first.IsSuccess);
+        Assert.Equal(CoordinatorGateKind.Approval, first.Value!.Kind);
+
+        var collision = CoordinatorDecisionFlow.RequestApproval(
+            first.State,
+            "approval-turn-2",
+            "subject-turn-2",
+            Owner);
+        Assert.False(collision.IsSuccess);
+        Assert.Contains(collision.Issues, issue =>
+            issue.Code == WorkflowValidationCode.CoordinatorTransitionBlocked);
+
+        var wrongSubject = first.State!.ApplyGateAnswer(Answer(
+            "approval-turn-1",
+            "another-owner",
+            7,
+            CoordinatorGateChoices.Approve));
+        Assert.Equal(CoordinatorGateAnswerStatus.Rejected, wrongSubject.Status);
+
+        var answer = Answer(
+            "approval-turn-1", Owner, 7, CoordinatorGateChoices.Approve);
+        var approved = first.State.ApplyGateAnswer(answer);
+        var replay = approved.State.ApplyGateAnswer(answer);
+        Assert.Equal(CoordinatorGateAnswerStatus.Accepted, approved.Status);
+        Assert.Equal(CoordinatorGateAnswerStatus.AlreadyApplied, replay.Status);
+        Assert.Equal("subject-turn-1", approved.Receipt!.SubjectId);
+        Assert.Same(approved.State, replay.State);
+    }
+
+    [Fact]
+    public void ApprovalGateReplaySurvivesRestoreAndRejectsChangedFenceAndSubject()
+    {
+        var operationId = Guid.NewGuid().ToString("N");
+        var subject = $"subject-{operationId}";
+        var requested = CoordinatorDecisionFlow.RequestApproval(
+            CoordinatorDecisionState.Create(19),
+            $"request-{operationId}",
+            subject,
+            Owner);
+        var restored = CoordinatorDecisionState.Restore(
+            requested.State!.Fence,
+            requested.State.OutcomeSpec,
+            requested.State.OutcomeConfirmed,
+            requested.State.NextClarifyingQuestionIndex,
+            requested.State.SelectedWorkflow,
+            requested.State.WorkflowConfirmed,
+            requested.State.ConfirmedWorkPlan,
+            requested.State.CandidateWorkPlan,
+            requested.State.LastScopeDiff,
+            requested.State.PendingGate,
+            requested.State.DecisionReceipts);
+        Assert.True(restored.IsValid);
+
+        var answer = Answer(
+            requested.Value!.RequestId,
+            Owner,
+            19,
+            CoordinatorGateChoices.Approve);
+        var accepted = restored.Value!.ApplyGateAnswer(answer);
+        var replay = accepted.State.ApplyGateAnswer(answer);
+        var changedFence = accepted.State.AdvanceFence(20).ApplyGateAnswer(answer);
+        var sibling = CoordinatorDecisionFlow.RequestApproval(
+            accepted.State,
+            $"sibling-{operationId}",
+            $"{subject}-sibling",
+            Owner);
+
+        Assert.Equal(CoordinatorGateAnswerStatus.AlreadyApplied, replay.Status);
+        Assert.Equal(CoordinatorGateAnswerStatus.Rejected, changedFence.Status);
+        Assert.True(sibling.IsSuccess);
+        Assert.NotEqual(subject, sibling.Value!.SubjectId);
+    }
+
+    [Fact]
     public void OutcomeMustBeConfirmedBeforeWorkflowSelectionAndPlanDecomposition()
     {
         var state = CoordinatorDecisionState.Create(4);

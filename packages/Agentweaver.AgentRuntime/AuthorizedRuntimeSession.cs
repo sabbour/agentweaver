@@ -608,12 +608,32 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             RequireTurnAdmission();
             _lastNativeTurn = null;
             await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
-            if (await material.ReadOptionalTurnAsync(
-                Registration, Facts, message.MessageId, cancellationToken)
-                .ConfigureAwait(false) is not null)
-                throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
-            await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
-                RequireCurrentAsync, cancellationToken, dispatchId: message.MessageId).ConfigureAwait(false);
+            var existingUser = await material.ReadOptionalTurnAsync(
+                Registration, Facts, message.MessageId, cancellationToken).ConfigureAwait(false);
+            if (existingUser is not null)
+            {
+                var existingAssistant = await material.ReadOptionalTurnAsync(
+                    Registration, Facts, CreateA2AAssistantEventId(message.MessageId), cancellationToken)
+                    .ConfigureAwait(false);
+                if (existingAssistant is null)
+                    throw new RuntimeAuthorizationException("runtime_turn_send_uncertain");
+                var recordedAnswer = await ReadRecordedA2ATurnAsync(
+                    material, message.MessageId, prompt, cancellationToken).ConfigureAwait(false)
+                    ?? throw new RuntimeAuthorizationException("runtime_turn_record_invalid");
+                return (
+                    recordedAnswer,
+                    null!,
+                    existingUser.Material,
+                    existingAssistant.Material);
+            }
+            await _actions.RequireAsync(
+                Registration,
+                "model.turn",
+                message.MessageId,
+                System.Text.Encoding.UTF8.GetBytes(prompt),
+                RequireCurrentAsync,
+                cancellationToken,
+                dispatchId: message.MessageId).ConfigureAwait(false);
             var nativeCursor = Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
                 Registration.Binding.CopilotHardCreditLimit is not null
                     ? await _session.CaptureNativeEventCursorAsync(cancellationToken).ConfigureAwait(false)

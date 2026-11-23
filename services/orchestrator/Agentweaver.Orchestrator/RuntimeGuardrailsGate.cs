@@ -73,7 +73,7 @@ internal static class RuntimeGuardrailsGate
     /// issued and before the policy receipt is written.
     /// </summary>
     /// <exception cref="RuntimeAuthorizationException">Thrown when the checks withhold the content or can't run.</exception>
-    internal static async Task<string?> RequireAllowedAsync(
+    internal static async Task<RuntimeNativePolicyGuardrailsResult?> RequireAllowedAsync(
         IServiceProvider services,
         AgtPolicyProvider policy,
         GuardrailsPreparation preparation,
@@ -115,12 +115,19 @@ internal static class RuntimeGuardrailsGate
             policyBinding,
             policyOptions,
             [],
-            [plan.Plan!]);
+            [plan.Plan!],
+            preparation.NativePolicy is { } nativePolicy
+                ? nativePolicy.RequiredChecks.Select(check => new GuardrailsDeferredFindingCheck(
+                    check.ProviderId,
+                    check.AdapterVersion,
+                    check.OptionsSchemaVersion,
+                    check.OptionsRevision)).ToImmutableArray()
+                : []);
         // The runtime event ID is the operation ID. A retry of the same turn reuses it, so the evidence store
         // can recognize the retry and return the same decision.
         var contentRequest = new GuardrailsContentRequest(
             request.EventId,
-            "model-turn-" + request.EventId.ToString("N"),
+            registration.Binding.TurnId,
             request.InputHash,
             GuardrailsContentStage.UserInput,
             GuardrailsContentClass.Text,

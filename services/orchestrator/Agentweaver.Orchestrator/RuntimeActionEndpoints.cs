@@ -61,15 +61,25 @@ internal sealed class RuntimeActionOwner(
         // this throws now, so a rejected request leaves no grant behind.
         var guardrails = RuntimeGuardrailsGate.Prepare(
             services, request, accepted, content, nativePolicyPreparation);
+        var approvedHandoff = false;
+        if (services.GetService<RuntimeNativeApprovalOwnerStore>() is { } approvalHandoff)
+            approvedHandoff = await approvalHandoff.RequireApprovedHandoffAsync(
+                CoordinationIdentity.RequireActor(context.User, options.Issuer),
+                accepted,
+                registration,
+                request,
+                cancellationToken).ConfigureAwait(false);
         var grant = await IssueOrRecordNumericLimitDenialAsync(
-            context, registration, request, cancellationToken).ConfigureAwait(false);
+            context, registration, request, cancellationToken,
+            approvedNativeHandoff: approvedHandoff).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
         // Guardrails checks run before the guarded callback, so withheld content never gets a policy receipt.
         // The authority check re-reads the registration and the accepted selection from their owners, and
         // compares them with the values used for this admission.
         string? nativeGuardrailsBinding = null;
         if (guardrails is not null)
-            nativeGuardrailsBinding = await RuntimeGuardrailsGate.RequireAllowedAsync(
+        {
+            var nativeResult = await RuntimeGuardrailsGate.RequireAllowedAsync(
                 services, policy, guardrails,
                 RuntimeGuardrailsGate.AuthorityCheck(
                     token => registrations.ReadCurrentAsync(context, registration.RuntimeInstanceId, token),
@@ -78,6 +88,30 @@ internal sealed class RuntimeActionOwner(
                     registration, RuntimeGuardrailsGate.SelectionHash(accepted.Selection)),
                 registration, accepted, request, grant, policyBinding, policyOptions,
                 cancellationToken).ConfigureAwait(false);
+            if (nativeResult is { RequiresApproval: true })
+            {
+                var approvalStore = services.GetService<RuntimeNativeApprovalOwnerStore>()
+                    ?? throw new RuntimeAuthorizationException(RuntimeNativePolicyGate.UnavailableCode);
+                var approval = await approvalStore.RequireOrSuspendAsync(
+                    CoordinationIdentity.RequireActor(context.User, options.Issuer),
+                    accepted,
+                    registration,
+                    request,
+                    nativeResult,
+                    cancellationToken).ConfigureAwait(false);
+                if (approval.Disposition == RuntimeNativeApprovalDisposition.Pending)
+                    throw new RuntimeAuthorizationException(RuntimeNativeApprovalOwnerStore.PendingCode);
+                var nativeGate = services.GetService<RuntimeNativePolicyGate>()
+                    ?? throw new RuntimeAuthorizationException(RuntimeNativePolicyGate.UnavailableCode);
+                await nativeGate.ResolveApprovalAsync(
+                    registration,
+                    request,
+                    nativeResult,
+                    approve: true,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            nativeGuardrailsBinding = nativeResult?.BindingHash;
+        }
         var invocation = new ExecutableActionInvocation(context.User, binding.SessionId, actionStepId,
             request.ActionId, RuntimeActionContract.Purpose, grant, binding.ExecutionFence, policyBinding, request.EventId);
         // The guarded callback admits dispatch; the native SDK effect remains in AgentHost.
@@ -112,7 +146,9 @@ internal sealed class RuntimeActionOwner(
     {
         RuntimeActionContract.Validate(admission.Request);
         if (admission.ContractVersion != 1 || admission.PolicyReceiptId != admission.Request.EventId ||
-            admission.GrantId != admission.Request.EventId.ToString("N") || admission.GrantRevision != "1" ||
+            admission.GrantId != admission.Request.EventId.ToString("N") ||
+            !long.TryParse(admission.GrantRevision, out var admissionGrantRevision) ||
+            admissionGrantRevision < 1 ||
             admission.Outcome != PolicyEvaluationOutcome.Allow || admission.ReasonCode != PolicyEvaluationReasonCode.Allowed)
             throw new RuntimeAuthorizationException("runtime_action_admission_invalid");
         var registration = await registrations.ReadCurrentAsync(
@@ -120,14 +156,25 @@ internal sealed class RuntimeActionOwner(
         RequireRequest(registration, admission.Request);
         await RequireCostTurnEnabledAsync(context, registration, admission.Request,
             RuntimeFixedCreditGuardStage.ActionVerify, cancellationToken).ConfigureAwait(false);
+        var binding = registration.Binding;
+        var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        var approvedHandoff = false;
+        if (services.GetService<RuntimeNativeApprovalOwnerStore>() is { } approvalHandoff)
+            approvedHandoff = await approvalHandoff.RequireApprovedHandoffAsync(
+                CoordinationIdentity.RequireActor(context.User, options.Issuer),
+                accepted,
+                registration,
+                admission.Request,
+                cancellationToken).ConfigureAwait(false);
         var reference = await IssueOrRecordNumericLimitDenialAsync(
-            context, registration, admission.Request, cancellationToken).ConfigureAwait(false);
+            context, registration, admission.Request, cancellationToken,
+            approvedNativeHandoff: approvedHandoff).ConfigureAwait(false);
         if (reference.GrantId != admission.GrantId || reference.Revision != admission.GrantRevision)
             throw new RuntimeAuthorizationException("runtime_action_admission_invalid");
         if (admission.Request.IsToolInvocation)
             await grants.RequireToolInvocationReservationAsync(
                 registration, admission.Request, cancellationToken).ConfigureAwait(false);
-        var binding = registration.Binding;
         var actionStepId = RuntimeActionContract.RequireActionStepId(binding);
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         var receipt = await grants.ValidateReceiptAdmissionAsync(actor, binding.ProjectId, binding.RunId,
@@ -143,8 +190,13 @@ internal sealed class RuntimeActionOwner(
             throw new RuntimeAuthorizationException("runtime_action_grant_unavailable");
         var policyOptions = services.GetService<AgtPolicyProviderOptions>()
             ?? throw new RuntimeAuthorizationException("runtime_action_policy_unavailable");
-        var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
-            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        if (services.GetService<RuntimeNativeApprovalOwnerStore>() is { } approvalAuthority)
+            await approvalAuthority.RequireCurrentApprovalAsync(
+                CoordinationIdentity.RequireActor(context.User, options.Issuer),
+                accepted,
+                registration,
+                admission.Request,
+                cancellationToken).ConfigureAwait(false);
         await RequireNativePolicyVerifyAsync(
             registration, accepted, admission.Request, cancellationToken).ConfigureAwait(false);
         _ = await SourceControlEndpoints.ResolvePolicyBindingAsync(
@@ -153,10 +205,15 @@ internal sealed class RuntimeActionOwner(
         var decision = policy.Evaluate(policyOptions, new AgtPolicyEvaluationRequest(
             grant.ActorId, admission.Request.ActionId, new Dictionary<string, object>(StringComparer.Ordinal)
             {
-                ["tenant_id"] = grant.TenantId, ["project_id"] = grant.ProjectId,
-                ["run_id"] = grant.RunId, ["session_id"] = grant.SessionId, ["step_id"] = grant.StepId,
-                ["grant_id"] = grant.Reference.GrantId, ["grant_revision"] = grant.Reference.Revision,
-                ["purpose"] = grant.Purpose, ["fence"] = grant.Fence
+                ["tenant_id"] = grant.TenantId,
+                ["project_id"] = grant.ProjectId,
+                ["run_id"] = grant.RunId,
+                ["session_id"] = grant.SessionId,
+                ["step_id"] = grant.StepId,
+                ["grant_id"] = grant.Reference.GrantId,
+                ["grant_revision"] = grant.Reference.Revision,
+                ["purpose"] = grant.Purpose,
+                ["fence"] = grant.Fence
             }));
         if (decision.Outcome != PolicyEvaluationOutcome.Allow)
             throw new RuntimeAuthorizationException("runtime_action_denied");
@@ -166,6 +223,10 @@ internal sealed class RuntimeActionOwner(
             throw new RuntimeAuthorizationException("runtime_action_journal_ack_missing");
         await RequireNativePolicyReleaseAsync(
             registration, accepted, admission.Request, cancellationToken).ConfigureAwait(false);
+        await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        if (services.GetService<RuntimeNativeApprovalOwnerStore>() is { } approvalStore)
+            await approvalStore.ClaimAsync(
+                actor, accepted, registration, admission.Request, cancellationToken).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
         return admission;
     }
@@ -247,7 +308,8 @@ internal sealed class RuntimeActionOwner(
         RuntimeRegistration registration,
         RuntimeActionRequest request,
         CancellationToken cancellationToken,
-        bool reserveToolInvocation = false)
+        bool reserveToolInvocation = false,
+        bool approvedNativeHandoff = false)
     {
         // Spend evidence is read only when a coordinator root model turn has budgets. The caller's bearer is
         // forwarded to Events, so it is wrapped on first use and invalidated after the grant call.
@@ -265,7 +327,8 @@ internal sealed class RuntimeActionOwner(
         try
         {
             return await grants.IssueRuntimeActionGrantAsync(
-                context, registration, request, cancellationToken, reserveToolInvocation, readSpendEvidence)
+                context, registration, request, cancellationToken, reserveToolInvocation, readSpendEvidence,
+                approvedNativeHandoff)
                 .ConfigureAwait(false);
         }
         catch (RuntimeNumericLimitDeniedException denial)
@@ -644,6 +707,9 @@ public static class RuntimeActionEndpoints
             // 403 Forbidden: every other failure is a final denial, including content that the checks blocked.
             var status = failure.Code == RuntimeGuardrailsGate.ContentRequiredCode
                 ? StatusCodes.Status428PreconditionRequired
+                : failure.Code is RuntimeNativeApprovalOwnerStore.PendingCode or
+                    RuntimeNativeApprovalOwnerStore.CollisionCode
+                    ? StatusCodes.Status409Conflict
                 : failure.Code == "runtime_fixed_credit_guard_unavailable" ||
                 failure.Code == RuntimeNativePolicyGate.UnavailableCode ||
                 RuntimeGuardrailsGate.IsTransient(failure.Code)

@@ -21,8 +21,9 @@ caller must select a domain through a typed native-library entrypoint.
 
 The library accepts only reviewed rule patterns. The service hosts do not
 register the `RuntimeNativePolicyGate` source composition. Projects & Config
-keeps its current write default. The v4 Policy path, deployed enforcement, API
-schema, storage schema, approval flow, and service topology remain unchanged.
+keeps its current write default. Production enforcement and service topology
+remain unchanged. Approval flow support is limited to one exact native
+Guardrails escalation and the existing coordinator approval gate.
 
 ## Intended behavior and requirements
 
@@ -73,8 +74,8 @@ the exact legacy `tool-permissions.rego` module and its scan-less data shape:
 | --- | --- | --- |
 | Model use | `agentweaver_model_use`, `policy/model-use.rego` | Allows only an exact match for model reference, model ID, source mode, provider type and ID, configuration revision, and configuration hash. An explicit deny wins. |
 | Model-use data | `policy/model_use/data.json` | Contains a closed list of exact `allow` or `deny` rules. Missing provider fields are represented as `null`; they are not wildcards. |
-| Guardrails | `agentweaver_guardrails`, `policy/guardrails.rego` | Requires the ordered `UserInput`/`Text` checks and denies blocked normalized findings. |
-| Guardrails data | `policy/guardrails/data.json` | Contains exact ordered provider, adapter, schema, and options revisions plus blocked finding code and severity tuples. |
+| Guardrails | `agentweaver_guardrails`, `policy/guardrails.rego` | Requires the ordered `UserInput`/`Text` checks, denies blocked findings, and escalates exact configured findings. |
+| Guardrails data | `policy/guardrails/data.json` | Contains exact ordered provider, adapter, schema, and options revisions plus hard blocked and bounded escalation tuples. |
 | Tool permissions | `agentweaver_tool_permissions`, `policy/tool-permissions.rego` | Matches the exact SDK or reviewed remote tool, owner action, callback phase, permission kind, capabilities, and required Remote MCP scan results. |
 | Tool-permission data | `policy/tool_permissions/data.json` | Contains the closed set of tool permission rules and the Remote MCP required-check and risk-threshold list. |
 | Selector | `agentweaver_domains_v2`, `policy/domains.rego` | Selects one of the five domains at `pre_model_call`. |
@@ -117,9 +118,18 @@ Workspace containment is a separate local check and always runs for SDK file
 and shell callbacks.
 
 The unified profile rejects unknown fields, duplicate keys and rules, additional
-files, changed templates, unsupported stages, approval settings, and budget
-facts. It accepts an empty Guardrails check list. The Orchestrator treats that
-list as inactive.
+files, changed templates, unsupported stages, free-form approval settings, and
+budget facts. Guardrails data may add the bounded
+`guardrails-escalation-v1` rule. A rule names one exact normalized
+check/code/severity tuple. Hard blocked findings win over escalation. A
+non-blocked escalated finding produces a native `Escalate` verdict.
+
+The native `PolicyInput` adds the owner-verified `turn_id` and exact
+lower-case SHA-256 `arguments_digest`. It never adds prompt bytes. The
+`ApprovalResolver` must bind the retained input and native approval handle.
+Changed turn or digest values reject resolution. `require_approval`,
+auto-approval, and `on_timeout: allow` are invalid profile data. The profile
+accepts no unattended approval mode.
 
 The runtime source boundary reads accepted and current Policy snapshots. Tool
 callbacks use the current Platform and Project revisions as the retained
@@ -131,9 +141,19 @@ permission does not match its retained invocation. The gate does not substitute
 a different model or provider.
 
 The existing Guardrails resolver still owns provider registration, adapter and
-options matching, resource pins, and classifier execution. The native result narrows the existing AGT and classifier result. A denied, unavailable, stale,
-revoked, or mismatched native result prevents the model send. Budget checks and
-their evidence remain independent.
+options matching, resource pins, and classifier execution. When the native
+composition is present, native Guardrails policy owns normalized finding
+decisions. Independent action policy, model permission, dispatch authorization,
+budgets, and current-authority checks remain active. A denied, unavailable,
+stale, revoked, or mismatched native result prevents the model send.
+
+An escalation first saves the owner turn ID, operation ID, argument digest,
+policy-input digest, and retained native evaluation. The Orchestrator then opens
+one idempotent coordinator approval request. Replays recover that record before
+opening another request. A different pending gate returns a collision. After an
+exact approval receipt arrives, the retry resolves the retained native
+evaluation, checks current authority and restrictions, and consumes the handoff
+once. The handoff does not authorize another operation or a sibling turn.
 
 ## Contracts and boundaries
 
@@ -179,6 +199,7 @@ validation, evaluation, or candidate compilation.
 | Existing finite-network entrypoints reject composed artifacts | Validator and Environment compiler tests | Implemented |
 | Full source hash survives normal and System-only candidate compilation | Environment compiler tests | Implemented |
 | Exact model/provider tuple and Guardrails result | `UnifiedNativeModelAndGuardrailsDecisionsAreHashBound` and `RuntimeNativePolicyGateTests.NativePolicyBlocksEveryWithheldModelSendAndBindsRevision` | Required in Linux CI |
+| Retained native approval binds exact turn and arguments | `NativeGuardrailsEscalationRetainsExactTurnAndDigestAcrossApprovalResolution` | Required in Linux CI |
 | Documentation and source-map coverage | Docs build, link, and drift checks | Candidate validation |
 
 The `native-acs` CI shard runs on Ubuntu, verifies OPA 0.70.0 against the
@@ -196,4 +217,4 @@ APIs retain their current profile behavior.
 
 Activation needs the separately approved exact-scope Policy source, durable
 admission fence, owner receipt link, and compatible native assets. Approval
-and unattended rules remain outside this profile version.
+syntax is accepted only when the pinned Linux native resolver test passes.

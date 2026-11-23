@@ -356,6 +356,16 @@ public sealed class GuardrailsStagePlanResolverTests
     {
         public List<GuardrailsEvaluationEvidence> Evidence { get; } = [];
 
+        public Task<GuardrailsJournalReadResult> ReadAsync(
+            Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            var evidence = Evidence.SingleOrDefault(item => item.OperationId == operationId);
+            return Task.FromResult<GuardrailsJournalReadResult>(evidence is null
+                ? new(GuardrailsJournalReadStatus.NotFound)
+                : new(GuardrailsJournalReadStatus.Found, evidence));
+        }
+
         public Task<GuardrailsJournalAppendStatus> AppendAsync(
             GuardrailsEvaluationEvidence evidence,
             CancellationToken cancellationToken)

@@ -102,6 +102,19 @@ public enum GuardrailsJournalAppendStatus
     Unavailable
 }
 
+/// <summary>Result of reading one operation's retained Guardrails evaluation.</summary>
+public enum GuardrailsJournalReadStatus
+{
+    NotFound,
+    Found,
+    Unavailable
+}
+
+/// <summary>Retained evaluation read for exact operation recovery.</summary>
+public sealed record GuardrailsJournalReadResult(
+    GuardrailsJournalReadStatus Status,
+    GuardrailsEvaluationEvidence? Evidence = null);
+
 /// <summary>Capability identifiers mapping supported stage/content pairs to provider pins.</summary>
 public static class GuardrailsProviderCapabilities
 {
@@ -283,6 +296,13 @@ public sealed record GuardrailsAcceptedStagePlan(
     PinnedOrderedProviderBinding Binding,
     ImmutableArray<IGuardrailsClassifierBinding> Checks);
 
+/// <summary>Classifier pin whose finding decision belongs to the active native Policy path.</summary>
+public sealed record GuardrailsDeferredFindingCheck(
+    string ProviderId,
+    string AdapterVersion,
+    int OptionsSchemaVersion,
+    string OptionsRevision);
+
 /// <summary>Accepted actor, run, policy, grant, and stage bindings consumed by the gate.</summary>
 public sealed record GuardrailsAcceptedRunBinding(
     string ActorIssuer,
@@ -301,7 +321,8 @@ public sealed record GuardrailsAcceptedRunBinding(
     PinnedProviderBinding PolicyBinding,
     AgtPolicyProviderOptions PolicyOptions,
     ImmutableArray<string> ProjectPolicyDocuments,
-    ImmutableArray<GuardrailsAcceptedStagePlan> StagePlans);
+    ImmutableArray<GuardrailsAcceptedStagePlan> StagePlans,
+    ImmutableArray<GuardrailsDeferredFindingCheck> DeferredFindingChecks = default);
 
 /// <summary>Operation and canonical bytes submitted for a Guardrails decision.</summary>
 public sealed record GuardrailsContentRequest(
@@ -390,6 +411,7 @@ public sealed record GuardrailsEvaluationEvidence(
     GuardrailsContentStage Stage,
     GuardrailsContentClass ContentClass,
     ImmutableArray<GuardrailsCheckEvidence> Checks,
+    ImmutableArray<GuardrailsVersionedFinding> Findings,
     PolicyEvaluationOutcome BaselinePolicyOutcome,
     PolicyEvaluationReasonCode BaselinePolicyReasonCode,
     PolicyEvaluationOutcome PolicyOutcome,
@@ -399,6 +421,11 @@ public sealed record GuardrailsEvaluationEvidence(
 /// <summary>Durable append boundary for Guardrails evaluation evidence.</summary>
 public interface IGuardrailsEvidenceJournal
 {
+    /// <summary>Reads the immutable evaluation retained for an operation.</summary>
+    Task<GuardrailsJournalReadResult> ReadAsync(
+        Guid operationId,
+        CancellationToken cancellationToken);
+
     /// <summary>Appends complete evidence and reports duplicate or unavailable writes explicitly.</summary>
     Task<GuardrailsJournalAppendStatus> AppendAsync(
         GuardrailsEvaluationEvidence evidence,
@@ -473,6 +500,14 @@ public sealed class GuardrailsContentGate(
             .ConfigureAwait(false);
         if (authority is not null)
             return Withhold(authority.Value);
+
+        var retained = await evidenceJournal.ReadAsync(request.OperationId, cancellationToken).ConfigureAwait(false);
+        if (retained.Status == GuardrailsJournalReadStatus.Unavailable)
+            return Withhold(GuardrailsReasonCode.JournalUnavailable);
+        if (retained.Status == GuardrailsJournalReadStatus.Found)
+            return await RecoverAsync(
+                acceptedRun, request, stagePlan, contentDigest, retained.Evidence, cancellationToken)
+                .ConfigureAwait(false);
 
         var checkEvidence = ImmutableArray.CreateBuilder<GuardrailsCheckEvidence>(stagePlan.Checks.Length);
         var findings = ImmutableArray.CreateBuilder<GuardrailsVersionedFinding>();
@@ -575,11 +610,19 @@ public sealed class GuardrailsContentGate(
                 acceptedRun.PolicyOptions,
                 CreatePolicyRequest(acceptedRun, request, []))
             : PolicyError(acceptedRun.PolicyOptions);
+        var legacyFindings = findings
+            .Where(finding => acceptedRun.DeferredFindingChecks.IsDefaultOrEmpty ||
+                !acceptedRun.DeferredFindingChecks.Any(check =>
+                check.ProviderId == finding.ProviderId &&
+                check.AdapterVersion == finding.AdapterVersion &&
+                check.OptionsSchemaVersion == finding.OptionsSchemaVersion &&
+                check.OptionsRevision == finding.OptionsRevision))
+            .ToImmutableArray();
         var policyResult = checkFailure == GuardrailsReasonCode.Allowed
             ? policyProvider.Evaluate(
                 acceptedRun.PolicyOptions,
-                CreatePolicyRequest(acceptedRun, request, findings.ToImmutable()))
-            : PolicyError(acceptedRun.PolicyOptions);
+                CreatePolicyRequest(acceptedRun, request, legacyFindings))
+            : baselinePolicyResult;
         var effectivePolicyResult = GuardrailsPolicyNarrowing.Apply(baselinePolicyResult, policyResult);
 
         var reason = checkFailure != GuardrailsReasonCode.Allowed
@@ -595,13 +638,26 @@ public sealed class GuardrailsContentGate(
             request,
             contentDigest,
             checkEvidence.ToImmutable(),
+            findings.ToImmutable(),
             baselinePolicyResult,
             policyResult,
             reason);
 
         var append = await evidenceJournal.AppendAsync(evidence, cancellationToken).ConfigureAwait(false);
         if (append == GuardrailsJournalAppendStatus.Duplicate)
-            return Withhold(GuardrailsReasonCode.JournalDuplicate, effectivePolicyResult, findings.ToImmutable());
+        {
+            var winner = await evidenceJournal.ReadAsync(request.OperationId, cancellationToken).ConfigureAwait(false);
+            if (winner.Status == GuardrailsJournalReadStatus.Found)
+                return await RecoverAsync(
+                    acceptedRun, request, stagePlan, contentDigest, winner.Evidence, cancellationToken)
+                    .ConfigureAwait(false);
+            return Withhold(
+                winner.Status == GuardrailsJournalReadStatus.Unavailable
+                    ? GuardrailsReasonCode.JournalUnavailable
+                    : GuardrailsReasonCode.JournalDuplicate,
+                effectivePolicyResult,
+                findings.ToImmutable());
+        }
         if (append != GuardrailsJournalAppendStatus.Appended)
             return Withhold(GuardrailsReasonCode.JournalUnavailable, effectivePolicyResult, findings.ToImmutable());
 
@@ -620,6 +676,77 @@ public sealed class GuardrailsContentGate(
             GuardrailsReasonCode.Allowed,
             effectivePolicyResult.Outcome,
             findings.ToImmutable());
+    }
+
+    private async Task<GuardrailsGateResult> RecoverAsync(
+        GuardrailsAcceptedRunBinding acceptedRun,
+        GuardrailsContentRequest request,
+        GuardrailsAcceptedStagePlan stagePlan,
+        string contentDigest,
+        GuardrailsEvaluationEvidence? evidence,
+        CancellationToken cancellationToken)
+    {
+        if (evidence is null ||
+            evidence.OperationId != request.OperationId ||
+            evidence.SnapshotId != request.SnapshotId ||
+            evidence.SnapshotDigest != request.SnapshotDigest ||
+            evidence.ContentDigest != contentDigest ||
+            evidence.ActorIssuer != acceptedRun.ActorIssuer ||
+            evidence.ActorId != acceptedRun.ActorId ||
+            evidence.TenantId != acceptedRun.TenantId ||
+            evidence.ProjectId != acceptedRun.ProjectId ||
+            evidence.RunId != acceptedRun.RunId ||
+            evidence.SessionId != acceptedRun.SessionId ||
+            evidence.ActionId != acceptedRun.ActionId ||
+            evidence.Purpose != acceptedRun.Purpose ||
+            evidence.AcceptedSelectionRevision != acceptedRun.AcceptedSelectionRevision ||
+            evidence.AcceptedSelectionHash != acceptedRun.AcceptedSelectionHash ||
+            evidence.ExecutionFence != acceptedRun.ExecutionFence ||
+            evidence.Stage != request.Stage ||
+            evidence.ContentClass != request.ContentClass ||
+            evidence.Checks.Length != stagePlan.Checks.Length ||
+            !MatchesChecks(evidence.Checks, stagePlan) ||
+            evidence.Findings.IsDefault)
+            return Withhold(GuardrailsReasonCode.JournalDuplicate);
+
+        var authority = await CheckAuthorityAsync(
+            acceptedRun, request, contentDigest, cancellationToken).ConfigureAwait(false);
+        if (authority is not null)
+            return new(
+                GuardrailsDecision.Withhold,
+                authority.Value,
+                evidence.PolicyOutcome,
+                evidence.Findings);
+
+        return evidence.ReasonCode == GuardrailsReasonCode.Allowed
+            ? new(
+                GuardrailsDecision.Allow,
+                GuardrailsReasonCode.Allowed,
+                PolicyEvaluationOutcome.Allow,
+                evidence.Findings)
+            : new(
+                GuardrailsDecision.Withhold,
+                evidence.ReasonCode,
+                evidence.PolicyOutcome,
+                evidence.Findings);
+    }
+
+    private static bool MatchesChecks(
+        ImmutableArray<GuardrailsCheckEvidence> checks,
+        GuardrailsAcceptedStagePlan stagePlan)
+    {
+        for (var index = 0; index < checks.Length; index++)
+        {
+            var check = checks[index];
+            var pin = stagePlan.Checks[index].Pin;
+            if (check.Order != index ||
+                check.ProviderId != pin.ProviderId ||
+                check.AdapterVersion != pin.AdapterVersion.ToString() ||
+                check.OptionsSchemaVersion != pin.OptionsSchemaVersion ||
+                check.OptionsRevision != pin.OptionsRevision)
+                return false;
+        }
+        return true;
     }
 
     private static bool ValidateRequest(
@@ -696,6 +823,12 @@ public sealed class GuardrailsContentGate(
             acceptedRun.ProjectPolicyDocuments.Any(string.IsNullOrWhiteSpace) ||
             acceptedRun.StagePlans.IsDefault ||
             acceptedRun.StagePlans.Any(item => item is null) ||
+            !acceptedRun.DeferredFindingChecks.IsDefaultOrEmpty &&
+                acceptedRun.DeferredFindingChecks.Any(check => check is null ||
+                    !AgtPolicyProvider.IsIdentifier(check.ProviderId) ||
+                    string.IsNullOrWhiteSpace(check.AdapterVersion) ||
+                    check.OptionsSchemaVersion < 1 ||
+                    !AgtPolicyProvider.IsIdentifier(check.OptionsRevision)) ||
             stagePlan.Binding.Seam != ProviderSeam.Guardrails ||
             stagePlan.Binding.RunId != acceptedRun.RunId ||
             stagePlan.Checks.Length == 0 ||
@@ -819,6 +952,7 @@ public sealed class GuardrailsContentGate(
         GuardrailsContentRequest request,
         string contentDigest,
         ImmutableArray<GuardrailsCheckEvidence> checks,
+        ImmutableArray<GuardrailsVersionedFinding> findings,
         AgtPolicyEvaluationResult baselinePolicyResult,
         AgtPolicyEvaluationResult policyResult,
         GuardrailsReasonCode reasonCode) =>
@@ -843,6 +977,7 @@ public sealed class GuardrailsContentGate(
             request.Stage,
             request.ContentClass,
             checks,
+            findings,
             baselinePolicyResult.Outcome,
             baselinePolicyResult.ReasonCode,
             policyResult.Outcome,

@@ -1658,14 +1658,17 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
     private async Task<ExecutableActionGrantReference> IssueAsync(
         int index, RuntimeActionRequest request,
-        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null,
+        bool approvedNativeHandoff = false)
     {
         var store = GrantStore();
         try
         {
             return await store.IssueRuntimeActionGrantAsync(
                 _context, _registrations[index], request, default,
-                reserveToolInvocation: request.IsToolInvocation, readSpendEvidence: readSpendEvidence);
+                reserveToolInvocation: request.IsToolInvocation,
+                readSpendEvidence: readSpendEvidence,
+                approvedNativeHandoff: approvedNativeHandoff);
         }
         catch (RuntimeNumericLimitDeniedException denial)
         {

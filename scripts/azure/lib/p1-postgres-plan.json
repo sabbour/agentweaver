@@ -1608,6 +1608,14 @@
           ]
         },
         {
+          "table": "runtime_native_approval_suspensions",
+          "privileges": [
+            "SELECT",
+            "INSERT",
+            "UPDATE"
+          ]
+        },
+        {
           "table": "backlog_tasks",
           "privileges": [
             "SELECT",
@@ -2109,7 +2117,8 @@
     49,
     50,
     51,
-    52
+    52,
+    53
   ],
   "environmentVersions": [
     1,

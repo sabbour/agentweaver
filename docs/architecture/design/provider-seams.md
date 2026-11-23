@@ -753,11 +753,21 @@ model input/output, MCP discovery, structured results, and non-text content requ
 on every check in the accepted stage pin. Permission metadata and MCP annotations are provenance only and
 never grant tool authority.
 
-The opt-in native `model-use` and `guardrails` Policy domains add a
-second narrowing decision at runtime composition tests. They do not replace
-the catalog resolver or classifiers. Model use receives only the validated
-model pin. Guardrails receives only exact check pins and normalized findings.
-The service hosts do not register the source or admission store in this slice.
+The opt-in native `model-use` and `guardrails` Policy domains replace only the
+legacy normalized finding decision at the model-turn user-input gate. They do
+not replace the catalog resolver, classifiers, action authorization, model
+permission, or dispatch guards. Model use receives only the validated model
+pin. Guardrails receives exact check pins and normalized findings plus an
+owner-verified turn ID and argument digest. The profile rejects auto-approval,
+`require_approval`, and `on_timeout: allow`.
+
+An allowed-to-escalate finding suspends the exact turn before a coordinator
+approval gate opens. The suspension stores the retained native evaluation and
+binds it to the turn and digest. A retry after a restart recovers the same gate.
+An approved retry resolves the retained native result, validates current
+authority and restrictions, and consumes one grant. A pending different gate is
+a collision. The service hosts do not register the source or approval store in
+this source-only slice.
 
 <a id="p2-runtime-gate-for-model-turn-user-input"></a>
 
@@ -779,8 +789,9 @@ admission (`/internal/runtime/actions/authorize`):
    check in order. `PromptShieldsClassifier` calls Azure AI Content Safety `text:shieldPrompt` with the
    Orchestrator workload identity. A detected attack becomes the `prompt_shields.user_prompt_attack`
    finding.
-5. The gate sends the findings to AGT as the `guardrails_stage`, `guardrails_content_class`,
-   `guardrails_finding_count`, and `guardrails_findings` context keys. AGT makes the final decision.
+5. The gate sends the findings to the configured action-policy baseline. With
+   native composition, action policy remains independent and native Guardrails
+   owns the normalized finding decision.
 6. The Orchestrator appends one immutable evidence row per operation to the `guardrails_evaluations`
    table (Orchestrator migration 028). The row holds digests, provider IDs, versions, finding codes, and
    the AGT outcome. It never holds the content. Classifier timeouts and unavailable classifiers aren't
@@ -788,10 +799,12 @@ admission (`/internal/runtime/actions/authorize`):
 
 When the opt-in native composition is present, its required checks join the
 accepted plan before the 428 response. Native model permission runs on both
-authorize paths. Its Guardrails result runs after classifier findings. Verify
-rechecks the exact Policy source binding. Any native denial, unavailable
-dependency, stale revision, revoked source, or model mismatch withholds the
-turn.
+authorize paths. Its Guardrails result runs after classifier findings. A native
+escalation returns `409 runtime_native_policy_approval_pending` after durable
+suspension and gate publication. Verify rechecks the exact Policy source
+binding and consumes an approved handoff once. Any hard native denial,
+unavailable dependency, stale revision, revoked source, or model mismatch
+withholds the turn.
 
 A withheld turn has no policy receipt, so the runtime can't verify or perform it. Classifier timeouts and
 unavailable classifiers, journals, or owners return HTTP 503 and fail closed. Tool-approval denial and

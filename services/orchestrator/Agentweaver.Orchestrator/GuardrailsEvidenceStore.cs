@@ -43,6 +43,37 @@ internal sealed class GuardrailsEvidenceStore : IGuardrailsEvidenceJournal
         _table = $"\"{schema}\".guardrails_evaluations";
     }
 
+    /// <summary>Reads the immutable evaluation so a restarted request reuses the exact findings.</summary>
+    public async Task<GuardrailsJournalReadResult> ReadAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        if (operationId == Guid.Empty)
+            throw new ArgumentException("A non-empty operation ID is required.", nameof(operationId));
+        try
+        {
+            await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            await using var command = new NpgsqlCommand($"""
+                SELECT evidence_json::text
+                FROM {_table}
+                WHERE operation_id = @operation
+                """, connection);
+            command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            var json = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (json is null)
+                return new(GuardrailsJournalReadStatus.NotFound);
+            var evidence = JsonSerializer.Deserialize<GuardrailsEvaluationEvidence>(json, JsonOptions);
+            return evidence is null
+                ? new(GuardrailsJournalReadStatus.Unavailable)
+                : new(GuardrailsJournalReadStatus.Found, evidence);
+        }
+        catch (Exception exception) when (exception is NpgsqlException or JsonException or
+                                             InvalidOperationException or TimeoutException)
+        {
+            return new(GuardrailsJournalReadStatus.Unavailable);
+        }
+    }
+
     /// <summary>Inserts the evidence row, or compares it with the row already recorded for the operation.</summary>
     public async Task<GuardrailsJournalAppendStatus> AppendAsync(
         GuardrailsEvaluationEvidence evidence,

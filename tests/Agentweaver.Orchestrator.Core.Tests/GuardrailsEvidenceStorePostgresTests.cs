@@ -123,6 +123,7 @@ public sealed class GuardrailsEvidenceStorePostgresTests(CoordinationPostgresFix
         GuardrailsContentClass.Text,
         [new GuardrailsCheckEvidence(0, "azure-prompt-shields", "1.0.0", 1, "options-1",
             GuardrailsCheckOutcome.Clear, 0)],
+        [],
         PolicyEvaluationOutcome.Allow,
         default,
         PolicyEvaluationOutcome.Allow,

@@ -81,4 +81,24 @@ failed asset check or probe stops that image build.
 
 The build does not download assets at runtime, search `PATH` for OPA, enable a
 permissive mode, activate ACS, or change stored policy data. It proves runtime
-assets only; Agentweaver does not yet use them to authorize actions.
+assets only. The reviewed `composable-domains-v2` profile can use exact native
+Guardrails escalation rules, but service hosts register its runtime source only
+through a separate admitted composition.
+
+Approval-capable Guardrails data uses this bounded shape:
+
+```json
+{
+  "required_checks": [],
+  "blocked_findings": [],
+  "escalation": {
+    "version": "guardrails-escalation-v1",
+    "rules": []
+  }
+}
+```
+
+Each escalation rule repeats one required check's `check_id`, `code`, and
+`severity`. Hard blocked findings remain dominant. The profile rejects
+`require_approval`, auto-approval, and `on_timeout: allow`. Its native policy
+input carries an owner turn ID and argument digest, not prompt bytes.

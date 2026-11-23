@@ -1498,10 +1498,12 @@ internal sealed class RuntimeUsageSourceStore(
         RuntimeRegistration registration,
         Guid dispatchId,
         string promptHash,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool approvedNativeHandoff = false)
     {
         var evidence = await ReadNativeActionDispatchEvidenceAsync(
-            connection, transaction, registration, dispatchId, promptHash, cancellationToken)
+            connection, transaction, registration, dispatchId, promptHash, cancellationToken,
+            approvedNativeHandoff)
             .ConfigureAwait(false);
         return evidence is { State: "prepared" or "sending" };
     }
@@ -1512,7 +1514,8 @@ internal sealed class RuntimeUsageSourceStore(
         RuntimeRegistration registration,
         Guid dispatchId,
         string? expectedPromptHash,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool approvedNativeHandoff = false)
     {
         NativeDispatch dispatch;
         try
@@ -1549,7 +1552,8 @@ internal sealed class RuntimeUsageSourceStore(
         string? checkpointHash = null;
         if (dispatch.State is "prepared" or "sending")
             checkpointHash = await RequireNativeCheckpointAsync(
-                connection, transaction, registration, admission, dispatch, cancellationToken, rebind)
+                connection, transaction, registration, admission, dispatch, cancellationToken, rebind,
+                approvedNativeHandoff: approvedNativeHandoff)
                 .ConfigureAwait(false);
         return new RuntimeNativeActionDispatchEvidence(
             dispatch.RootSessionId,
@@ -2959,7 +2963,8 @@ internal sealed class RuntimeUsageSourceStore(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeNativeTurnAdmissionReceipt admission, NativeDispatch dispatch, CancellationToken cancellationToken,
         NativeChildRebindReceipt? rebind = null,
-        MafExecutionCheckpointSnapshot? callerCheckpoint = null)
+        MafExecutionCheckpointSnapshot? callerCheckpoint = null,
+        bool approvedNativeHandoff = false)
     {
         if (rebind is not null)
         {
@@ -2973,6 +2978,30 @@ internal sealed class RuntimeUsageSourceStore(
             return rebound.PayloadHash;
         }
 
+        var approvalContinuity = approvedNativeHandoff
+            ? $"""
+                            OR EXISTS (
+                                SELECT 1
+                                FROM {_schema}.runtime_native_approval_suspensions approval
+                                JOIN {_decisions} approval_decision
+                                  ON approval_decision.project_id = approval.project_id
+                                 AND approval_decision.run_id = approval.run_id
+                                 AND approval_decision.session_id = checkpoint.session_id
+                                 AND approval_decision.state_version = approval.approval_state_version
+                                WHERE approval.project_id = checkpoint.project_id
+                                  AND approval.run_id = checkpoint.run_id
+                                  AND approval.session_id = @child
+                                  AND approval.owner_turn_id = @turn
+                                  AND approval.operation_id = @operation
+                                  AND approval.request_hash = @prompt_hash
+                                  AND NOT EXISTS (
+                                      SELECT 1 FROM {_decisions} later_decision
+                                      WHERE later_decision.project_id = approval_decision.project_id
+                                        AND later_decision.run_id = approval_decision.run_id
+                                        AND later_decision.session_id = approval_decision.session_id
+                                        AND later_decision.state_version > approval_decision.state_version))
+                """
+            : string.Empty;
         await using var command = new NpgsqlCommand($"""
             SELECT checkpoint.payload::text
             FROM {_checkpoints} checkpoint
@@ -2983,11 +3012,13 @@ internal sealed class RuntimeUsageSourceStore(
                     SELECT 1 FROM {_decisions} decision
                     WHERE decision.project_id = checkpoint.project_id AND decision.run_id = checkpoint.run_id
                         AND decision.session_id = checkpoint.session_id AND decision.state_version = @decision
-                        AND NOT EXISTS (
-                            SELECT 1 FROM {_decisions} next_decision
-                            WHERE next_decision.project_id = decision.project_id AND next_decision.run_id = decision.run_id
-                                AND next_decision.session_id = decision.session_id
-                                AND next_decision.state_version > decision.state_version))
+                        AND (
+                            NOT EXISTS (
+                                SELECT 1 FROM {_decisions} next_decision
+                                WHERE next_decision.project_id = decision.project_id AND next_decision.run_id = decision.run_id
+                                    AND next_decision.session_id = decision.session_id
+                                    AND next_decision.state_version > decision.state_version)
+                            {approvalContinuity}))
                 AND NOT EXISTS (
                     SELECT 1 FROM {_checkpoints} next
                     WHERE next.project_id = checkpoint.project_id AND next.run_id = checkpoint.run_id
@@ -3000,6 +3031,10 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, dispatch.CheckpointId);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, dispatch.ExecutionFence);
         command.Parameters.AddWithValue("decision", NpgsqlDbType.Bigint, dispatch.DecisionStateVersion);
+        command.Parameters.AddWithValue("child", NpgsqlDbType.Varchar, dispatch.ChildSessionId);
+        command.Parameters.AddWithValue("turn", NpgsqlDbType.Varchar, registration.Binding.TurnId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, admission.MessageId);
+        command.Parameters.AddWithValue("prompt_hash", NpgsqlDbType.Char, admission.PromptHash);
         var json = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (json is not string payload)
             throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");

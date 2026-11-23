@@ -496,7 +496,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
     internal async Task<ExecutableActionGrantReference> IssueRuntimeActionGrantAsync(
         HttpContext context, RuntimeRegistration registration, RuntimeActionRequest request,
         CancellationToken cancellationToken, bool reserveToolInvocation = false,
-        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null,
+        bool approvedNativeHandoff = false)
     {
         RuntimeActionContract.Validate(request);
         var binding = registration.Binding;
@@ -517,10 +518,18 @@ internal sealed class ExecutableActionGrantOwnerStore(
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         if (actor.Issuer != binding.ActorIssuer || actor.Subject != binding.ActorId)
             throw new RuntimeAuthorizationException("runtime_action_actor_invalid");
-        var reference = new ExecutableActionGrantReference(request.EventId.ToString("N"), "1");
+        var grantId = request.EventId.ToString("N");
+        var reference = new ExecutableActionGrantReference(grantId, "1");
         var requestHash = RuntimeActionContract.Hash(request);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var acquireGrant = new NpgsqlCommand(
+                         "SELECT pg_advisory_xact_lock(hashtext('agentweaver.runtime.actions'), hashtext(@grantScope))",
+                         connection, transaction))
+        {
+            acquireGrant.Parameters.AddWithValue("grantScope", $"{binding.ProjectId}/{binding.RunId}/{grantId}");
+            await acquireGrant.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
         if (await CheckpointRecoveryHold.IsHeldAsync(
                 connection, transaction, _schema, binding.ProjectId, binding.RunId, cancellationToken)
             .ConfigureAwait(false))
@@ -681,10 +690,57 @@ internal sealed class ExecutableActionGrantOwnerStore(
         if (!isCoordinatorRoot && request.ActionId == "model.turn" && request.DispatchId is { } dispatchId)
         {
             if (!await _runtimeSources.IsNativeDispatchAdmittedForActionGrantAsync(
-                    connection, transaction, registration, dispatchId, request.InputHash, cancellationToken)
+                    connection, transaction, registration, dispatchId, request.InputHash, cancellationToken,
+                    approvedNativeHandoff)
                 .ConfigureAwait(false))
                 throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
         }
+        long nextRevision = 1;
+        ExecutableActionGrantReference? currentReference = null;
+        await using (var existing = new NpgsqlCommand($"""
+            SELECT revision, is_current, source_state_version, source_request_id, source_decision_id
+            FROM {_schema}.executable_action_grants
+            WHERE project_id = @project AND run_id = @run AND grant_id = @grant
+            ORDER BY length(revision) DESC, revision DESC
+            """, connection, transaction))
+        {
+            existing.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            existing.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            existing.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, grantId);
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (!long.TryParse(reader.GetString(0), out var revision) || revision < 1)
+                    throw new RuntimeAuthorizationException("runtime_action_grant_invalid");
+                nextRevision = Math.Max(nextRevision, checked(revision + 1));
+                if (reader.GetString(3) != requestHash)
+                    throw new RuntimeAuthorizationException("runtime_action_conflict");
+                if (reader.GetBoolean(1) && reader.GetInt64(2) == decisionVersion)
+                {
+                    if (reader.GetGuid(4) != decisionId)
+                        throw new RuntimeAuthorizationException("runtime_action_grant_invalid");
+                    currentReference = new(
+                        grantId, revision.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+                }
+            }
+        }
+        reference = currentReference
+            ?? new(grantId, nextRevision.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (currentReference is null)
+        {
+            await using var supersede = new NpgsqlCommand($"""
+                UPDATE {_schema}.executable_action_grants
+                SET is_current = false, grant_state = 'superseded'
+                WHERE project_id = @project AND run_id = @run AND grant_id = @grant
+                  AND is_current = true
+                """, connection, transaction);
+            supersede.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            supersede.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            supersede.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, grantId);
+            await supersede.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         bool grantInserted;
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.executable_action_grants
@@ -694,7 +750,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
                  context_revision, accepted_selection_hash, membership_revision, role_revision,
                  execution_fence, expires_at, source_state_version, source_decision_id, source_request_id)
             VALUES
-                (@project, @run, @grant, '1', true, 'active',
+                (@project, @run, @grant, @revision, true, 'active',
                  @issuer, @actor, @tenant, @session, @step, @actions, @purpose,
                  @projectRevision, @configurationRevision, @platformRevision,
                  @contextRevision, @selectionHash, @membershipRevision, @roleRevision,
@@ -704,6 +760,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         {
             BindRuntime(insert, binding);
             insert.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, reference.GrantId);
+            insert.Parameters.AddWithValue("revision", NpgsqlDbType.Varchar, reference.Revision);
             insert.Parameters.AddWithValue("step", NpgsqlDbType.Varchar, step);
             insert.Parameters.AddWithValue("actions", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(new[] { request.ActionId }));
             insert.Parameters.AddWithValue("purpose", NpgsqlDbType.Varchar, RuntimeActionContract.Purpose);
@@ -721,12 +778,13 @@ internal sealed class ExecutableActionGrantOwnerStore(
         }
         await using (var exact = new NpgsqlCommand($"""
             SELECT source_request_id FROM {_schema}.executable_action_grants
-            WHERE project_id = @project AND run_id = @run AND grant_id = @grant AND revision = '1'
+            WHERE project_id = @project AND run_id = @run AND grant_id = @grant AND revision = @revision
             """, connection, transaction))
         {
             exact.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
             exact.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
             exact.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, reference.GrantId);
+            exact.Parameters.AddWithValue("revision", NpgsqlDbType.Varchar, reference.Revision);
             if ((string?)await exact.ExecuteScalarAsync(cancellationToken) != requestHash)
                 throw new RuntimeAuthorizationException("runtime_action_conflict");
         }

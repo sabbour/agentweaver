@@ -64,7 +64,9 @@ public sealed class NativeAcsArtifactValidator
         "input.policy_target.value.guardrails.stage",
         "input.policy_target.value.guardrails.content_class",
         "input.policy_target.value.guardrails.checks",
-        "input.policy_target.value.guardrails.findings"
+        "input.policy_target.value.guardrails.findings",
+        "input.policy_target.value.approval.turn_id",
+        "input.policy_target.value.approval.arguments_digest"
     };
     private static readonly HashSet<string> AllowedToolInputPaths = new(StringComparer.Ordinal)
     {

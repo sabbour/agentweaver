@@ -399,6 +399,8 @@ described in the [ACS runtime asset guide](https://github.com/sabbour/agentweave
 The composed-domain tests also check fixed module bytes, separate data
 namespaces, and independent action and network decisions. The unified profile
 tests check exact model/provider permission and ordered Guardrails findings.
+Approval tests retain the native evaluation and resolve an exact turn ID and
+argument digest through the real Linux `ApprovalResolver`.
 Project profile tests check omitted network data and the exact submitted hash.
 
 Run these commands from the repository root. Replace `/path/to/opa` with the
@@ -418,9 +420,12 @@ native test to pass. `ComposedNativeSelectorKeepsDomainDecisionsIndependent`
 is one of those required tests. A Windows skip does not satisfy this Linux CI
 check. `UnifiedNativeModelAndGuardrailsDecisionsAreHashBound` and
 `RuntimeNativePolicyGateTests.NativePolicyBlocksEveryWithheldModelSendAndBindsRevision`
-are also required. The latter counts fake model sends and source revisions
-through the opt-in Orchestrator policy gate. These tests do not activate ACS or
-change the deployed v4 Policy path.
+and
+`NativeGuardrailsEscalationRetainsExactTurnAndDigestAcrossApprovalResolution`
+are also required. The runtime test counts fake model sends and source
+revisions through the opt-in Orchestrator policy gate. The escalation test
+changes the digest and proves native resolution rejects it. These tests do not
+activate ACS or change the deployed v4 Policy path.
 
 Run the Remote MCP scan and send-boundary regressions after the Release build:
 

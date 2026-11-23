@@ -414,12 +414,12 @@ public sealed class RuntimeNativePolicyGateTests
         Assert.Equal(1, sends);
     }
 
-    private static Task<string> RequireClearGuardrailsAsync(
+    private static async Task<string> RequireClearGuardrailsAsync(
         RuntimeNativePolicyGate gate,
         RuntimeNativePolicyPreparation preparation,
         RuntimeRegistration registration,
         RuntimeActionRequest request) =>
-        gate.RequireGuardrailsAsync(
+        (await gate.RequireGuardrailsAsync(
             preparation,
             registration,
             request,
@@ -428,7 +428,7 @@ public sealed class RuntimeNativePolicyGateTests
                     "prompt-shields", "1.0.0", 1, "options-v1")
             ],
             [],
-            default);
+            default).ConfigureAwait(false)).BindingHash;
 
     private static async Task RequireModelSendAsync(
         RuntimeActionOwner owner,
@@ -552,7 +552,60 @@ public sealed class RuntimeNativePolicyGateTests
         Assert.Equal(RuntimeGuardrailsGate.ContentRequiredCode, failure.Code);
     }
 
-    private static NativeAcsArtifact Artifact(string effect) =>
+    [RuntimeNativePolicyFact]
+    public async Task NativeApprovalRejectsChangedOwnerTurnAndArgumentDigest()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var source = new FixtureSource(Artifact(
+            "allow",
+            escalates: true));
+        var gate = new RuntimeNativePolicyGate(source, new FixtureAdmissionStore(), evaluator);
+        var (registration, accepted) = RunBinding("byok-model");
+        var request = ModelTurnRequest(registration);
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, request, default);
+
+        var retained = await gate.RequireGuardrailsAsync(
+            preparation,
+            registration,
+            request,
+            [new NativeAcsGuardrailsCheckFacts(
+                "prompt-shields", "1.0.0", 1, "options-v1")],
+            [new NativeAcsGuardrailsFindingFacts(
+                "prompt-shields", "sensitive-request", "medium")],
+            default);
+
+        var escalation = Assert.Single(retained.Escalations);
+        Assert.Equal(registration.Binding.TurnId,
+            escalation.PolicyInput.GetProperty("policy_target").GetProperty("value")
+                .GetProperty("approval").GetProperty("turn_id").GetString());
+        Assert.Equal(request.InputHash,
+            escalation.PolicyInput.GetProperty("policy_target").GetProperty("value")
+                .GetProperty("approval").GetProperty("arguments_digest").GetString());
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            gate.ResolveApprovalAsync(
+                registration with
+                {
+                    Binding = registration.Binding with { TurnId = "turn-sibling" }
+                },
+                request,
+                retained,
+                approve: true,
+                default));
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            gate.ResolveApprovalAsync(
+                registration,
+                request with { InputHash = new string('c', 64) },
+                retained,
+                approve: true,
+                default));
+
+        await gate.ResolveApprovalAsync(
+            registration, request, retained, approve: true, default);
+    }
+
+    private static NativeAcsArtifact Artifact(string effect, bool escalates = false) =>
         NativeAcsUnifiedPolicyProfile.CreateArtifact(
             """{"allowed_action_ids":["model.turn"]}""",
             """
@@ -592,7 +645,7 @@ public sealed class RuntimeNativePolicyGateTests
               ]
             }
             """,
-            """
+            $$"""
             {
               "required_checks": [
                 {
@@ -608,7 +661,26 @@ public sealed class RuntimeNativePolicyGateTests
                   "code": "prompt-injection",
                   "severity": "high"
                 }
-              ]
+              ],
+              {{(escalates
+                  ? """
+                    "escalation": {
+                      "version": "guardrails-escalation-v1",
+                      "rules": [
+                        {
+                          "check_id": "prompt-shields",
+                          "code": "sensitive-request",
+                          "severity": "medium"
+                        }
+                      ]
+                    }
+                    """
+                  : """
+                    "escalation": {
+                      "version": "guardrails-escalation-v1",
+                      "rules": []
+                    }
+                    """)}}
             }
             """);
 

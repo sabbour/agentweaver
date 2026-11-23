@@ -102,6 +102,29 @@ public sealed class RuntimeGuardrailsGateTests
     }
 
     [Fact]
+    public void ApprovalSubjectIsStableAcrossClockChangesAndBindsTurnEventAndDigest()
+    {
+        var request = Request("model.turn");
+        var subject = RuntimeNativeApprovalOwnerStore.SubjectId("turn-owner", request);
+        Thread.Sleep(5);
+
+        Assert.Equal(
+            subject,
+            RuntimeNativeApprovalOwnerStore.SubjectId("turn-owner", request));
+        Assert.NotEqual(
+            subject,
+            RuntimeNativeApprovalOwnerStore.SubjectId("turn-sibling", request));
+        Assert.NotEqual(
+            subject,
+            RuntimeNativeApprovalOwnerStore.SubjectId(
+                "turn-owner", request with { EventId = Guid.NewGuid() }));
+        Assert.NotEqual(
+            subject,
+            RuntimeNativeApprovalOwnerStore.SubjectId(
+                "turn-owner", request with { InputHash = new string('b', 64) }));
+    }
+
+    [Fact]
     public async Task AuthorityCheckMapsCurrentStaleRevokedAndUnavailable()
     {
         var registration = Registration();

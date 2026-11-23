@@ -409,7 +409,9 @@ The opt-in `composable-domains-v2` snapshot can also contain
 reference, concrete model ID, source mode, provider type and ID, configuration
 revision, and configuration hash. Guardrails facts carry the
 `UserInput`/`Text` stage, exact ordered check registrations, and normalized
-findings. The snapshot does not contain budget or approval facts.
+findings. Approval facts carry the owner-verified turn ID and exact argument
+digest. The snapshot does not contain raw prompt bytes, budget facts, or human
+response text.
 
 The `composable-domains-v1` profile adds reviewed `actions` and
 `platform_network` domains to one artifact. It pins the manifest and all three
@@ -442,6 +444,13 @@ records exact source references and the complete content hash beside request
 and registration hashes. Verification rechecks all values before native tool
 approval release. A missing evaluator, Policy source, or admission binding denies
 the callback.
+
+An escalated finding saves one turn-bound suspension record before the
+coordinator opens its approval gate. The native `ApprovalResolver` resolves
+only the retained `PolicyInput` and approval handle. Turn ID or argument-digest
+changes reject the result. The approved retry reissues independent runtime
+authority, rechecks restrictions at verification, and consumes one exact-turn
+handoff. Pending-gate collisions do not create a bypass or sibling-turn grant.
 
 Projects & Config exposes the current Platform policy artifact through a
 source API. It uses one head per scope and keeps the Policy ID of an existing
