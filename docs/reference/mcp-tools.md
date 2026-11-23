@@ -155,6 +155,7 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `importMarketplaceSkill` | Import the selected, previewed content. |
 | `previewSkillContent` | Validate submitted local content without importing. |
 | `packageSkillContent` | Turn uploaded files, a ZIP archive, or draft fields into skill candidates. |
+| `readProjectSkillTrust` | Read the current trust projection for one exact Skill revision. |
 | `importProjectSkill` | Import validated local content. |
 | `updateProjectSkillAssignment` | Update project assignments at an expected configuration revision. |
 | `listProjectSkillInventory` | Read paginated revision metadata. |
