@@ -19,3 +19,7 @@ pre_model_call_verdict := data.agent_control_specification.agentweaver_model_use
 pre_model_call_verdict := data.agent_control_specification.agentweaver_guardrails.pre_model_call_verdict if {
 	input.policy_target.value.domain_id == "agentweaver_guardrails"
 }
+
+pre_model_call_verdict := data.agent_control_specification.agentweaver_tool_permissions.pre_model_call_verdict if {
+	input.policy_target.value.domain_id == "agentweaver_tool_permissions"
+}

@@ -803,12 +803,26 @@ public sealed class NativeAcsPolicyTests
                         "prompt-shields", "prompt-injection", "high")
                 ])
             });
+        var toolAllowed = await evaluator.EvaluateComposedAsync(
+            artifact, NativeAcsDomainId.ToolPermissions, InterventionPoint.PreModelCall,
+            Snapshot("tool.write") with
+            {
+                Tool = ToolFacts("edit", "invocation", null)
+            });
+        var toolDenied = await evaluator.EvaluateComposedAsync(
+            artifact, NativeAcsDomainId.ToolPermissions, InterventionPoint.PreModelCall,
+            Snapshot("tool.write") with
+            {
+                Tool = ToolFacts("unregistered", "invocation", null)
+            });
 
         Assert.Equal(PolicyEvaluationOutcome.Allow, allowed.Outcome);
         Assert.Equal(artifact.ContentSha256, allowed.ArtifactSha256);
         Assert.Equal(PolicyEvaluationOutcome.Deny, mismatched.Outcome);
         Assert.Equal(PolicyEvaluationOutcome.Allow, guardrailsAllowed.Outcome);
         Assert.Equal(PolicyEvaluationOutcome.Deny, guardrailsBlocked.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Allow, toolAllowed.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, toolDenied.Outcome);
         AssertNoEvaluationWorkspaces();
     }
 
@@ -832,6 +846,21 @@ public sealed class NativeAcsPolicyTests
             edited.Files.Single(item =>
                 item.RelativePath == NativeAcsUnifiedPolicyProfile.GuardrailsDataPath).Bytes);
         Assert.NotEqual(original.ContentSha256, edited.ContentSha256);
+        Assert.Contains(NativeAcsDomainId.ToolPermissions, inspection.Domains);
+    }
+
+    [Fact]
+    public void UnifiedProfileRejectsInvalidToolPermissionFacts()
+    {
+        var original = CreateUnifiedArtifact();
+        var invalid = ReplaceComposedFile(
+            original,
+            NativeAcsUnifiedPolicyProfile.ToolPermissionsDataPath,
+            """{"rules":[{"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false}]}""");
+
+        Assert.Contains(
+            NativeAcsUnifiedPolicyProfile.Inspect(invalid).Diagnostics,
+            diagnostic => diagnostic.Code == "tool_permissions_data_rule");
     }
 
     [Fact]
@@ -1128,6 +1157,22 @@ public sealed class NativeAcsPolicyTests
                     "prompt-shields", "1.0.0", 1, "options-v1")
             ],
             findings.ToImmutableArray());
+
+    private static NativeAcsToolEvaluationFacts ToolFacts(
+        string toolName, string phase, string? permissionKind) =>
+        new(
+            toolName,
+            "call-1",
+            phase,
+            new string('b', 64),
+            "sdk-session-1",
+            Guid.NewGuid().ToString("D"),
+            "turn-1",
+            false,
+            true,
+            false,
+            permissionKind,
+            phase == "permission" ? new string('a', 64) : null);
 
     private const string ComposedNetworkData = """
         {

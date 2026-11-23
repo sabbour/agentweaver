@@ -435,12 +435,13 @@ validation does not select or evaluate the Project network domain. Future
 consumers must select network from the Platform scope and combine applicable
 scope decisions with hard-deny precedence.
 
-`RuntimeNativePolicyGate` is an unregistered Orchestrator source boundary for
-the opt-in profile. An explicit test composition supplies accepted and current
-Policy revisions and an append-only admission store. The gate records the exact
-source references and complete content hash beside request and registration
-hashes. It rechecks all values during verification. Production hosts do not
-register this composition.
+`RuntimeNativePolicyGate` is the Orchestrator source boundary for the opt-in
+profile. Production reads current Platform and Project Policy revisions from
+Projects and retains immutable admission bindings in the owner process. The gate
+records exact source references and the complete content hash beside request
+and registration hashes. Verification rechecks all values before native tool
+approval release. A missing evaluator, Policy source, or admission binding denies
+the callback.
 
 Projects & Config exposes the current Platform policy artifact through a
 source API. It uses one head per scope and keeps the Policy ID of an existing

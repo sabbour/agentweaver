@@ -53,7 +53,8 @@ public sealed class NativeAcsPolicyEvaluator
             (!Enum.IsDefined(selectedDomain) ||
              interventionPoint != InterventionPoint.PreModelCall ||
              !NativeAcsUnifiedPolicyProfile.IsCandidate(artifact) &&
-                 selectedDomain is NativeAcsDomainId.ModelUse or NativeAcsDomainId.Guardrails))
+                 selectedDomain is NativeAcsDomainId.ModelUse or NativeAcsDomainId.Guardrails
+                     or NativeAcsDomainId.ToolPermissions))
             return Error("unavailable", "domain_intervention_point_unsupported");
 
         var validation = domain is null
@@ -87,6 +88,9 @@ public sealed class NativeAcsPolicyEvaluator
         if (domain == NativeAcsDomainId.Guardrails &&
             snapshot.Guardrails is { } guardrails &&
             !IsValidGuardrailsFacts(guardrails))
+            return Error(artifactHash, "snapshot_invalid");
+        if (domain == NativeAcsDomainId.ToolPermissions &&
+            (snapshot.Tool is not { } tool || !IsValidToolFacts(tool)))
             return Error(artifactHash, "snapshot_invalid");
 
         if (!Enum.IsDefined(interventionPoint))
@@ -207,6 +211,27 @@ public sealed class NativeAcsPolicyEvaluator
             IsIdentifier(finding.Code) &&
             finding.Severity is "low" or "medium" or "high" or "critical");
 
+    private static bool IsValidToolFacts(NativeAcsToolEvaluationFacts facts) =>
+        IsIdentifier(facts.ToolName) &&
+        IsIdentifier(facts.CallId) &&
+        IsIdentifier(facts.SdkSessionId) &&
+        IsIdentifier(facts.MessageId) &&
+        IsIdentifier(facts.TurnId) &&
+        facts.Phase is "invocation" or "permission" &&
+        IsSha256(facts.ArgumentDigest) &&
+        (facts.PermissionKind is null or "read" or "write" or "shell") &&
+        (facts.InvocationArgumentDigest is null || IsSha256(facts.InvocationArgumentDigest)) &&
+        (facts.ReadAccess ? 1 : 0) + (facts.WriteAccess ? 1 : 0) +
+            (facts.ShellAccess ? 1 : 0) == 1 &&
+        (facts.Phase == "invocation"
+            ? facts.PermissionKind is null && facts.InvocationArgumentDigest is null
+            : facts.PermissionKind is not null && facts.InvocationArgumentDigest is not null);
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } &&
+        value.All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
     private const int GuardrailsMaximumChecks = 16;
     private const int GuardrailsMaximumFindings = 48;
 
@@ -303,6 +328,13 @@ public sealed class NativeAcsPolicyEvaluator
                         guardrails.Findings.Select(finding => new NativeAcsGuardrailsFinding(
                             finding.CheckId, finding.Code, finding.Severity)).ToArray())
                     : null,
+                snapshot.Tool is { } tool
+                    ? new NativeAcsToolFacts(
+                        tool.ToolName, tool.CallId, tool.Phase, tool.ArgumentDigest,
+                        tool.SdkSessionId, tool.MessageId, tool.TurnId,
+                        tool.ReadAccess, tool.WriteAccess, tool.ShellAccess,
+                        tool.PermissionKind, tool.InvocationArgumentDigest)
+                    : null,
                 domain is { } selectedDomain
                     ? NativeAcsUnifiedPolicyProfile.IsCandidate(artifact)
                         ? NativeAcsUnifiedPolicyProfile.GetPolicyId(selectedDomain)
@@ -365,8 +397,24 @@ public sealed class NativeAcsPolicyEvaluator
         NativeAcsModelUseFacts? ModelUse,
         [property: JsonPropertyName("guardrails"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         NativeAcsGuardrailsFacts? Guardrails,
+        [property: JsonPropertyName("tool"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        NativeAcsToolFacts? Tool,
         [property: JsonPropertyName("domain_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? DomainId);
+
+    private sealed record NativeAcsToolFacts(
+        [property: JsonPropertyName("tool_name")] string ToolName,
+        [property: JsonPropertyName("call_id")] string CallId,
+        [property: JsonPropertyName("phase")] string Phase,
+        [property: JsonPropertyName("argument_digest")] string ArgumentDigest,
+        [property: JsonPropertyName("sdk_session_id")] string SdkSessionId,
+        [property: JsonPropertyName("message_id")] string MessageId,
+        [property: JsonPropertyName("turn_id")] string TurnId,
+        [property: JsonPropertyName("read_access")] bool ReadAccess,
+        [property: JsonPropertyName("write_access")] bool WriteAccess,
+        [property: JsonPropertyName("shell_access")] bool ShellAccess,
+        [property: JsonPropertyName("permission_kind")] string? PermissionKind,
+        [property: JsonPropertyName("invocation_argument_digest")] string? InvocationArgumentDigest);
 
     private sealed record NativeAcsNetworkFacts(
         [property: JsonPropertyName("check_kind")] string CheckKind,

@@ -66,6 +66,22 @@ public sealed class NativeAcsArtifactValidator
         "input.policy_target.value.guardrails.checks",
         "input.policy_target.value.guardrails.findings"
     };
+    private static readonly HashSet<string> AllowedToolInputPaths = new(StringComparer.Ordinal)
+    {
+        "input.policy_target.value.action_id",
+        "input.policy_target.value.tool.tool_name",
+        "input.policy_target.value.tool.call_id",
+        "input.policy_target.value.tool.phase",
+        "input.policy_target.value.tool.argument_digest",
+        "input.policy_target.value.tool.sdk_session_id",
+        "input.policy_target.value.tool.message_id",
+        "input.policy_target.value.tool.turn_id",
+        "input.policy_target.value.tool.read_access",
+        "input.policy_target.value.tool.write_access",
+        "input.policy_target.value.tool.shell_access",
+        "input.policy_target.value.tool.permission_kind",
+        "input.policy_target.value.tool.invocation_argument_digest"
+    };
     private static readonly HashSet<string> UnsafeBuiltins = new(StringComparer.Ordinal)
     {
         "http.send",
@@ -272,6 +288,7 @@ public sealed class NativeAcsArtifactValidator
                                 AllowedDomainSelectorInputPaths,
                             NativeAcsUnifiedPolicyProfile.ModelUseModulePath => AllowedModelUseInputPaths,
                             NativeAcsUnifiedPolicyProfile.GuardrailsModulePath => AllowedGuardrailsInputPaths,
+                            NativeAcsUnifiedPolicyProfile.ToolPermissionsModulePath => AllowedToolInputPaths,
                             _ => new HashSet<string>(StringComparer.Ordinal)
                         }
                         : isNetworkArtifact ? AllowedActionAndNetworkInputPaths : AllowedInputPaths;

@@ -11,18 +11,22 @@ public static class NativeAcsUnifiedPolicyProfile
     public const string ProfileId = "composable-domains-v2";
     public const string ModelUsePolicyId = "agentweaver_model_use";
     public const string GuardrailsPolicyId = "agentweaver_guardrails";
+    public const string ToolPermissionsPolicyId = "agentweaver_tool_permissions";
     public const string SelectorPolicyId = "agentweaver_domains_v2";
 
     internal const string ModelUseModulePath = "policy/model-use.rego";
     internal const string ModelUseDataPath = "policy/model_use/data.json";
     internal const string GuardrailsModulePath = "policy/guardrails.rego";
     internal const string GuardrailsDataPath = "policy/guardrails/data.json";
+    internal const string ToolPermissionsModulePath = "policy/tool-permissions.rego";
+    internal const string ToolPermissionsDataPath = "policy/tool_permissions/data.json";
     internal const string SelectorModulePath = "policy/domains.rego";
 
     private const string ManifestResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.manifest.yaml";
     private const string SelectorModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.domains.rego";
     private const string ModelUseModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.model-use.rego";
     private const string GuardrailsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.guardrails.rego";
+    private const string ToolPermissionsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.tool-permissions.rego";
     private const string ActionsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV1.policy.actions.rego";
     private const string NetworkModuleResource = "Agentweaver.Policy.Acs.FiniteNetworkV1.policy.network.rego";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -32,6 +36,7 @@ public static class NativeAcsUnifiedPolicyProfile
     private static readonly byte[] SelectorModuleBytes = ReadAsset(SelectorModuleResource);
     private static readonly byte[] ModelUseModuleBytes = ReadAsset(ModelUseModuleResource);
     private static readonly byte[] GuardrailsModuleBytes = ReadAsset(GuardrailsModuleResource);
+    private static readonly byte[] ToolPermissionsModuleBytes = ReadAsset(ToolPermissionsModuleResource);
 
     public static bool IsCandidate(NativeAcsArtifact artifact)
     {
@@ -70,7 +75,7 @@ public static class NativeAcsUnifiedPolicyProfile
             return Invalid(diagnostics, "unified_manifest",
                 "The unified ACS manifest does not match the reviewed profile.");
 
-        if (artifact.Files.IsDefault || artifact.Files.Length != (projectScope ? 8 : 9))
+        if (artifact.Files.IsDefault || artifact.Files.Length != (projectScope ? 10 : 11))
             return Invalid(diagnostics, "unified_file_closure",
                 "The unified ACS artifact must contain all reviewed domain files.");
 
@@ -98,6 +103,8 @@ public static class NativeAcsUnifiedPolicyProfile
                 ModelUseDataPath,
                 GuardrailsModulePath,
                 GuardrailsDataPath,
+                ToolPermissionsModulePath,
+                ToolPermissionsDataPath,
                 .. projectScope ? [] : new[] { NativeAcsComposableDomainsProfile.NetworkDataPath }
             ]))
             return Invalid(diagnostics, "unified_file_closure",
@@ -107,7 +114,8 @@ public static class NativeAcsUnifiedPolicyProfile
             !Matches(files[NativeAcsComposableDomainsProfile.NetworkModulePath], NetworkModuleBytes) ||
             !Matches(files[SelectorModulePath], SelectorModuleBytes) ||
             !Matches(files[ModelUseModulePath], ModelUseModuleBytes) ||
-            !Matches(files[GuardrailsModulePath], GuardrailsModuleBytes))
+            !Matches(files[GuardrailsModulePath], GuardrailsModuleBytes) ||
+            !Matches(files[ToolPermissionsModulePath], ToolPermissionsModuleBytes))
             return Invalid(diagnostics, "unified_module",
                 "Unified ACS Rego modules must match the reviewed templates.");
 
@@ -163,13 +171,19 @@ public static class NativeAcsUnifiedPolicyProfile
             return Invalid(diagnostics, guardrailsCode,
                 "The Guardrails domain data does not match its closed schema.",
                 GuardrailsDataPath);
+        if (!ValidateToolPermissionsData(files[ToolPermissionsDataPath].Bytes, out var toolCode))
+            return Invalid(diagnostics, toolCode,
+                "The tool-permissions domain data does not match its closed schema.",
+                ToolPermissionsDataPath);
 
         return new(
             true,
             projectScope
-                ? [NativeAcsDomainId.Actions, NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails]
+                ? [NativeAcsDomainId.Actions, NativeAcsDomainId.ModelUse,
+                    NativeAcsDomainId.Guardrails, NativeAcsDomainId.ToolPermissions]
                 : [NativeAcsDomainId.Actions, NativeAcsDomainId.PlatformNetwork,
-                    NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails],
+                    NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails,
+                    NativeAcsDomainId.ToolPermissions],
             networkPolicy,
             modelUsePolicy,
             guardrailsPolicy,
@@ -180,23 +194,29 @@ public static class NativeAcsUnifiedPolicyProfile
         string actionsDataJson,
         string networkDataJson,
         string modelUseDataJson,
-        string guardrailsDataJson)
+        string guardrailsDataJson,
+        string? toolPermissionsDataJson = null)
     {
         ArgumentNullException.ThrowIfNull(networkDataJson);
-        return CreateArtifactCore(actionsDataJson, networkDataJson, modelUseDataJson, guardrailsDataJson);
+        return CreateArtifactCore(
+            actionsDataJson, networkDataJson, modelUseDataJson, guardrailsDataJson,
+            toolPermissionsDataJson);
     }
 
     public static NativeAcsArtifact CreateProjectArtifact(
         string actionsDataJson,
         string modelUseDataJson,
-        string guardrailsDataJson) =>
-        CreateArtifactCore(actionsDataJson, null, modelUseDataJson, guardrailsDataJson);
+        string guardrailsDataJson,
+        string? toolPermissionsDataJson = null) =>
+        CreateArtifactCore(actionsDataJson, null, modelUseDataJson, guardrailsDataJson,
+            toolPermissionsDataJson);
 
     private static NativeAcsArtifact CreateArtifactCore(
         string actionsDataJson,
         string? networkDataJson,
         string modelUseDataJson,
-        string guardrailsDataJson)
+        string guardrailsDataJson,
+        string? toolPermissionsDataJson)
     {
         ArgumentNullException.ThrowIfNull(actionsDataJson);
         ArgumentNullException.ThrowIfNull(modelUseDataJson);
@@ -233,7 +253,14 @@ public static class NativeAcsUnifiedPolicyProfile
                     GuardrailsModuleBytes.ToImmutableArray()),
                 new NativeAcsArtifactFile(
                     GuardrailsDataPath,
-                    StrictUtf8.GetBytes(guardrailsDataJson).ToImmutableArray())
+                    StrictUtf8.GetBytes(guardrailsDataJson).ToImmutableArray()),
+                new NativeAcsArtifactFile(
+                    ToolPermissionsModulePath,
+                    ToolPermissionsModuleBytes.ToImmutableArray()),
+                new NativeAcsArtifactFile(
+                    ToolPermissionsDataPath,
+                    StrictUtf8.GetBytes(toolPermissionsDataJson ?? DefaultToolPermissionsData)
+                        .ToImmutableArray())
             ],
             string.Empty);
         return artifact with
@@ -262,6 +289,7 @@ public static class NativeAcsUnifiedPolicyProfile
         AddChange(NativeAcsDomainId.PlatformNetwork, NativeAcsComposableDomainsProfile.NetworkDataPath);
         AddChange(NativeAcsDomainId.ModelUse, ModelUseDataPath);
         AddChange(NativeAcsDomainId.Guardrails, GuardrailsDataPath);
+        AddChange(NativeAcsDomainId.ToolPermissions, ToolPermissionsDataPath);
         return new(true, changed.ToImmutable(), []);
 
         void AddChange(NativeAcsDomainId domain, string path)
@@ -277,8 +305,119 @@ public static class NativeAcsUnifiedPolicyProfile
         NativeAcsDomainId.PlatformNetwork => NativeAcsComposableDomainsProfile.NetworkPolicyId,
         NativeAcsDomainId.ModelUse => ModelUsePolicyId,
         NativeAcsDomainId.Guardrails => GuardrailsPolicyId,
+        NativeAcsDomainId.ToolPermissions => ToolPermissionsPolicyId,
         _ => throw new ArgumentOutOfRangeException(nameof(domain))
     };
+
+    private static bool ValidateToolPermissionsData(
+        ImmutableArray<byte> bytes, out string failureCode)
+    {
+        failureCode = "tool_permissions_data_json";
+        try
+        {
+            using var document = JsonDocument.Parse(bytes.ToArray(),
+                new JsonDocumentOptions { MaxDepth = 16 });
+            var root = document.RootElement;
+            if (HasDuplicateProperties(root) ||
+                !HasProperties(root, "rules") ||
+                !root.TryGetProperty("rules", out var rules) ||
+                rules.ValueKind != JsonValueKind.Array ||
+                rules.GetArrayLength() > 64)
+            {
+                failureCode = "tool_permissions_data_shape";
+                return false;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var rule in rules.EnumerateArray())
+            {
+                if (!HasProperties(rule, "tool_name", "action_id", "phase", "permission_kind",
+                        "read_access", "write_access", "shell_access") ||
+                    !TryString(rule, "tool_name", out var toolName) ||
+                    !TryString(rule, "action_id", out var actionId) ||
+                    !TryString(rule, "phase", out var phase) ||
+                    !TryNullableString(rule, "permission_kind", out var permissionKind) ||
+                    !rule.TryGetProperty("read_access", out var read) ||
+                    !rule.TryGetProperty("write_access", out var write) ||
+                    !rule.TryGetProperty("shell_access", out var shell) ||
+                    read.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                    write.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                    shell.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                    !IsIdentifier(toolName) ||
+                    actionId is not ("tool.read" or "tool.write" or
+                        "exec.shell" or "exec.read" or "exec.write" or "exec.stop") ||
+                    phase is not ("invocation" or "permission") ||
+                    permissionKind is not (null or "read" or "write" or "shell") ||
+                    (phase == "invocation") != (permissionKind is null) ||
+                    !MatchesToolPermission(
+                        toolName, actionId, permissionKind,
+                        read.GetBoolean(), write.GetBoolean(), shell.GetBoolean()) ||
+                    !seen.Add(rule.GetRawText()))
+                {
+                    failureCode = "tool_permissions_data_rule";
+                    return false;
+                }
+            }
+            failureCode = string.Empty;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private const string DefaultToolPermissionsData = """
+        {"rules":[
+          {"tool_name":"view","action_id":"tool.read","phase":"invocation","permission_kind":null,"read_access":true,"write_access":false,"shell_access":false},
+          {"tool_name":"view","action_id":"tool.read","phase":"permission","permission_kind":"read","read_access":true,"write_access":false,"shell_access":false},
+          {"tool_name":"create","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false},
+          {"tool_name":"create","action_id":"tool.write","phase":"permission","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false},
+          {"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false},
+          {"tool_name":"edit","action_id":"tool.write","phase":"permission","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false},
+          {"tool_name":"bash","action_id":"exec.shell","phase":"invocation","permission_kind":null,"read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"bash","action_id":"exec.shell","phase":"permission","permission_kind":"shell","read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"read_bash","action_id":"exec.read","phase":"invocation","permission_kind":null,"read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"read_bash","action_id":"exec.read","phase":"permission","permission_kind":"shell","read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"write_bash","action_id":"exec.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"write_bash","action_id":"exec.write","phase":"permission","permission_kind":"shell","read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"stop_bash","action_id":"exec.stop","phase":"invocation","permission_kind":null,"read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"stop_bash","action_id":"exec.stop","phase":"permission","permission_kind":"shell","read_access":false,"write_access":false,"shell_access":true}
+        ]}
+        """;
+
+    private static bool MatchesToolPermission(
+        string toolName,
+        string actionId,
+        string? permissionKind,
+        bool readAccess,
+        bool writeAccess,
+        bool shellAccess)
+    {
+        var expectedAction = toolName switch
+        {
+            "view" => "tool.read",
+            "create" or "edit" => "tool.write",
+            "bash" => "exec.shell",
+            "read_bash" => "exec.read",
+            "write_bash" => "exec.write",
+            "stop_bash" => "exec.stop",
+            _ => null
+        };
+        var expectedPermission = expectedAction switch
+        {
+            "tool.read" => "read",
+            "tool.write" => "write",
+            _ when expectedAction is not null => "shell",
+            _ => null
+        };
+        return expectedAction == actionId &&
+            (permissionKind is null || permissionKind == expectedPermission) &&
+            (readAccess ? 1 : 0) + (writeAccess ? 1 : 0) + (shellAccess ? 1 : 0) == 1 &&
+            readAccess == (actionId == "tool.read") &&
+            writeAccess == (actionId == "tool.write") &&
+            shellAccess == actionId.StartsWith("exec.", StringComparison.Ordinal);
+    }
 
     private static bool TryReadModelUse(
         ImmutableArray<byte> bytes,

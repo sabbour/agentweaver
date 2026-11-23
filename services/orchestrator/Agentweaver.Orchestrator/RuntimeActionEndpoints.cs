@@ -39,6 +39,8 @@ internal sealed class RuntimeActionOwner(
         byte[]? content = null)
     {
         RuntimeActionContract.Validate(request);
+        if (request.IsNativeToolCallback && request.ToolOwner is null)
+            throw new RuntimeAuthorizationException("runtime_action_tool_owner_required");
         var registration = await registrations.ReadCurrentAsync(
             context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
         RequireRequest(registration, request);
@@ -162,6 +164,8 @@ internal sealed class RuntimeActionOwner(
             receipt.Identity, admission.PolicyReceiptId, cancellationToken).ConfigureAwait(false);
         if (!recorded.IsDuplicate)
             throw new RuntimeAuthorizationException("runtime_action_journal_ack_missing");
+        await RequireNativePolicyReleaseAsync(
+            registration, accepted, admission.Request, cancellationToken).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
         return admission;
     }
@@ -173,7 +177,12 @@ internal sealed class RuntimeActionOwner(
         CancellationToken cancellationToken)
     {
         var gate = services.GetService<RuntimeNativePolicyGate>();
-        return request.ActionId == "model.turn" && gate is not null
+        if (request.IsNativeToolCallback)
+            return await (gate ?? throw new RuntimeAuthorizationException(
+                RuntimeNativePolicyGate.UnavailableCode))
+                .PrepareAuthorizeAsync(
+                    registration, accepted, request, cancellationToken).ConfigureAwait(false);
+        return request.ActionId == "model.turn" && gate is { IsAvailable: true }
             ? await gate.PrepareAuthorizeAsync(
                 registration, accepted, request, cancellationToken).ConfigureAwait(false)
             : null;
@@ -194,9 +203,32 @@ internal sealed class RuntimeActionOwner(
         CancellationToken cancellationToken)
     {
         var gate = services.GetService<RuntimeNativePolicyGate>();
-        if (request.ActionId == "model.turn" && gate is not null)
+        if (request.IsNativeToolCallback)
+        {
+            _ = await (gate ?? throw new RuntimeAuthorizationException(
+                RuntimeNativePolicyGate.UnavailableCode))
+                .RequireVerifyAsync(
+                    registration, accepted, request, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        if (request.ActionId == "model.turn" && gate is { IsAvailable: true })
             _ = await gate.RequireVerifyAsync(
                 registration, accepted, request, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task RequireNativePolicyReleaseAsync(
+        RuntimeRegistration registration,
+        AuthorizedRunSelection accepted,
+        RuntimeActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var gate = services.GetService<RuntimeNativePolicyGate>();
+        if (!request.IsNativeToolCallback)
+            return;
+        _ = await (gate ?? throw new RuntimeAuthorizationException(
+                RuntimeNativePolicyGate.UnavailableCode))
+            .RequireVerifyAsync(registration, accepted, request, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -268,6 +300,30 @@ internal sealed class RuntimeActionOwner(
         if (registration.Revision != request.RegistrationRevision ||
             registration.Binding.ExecutionFence != request.ExecutionFence)
             throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
+        if (request.ToolOwner is not { } owner)
+            return;
+        var expectedAction = owner.ToolName switch
+        {
+            "view" => "tool.read",
+            "create" or "edit" => "tool.write",
+            "bash" => "exec.shell",
+            "read_bash" => "exec.read",
+            "write_bash" => "exec.write",
+            "stop_bash" => "exec.stop",
+            _ => null
+        };
+        var expectedPermission = expectedAction switch
+        {
+            "tool.read" => "read",
+            "tool.write" => "write",
+            _ when expectedAction?.StartsWith("exec.", StringComparison.Ordinal) == true => "shell",
+            _ => null
+        };
+        if (expectedAction != request.ActionId ||
+            owner.SdkSessionId != RuntimeContractValidation.NativeSessionId(registration.Binding) ||
+            owner.TurnId != registration.Binding.TurnId ||
+            owner.PermissionKind is { } kind && kind != expectedPermission)
+            throw new RuntimeAuthorizationException("runtime_action_tool_owner_invalid");
     }
 
     /// <summary>
