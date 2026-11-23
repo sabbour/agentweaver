@@ -1,9 +1,8 @@
 # Manage platform BYOK provider metadata
 
-Use the native CLI to create, read, and update platform BYOK provider
-metadata. This procedure does not set a key or activate a provider. The
-Gateway API can activate an `Available` platform provider for new runs or
-deactivate it to restore hosted Copilot defaults. See the
+Use the native CLI to create, read, update, price, recheck, disable, and switch
+platform BYOK providers. A credential upload uses the dedicated credential
+workflow; these commands never upload an API key. See the
 [model-provider API routes](../reference/api.md#model-provider-draft-and-available-metadata).
 For a Project's provider drafts, see
 [Manage project BYOK provider metadata](./manage-project-byok-provider-metadata.md).
@@ -37,21 +36,22 @@ These commands use an unbound identity. They ignore
 
 1. Enter the provider's metadata. Use `openai`, `azure`, or `anthropic` for
    the provider type. Give the base URL as an HTTPS URL. For Azure, use the
-   resource host without an API path.
+   resource host without an API path. Add `--rate-card-id` and
+   `--rate-card-version` together when the runtime rate card exists.
 
    ```powershell
    $displayName = Read-Host "Provider display name"
    $providerType = Read-Host "Provider type: openai, azure, or anthropic"
    $providerBaseUrl = Read-Host "Provider HTTPS base URL"
    $deployment = Read-Host "Model deployment"
-   $operationId = [guid]::NewGuid().ToString()
+   $addOperationId = [guid]::NewGuid().ToString()
 
    agentweaver platform byok add `
      --name $displayName `
      --type $providerType `
      --base-url $providerBaseUrl `
      --model $deployment `
-     --operation-id $operationId
+     --operation-id $addOperationId
    ```
 
 2. Save the `providerId` and `revision` from the JSON response. The API
@@ -78,7 +78,9 @@ These commands use an unbound identity. They ignore
 3. Enter the full metadata for the new revision. Copy optional values from
    `show` when you want to keep them. If you omit `--wire-api`,
    `--azure-api-version`, `--reasoning-effort`, or
-   `--prompt-capacity-tokens`, the update clears those values.
+   `--prompt-capacity-tokens`, the update clears those values. Omitting the
+   rate-card pair clears an existing attachment. Specify both options to keep
+   or replace the attachment.
 
    ```powershell
    $expectedRevision = Read-Host "Current revision from show"
@@ -86,7 +88,7 @@ These commands use an unbound identity. They ignore
    $providerType = Read-Host "Provider type: openai, azure, or anthropic"
    $providerBaseUrl = Read-Host "Provider HTTPS base URL"
    $deployment = Read-Host "Model deployment"
-   $operationId = [guid]::NewGuid().ToString()
+   $updateOperationId = [guid]::NewGuid().ToString()
 
    agentweaver platform byok update $providerId `
      --expected-revision $expectedRevision `
@@ -94,11 +96,83 @@ These commands use an unbound identity. They ignore
      --type $providerType `
      --base-url $providerBaseUrl `
      --model $deployment `
-     --operation-id $operationId
+     --operation-id $updateOperationId
    ```
 
 The update response keeps the same `providerId` and shows the new `name` and
 `revision`. The name is display text, not a provider key.
+
+## Save and attach a runtime rate card
+
+Search authenticated Azure Retail prices for a selected Project:
+
+```powershell
+agentweaver project byok prices `
+  --project-id $projectId `
+  --region eastus `
+  --search gpt-4.1
+```
+
+Use the selected meter IDs and expected USD-per-million values to build the
+version-1 Azure Retail rate-card request. To save a complete manual envelope
+instead, prepare its `runtimeRateCardSchemaVersion`, `rateCard`, and
+`provenance` fields. Save either file with its exact ID and version:
+
+```powershell
+agentweaver platform byok save-prices $rateCardId $rateCardVersion `
+  --source azure-retail `
+  --input .\azure-rate-card.json
+```
+
+Use `--source manual` for a manual envelope. The CLI sends the file unchanged,
+prints the validated receipt, and exits with code 1 for a conflict or failed
+pricing operation. A manual `sourceUrl` must be an HTTPS URL without user
+information, a query string, or a fragment.
+
+Attach the exact returned ID and version to an `add` or `update` command. On
+an update, omit both options only when you intend to clear the attachment.
+
+## Recheck or disable a saved credential
+
+Use the current provider and credential revisions:
+
+```powershell
+agentweaver platform byok recheck-key $providerId `
+  --expected-revision $providerRevision `
+  --expected-credential-revision $credentialRevision `
+  --operation-id ([guid]::NewGuid().ToString())
+
+agentweaver platform byok disable-key $providerId `
+  --expected-revision $providerRevision `
+  --expected-credential-revision $credentialRevision `
+  --operation-id ([guid]::NewGuid().ToString())
+```
+
+`recheck-key` verifies the saved Vault version and current pricing attachment.
+It does not upload a key or create a Vault version. `disable-key` disables the
+credential slot and returns the provider to Draft. A quarantined or
+publication-pending receipt exits with code 1.
+
+## Activate or deactivate the platform default
+
+Read `platform byok list` and use its `settingsRevision`. To switch new runs
+to an `Available` provider:
+
+```powershell
+agentweaver platform byok activate $providerId `
+  --expected-revision $providerRevision `
+  --expected-settings-revision $settingsRevision
+```
+
+To restore hosted Copilot as the platform default:
+
+```powershell
+agentweaver platform byok deactivate `
+  --expected-settings-revision $settingsRevision
+```
+
+The settings revision changes after a switch. Use the new value for the next
+switch. Accepted runs keep their saved selections.
 
 ## Recover from a write result
 

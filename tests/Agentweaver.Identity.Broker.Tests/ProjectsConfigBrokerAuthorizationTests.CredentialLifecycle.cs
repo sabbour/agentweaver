@@ -326,6 +326,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         Assert.Equal(2, fakeVault.WriteCalls);
 
+        // A disable that reuses this publication operation ID must not cancel the claim.
+        using (var collision = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            new
+            {
+                operationId = op1,
+                expectedProviderRevision = 1,
+                expectedCredentialRevision = 1,
+                cancel = false,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, collision.StatusCode);
+            Assert.Contains("credential_slot_conflict", await collision.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(2, fakeVault.WriteCalls);
+
         // Retry with raw apiKey must NOT call Vault again!
         using (var retryNoSend = await SendCredentialJsonAsync(
             gateway.Client, HttpMethod.Put,

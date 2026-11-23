@@ -15,7 +15,8 @@ internal static class CliConfiguration
         IReadOnlyList<string>? requestedScopes = null,
         bool discoveryOnly = false,
         CliOptions? options = null,
-        bool unbound = false)
+        bool unbound = false,
+        bool runless = false)
     {
         var gatewayOverride = options?.Single("gateway-url");
         var issuerOverride = options?.Single("broker-issuer");
@@ -37,7 +38,9 @@ internal static class CliConfiguration
             clientId = "agentweaver-cli";
 
         var project = discoveryOnly || unbound ? null : Optional("AGENTWEAVER_PROJECT_ID", projectOverride);
-        var run = discoveryOnly || unbound ? null : Optional("AGENTWEAVER_RUN_ID", runOverride);
+        var run = discoveryOnly || unbound || runless
+            ? null
+            : Optional("AGENTWEAVER_RUN_ID", runOverride);
         if (!unbound && run is not null && project is null)
             throw new InvalidOperationException("AGENTWEAVER_RUN_ID requires AGENTWEAVER_PROJECT_ID.");
 

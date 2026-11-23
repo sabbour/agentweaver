@@ -668,20 +668,33 @@ agentweaver platform byok list [target options]
 agentweaver platform byok show <providerId> [target options]
 agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
+    [--rate-card-id <id> --rate-card-version <version>]
 agentweaver platform byok update <providerId> --expected-revision <revision>
     --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <deployment>
-    [metadata options] [--operation-id <guid>]
+    [metadata options] [--operation-id <guid>] [--rate-card-id <id> --rate-card-version <version>]
+agentweaver platform byok save-prices <id> <version> --source manual|azure-retail --input <file.json>
+agentweaver platform byok recheck-key <providerId> --expected-revision <revision>
+    --expected-credential-revision <credentialRevision> --operation-id <guid>
+agentweaver platform byok disable-key <providerId> --expected-revision <revision>
+    --expected-credential-revision <credentialRevision> --operation-id <guid>
+agentweaver platform byok activate <providerId> --expected-revision <providerRevision>
+    --expected-settings-revision <settingsRevision>
+agentweaver platform byok deactivate --expected-settings-revision <settingsRevision>
 ```
 
 The optional metadata options are `--wire-api`, `--azure-api-version`,
 `--reasoning-effort` (repeat it to set more than one value), and
-`--prompt-capacity-tokens`. The API accepts `completions` or `responses` for
+`--prompt-capacity-tokens`. Rate-card attachment options are
+`--rate-card-id` and `--rate-card-version`; specify both or neither. On
+`update`, omitting both clears an existing attachment. The API accepts
+`completions` or `responses` for
 `--wire-api`, and `none`, `minimal`, `low`, `medium`, `high`, or `xhigh` for
 `--reasoning-effort`. The provider type must be `openai`, `azure`, or
 `anthropic`. The base URL must use HTTPS. An Azure base URL must name the
 resource host without an API path.
 
-`list` reads every cursor page. Its JSON output contains a `providers` array.
+`list` reads every cursor page. Its JSON output contains `switchMode`,
+`activeProviderId`, `settingsRevision`, and a `providers` array.
 Each provider has a stable `providerId`, a mutable display `name`, provider
 metadata, and a `revision`. Use the `providerId` from `list` or from the `add`
 response for `show` and `update`. A display name does not identify a provider.
@@ -693,6 +706,12 @@ before you update it. A stale revision returns an error; the CLI does not retry
 the update. Read the provider again and review its current metadata before
 starting a new update.
 
+`save-prices` writes a version-1 runtime rate card from a JSON file. Use the
+`manual` source for a complete manual rate-card envelope, or `azure-retail`
+for a verified meter selection. The file must fit 64 KiB. A verified receipt
+returns the rate-card ID and version, so attach that exact pair to a provider
+draft.
+
 Each write uses an operation ID. The CLI creates one when you omit
 `--operation-id`. Give an explicit GUID when you need to replay a write. If the
 write result is uncertain, repeat the same command with the same operation ID
@@ -700,13 +719,25 @@ and the same fields. The API replays that write. Use a new operation ID for a
 new write. If you cancel a write, the CLI reports that its result is unknown
 and prints the operation ID for replay.
 
-If a request returns `model_provider_draft_metadata_requires_update`, the
-message gives the provider ID and revision. Use them with `update` and supply
-complete corrected metadata. The API does not return the rejected metadata.
+If a `show` request returns
+`model_provider_draft_metadata_requires_update`, the CLI prints
+`BYOK_METADATA_REPAIR_REQUIRED` with the validated provider ID and revision.
+Use that pair with `update` and supply complete corrected metadata. The API
+does not return the rejected metadata.
 
-These commands send and display provider metadata only. They do not send
-credentials or key bytes, set a key, or activate a provider. For the task
-procedure, see [Manage platform BYOK provider metadata](./manage-model-providers.md).
+`recheck-key` verifies the current enabled credential version without uploading
+a key. `disable-key` disables the current credential. Both require exact
+provider and credential revisions and an explicit operation ID. `activate`
+switches new runs to an `Available` provider. `deactivate` restores hosted
+Copilot defaults for new runs. Activation and deactivation require the exact
+settings revision; neither changes accepted runs. For the task procedure, see
+[Manage platform BYOK provider metadata](./manage-model-providers.md).
+
+Credential errors use fixed CLI messages. A quarantined HTTP 409 prints
+`BYOK_QUARANTINED`; another HTTP 409 prints `BYOK_CONFLICT`. A pending
+publication HTTP 503 prints `BYOK_PENDING_PUBLICATION`; a Vault-unavailable
+HTTP 503 prints `BYOK_VAULT_UNAVAILABLE`. The CLI does not print raw response
+bodies.
 
 ## Manage project BYOK provider drafts
 
@@ -722,25 +753,36 @@ agentweaver project byok list --project-id <projectId> [other target options]
 agentweaver project byok show <providerId> --project-id <projectId> [other target options]
 agentweaver project byok add --project-id <projectId> --name <name> --type <openai|azure|anthropic>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
+    [--rate-card-id <id> --rate-card-version <version>]
 agentweaver project byok update <providerId> --project-id <projectId>
     --expected-revision <revision> --name <name> --type <openai|azure|anthropic>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
+    [--rate-card-id <id> --rate-card-version <version>]
+agentweaver project byok prices --project-id <projectId> --region <region> --search <meter-text>
+agentweaver project byok recheck-key <providerId> --project-id <projectId>
+    --expected-revision <providerRevision> --expected-credential-revision <credentialRevision>
+    --operation-id <guid>
+agentweaver project byok disable-key <providerId> --project-id <projectId>
+    --expected-revision <providerRevision> --expected-credential-revision <credentialRevision>
+    --operation-id <guid>
 ```
 
 The project ID selects the token binding and the Project route. The CLI sends
-that ID as `project_id` with no `run_id`. Do not set `AGENTWEAVER_RUN_ID` or
-pass `--run-id`. Each request also checks current project authority, so a
+that ID as `project_id` with no `run_id`. These commands ignore
+`AGENTWEAVER_RUN_ID`, and they reject `--run-id`. Each request also checks current project authority, so a
 removed or changed role is denied.
 
-`list` reads every cursor page. Its JSON output contains one `providers` array.
+`list` reads every cursor page. Its JSON output contains the page switch
+metadata and one `providers` array.
 Use the stable `providerId` field from `list` or `add` with `show` and
 `update`; the provider name is display text and can change. `add` creates a
 Draft. `update` writes a complete metadata revision and requires the current
 `--expected-revision`. The metadata options and write recovery rules match
 [platform BYOK](#manage-platform-byok-provider-drafts).
 
-These commands send and display provider metadata only. They do not send key
-bytes or credentials, set a key, or activate a provider. For the procedure,
+`prices` searches Azure Retail meter candidates through the authenticated
+Gateway route. `recheck-key` verifies a saved credential version, and
+`disable-key` disables it. These commands never upload key bytes. For the procedure,
 see [Manage project BYOK provider metadata](./manage-project-byok-provider-metadata.md).
 
 ## Configure a BYOK model binding

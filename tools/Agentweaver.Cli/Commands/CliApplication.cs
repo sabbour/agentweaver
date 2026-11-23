@@ -546,16 +546,31 @@ public static class CliApplication
           agentweaver platform byok show <providerId> [target options]
           agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
               --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
+              [--rate-card-id <id> --rate-card-version <version>]
           agentweaver platform byok update <providerId> --expected-revision <revision>
               --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <model>
-              [metadata options] [--operation-id <guid>]
+              [metadata options] [--operation-id <guid>] [--rate-card-id <id> --rate-card-version <version>]
+          agentweaver platform byok save-prices <id> <version> --source manual|azure-retail --input <file.json>
+          agentweaver platform byok recheck-key <providerId> --expected-revision <revision>
+              --expected-credential-revision <revision> --operation-id <guid>
+          agentweaver platform byok disable-key <providerId> --expected-revision <revision>
+              --expected-credential-revision <revision> --operation-id <guid>
+          agentweaver platform byok activate <providerId> --expected-revision <providerRevision>
+              --expected-settings-revision <settingsRevision>
+          agentweaver platform byok deactivate --expected-settings-revision <settingsRevision>
           agentweaver project byok list [--project-id <id>] [other target options]
           agentweaver project byok show <providerId> --project-id <id> [other target options]
           agentweaver project byok add --project-id <id> --name <name> --type <openai|azure|anthropic>
               --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
+              [--rate-card-id <id> --rate-card-version <version>]
           agentweaver project byok update <providerId> --project-id <id> --expected-revision <revision>
               --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <model>
-              [metadata options] [--operation-id <guid>]
+              [metadata options] [--operation-id <guid>] [--rate-card-id <id> --rate-card-version <version>]
+          agentweaver project byok prices --project-id <id> --region <region> --search <meter-text>
+          agentweaver project byok recheck-key <providerId> --project-id <id> --expected-revision <revision>
+              --expected-credential-revision <revision> --operation-id <guid>
+          agentweaver project byok disable-key <providerId> --project-id <id> --expected-revision <revision>
+              --expected-credential-revision <revision> --operation-id <guid>
           agentweaver workspace refs --project <project-id> --interactive [--cursor <2-10000>] [target options]
           agentweaver workspace tree --project <project-id> --ref <commit-sha> --interactive [target options]
           agentweaver workspace file --project <project-id> --ref <commit-sha> --path <repository-path>

@@ -66,6 +66,24 @@ public sealed class GatewayOpenApiParityTests
         Assert.Equal("#/components/schemas/RecoverRunExecutionRequest",
             recoverRun["requestBody"]?["content"]?["application/json"]?["schema"]?["$ref"]?.GetValue<string>());
         JsonObject schemas = Assert.IsType<JsonObject>(discovered["components"]?["schemas"]);
+        foreach (string requestSchema in new[]
+        {
+            "ModelProviderDraftPlatformCreateRequest",
+            "ModelProviderDraftProjectCreateRequest",
+            "ModelProviderDraftSaveRequest",
+        })
+        {
+            JsonObject schema = Assert.IsType<JsonObject>(schemas[requestSchema]);
+            JsonObject properties = Assert.IsType<JsonObject>(schema["properties"]);
+            Assert.Equal("string", properties["rate_card_id"]?["anyOf"]?[0]?["type"]?.GetValue<string>());
+            Assert.Equal("null", properties["rate_card_id"]?["anyOf"]?[1]?["type"]?.GetValue<string>());
+            Assert.Equal("string", properties["rate_card_version"]?["anyOf"]?[0]?["type"]?.GetValue<string>());
+            Assert.Equal("null", properties["rate_card_version"]?["anyOf"]?[1]?["type"]?.GetValue<string>());
+            Assert.DoesNotContain("rate_card_id",
+                Assert.IsType<JsonArray>(schema["required"]).Select(value => value!.GetValue<string>()));
+            Assert.DoesNotContain("rate_card_version",
+                Assert.IsType<JsonArray>(schema["required"]).Select(value => value!.GetValue<string>()));
+        }
         var recoveryEvents = FindOperation(discovered, "readCheckpointRecoveryEvents");
         Assert.Equal("#/components/schemas/CheckpointRecoveryEventPage",
             recoveryEvents["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?.GetValue<string>());

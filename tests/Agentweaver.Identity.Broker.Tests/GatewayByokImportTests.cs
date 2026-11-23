@@ -1,14 +1,18 @@
 extern alias ProjectsConfig;
+extern alias GatewayHost;
 
 using System.IdentityModel.Tokens.Jwt;
 using System.Collections.Concurrent;
 using System.Net;
+using System.Reflection;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 using Agentweaver.Cli;
+using Agentweaver.Cli.Api;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
@@ -20,6 +24,19 @@ namespace Agentweaver.Identity.Broker.Tests;
 [Collection("IdentityBrokerPostgres")]
 public sealed class GatewayByokImportTests(PostgresContainerFixture postgres)
 {
+    [Fact]
+    public void ImportContractAcceptsTheEmittedGatewayOpenApiDocument()
+    {
+        var openApi = typeof(GatewayHost::Agentweaver.Gateway.GatewayEndpoints).Assembly
+            .GetType("Agentweaver.Gateway.GatewayOpenApi")!;
+        var emitted = openApi.GetMethod(
+            "CreateDocument",
+            BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, null);
+        var document = JsonNode.Parse(JsonSerializer.Serialize(emitted))!.AsObject();
+
+        ByokImportContract.Require(document, []);
+    }
+
     [Fact]
     public async Task CliReplaysAgainstOriginalOwnerAndRejectsAnotherDatabase()
     {

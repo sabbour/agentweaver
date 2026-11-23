@@ -566,7 +566,10 @@ internal static class ModelProviderCredentialEndpoints
         {
             var existingClaim = await store.ReadWriteClaimByOperationAsync(operationId, cancellationToken)
                 .ConfigureAwait(false);
-            if (existingClaim is not null || cancelRequested)
+            if (existingClaim is not null && !cancelRequested)
+                return Error("credential_slot_conflict", 409);
+
+            if (cancelRequested)
             {
                 if (existingClaim is null)
                     return Error("credential_slot_not_found", 404);
