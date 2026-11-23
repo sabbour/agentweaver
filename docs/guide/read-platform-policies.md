@@ -1,31 +1,53 @@
-# Read and validate Platform Policies
+# Read and validate Policies
 
-Use the Platform Policies page to read saved source and revisions, edit a raw
-manifest and file draft, and validate that draft. The page does not report
+Use the Policies page to read saved Platform Policy source, or to validate a
+local Project Policy draft. The page does not save, apply, preview, or report
 runtime enforcement.
 
 ## Before you begin
 
 - Sign in through the Identity Broker.
-- Know the tenant ID for the policy you need to read or validate.
-- Your current tenant access must allow Platform Policy reads. The Gateway
-  checks this access when the page loads and when you validate a draft.
+- Know the tenant ID.
+- For Platform Policy reads, have current Platform Policy read access.
+- For Project Policy validation, have `writeProjects` as the Project Owner for
+  the exact Project or as a TenantAdmin in the tenant. PlatformAdmin access
+  alone does not grant Project Policy validation.
 
 ## Read saved source
 
 1. Select **Platform Policies** in the navigation rail, or open `/policies`.
-2. Check the **Tenant ID** field. The page fills it from the confirmed
+2. Select **Platform** in **Policy scope**.
+3. Check the **Tenant ID** field. The page fills it from the confirmed
    authorization context when that value is available. If it is empty, enter
    the tenant ID and select **Retry**.
-3. Read the revision list. The row marked **snapshot head** is the revision
+4. Read the revision list. The row marked **snapshot head** is the revision
    named by the saved snapshot.
-4. Select **View** beside a revision to read its manifest and files. Select
+5. Select **View** beside a revision to read its manifest and files. Select
    **Load more** to read older revisions.
 
 An empty history means you have read access and no Platform Policy is saved
 for that tenant.
 
-## Edit and validate a draft
+## Validate a Project Policy draft
+
+1. Open `/policies`.
+2. Select **Project** in **Policy scope** and choose a Project.
+3. Select a local JSON file under **Validation request**. The JSON object must
+   contain only `artifact`. The artifact must contain `manifestBytes`, `files`,
+   and `contentSha256`. Each file must contain `relativePath` and `bytes`.
+4. Edit the imported manifest, file paths, and file content in the draft
+   editor.
+5. Select **Validate draft**. Review the result and any diagnostics.
+
+The import checks the artifact hash and preserves the artifact bytes, including
+the UTF-8 byte-order mark and line endings. A failed import leaves the current
+draft unchanged. The draft stays in browser memory. No Project Policy head or
+history request runs, and validation does not save or apply the draft.
+
+The request file limit is 5 MiB. The artifact limit is 1 MiB, with the same
+manifest and file limits described below.
+
+## Edit and validate a Platform Policy draft
 
 1. Select **View** beside the saved revision you want to use.
 2. Select **Load viewed revision into draft**. The editor copies its manifest
@@ -46,11 +68,19 @@ measures UTF-8 bytes.
 ## Verify access
 
 The navigation item appears after the Gateway allows the Platform Policy
-history read. The `/policies` route runs the same check. The Gateway also
-checks access when you validate a draft. If the Gateway denies access, the
-page hides policy data and the navigation item. Select **Retry** after your
-tenant access changes. If access expires during validation, the page checks
-access again; select **Validate draft** after the check completes.
+history read. The `/policies` route runs the same check. The Gateway checks
+Project access against the selected tenant and exact Project. If the Gateway
+denies access, the page clears the current draft and blocks validation. Select
+**Retry** after your access changes.
+
+If Platform access expires, the page refreshes the unbound session, checks the
+Platform identity and history again, and requires another validation action.
+
+If Project validation returns `401`, the page refreshes the unbound session,
+checks the same tenant and exact Project, and retries the unchanged draft once.
+If a Project request is aborted while that scope is still active, the page
+rechecks access but does not resend the artifact. After an edit, the page
+clears old diagnostics and never retries the old draft.
 
 ## Next step
 

@@ -46,7 +46,7 @@ flowchart LR
   chief --> newchat[New chat]
   chief --> conversations[My conversations]
   overview --> projects[Projects]
-  overview --> policies[Platform Policies]
+  overview --> policies[Policies]
   overview --> sessions[Sessions]
   overview --> attention[Needs attention]
   bell[Notification bell] --> attention

@@ -93,7 +93,7 @@ The client uses these routes:
 | `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
 | `/platform-settings` | Read the platform component report. Only tenant and platform administrators can read it. |
-| `/policies` | Read saved Platform Policy source and revision history when the Gateway authorizes the history read. |
+| `/policies` | Read saved Platform Policy source or validate an in-memory Project Policy draft. |
 
 ## Navigate the client
 
@@ -346,7 +346,7 @@ page shows each status exactly as the owner reported it. If an owner didn't
 report, the area reads **Status not reported**. Other users get a permission
 message.
 
-### Read Platform Policies
+### Read and validate Policies
 
 Open `/policies` or select **Platform Policies** in the rail. The page uses the
 confirmed tenant ID and checks access by reading Platform Policy history. If
@@ -356,7 +356,12 @@ empty history means no Platform Policy is saved for that tenant.
 Select **View** to read a saved revision's manifest and files. Select **Load
 more** to read older revisions. The page displays saved source as text; it does
 not report runtime enforcement. For the full task, see
-[Read Platform Policies](./read-platform-policies.md).
+[Read and validate Policies](./read-platform-policies.md).
+
+In Project mode, select an exact Project and import a local validation request.
+The page keeps the draft in browser memory and sends it to the Project Policy
+validation endpoint. It does not read a Project Policy head, save, apply, or
+preview Policy.
 
 ### Operations pages
 

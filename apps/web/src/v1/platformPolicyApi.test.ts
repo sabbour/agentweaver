@@ -84,6 +84,29 @@ describe('Platform Policy API reads', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ artifact });
   });
 
+  it('posts a Project validation artifact to the exact Project route', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ isValid: true, diagnostics: [] }), { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('/api/v1', fetcher);
+    const artifact = {
+      manifestBytes: [110, 97, 109, 101],
+      files: [],
+      contentSha256: 'a'.repeat(64),
+    };
+
+    await client.validateProjectPolicyArtifact(
+      'policy-token',
+      'tenant-1',
+      'project/one',
+      artifact,
+    );
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('/api/v1/policies/projects/project%2Fone/validate');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(JSON.parse(String(init?.body))).toEqual({ artifact });
+  });
+
   it('rejects oversized and forbidden responses without exposing server details', async () => {
     const exactLimitFetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify(emptyHistory), {

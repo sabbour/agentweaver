@@ -204,7 +204,7 @@ function RetainedShellContent({ children }: { children: ReactNode }) {
             'overview',
             'chief-of-staff',
             'projects',
-            ...(platformPolicies.authorized ? ['platform-policies'] : []),
+            ...(platformPolicies.platformNavigationAuthorized ? ['platform-policies'] : []),
             'sessions',
           ]}
           visibleProjectKeys={['dashboard', 'board', 'flow', 'orchestrations', 'workspace', 'agents', 'skills', 'memories', 'workflows', 'observability', 'diagnostics', 'heartbeat', 'cluster']}

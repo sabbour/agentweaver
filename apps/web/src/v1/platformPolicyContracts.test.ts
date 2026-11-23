@@ -4,6 +4,7 @@ import {
   createPlatformPolicyTextBuffer,
   parsePlatformPolicyRevisionPage,
   parsePlatformPolicyRevisionReadResult,
+  parsePlatformPolicyValidationRequestFile,
   parsePlatformPolicyValidationResult,
   serializePlatformPolicyTextBuffer,
   updatePlatformPolicyTextBuffer,
@@ -59,6 +60,29 @@ describe('Platform Policy response contracts', () => {
     expect(artifact.files[0]?.bytes).toEqual(bytes('allow=true\r'));
     expect(artifact.contentSha256)
       .toBe('f9591534f88ca70e815637008d4841a94fe4c58b622582a9078ea32be3844357');
+  });
+
+  it('imports one exact validation request and preserves its bytes', async () => {
+    const manifest = createPlatformPolicyTextBuffer('\uFEFFname: x\r\n');
+    const artifact = await buildPlatformPolicyValidationArtifact(manifest, [
+      { relativePath: 'rules/a.rego', content: createPlatformPolicyTextBuffer('allow=true\r') },
+    ]);
+    const requestBytes = new TextEncoder().encode(
+      `\uFEFF${JSON.stringify({ artifact })}\r\n`,
+    );
+    const imported = await parsePlatformPolicyValidationRequestFile(requestBytes);
+    expect(serializePlatformPolicyTextBuffer(imported.manifest)).toBe('\uFEFFname: x\r\n');
+    expect(serializePlatformPolicyTextBuffer(imported.files[0].content)).toBe('allow=true\r');
+    expect(await buildPlatformPolicyValidationArtifact(
+      imported.manifest,
+      imported.files,
+    )).toEqual(artifact);
+
+    await expect(parsePlatformPolicyValidationRequestFile(new TextEncoder().encode(
+      JSON.stringify({
+        artifact: { ...artifact, contentSha256: 'b'.repeat(64) },
+      }),
+    ))).rejects.toThrow('hash does not match');
   });
 
   it('keeps unchanged mixed separators when a browser-normalized textarea value changes', () => {

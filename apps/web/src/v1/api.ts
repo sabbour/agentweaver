@@ -2680,6 +2680,34 @@ export class AgentweaverGatewayClient {
     return result;
   }
 
+  async validateProjectPolicyArtifact(
+    token: string,
+    tenantSelector: string,
+    projectId: string,
+    artifact: PlatformPolicyArtifactRequest,
+    signal?: AbortSignal,
+  ): Promise<PlatformPolicyValidationResult> {
+    if (!projectId.trim() || projectId.trim() !== projectId)
+      throw new GatewayError(400, { code: 'project_policy_request_invalid' },
+        'Choose a Project before validating its Policy draft.');
+    const value = await this.requestPlatformPolicy<unknown>(
+      token,
+      `/policies/projects/${encodeSegments(projectId, 'validate')}`,
+      tenantSelector,
+      {
+        signal,
+        method: 'POST',
+        body: JSON.stringify({ artifact }),
+        acceptInvalidArtifact: true,
+      },
+    );
+    const result = parsePlatformPolicyValidationResult(value);
+    if (!result)
+      throw new GatewayError(502, { code: 'project_policy_validation_response_invalid' },
+        'Project Policy validation results could not be read.');
+    return result;
+  }
+
   /**
    * Reads every platform component area and its readiness. Needs a token that
    * is not bound to a run and a tenant or platform administrator. An owner that
