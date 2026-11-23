@@ -62,7 +62,8 @@ public sealed class NativeAcsPolicyTests
 
         var inspection = NativeAcsUnifiedPolicyProfile.Inspect(artifact);
 
-        Assert.True(inspection.IsValid);
+        Assert.True(inspection.IsValid,
+            string.Join("\n", inspection.Diagnostics.Select(item => $"{item.Code}: {item.Message}")));
         Assert.Contains(NativeAcsDomainId.Skills, inspection.Domains);
         Assert.Equal(600, inspection.SkillsPolicy!.MinimumScore);
         Assert.True(inspection.SkillsPolicy.RequireCompletedEvidence);
@@ -71,6 +72,48 @@ public sealed class NativeAcsPolicyTests
             "policy/skills/data.json",
             """{"schemaVersion":1,"minimumScore":600,"requireCompletedEvidence":true,"relax":true}""");
         Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(invalid).IsValid);
+    }
+
+    [NativeAcsFact]
+    public async Task SkillsDomainEnforcesScoreAndCompletedEvidence()
+    {
+        var artifact = NativeAcsUnifiedPolicyProfile.CreateArtifact(
+            """{"allowed_action_ids":["skill.admit"]}""",
+            ComposedNetworkData,
+            UnifiedModelUseData,
+            UnifiedGuardrailsData,
+            """{"schemaVersion":1,"minimumScore":600,"requireCompletedEvidence":true}""");
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+
+        var allowed = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Skills,
+            InterventionPoint.PreModelCall,
+            Snapshot("skill.admit") with
+            {
+                Skills = new NativeAcsSkillsEvaluationFacts(600, true, false),
+            });
+        var incomplete = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Skills,
+            InterventionPoint.PreModelCall,
+            Snapshot("skill.admit") with
+            {
+                Skills = new NativeAcsSkillsEvaluationFacts(1000, false, false),
+            });
+        var exempt = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Skills,
+            InterventionPoint.PreModelCall,
+            Snapshot("skill.admit") with
+            {
+                Skills = new NativeAcsSkillsEvaluationFacts(0, false, true),
+            });
+
+        Assert.Equal(PolicyEvaluationOutcome.Allow, allowed.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, incomplete.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Allow, exempt.Outcome);
     }
 
     [Fact]
