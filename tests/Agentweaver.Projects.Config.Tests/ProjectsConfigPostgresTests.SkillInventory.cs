@@ -517,6 +517,9 @@ public sealed partial class ProjectsConfigPostgresTests
     public async Task RevokedRevisionRemainsVisibleAsMetadataButIsDeniedForAcceptedRunExecution()
     {
         await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
             CreateDbContextOptions(), TimeProvider.System);
         var setup = await CreateSkillInventoryProjectAsync(db, authorityStore);
@@ -621,6 +624,11 @@ public sealed partial class ProjectsConfigPostgresTests
                 "agent-one",
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, denied.StatusCode);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
     }
 
     private async Task<SkillInventoryTestProject> CreateSkillInventoryProjectAsync(

@@ -277,9 +277,6 @@ public sealed class RuntimeNativePolicyGateTests
         var acceptedArtifact = NativeAcsUnifiedPolicyProfile.DowngradeToV2(
             Artifact("allow"));
         var source = new FixtureSource(acceptedArtifact);
-        source.SetAcceptedAndCurrent(
-            acceptedArtifact,
-            Artifact("allow", skillsEnabled: true));
         var gate = new RuntimeNativePolicyGate(
             source, new FixtureAdmissionStore(), evaluator);
         var (registration, accepted) = RunBinding("byok-model");
@@ -1029,15 +1026,6 @@ public sealed class RuntimeNativePolicyGateTests
             _acceptedArtifact = artifact;
             _currentArtifact = artifact;
             _acceptedRevision++;
-            _currentRevision++;
-        }
-
-        public void SetAcceptedAndCurrent(
-            NativeAcsArtifact acceptedArtifact,
-            NativeAcsArtifact currentArtifact)
-        {
-            _acceptedArtifact = acceptedArtifact;
-            _currentArtifact = currentArtifact;
             _currentRevision++;
         }
 
