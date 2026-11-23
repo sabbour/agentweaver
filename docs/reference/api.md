@@ -68,7 +68,9 @@ project Owner or PlatformAdmin. Every operation requires `api.read` and
 List routes accept only `pageSize` and `afterProviderId`. Saves use an
 operation ID and expected revision; create uses revision `0`, while update
 requires a positive revision. Save retries return the revision committed by
-the original operation. Activation requires the current positive
+the original operation. Create and update accept optional nullable
+`rate_card_id` and `rate_card_version` fields. API callers must provide both or
+neither. Omitting both on update clears the attachment. Activation requires the current positive
 `expectedSettingsRevision` and `expectedProviderRevision`. It also requires an
 `Available` platform provider with stored credential and pricing evidence.
 Deactivation requires `expectedSettingsRevision`.
@@ -102,8 +104,17 @@ inactive Drafts. `ProjectsConfig:ProviderReferenceReservationsEnabled`
 defaults to `false`; an authorized replay still works when it is off. See the
 [reference reservation contract](./contracts.md#model-provider-draft-metadata)
 for syntax, conflicts, and recovery.
-The public response `state` is `Draft` or `Available`; the provider revision rules are in the
+Public metadata requests accept only verified rate-card identity fields; they
+do not accept rate values. The public response `state` is `Draft` or
+`Available`; the provider revision rules are in the
 [service contract](./contracts.md#customer-provided-model-provider-draft-contract).
+
+The CLI exposes these routes as `platform byok` and `project byok` commands.
+It excludes credential upload from command dispatch. `recheck-key` calls the
+credential `PUT` with `recheckExistingVersion: true`; `disable-key` calls the
+credential `DELETE` with `cancel: false`. The CLI prints only validated
+receipt fields and uses exit code `1` for conflicts, quarantined credentials,
+and pending publication, and code `130` for cancellation.
 See the [contract details](./contracts.md#customer-provided-model-provider-draft-contract).
 
 The deployment-binding read takes no query or request body. It returns the

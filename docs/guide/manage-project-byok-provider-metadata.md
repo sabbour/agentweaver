@@ -63,7 +63,8 @@ agentweaver project byok show $providerId --project-id $projectId
 Update the complete metadata. Copy optional values from `show` when you want
 to keep them. If you omit `--wire-api`, `--azure-api-version`,
 `--reasoning-effort`, or `--prompt-capacity-tokens`, the update clears those
-values.
+values. Add `--rate-card-id` and `--rate-card-version` together to keep or
+replace an attachment. Omitting the pair clears an existing attachment.
 
 ```powershell
 $expectedRevision = Read-Host "Current revision from show"
@@ -96,30 +97,45 @@ with changed fields.
 
 ## Recheck availability for a saved credential
 
-If a credential `PUT` saved the API key but left the provider in `Draft` because
-pricing was missing or unavailable, update the provider's rate card and run a
-same-version recheck with a new `operationId` using
-[`agentweaver rest`](./cli.md#make-a-direct-gateway-request).
-`agentweaver rest` sends your `--body` JSON as-is and rejects sensitive or
-reserved `--header` values before network access. Set `recheckExistingVersion`
-to `true` and pass the current `expectedProviderRevision` and positive
-`expectedCredentialRevision` without `apiKey` or `recoverySecretVersion`:
+If a saved credential left the provider in `Draft` because pricing was missing
+or unavailable, attach the verified rate card and run a same-version recheck:
 
 ```powershell
 $operationId = [guid]::NewGuid().ToString()
-$body = @{
-  operationId = $operationId
-  expectedProviderRevision = [long]$expectedProviderRevision
-  expectedCredentialRevision = [long]$expectedCredentialRevision
-  recheckExistingVersion = $true
-} | ConvertTo-Json -Compress
-
-agentweaver rest --method PUT --url "/api/v1/projects/$projectId/byok-providers/$providerId/credential" --project-id $projectId --scope projects.admin --body $body
+agentweaver project byok recheck-key $providerId `
+  --project-id $projectId `
+  --expected-revision $expectedProviderRevision `
+  --expected-credential-revision $expectedCredentialRevision `
+  --operation-id $operationId
 ```
 
 The Broker verifies the stored, enabled Key Vault version without uploading a
 key or creating a new Vault version, and Projects transitions `providerState`
 to `Available` when the saved rate card verifies against Events.
+
+## Search prices or disable a saved credential
+
+Search authenticated Azure Retail meters before you create a rate card:
+
+```powershell
+agentweaver project byok prices `
+  --project-id $projectId `
+  --region eastus `
+  --search gpt-4.1
+```
+
+Disable the credential slot with exact provider and credential revisions:
+
+```powershell
+agentweaver project byok disable-key $providerId `
+  --project-id $projectId `
+  --expected-revision $expectedProviderRevision `
+  --expected-credential-revision $expectedCredentialRevision `
+  --operation-id ([guid]::NewGuid().ToString())
+```
+
+Both commands force a project-bound identity without a run binding, even when
+`AGENTWEAVER_RUN_ID` is set.
 
 For command syntax and metadata options, see
 [Manage project BYOK provider drafts](./cli.md#manage-project-byok-provider-drafts).

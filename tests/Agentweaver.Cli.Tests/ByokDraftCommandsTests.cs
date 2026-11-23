@@ -167,7 +167,8 @@ public sealed class ByokDraftCommandsTests
             new[]
             {
                 "azure_api_version", "base_url", "expectedRevision", "model", "name",
-                "operationId", "prompt_capacity_tokens", "reasoning_efforts", "type", "wire_api",
+                "operationId", "prompt_capacity_tokens", "rate_card_id", "rate_card_version",
+                "reasoning_efforts", "type", "wire_api",
             },
             body.Select(property => property.Key).Order(StringComparer.Ordinal));
         Assert.Equal(OperationId, body["operationId"]!.GetValue<string>());
@@ -291,8 +292,10 @@ public sealed class ByokDraftCommandsTests
 
         Assert.Equal(1, await fixture.Run("show", "byok-legacy-0001"));
 
-        Assert.Contains("byok-legacy-0001", fixture.Error.ToString(), StringComparison.Ordinal);
-        Assert.Contains("revision 7", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(
+            "BYOK_METADATA_REPAIR_REQUIRED providerId=byok-legacy-0001 revision=7" +
+            Environment.NewLine,
+            fixture.Error.ToString());
         Assert.DoesNotContain("secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
         Assert.Empty(fixture.Output.ToString());
     }
@@ -318,7 +321,7 @@ public sealed class ByokDraftCommandsTests
 
         Assert.Single(fixture.Requests);
         Assert.Empty(fixture.Output.ToString());
-        Assert.Contains("revision changed", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("BYOK_CONFLICT", fixture.Error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -435,13 +438,13 @@ public sealed class ByokDraftCommandsTests
         Assert.Equal(HttpMethod.Put.Method, request.Method);
         Assert.Equal("/api/v1/projects/project-1/byok-providers/" + ProviderId, request.Path);
         Assert.Equal(1, JsonNode.Parse(request.Body)!["expectedRevision"]!.GetValue<long>());
-        Assert.Contains("revision changed", fixture.Error.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("BYOK_CONFLICT", fixture.Error.ToString(), StringComparison.Ordinal);
 
         fixture.Requests.Clear();
         fixture.Error.GetStringBuilder().Clear();
         fixture.Respond = _ => JsonResponse("{}", HttpStatusCode.Forbidden);
         Assert.Equal(1, await fixture.RunProject("show", ProviderId));
-        Assert.Contains("current Owner or PlatformAdmin authority", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal("BYOK_FORBIDDEN" + Environment.NewLine, fixture.Error.ToString());
     }
 
     [Fact]
@@ -484,6 +487,405 @@ public sealed class ByokDraftCommandsTests
         Assert.Contains("Unknown option: --run-id", fixture.Error.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AddAndUpdateSendAnOptionalPairedRateCardAttachment()
+    {
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse(Provider(ProviderId, "Attached")),
+        };
+
+        Assert.Equal(0, await fixture.Run(
+            "add", "--name", "Attached", "--type", "openai",
+            "--base-url", "https://models.example/", "--model", "deployment-a",
+            "--rate-card-id", "azure-gpt", "--rate-card-version", "2026-11"));
+        var addBody = JsonNode.Parse(fixture.Requests.Single().Body)!.AsObject();
+        Assert.Equal("azure-gpt", addBody["rate_card_id"]!.GetValue<string>());
+        Assert.Equal("2026-11", addBody["rate_card_version"]!.GetValue<string>());
+
+        fixture.Requests.Clear();
+        Assert.Equal(0, await fixture.Run(
+            "update", ProviderId, "--expected-revision", "1",
+            "--name", "Cleared", "--type", "openai",
+            "--base-url", "https://models.example/", "--model", "deployment-a"));
+        var updateBody = JsonNode.Parse(fixture.Requests.Single().Body)!.AsObject();
+        Assert.Null(updateBody["rate_card_id"]);
+        Assert.Null(updateBody["rate_card_version"]);
+    }
+
+    [Fact]
+    public async Task RateCardAttachmentOptionsAreAlwaysPaired()
+    {
+        using var fixture = new Fixture();
+
+        Assert.Equal(1, await fixture.Run(
+            "add", "--name", "Attached", "--type", "openai",
+            "--base-url", "https://models.example/", "--model", "deployment-a",
+            "--rate-card-id", "azure-gpt"));
+
+        Assert.Empty(fixture.Requests);
+        Assert.Contains("must be specified together", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProjectPricesIgnoresAmbientRunIdentity()
+    {
+        var lookup = PriceLookup(secret: "price-secret-canary");
+        lookup["sourceUrl"] =
+            "https://user:password@prices.azure.com/api/retail/prices?token=price-secret-canary";
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse(lookup),
+        };
+        var previousRun = Environment.GetEnvironmentVariable("AGENTWEAVER_RUN_ID");
+        Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", "ambient-run");
+        try
+        {
+            Assert.Equal(0, await fixture.RunProject(
+                "prices", "--region", "eastus", "--search", "gpt-4.1"));
+
+            var request = Assert.Single(fixture.Requests);
+            Assert.Equal(HttpMethod.Get.Method, request.Method);
+            Assert.Equal("/api/v1/projects/project-1/model-pricing/azure-retail", request.Path);
+            Assert.Contains("region=eastus", request.Query, StringComparison.Ordinal);
+            Assert.Contains("search=gpt-4.1", request.Query, StringComparison.Ordinal);
+            Assert.Null(fixture.Authentication.Identity!.RunId);
+            Assert.DoesNotContain("price-secret-canary", fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("password", fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("https://prices.azure.com/api/retail/prices",
+                fixture.Output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", previousRun);
+        }
+    }
+
+    [Theory]
+    [InlineData("manual", "/api/v1/platform/model-pricing/rate-cards/card-1/v1")]
+    [InlineData("azure-retail", "/api/v1/platform/model-pricing/azure-retail/rate-cards/card-1/v1")]
+    public async Task SavePricesUsesTheSelectedPricingMode(string source, string expectedPath)
+    {
+        var id = source == "azure-retail" ? "azure-retail-prices.standard.eastus" : "card-1";
+        var body = source == "manual"
+            ? new JsonObject
+            {
+                ["runtimeRateCardSchemaVersion"] = 1,
+                ["rateCard"] = new JsonObject
+                {
+                    ["id"] = id,
+                    ["version"] = "v1",
+                    ["meterSource"] = "byok.tokens",
+                    ["unit"] = "USD",
+                    ["nanoUnitsPerUnit"] = 1_000_000,
+                    ["modelMultipliers"] = new JsonObject { ["gpt-4.1"] = 1 },
+                },
+                ["provenance"] = new JsonObject
+                {
+                    ["source"] = "manual",
+                    ["sourceUrl"] = "https://example.test/prices",
+                    ["retrievedOn"] = "2026-11-23T00:00:00Z",
+                },
+            }
+            : new JsonObject
+            {
+                ["region"] = "eastus",
+                ["modelId"] = "gpt-4.1",
+                ["input"] = new JsonObject { ["meterId"] = "input", ["expectedUsdPer1M"] = 1 },
+                ["output"] = new JsonObject { ["meterId"] = "output", ["expectedUsdPer1M"] = 2 },
+            };
+        string path = WriteFixtureFile(body);
+        try
+        {
+            using var fixture = new Fixture
+            {
+                Respond = _ => JsonResponse(RateCard(source, id)),
+            };
+
+            Assert.Equal(0, await fixture.Run(
+                "save-prices", id, "v1", "--source", source, "--input", path));
+
+            var request = Assert.Single(fixture.Requests);
+            Assert.Equal(HttpMethod.Put.Method, request.Method);
+            Assert.Equal(expectedPath.Replace("card-1", id), request.Path);
+            Assert.True(JsonNode.DeepEquals(body, JsonNode.Parse(request.Body)));
+            Assert.DoesNotContain("secret-canary", fixture.Output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task CredentialLifecycleCommandsSendExactRevisionFencedBodies()
+    {
+        var providerReceipt = CredentialReceipt("published");
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse(providerReceipt),
+        };
+
+        Assert.Equal(0, await fixture.Run(
+            "recheck-key", ProviderId,
+            "--expected-revision", "4",
+            "--expected-credential-revision", "7",
+            "--operation-id", OperationId));
+        var recheck = Assert.Single(fixture.Requests);
+        Assert.Equal(HttpMethod.Put.Method, recheck.Method);
+        Assert.Equal("/api/v1/platform/byok-providers/" + ProviderId + "/credential", recheck.Path);
+        Assert.Equal(
+            ["expectedCredentialRevision", "expectedProviderRevision", "operationId", "recheckExistingVersion"],
+            JsonNode.Parse(recheck.Body)!.AsObject().Select(item => item.Key).Order());
+        Assert.True(JsonNode.Parse(recheck.Body)!["recheckExistingVersion"]!.GetValue<bool>());
+
+        fixture.Requests.Clear();
+        fixture.Respond = _ => JsonResponse(CredentialReceipt("disabled"));
+        Assert.Equal(0, await fixture.Run(
+            "disable-key", ProviderId,
+            "--expected-revision", "4",
+            "--expected-credential-revision", "7",
+            "--operation-id", OperationId));
+        var disableBody = JsonNode.Parse(fixture.Requests.Single().Body)!.AsObject();
+        Assert.False(disableBody["cancel"]!.GetValue<bool>());
+        Assert.DoesNotContain("credentialVersion", fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("configurationHash", fixture.Output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("quarantined", "BYOK_QUARANTINED")]
+    [InlineData("publication_pending", "BYOK_PENDING_PUBLICATION")]
+    public async Task CredentialUncertainReceiptsFailAndStayRedacted(string status, string code)
+    {
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse(CredentialReceipt(status, secret: "credential-secret-canary")),
+        };
+
+        Assert.Equal(1, await fixture.Run(
+            "recheck-key", ProviderId,
+            "--expected-revision", "4",
+            "--expected-credential-revision", "7",
+            "--operation-id", OperationId));
+
+        Assert.Equal(code + Environment.NewLine, fixture.Error.ToString());
+        Assert.Empty(fixture.Output.ToString());
+        Assert.DoesNotContain("credential-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Conflict, "credential_write_quarantined", "BYOK_QUARANTINED")]
+    [InlineData(HttpStatusCode.Conflict, "credential_slot_conflict", "BYOK_CONFLICT")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "credential_publication_pending", "BYOK_PENDING_PUBLICATION")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "credential_vault_unavailable", "BYOK_VAULT_UNAVAILABLE")]
+    public async Task CredentialHttpErrorsUseFixedMessages(
+        HttpStatusCode status, string code, string expected)
+    {
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse(
+                new JsonObject { ["code"] = code, ["raw"] = "private-response-canary" }, status),
+        };
+
+        Assert.Equal(1, await fixture.Run(
+            "recheck-key", ProviderId,
+            "--expected-revision", "4",
+            "--expected-credential-revision", "7",
+            "--operation-id", OperationId));
+
+        Assert.Equal(expected + Environment.NewLine, fixture.Error.ToString());
+        Assert.DoesNotContain("private-response-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ActivationCommandsSwitchSettingsRevisionOnThePinnedRoutes()
+    {
+        using var fixture = new Fixture
+        {
+            Respond = _ => JsonResponse(new JsonObject
+            {
+                ["mode"] = "active",
+                ["activeProviderId"] = ProviderId,
+                ["settingsRevision"] = 12,
+            }),
+        };
+
+        Assert.Equal(0, await fixture.Run(
+            "activate", ProviderId, "--expected-revision", "4",
+            "--expected-settings-revision", "11"));
+        var activate = Assert.Single(fixture.Requests);
+        Assert.Equal(HttpMethod.Post.Method, activate.Method);
+        Assert.Equal("/api/v1/platform/byok-providers/" + ProviderId + "/activate", activate.Path);
+        Assert.Equal(4, JsonNode.Parse(activate.Body)!["expectedProviderRevision"]!.GetValue<long>());
+        Assert.Equal(11, JsonNode.Parse(activate.Body)!["expectedSettingsRevision"]!.GetValue<long>());
+
+        fixture.Requests.Clear();
+        fixture.Respond = _ => JsonResponse(new JsonObject
+        {
+            ["mode"] = "explicitHosted",
+            ["activeProviderId"] = null,
+            ["settingsRevision"] = 13,
+        });
+        Assert.Equal(0, await fixture.Run(
+            "deactivate", "--expected-settings-revision", "12"));
+        var deactivate = Assert.Single(fixture.Requests);
+        Assert.Equal("/api/v1/platform/byok-providers/deactivate", deactivate.Path);
+        Assert.Equal(12, JsonNode.Parse(deactivate.Body)!["expectedSettingsRevision"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task OpenApiSchemaDriftFailsBeforeDispatch()
+    {
+        using var fixture = new Fixture
+        {
+            TransformOpenApi = document =>
+                document["components"]!["schemas"]!["ModelProviderDraftPlatformCreateRequest"]!
+                    ["properties"]!.AsObject().Remove("rate_card_version"),
+        };
+
+        Assert.Equal(1, await fixture.Run(
+            "add", "--name", "Drifted", "--type", "openai",
+            "--base-url", "https://models.example/", "--model", "deployment-a"));
+
+        Assert.Empty(fixture.Requests);
+        Assert.Equal("BYOK_CONTRACT_MISMATCH" + Environment.NewLine, fixture.Error.ToString());
+        Assert.DoesNotContain("models.example", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OpenApiCredentialFieldTypeDriftFailsBeforeDispatch()
+    {
+        using var fixture = new Fixture
+        {
+            TransformOpenApi = document =>
+            {
+                var field = document["components"]!["schemas"]!["ModelProviderCredentialPutRequest"]!
+                    ["properties"]!["recheckExistingVersion"]!.AsObject();
+                field["anyOf"]![0]!["type"] = "string";
+            },
+        };
+
+        Assert.Equal(1, await fixture.Run(
+            "recheck-key", ProviderId,
+            "--expected-revision", "4",
+            "--expected-credential-revision", "7",
+            "--operation-id", OperationId));
+
+        Assert.Empty(fixture.Requests);
+        Assert.Equal("BYOK_CONTRACT_MISMATCH" + Environment.NewLine, fixture.Error.ToString());
+    }
+
+    [Fact]
+    public async Task OpenApiNestedReferenceDriftFailsBeforeDispatch()
+    {
+        using var fixture = new Fixture
+        {
+            TransformOpenApi = document =>
+                document["components"]!["schemas"]!["ManualRuntimeRateCardWriteRequest"]!
+                    ["properties"]!["rateCard"]!["$ref"] = "#/components/schemas/AzureRetailMeterSelection",
+        };
+        var body = ManualRateCard("card-1");
+        var path = WriteFixtureFile(body);
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "save-prices", "card-1", "v1", "--source", "manual", "--input", path));
+            Assert.Empty(fixture.Requests);
+            Assert.Equal("BYOK_CONTRACT_MISMATCH" + Environment.NewLine, fixture.Error.ToString());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task SavePricesRejectsCredentialBearingSourceUrlBeforeDispatch()
+    {
+        var body = ManualRateCard("card-1");
+        body["provenance"]!["sourceUrl"] =
+            "https://example.test/prices?api_key=secret-canary";
+        var path = WriteFixtureFile(body);
+        try
+        {
+            using var fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run(
+                "save-prices", "card-1", "v1", "--source", "manual", "--input", path));
+
+            Assert.Empty(fixture.Requests);
+            Assert.DoesNotContain("secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task SavePricesSanitizesReceiptSourceUrlOnStdout()
+    {
+        var body = ManualRateCard("card-1");
+        var path = WriteFixtureFile(body);
+        try
+        {
+            var receipt = RateCard("manual");
+            receipt["provenance"]!["sourceUrl"] =
+                "https://user:password@example.test/prices?token=secret-canary#fragment";
+            using var fixture = new Fixture { Respond = _ => JsonResponse(receipt) };
+
+            Assert.Equal(0, await fixture.Run(
+                "save-prices", "card-1", "v1", "--source", "manual", "--input", path));
+
+            Assert.Contains("https://example.test/prices", fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("password", fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-canary", fixture.Output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task AzureRetailRateCardIdMustMatchTheRequestRegionBeforeDispatch()
+    {
+        var body = new JsonObject
+        {
+            ["region"] = "westus",
+            ["modelId"] = "gpt-4.1",
+            ["input"] = new JsonObject { ["meterId"] = "input", ["expectedUsdPer1M"] = 1 },
+            ["output"] = new JsonObject { ["meterId"] = "output", ["expectedUsdPer1M"] = 2 },
+        };
+        var path = WriteFixtureFile(body);
+        try
+        {
+            using var fixture = new Fixture();
+            Assert.Equal(1, await fixture.Run(
+                "save-prices", "azure-retail-prices.standard.eastus", "v1",
+                "--source", "azure-retail", "--input", path));
+
+            Assert.Empty(fixture.Requests);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task HelpListsRuntimeCommandsWithoutCredentialUpload()
+    {
+        using var output = new StringWriter();
+
+        Assert.Equal(0, await CliApplication.RunAsync(
+            ["--help"], new CliRuntimeOptions(Output: output)));
+
+        Assert.Contains("byok save-prices", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("byok recheck-key", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("byok disable-key", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("set-key", output.ToString(), StringComparison.Ordinal);
+    }
+
     private static string Page(IReadOnlyList<JsonObject> providers, string? nextAfterProviderId) =>
         new JsonObject
         {
@@ -521,6 +923,101 @@ public sealed class ByokDraftCommandsTests
             ["credentialReference"] = secret,
         };
 
+    private static JsonObject PriceLookup(string? secret = null) =>
+        new()
+        {
+            ["region"] = "eastus",
+            ["sourceUrl"] = "https://prices.azure.com/api/retail/prices",
+            ["retrievedOn"] = "2026-11-23T00:00:00Z",
+            ["items"] = new JsonArray(new JsonObject
+            {
+                ["meterId"] = "meter-1",
+                ["meterName"] = "GPT",
+                ["productName"] = "Azure OpenAI",
+                ["skuName"] = "Global",
+                ["unitOfMeasure"] = "1K Tokens",
+                ["currencyCode"] = "USD",
+                ["retailPrice"] = 1,
+                ["tierMinimumUnits"] = 0,
+                ["usdPer1M"] = 1000,
+                ["secret"] = secret,
+            }),
+            ["secret"] = secret,
+        };
+
+    private static JsonObject RateCard(string source, string id = "card-1") =>
+        new()
+        {
+            ["runtimeRateCardSchemaVersion"] = 1,
+            ["rateCard"] = new JsonObject
+            {
+                ["id"] = id,
+                ["version"] = "v1",
+                ["meterSource"] = "byok.tokens",
+                ["unit"] = "USD",
+                ["nanoUnitsPerUnit"] = 1000000,
+                ["modelMultipliers"] = new JsonObject { ["gpt-4.1"] = 1 },
+            },
+            ["provenance"] = source == "manual"
+                ? new JsonObject
+                {
+                    ["source"] = "manual",
+                    ["sourceUrl"] = "https://example.test/prices",
+                    ["retrievedOn"] = "2026-11-23T00:00:00Z",
+                }
+                : new JsonObject
+                {
+                    ["source"] = "azure-retail-prices",
+                    ["region"] = "eastus",
+                    ["meterIds"] = new JsonArray("input", "output"),
+                },
+            ["secret-canary"] = "secret-canary",
+        };
+
+    private static JsonObject ManualRateCard(string id) =>
+        new()
+        {
+            ["runtimeRateCardSchemaVersion"] = 1,
+            ["rateCard"] = new JsonObject
+            {
+                ["id"] = id,
+                ["version"] = "v1",
+                ["meterSource"] = "byok.tokens",
+                ["unit"] = "USD",
+                ["nanoUnitsPerUnit"] = 1_000_000,
+                ["modelMultipliers"] = new JsonObject { ["gpt-4.1"] = 1 },
+            },
+            ["provenance"] = new JsonObject
+            {
+                ["source"] = "manual",
+                ["sourceUrl"] = "https://example.test/prices",
+                ["retrievedOn"] = "2026-11-23T00:00:00Z",
+            },
+        };
+
+    private static JsonObject CredentialReceipt(string status, string? secret = null) =>
+        new()
+        {
+            ["operationId"] = OperationId,
+            ["status"] = status,
+            ["scope"] = "platform",
+            ["projectId"] = null,
+            ["providerId"] = ProviderId,
+            ["providerRevision"] = 4,
+            ["credentialRevision"] = 7,
+            ["credentialVersion"] = secret ?? "private-version",
+            ["configurationHash"] = "private-hash",
+            ["providerState"] = "Available",
+            ["secret"] = secret,
+        };
+
+    private static string WriteFixtureFile(JsonObject body)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "byok-input-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, body.ToJsonString());
+        return path;
+    }
+
     private static HttpResponseMessage JsonResponse(
         JsonObject body,
         HttpStatusCode status = HttpStatusCode.OK) =>
@@ -545,6 +1042,7 @@ public sealed class ByokDraftCommandsTests
         public StringWriter Error { get; } = new();
         public Authentication Authentication { get; } = new();
         public Func<Request, HttpResponseMessage>? Respond { get; set; }
+        public Action<JsonObject>? TransformOpenApi { get; set; }
 
         public IGatewayClient Create(CliIdentity identity) =>
             new GatewayClient(_http, identity, Authentication);
@@ -581,7 +1079,10 @@ public sealed class ByokDraftCommandsTests
                 var openApi = typeof(GatewayEndpoints).Assembly.GetType("Agentweaver.Gateway.GatewayOpenApi")!;
                 var emitted = openApi.GetMethod("CreateDocument", BindingFlags.Static | BindingFlags.NonPublic)!
                     .Invoke(null, null);
-                return JsonResponse(JsonSerializer.Serialize(emitted, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+                var document = JsonNode.Parse(JsonSerializer.Serialize(
+                    emitted, new JsonSerializerOptions(JsonSerializerDefaults.Web)))!.AsObject();
+                TransformOpenApi?.Invoke(document);
+                return JsonResponse(document.ToJsonString());
             }
             if (path == "/api/v1/authorization/context")
             {

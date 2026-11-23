@@ -45,9 +45,11 @@ behavior; they do not confirm availability in a particular environment.
 - [Configure Knowledge memory](./configure-knowledge.md): configure the
   native PostgreSQL Memory provider.
 - [Manage platform BYOK provider metadata](./manage-model-providers.md):
-  create, read, and update platform provider drafts with the native CLI.
+  create, price, recheck, disable, activate, and update platform provider drafts
+  with the native CLI.
 - [Manage project BYOK provider metadata](./manage-project-byok-provider-metadata.md):
-  create, read, and update provider drafts for one Project with the native CLI.
+  create, price, recheck, disable, and update provider drafts for one Project
+  with the native CLI.
 - [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md):
   let a project use your own Azure OpenAI deployment with a USD run limit.
 - [Use the Gateway](./gateway.md): read the authorization boundary and call a

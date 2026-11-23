@@ -67,12 +67,43 @@ prices.
    It shows each meter ID, meter name, product, SKU, unit, and USD price for
    one million tokens.
 
+   To search through an authorized Gateway target, bind the command to the
+   Project:
+
+   ```powershell
+   agentweaver project byok prices `
+     --project-id <project-id> `
+     --region <region> `
+     --search <model-version>
+   ```
+
+   This command uses a project identity without a run binding.
+
 2. Record the meter IDs for input, cached input, and output tokens. Use the
    meters for your deployment type, for example Global Standard.
+
+3. Save a rate card through the platform route when the runtime API manages
+   provider Drafts:
+
+   ```powershell
+   agentweaver platform byok save-prices azure-retail-prices.standard.eastus 2026-11 `
+     --source azure-retail `
+     --input .\azure-rate-card.json
+   ```
+
+   Attach the returned `rateCard.id` and `rateCard.version` as
+   `--rate-card-id` and `--rate-card-version` on a provider `add` or `update`.
+   After a credential already exists, `platform byok recheck-key` or
+   `project byok recheck-key` verifies that saved credential against the
+   attached card.
 
 If you have negotiated prices, or the meters are not listed, use manual
 prices instead. You then supply the prices, a source URL, and the date that
 you read them.
+
+The rate-card ID must be
+`azure-retail-prices.standard.<region>`. The `<region>` value must equal the
+`region` field in the request file.
 
 ## Write the input file
 
