@@ -236,6 +236,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(fixture.Dispatch.MessageId, child.DispatchMessageId);
         Assert.Single(snapshot.Checkpoint!.Progress.PendingDispatches);
         Assert.Null(snapshot.Recovery);
+        var repeated = await fixture.Owner.ReadExecutionPlanAsync(
+            _actor, _binding.Identity, _selection, checkpoints, CancellationToken.None);
+        Assert.Equal(snapshot.SavedPlanFingerprint, repeated.SavedPlanFingerprint);
 
         var wrongActor = _actor with { Subject = Guid.NewGuid().ToString("D") };
         var denied = await Assert.ThrowsAsync<CoordinationException>(() =>

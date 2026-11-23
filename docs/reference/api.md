@@ -1450,10 +1450,17 @@ latest checkpoint, direct child startup bindings, and selected child-join
 recovery state. The response includes hashes and identifiers, not child result
 text, credentials, or bootstrap material. Orchestrator rechecks the owner root
 and execution fence in its repeatable-read transaction, then rechecks Projects
-authority before it returns the response. The owner returns
+authority before it returns the response. `savedPlanFingerprint` contains
+version `1` and a lowercase SHA-256 digest of the canonical complete saved
+plan. The digest covers the workflow definition, work items, workflow and work
+item dependencies, and the full pinned isolation-provider binding. Object keys
+and capability-set entries are sorted for hashing, while saved array order,
+null values, and exact strings remain significant. Checkpoint data, decision
+version, and execution fence are outside this digest. The owner returns
 `Cache-Control: no-store`; responses are limited to 8 MiB and are never
 truncated. A missing confirmed plan returns `404`. Invalid or over-limit plan,
-checkpoint, child, or recovery data returns `409 execution_plan_unavailable`.
+checkpoint, child, or recovery data, including a plan that cannot be
+fingerprinted, returns `409 execution_plan_unavailable`.
 Stale selection keeps its existing `409` response.
 
 In this response, each workflow step has a required `buildTestCommand` field.

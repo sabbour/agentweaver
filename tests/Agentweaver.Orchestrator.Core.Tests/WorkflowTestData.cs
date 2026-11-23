@@ -163,6 +163,12 @@ internal static class WorkflowTestData
     public static PinnedProviderBinding PinnedSandboxBinding(
         string providerId = "sandbox.test",
         params string[] capabilities)
+        => PinnedSandboxBindingAtGeneration(1, providerId, capabilities);
+
+    public static PinnedProviderBinding PinnedSandboxBindingAtGeneration(
+        long generation,
+        string providerId = "sandbox.test",
+        params string[] capabilities)
     {
         var capabilitySet = capabilities.Length == 0
             ? ImmutableHashSet.Create(StringComparer.Ordinal, "sandbox.workspace.write")
@@ -196,7 +202,7 @@ internal static class WorkflowTestData
             resolution.Value!.Candidate!,
             "sandbox-resource",
             new ResourceNegotiation(
-                new ProviderResourceRef(ProviderSeam.Sandbox, providerId, "sandbox-resource", 1),
+                new ProviderResourceRef(ProviderSeam.Sandbox, providerId, "sandbox-resource", generation),
                 capabilitySet));
         Assert.True(pinned.IsSuccess);
         return pinned.Value!;

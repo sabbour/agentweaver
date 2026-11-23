@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Data;
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
@@ -72,6 +74,7 @@ internal sealed partial class CoordinationOwnerStore
         if (plan is null)
             throw new CoordinationException("execution_plan_not_found", StatusCodes.Status404NotFound);
         RequireValidPlan(plan);
+        var savedPlanFingerprint = ComputeSavedPlanFingerprint(plan);
 
         var checkpointBinding = CoordinationEndpoints.CreateExecutionCheckpointBinding(
             identity,
@@ -146,9 +149,74 @@ internal sealed partial class CoordinationOwnerStore
             run.Fence,
             decision.StateVersion,
             plan,
+            savedPlanFingerprint,
             checkpoint is null ? null : ToExecutionCheckpoint(checkpoint),
             children,
             selectedRecovery?.Snapshot);
+    }
+
+    internal static CoordinationSavedPlanFingerprint ComputeSavedPlanFingerprint(WorkPlanSnapshot plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        try
+        {
+            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+            };
+            using var document = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(plan, options));
+            using var canonical = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(canonical))
+                WriteCanonicalPlanJson(writer, document.RootElement, string.Empty);
+            return new CoordinationSavedPlanFingerprint(
+                1,
+                Convert.ToHexStringLower(SHA256.HashData(canonical.ToArray())));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidOperationException or JsonException
+                or NotSupportedException)
+        {
+            throw ExecutionPlanUnavailable(exception);
+        }
+    }
+
+    private static void WriteCanonicalPlanJson(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        string path)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject()
+                    .OrderBy(item => item.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonicalPlanJson(
+                        writer,
+                        property.Value,
+                        path.Length == 0 ? property.Name : $"{path}.{property.Name}");
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                var items = element.EnumerateArray().ToArray();
+                if (path.Equals("isolationProviderBinding.negotiatedCapabilities", StringComparison.Ordinal))
+                {
+                    if (items.Any(item => item.ValueKind != JsonValueKind.String))
+                        throw new InvalidOperationException("The negotiated capability set is invalid.");
+                    items = [.. items.OrderBy(item => item.GetString(), StringComparer.Ordinal)];
+                }
+                foreach (var item in items)
+                    WriteCanonicalPlanJson(writer, item, path);
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 
     internal static void RequireValidPlan(WorkPlanSnapshot plan)

@@ -10,6 +10,7 @@ import { appendRedactedJsonLine, serializeRedactedJsonLine } from '../../harness
 const CASE_ID = 'checkpoint-recovery-observation';
 const CASE_SCRIPT_PATH = fileURLToPath(import.meta.url);
 const MAX_OUTPUT = 4 * 1024 * 1024;
+const EXECUTION_PLAN_MAX_OUTPUT = 12 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 60_000;
 const PAGE_SIZE = 100;
 const MAX_PAGES = 1000;
@@ -25,7 +26,9 @@ const TARGET_ENV = [
 const OPERATIONS = [
   'readRunStatus', 'readSessionStatus', 'readDecisions', 'readSessionTree', 'replayRunEvents',
 ];
-const DISCOVERY_COMMAND_COUNT = 3 + OPERATIONS.length;
+const SAVED_PLAN_OPERATIONS = [...OPERATIONS, 'readExecutionPlan'];
+const discoveryOperations = input => input.caseKind === 'pending-gate' ? OPERATIONS : SAVED_PLAN_OPERATIONS;
+const discoveryCommandCount = input => 3 + discoveryOperations(input).length;
 const EVENT_KINDS = new Set([
   'turn', 'tool_call', 'policy_evaluation', 'decision_accepted', 'effect_accepted',
   'artifact_reference', 'cache_reference', 'addressed_message', 'produced_run_capture',
@@ -221,7 +224,7 @@ function invokeArgs(input, operation, query = {}) {
     '--scope', 'api.read', '--scope', 'projects.orchestrator',
     ...targetArgs(target),
   ];
-  if (['readSessionStatus', 'readDecisions', 'readSessionTree'].includes(operation)) {
+  if (['readSessionStatus', 'readDecisions', 'readSessionTree', 'readExecutionPlan'].includes(operation)) {
     args.splice(5, 0, '--path', `sessionId=${target.sessionId}`);
   }
   for (const [key, value] of Object.entries(query)) args.push('--query', `${key}=${value}`);
@@ -236,14 +239,15 @@ function restArgs(input, route) {
   ];
 }
 
-export function buildCommands(input) {
+export function buildCommands(input, legacy = false) {
   const unbound = targetArgs(input.target, false);
   const bound = targetArgs(input.target);
+  const operations = legacy ? OPERATIONS : discoveryOperations(input);
   return [
     { id: 'version', args: ['--version'] },
     { id: 'auth-status', args: ['auth', 'status', '--scope', 'api.read', '--scope', 'projects.orchestrator', ...bound] },
     { id: 'api-operations', args: ['api', 'operations', ...unbound] },
-    ...OPERATIONS.map(operation => ({
+    ...operations.map(operation => ({
       id: `api-describe-${operation}`,
       args: ['api', 'describe', operation, ...unbound],
     })),
@@ -259,6 +263,9 @@ export function buildCommands(input) {
       `/api/v1/projects/${encodeURIComponent(input.target.projectId)}/runs/${encodeURIComponent(input.target.runId)}/coordination/sessions/${encodeURIComponent(input.target.sessionId)}/status`) },
     { id: 'decisions', args: invokeArgs(input, 'readDecisions') },
     { id: 'session-tree', args: invokeArgs(input, 'readSessionTree') },
+    ...(!legacy && input.caseKind !== 'pending-gate' ? [{
+      id: 'execution-plan', args: invokeArgs(input, 'readExecutionPlan'),
+    }] : []),
   ];
 }
 
@@ -271,14 +278,14 @@ function childEnvironment(env) {
   return childEnv;
 }
 
-function runCommand(cliPath, args, env) {
+export function runCommand(cliPath, args, env) {
   const startedAt = new Date();
   const result = spawnSync(cliPath, args, {
     shell: false,
     windowsHide: true,
     encoding: 'utf8',
     timeout: COMMAND_TIMEOUT_MS,
-    maxBuffer: MAX_OUTPUT,
+    maxBuffer: args.includes('readExecutionPlan') ? EXECUTION_PLAN_MAX_OUTPUT : MAX_OUTPUT,
     env: childEnvironment(env),
   });
   const completedAt = new Date();
@@ -792,6 +799,55 @@ function savedChildFacts(snapshot, input) {
   };
 }
 
+function savedPlanFacts(value, snapshot, input) {
+  const fingerprint = value?.savedPlanFingerprint;
+  const checkpoint = value?.checkpoint;
+  const projection = snapshot.sessionStatus?.executionRecovery;
+  const expectedSelectionHash = snapshot.sessionStatus?.runtimeStartup?.acceptedSelectionHash;
+  if (!isObject(value)
+    || value.session?.projectId !== input.target.projectId
+    || value.session?.runId !== input.target.runId
+    || value.session?.sessionId !== input.target.sessionId
+    || !isHash(value.acceptedSelectionHash)
+    || !isHash(expectedSelectionHash)
+    || value.acceptedSelectionHash.toLowerCase() !== expectedSelectionHash.toLowerCase()
+    || value.executionFence !== snapshot.runStatus?.executionFence
+    || value.executionFence !== snapshot.sessionStatus?.executionFence
+    || value.executionFence !== snapshot.decisions?.executionFence
+    || value.decisionStateVersion !== snapshot.decisions?.stateVersion
+    || value.workPlan?.plan?.id !== projection?.workPlanId
+    || !isObject(checkpoint)
+    || checkpoint.workPlanId !== projection?.workPlanId
+    || checkpoint.checkpointId !== projection?.checkpointId
+    || checkpoint.revision !== projection?.checkpointRevision
+    || checkpoint.decisionStateVersion !== snapshot.decisions?.stateVersion
+    || !isObject(fingerprint)
+    || !exactKeys(fingerprint, ['version', 'sha256'])
+    || fingerprint.version !== 1
+    || !isHash(fingerprint.sha256)
+    || fingerprint.sha256 !== fingerprint.sha256.toLowerCase()) {
+    throw new CaseError('blocked', 'The execution-plan read is missing, malformed, unsupported, or unbound.');
+  }
+  return {
+    acceptedSelectionHash: value.acceptedSelectionHash.toLowerCase(),
+    executionFence: value.executionFence,
+    decisionStateVersion: value.decisionStateVersion,
+    workPlanId: value.workPlan.plan.id,
+    checkpointId: checkpoint.checkpointId,
+    checkpointRevision: checkpoint.revision,
+    fingerprint,
+  };
+}
+
+function boundSavedPlanPair(beforePlan, afterPlan, snapshot, input) {
+  const before = savedPlanFacts(beforePlan, snapshot, input);
+  const after = savedPlanFacts(afterPlan, snapshot, input);
+  if (!isDeepStrictEqual(before, after)) {
+    throw new CaseError('blocked', 'The execution-plan read changed during journal paging.');
+  }
+  return before;
+}
+
 function stableChildSnapshot(initial, final, input) {
   const initialContext = childAuthority(initial.context, input);
   const finalContext = childAuthority(final.context, input);
@@ -845,6 +901,11 @@ function boundChildRecovery(input, before, snapshot, recovery) {
   if (recovery.registrationRevision != null) requireSafe(recovery.registrationRevision, 'Recovery registration revision');
   if (recovery.sourceCheckpointId !== saved.checkpointId
     || recovery.sourceCheckpointRevision !== saved.checkpointRevision
+    || recovery.previousExecutionFence !== saved.fence
+    || recovery.executionFence !== nextFence
+    || recovery.executionFence !== snapshot.runStatus?.executionFence
+    || recovery.executionFence !== snapshot.sessionStatus?.executionFence
+    || recovery.executionFence !== snapshot.decisions?.executionFence
     || recovery.decisionStateVersion !== nextVersion
     || snapshot.decisions?.stateVersion !== nextVersion
     || !isObject(projection) || projection.state !== 'available'
@@ -877,6 +938,19 @@ function validateChildObservation(input, before, snapshot) {
   }
   const { saved, recovery, projection, nextFence, facts } =
     boundChildRecovery(input, before, snapshot, snapshot.runStatus?.checkpointRecovery);
+  if (before.formatVersion === 2
+    && (!isObject(before.savedPlanFingerprint) || !isObject(snapshot.savedPlan?.fingerprint)
+      || !isDeepStrictEqual(before.savedPlanFingerprint, snapshot.savedPlan.fingerprint))) {
+    if (isObject(before.savedPlanFingerprint)
+      && isObject(snapshot.savedPlan?.fingerprint)
+      && before.savedPlanFingerprint.version === 1
+      && snapshot.savedPlan.fingerprint.version === 1
+      && isHash(before.savedPlanFingerprint.sha256)
+      && isHash(snapshot.savedPlan.fingerprint.sha256)) {
+      throw new CaseError('failed', 'The saved plan changed during recovery.');
+    }
+    throw new CaseError('blocked', 'The saved-plan fingerprint is missing or invalid.');
+  }
   if (recovery.dispatchHeld !== false
     || !['nativeCache', 'journalRebuild'].includes(recovery.recoveryMaterialMode)
     || recovery.previousRuntimeInstanceId.toLowerCase() === recovery.runtimeInstanceId.toLowerCase()
@@ -1026,13 +1100,16 @@ function verifyBeforeCommandRecords(capture, input, records) {
   if (!Array.isArray(records)) {
     throw new CaseError('blocked', 'The retained before-capture command records are missing.');
   }
-  const commands = buildCommands(input);
-  if (records.length < commands.length + 6) {
+  const commands = buildCommands(input, capture.formatVersion === 1);
+  const hasPlanReads = capture.formatVersion === 2;
+  const initialCommands = hasPlanReads ? commands.filter(command => command.id !== 'execution-plan') : commands;
+  if (records.length < initialCommands.length + (hasPlanReads ? 8 : 6)) {
     throw new CaseError('blocked', 'The retained before-capture command records are incomplete.');
   }
   let index = 0;
-  for (const command of commands) {
-    const commandId = index < DISCOVERY_COMMAND_COUNT
+  const initialDiscoveryCount = capture.formatVersion === 1 ? 8 : discoveryCommandCount(input);
+  for (const command of initialCommands) {
+    const commandId = index < initialDiscoveryCount
       ? command.id
       : `initial-${command.id === 'rest-authorization-context'
         ? 'authorization-context'
@@ -1047,12 +1124,13 @@ function verifyBeforeCommandRecords(capture, input, records) {
   const operationIds = new Set(commandJson(records[2], 'api-operations').map(item => (
     typeof item === 'string' ? item : item?.operationId
   )));
-  if (OPERATIONS.some(operation => !operationIds.has(operation))) {
+  if (discoveryOperations({ caseKind: capture.formatVersion === 1 ? 'pending-gate' : input.caseKind })
+    .some(operation => !operationIds.has(operation))) {
     throw new CaseError('blocked', 'The retained API discovery record does not list every required operation.');
   }
   const { outputs } = capture;
-  const context = restBody(commandRecord(records, 8, 'initial-authorization-context',
-    commands[8].args), 'rest-authorization-context');
+  const context = restBody(commandRecord(records, initialDiscoveryCount, 'initial-authorization-context',
+    commands[initialDiscoveryCount].args), 'rest-authorization-context');
   if (!isDeepStrictEqual(validateAuthorizationContext(context, input), outputs.context)) {
     throw new CaseError('blocked', 'The retained authorization context does not match the captured output.');
   }
@@ -1074,21 +1152,52 @@ function verifyBeforeCommandRecords(capture, input, records) {
       throw new CaseError('blocked', `The retained ${id} record does not match the captured output.`);
     }
   }
-  const pageRecords = [];
-  let cursor = null;
-  for (;;) {
-    const pageNumber = pageRecords.length + 1;
-    const args = runEventArgs(input, cursor);
-    const record = commandRecord(
-      records, index++, `initial-journal-page-${pageNumber}`, args,
-    );
-    const page = apiResponseBody(commandJson(record, `journal-page-${pageNumber}`), `journal-page-${pageNumber}`);
-    pageRecords.push(page);
-    if (page.hasMore !== true) break;
-    cursor = page.nextCursor;
-  }
-  if (!isDeepStrictEqual(pageRecords, outputs.events)) {
-    throw new CaseError('blocked', 'The retained journal command records do not match the captured pages.');
+  let planFacts = null;
+  if (hasPlanReads) {
+    const command = commands.find(item => item.id === 'execution-plan');
+    const beforePlan = apiResponseBody(commandJson(commandRecord(
+      records, index++, 'initial-execution-plan-before-journal', command.args,
+    ), 'initial-execution-plan-before-journal'), 'initial-execution-plan-before-journal');
+    const pageRecords = [];
+    let cursor = null;
+    for (;;) {
+      const pageNumber = pageRecords.length + 1;
+      const args = runEventArgs(input, cursor);
+      const record = commandRecord(
+        records, index++, `initial-journal-page-${pageNumber}`, args,
+      );
+      const page = apiResponseBody(commandJson(record, `journal-page-${pageNumber}`), `journal-page-${pageNumber}`);
+      pageRecords.push(page);
+      if (page.hasMore !== true) break;
+      cursor = page.nextCursor;
+    }
+    const afterPlan = apiResponseBody(commandJson(commandRecord(
+      records, index++, 'initial-execution-plan-after-journal', command.args,
+    ), 'initial-execution-plan-after-journal'), 'initial-execution-plan-after-journal');
+    if (!isDeepStrictEqual(pageRecords, outputs.events)) {
+      throw new CaseError('blocked', 'The retained journal command records do not match the captured pages.');
+    }
+    planFacts = boundSavedPlanPair(beforePlan, afterPlan, outputs, input);
+    if (!isDeepStrictEqual(planFacts.fingerprint, capture.savedPlanFingerprint)) {
+      throw new CaseError('blocked', 'The retained plan-read fingerprint does not match the capture.');
+    }
+  } else {
+    const pageRecords = [];
+    let cursor = null;
+    for (;;) {
+      const pageNumber = pageRecords.length + 1;
+      const args = runEventArgs(input, cursor);
+      const record = commandRecord(
+        records, index++, `initial-journal-page-${pageNumber}`, args,
+      );
+      const page = apiResponseBody(commandJson(record, `journal-page-${pageNumber}`), `journal-page-${pageNumber}`);
+      pageRecords.push(page);
+      if (page.hasMore !== true) break;
+      cursor = page.nextCursor;
+    }
+    if (!isDeepStrictEqual(pageRecords, outputs.events)) {
+      throw new CaseError('blocked', 'The retained journal command records do not match the captured pages.');
+    }
   }
   const finalCommands = [
     ['initial-final-run-status', commands.find(command => command.id === 'run-status')],
@@ -1106,7 +1215,7 @@ function verifyBeforeCommandRecords(capture, input, records) {
   }
   if (input.caseKind !== 'pending-gate') {
     const finalContext = restBody(commandRecord(records, index++, 'initial-final-authorization-context',
-      commands[8].args), 'initial-final-authorization-context');
+      commands[initialDiscoveryCount].args), 'initial-final-authorization-context');
     const treeCommand = commands.find(command => command.id === 'session-tree');
     const finalTree = apiResponseBody(commandJson(commandRecord(records, index++,
       'initial-final-session-tree', treeCommand.args), 'initial-final-session-tree'), 'initial-final-session-tree');
@@ -1124,6 +1233,10 @@ function verifyBeforeCommandRecords(capture, input, records) {
       stableChildSnapshot(outputs, final, input);
       if (!sameFacts(savedChildFacts(outputs, input), capture.childFacts)) {
         throw new CaseError('blocked', 'The retained child facts do not match the capture.');
+      }
+      if (capture.formatVersion === 2
+        && !isDeepStrictEqual(planFacts?.fingerprint, capture.savedPlanFingerprint)) {
+        throw new CaseError('blocked', 'The retained plan-read evidence is unavailable.');
       }
     } catch (error) {
       throw new CaseError('blocked', `The retained before reads are incomplete or inconsistent: ${error.message}`);
@@ -1165,7 +1278,10 @@ export function verifyBeforeCapture(
   inputSha256, rawCommandRecords, rawCommandSha256,
 ) {
   if (!isObject(capture)
-    || capture.formatVersion !== 1
+    || ![1, 2].includes(capture.formatVersion)
+    || capture.formatVersion === 2 && input.caseKind === 'pending-gate'
+    || capture.formatVersion === 1 && input.caseKind !== 'pending-gate'
+      && capture.savedPlanFingerprint !== undefined
     || capture.status !== 'captured'
     || capture.caseId !== CASE_ID
     || capture.caseKind !== input.caseKind
@@ -1448,7 +1564,9 @@ export async function runCase(options, env = process.env, commandRunner = runCom
   }
 
   async function readSnapshot(prefix, before = null) {
-    const commands = buildCommands(input);
+    const legacy = before?.formatVersion === 1;
+    const commands = buildCommands(input, legacy);
+    const initialDiscoveryCount = legacy ? 8 : discoveryCommandCount(input);
     if (prefix === 'initial') {
       await execute('version', commands[0].args, 'text');
       const auth = await execute('auth-status', commands[1].args);
@@ -1459,15 +1577,15 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       const operationIds = new Set(Array.isArray(listed)
         ? listed.map(item => typeof item === 'string' ? item : item?.operationId)
         : []);
-      for (let index = 3; index < 3 + OPERATIONS.length; index += 1) {
-        const operation = OPERATIONS[index - 3];
+      for (let index = 3; index < initialDiscoveryCount; index += 1) {
+        const operation = (legacy ? OPERATIONS : discoveryOperations(input))[index - 3];
         if (!operationIds.has(operation)) {
           throw new CaseError('blocked', `Gateway discovery does not list ${operation}.`);
         }
         await execute(`api-describe-${operation}`, commands[index].args);
       }
     }
-    const base = DISCOVERY_COMMAND_COUNT;
+    const base = initialDiscoveryCount;
     const contextRecord = await execute(`${prefix}-authorization-context`, commands[base].args, 'text');
     const context = validateAuthorizationContext(
       restBody(contextRecord, `${prefix}-authorization-context`), input,
@@ -1502,6 +1620,13 @@ export async function runCase(options, env = process.env, commandRunner = runCom
 
     const events = [];
     const seenCursors = new Set();
+    let beforePlan = null;
+    if (input.caseKind !== 'pending-gate' && !legacy) {
+      beforePlan = apiResponseBody(
+        await execute(`${prefix}-execution-plan-before-journal`, commands.at(-1).args),
+        `${prefix}-execution-plan-before-journal`,
+      );
+    }
     let cursor = null;
     for (let pageNumber = 1; pageNumber <= MAX_PAGES; pageNumber += 1) {
       const pageResponse = await execute(
@@ -1523,6 +1648,19 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       }
     }
     const journal = validateJournalPages(events, input);
+    let savedPlan;
+    if (beforePlan) {
+      const afterPlan = apiResponseBody(
+        await execute(`${prefix}-execution-plan-after-journal`, commands.at(-1).args),
+        `${prefix}-execution-plan-after-journal`,
+      );
+      savedPlan = boundSavedPlanPair(
+        beforePlan,
+        afterPlan,
+        { context, runStatus, sessionStatus, decisions, tree },
+        input,
+      );
+    }
     const finalRunStatus = apiResponseBody(
       await execute(`${prefix}-final-run-status`, commands[base + 1].args),
       `${prefix}-final-run-status`,
@@ -1641,6 +1779,7 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       tree,
       events,
       journal,
+      ...(savedPlan ? { savedPlan } : {}),
       finalAuthority: {
         runStatus: finalRunStatus,
         sessionStatus: finalSessionStatus,
@@ -1682,7 +1821,7 @@ export async function runCase(options, env = process.env, commandRunner = runCom
         }
       }
       const capture = {
-        formatVersion: 1,
+        formatVersion: input.caseKind === 'pending-gate' ? 1 : 2,
         status: 'captured',
         caseId: CASE_ID,
         caseKind: input.caseKind,
@@ -1700,6 +1839,7 @@ export async function runCase(options, env = process.env, commandRunner = runCom
             ? { effectOperationId: input.expectedEffectOperationId } : {}),
         },
         commandsSha256: await sha256(commandsPath),
+        ...(snapshot.savedPlan ? { savedPlanFingerprint: snapshot.savedPlan.fingerprint } : {}),
         ...(gate ? { gate } : { childFacts }),
         outputs: {
           context: snapshot.context,
@@ -1721,10 +1861,14 @@ export async function runCase(options, env = process.env, commandRunner = runCom
         actorId: snapshot.context.actorId,
         ...(gate ? { gateRequestId: gate.requestId } : { childFacts }),
         ...(childFacts ? {
-          fullPlanContentProof: { status: 'blocked' },
-          dependencyGraphProof: { status: 'blocked' },
+          fullPlanContentProof: { status: snapshot.savedPlan ? 'captured' : 'blocked' },
+          dependencyGraphProof: { status: snapshot.savedPlan ? 'captured' : 'blocked' },
+          completedChildProof: { status: 'blocked' },
           committedRecoveryEventProof: { status: 'blocked' },
-          ...(input.caseKind === 'committed-effect' ? { physicalNoDuplicateProof: { status: 'blocked' } } : {}),
+          ...(input.caseKind === 'committed-effect' ? {
+            physicalNoDuplicateProof: { status: 'blocked' },
+            checkpointRestartDuplicateFence: { status: 'blocked' },
+          } : {}),
         } : {}),
         capturePath,
         captureSha256: await sha256(capturePath),
@@ -1751,11 +1895,25 @@ export async function runCase(options, env = process.env, commandRunner = runCom
         members: observed.members,
         ...(observed.effect ? { effect: observed.effect } : {}),
         journal: snapshot.journal,
-        fullPlanContentProof: { status: 'blocked', reason: 'The public reads do not expose the full confirmed plan.' },
-        dependencyGraphProof: { status: 'blocked', reason: 'The public reads do not expose dependency edges.' },
+        fullPlanContentProof: {
+          status: before.formatVersion === 2 ? 'passed' : 'blocked',
+          ...(before.formatVersion === 1 ? { reason: 'The historical capture has no saved-plan fingerprint.' } : {}),
+        },
+        dependencyGraphProof: {
+          status: before.formatVersion === 2 ? 'passed' : 'blocked',
+          ...(before.formatVersion === 1 ? { reason: 'The historical capture has no saved-plan fingerprint.' } : {}),
+        },
+        completedChildProof: {
+          status: 'blocked',
+          reason: 'The owner does not expose a verified receipt-to-message link.',
+        },
         committedRecoveryEventProof: { status: 'blocked', reason: 'The public journal has no recovery-progress projection.' },
         ...(input.caseKind === 'committed-effect' ? {
           physicalNoDuplicateProof: { status: 'blocked', reason: 'The public reads do not contain a complete effect and native-call inventory.' },
+          checkpointRestartDuplicateFence: {
+            status: 'blocked',
+            reason: 'Native-send and external-effect evidence is unavailable.',
+          },
         } : {}),
         finishedAt: new Date().toISOString(),
       };
@@ -1804,8 +1962,12 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       ...(input.caseKind !== 'pending-gate' ? {
         fullPlanContentProof: { status: 'blocked' },
         dependencyGraphProof: { status: 'blocked' },
+        completedChildProof: { status: 'blocked' },
         committedRecoveryEventProof: { status: 'blocked' },
-        ...(input.caseKind === 'committed-effect' ? { physicalNoDuplicateProof: { status: 'blocked' } } : {}),
+        ...(input.caseKind === 'committed-effect' ? {
+          physicalNoDuplicateProof: { status: 'blocked' },
+          checkpointRestartDuplicateFence: { status: 'blocked' },
+        } : {}),
       } : {}),
       finishedAt: new Date().toISOString(),
     };
