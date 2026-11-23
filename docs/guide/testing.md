@@ -378,13 +378,15 @@ storage writes. The Python check confirms the pinned evaluator's separate
 Run the PostgreSQL regressions for persisted Skill trust evidence:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PersistsExactSkillScanEvidenceAndPendingDecision|FullyQualifiedName~ExactReplayIgnoresEvaluationTimeButChangedReportConflicts|FullyQualifiedName~TrustEvidenceRequiresCurrentProjectOwnerAndUnrevokedRevision|FullyQualifiedName~TrustEvidenceReadsOnlyItsProjectWhenProjectsRunInReverseOrder"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PersistsExactSkillScanEvidenceAndPendingDecision|FullyQualifiedName~ExactReplayIgnoresEvaluationTimeButChangedReportConflicts|FullyQualifiedName~EvaluatorErrorsPersistPendingEvidenceAndReuseItOnReplay|FullyQualifiedName~DecisionAppendFailureReusesCommittedEvidenceOnExactRetry|FullyQualifiedName~TrustEvidenceReplayRechecksProjectOwnerRevocationDuringScan|FullyQualifiedName~TrustEvidenceReplayRechecksRevisionRevocationDuringScan|FullyQualifiedName~TrustEvidenceRequiresCurrentProjectOwnerAndUnrevokedRevision|FullyQualifiedName~TrustEvidenceReadsOnlyItsProjectWhenProjectsRunInReverseOrder"
 ```
 
 These tests use the disposable PostgreSQL fixture. They check exact replay,
-changed-report conflicts, current authority, revocation, source metadata, and
-project-scoped reads. Each test owns its project and evidence rows, so the
-suite can run in either project order.
+changed-report conflicts, pending evaluator-error evidence, current Owner
+authority during the save, recovery after a decision-append failure, revision
+revocation, source metadata, and project-scoped reads. The order test uses one
+actor and one idempotency key in two projects, then replays them in the
+opposite order.
 
 ## Test the native ACS profile
 
