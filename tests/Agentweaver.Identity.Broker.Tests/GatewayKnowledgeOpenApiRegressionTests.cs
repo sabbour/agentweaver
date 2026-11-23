@@ -567,7 +567,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             import.GetProperty("requestBody").GetProperty("content")
                 .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         Assert.Equal(
-            "#/components/schemas/SkillContentPreview",
+            "#/components/schemas/MarketplaceSkillContentPreview",
             preview.GetProperty("responses").GetProperty("200").GetProperty("content")
                 .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         Assert.Equal(
@@ -580,6 +580,14 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             Assert.True(import.GetProperty("responses").TryGetProperty(status, out _));
         }
         Assert.True(import.GetProperty("responses").TryGetProperty("500", out _));
+        var trust = FindOperation(paths, "readProjectSkillTrust");
+        Assert.DoesNotContain(
+            trust.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("in").GetString() == "query");
+        Assert.Equal(
+            "#/components/schemas/SkillTrustProjection",
+            trust.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         Assert.Contains("not the source bytes", preview.GetProperty("description").GetString(),
             StringComparison.Ordinal);
         var schemasForMarketplaceContent = document.RootElement.GetProperty("components").GetProperty("schemas");

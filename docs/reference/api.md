@@ -853,6 +853,7 @@ Gateway prefix: `/api/v1/projects/{projectId}/skills`.
 | GET | `/` | Admin; archived projects allowed | Read revision inventory with `cursor` and `pageSize`. | Yes, empty suffix |
 | POST | `/import` | Admin | Import validated content with idempotency and digest checks. | Yes |
 | PUT | `/{skillId}/assignment` | Admin | Save pinned skill assignment at the expected configuration revision. | Yes |
+| GET | `/{skillId}/revisions/{revision:long}/trust` | Admin; archived projects allowed | Read the current trust projection for that exact revision. | Yes |
 | POST | `/{skillId}/revisions/{revision:long}/revoke` | Admin | Revoke an imported revision. | Yes |
 
 | Method | Native full path | Auth | Purpose | Gateway full path |
@@ -893,6 +894,14 @@ authority and lists the suggested marketplaces. The Gateway path is
 
 See [Projects & Config](../architecture/projects-config.md) and
 [Skill marketplace sources](../architecture/skill-marketplace.md).
+
+Marketplace preview and trust routes are read-only. A Marketplace preview
+returns `Unknown` because no admission evidence exists until import. A stored
+revision returns its exact revision, content digest, evidence age, current
+admission state, revocation, and a stable error code or message. `builtInExempt`
+means `Built-in — exempt`; it is not a heuristic score or verification tier.
+These projections do not create evidence records, change project access, or
+replace admission.
 
 ## Orchestrator
 

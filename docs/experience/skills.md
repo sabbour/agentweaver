@@ -40,8 +40,9 @@ read, the dialog shows the error, and you can still add a source by hand.
 3. Under **Browse a source**, select the source, enter an optional search, and
    select **Browse skills**.
 4. Select **Preview source skill** for a candidate.
-5. Review the validated skill name, resource count, content digest, and total
-   bytes.
+5. Review the validated skill name, resource count, content digest, total
+   bytes, exact source revision, and **Trust status: Unknown**. The preview has
+   passed content validation, but preview does not establish admission readiness.
 6. Select **Import selected source skill**.
 
 Browse results pin the owner-reported source revision and resolved commit.
@@ -154,6 +155,13 @@ project assignments. Select the inventory refresh and paging controls to read
 more results. The owner defaults to 25 records per page and accepts page sizes
 from 1 to 50. The cursor does not provide a snapshot across pages.
 
+Select **Load trust status** for a revision to fetch its exact trust state
+without delaying the inventory. `Unknown`, `Denied`, `Error`, and `Revoked` stay
+distinct. A release-inventory Skill shows **Built-in — exempt**; this label is
+not a heuristic score or verification tier. Select **Open Skills policies** to
+read the policy source, or **Open project audit history** to read the
+configuration audit view.
+
 **Expected result:** The inventory page shows the revision and assignment
 metadata returned by the owner. It does not show whether a runtime loaded a
 skill.
@@ -161,6 +169,8 @@ skill.
 ## Understand states and errors
 
 - Browse, preview, import, and inventory each show their own loading state.
+- Marketplace preview shows `Unknown` because preview writes no evidence and
+  does not replace import admission.
 - If the app has no authorized Gateway actions, the section displays an
   unavailable message.
 - A source, configuration, or digest conflict requires a fresh read and
@@ -191,6 +201,7 @@ source.
 | Package uploads or a new skill | `POST /api/v1/skills/package` |
 | Import local content | `POST /api/v1/projects/{projectId}/skills/import` |
 | Read inventory | `GET /api/v1/projects/{projectId}/skills` |
+| Read an exact revision trust projection | `GET /api/v1/projects/{projectId}/skills/{skillId}/revisions/{revision}/trust` |
 | Assign a skill | `PUT /api/v1/projects/{projectId}/skills/{skillId}/assignment` |
 | Revoke a revision | `POST /api/v1/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke` |
 

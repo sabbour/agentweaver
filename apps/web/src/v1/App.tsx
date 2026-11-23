@@ -725,7 +725,12 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeScope, setNoticeScope] = useState<string | null>(null);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
-  const requestScope = JSON.stringify([session?.accessToken ?? null, projectId]);
+  const requestScope = JSON.stringify([
+    session?.accessToken ?? null,
+    authorizationContext?.tenantId ?? null,
+    authorizationContext?.membershipRevision ?? null,
+    projectId,
+  ]);
   const activeScope = useRef(requestScope);
   const loadGeneration = useRef(0);
 
@@ -935,6 +940,9 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       request: Parameters<typeof gatewayClient.listProjectSkillInventory>[2],
     ) => apiCall((token, tenantSelector) =>
       gatewayClient.listProjectSkillInventory(token, scope, request, tenantSelector), null),
+    readSkillTrust: (scope: string, skillId: string, revision: number) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.readProjectSkillTrust(token, scope, skillId, revision, tenantSelector), null),
     updateSkillAssignment: (
       scope: string,
       skillId: string,
@@ -1007,11 +1015,12 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       {statusMessages}
       {currentLoading ? <Loading label="Loading skills" /> : currentConfiguration && (
         <SkillsMarketplacePanel
+          key={`${authorizationContext?.tenantId ?? 'no-tenant'}/${authorizationContext?.membershipRevision ?? 'no-membership'}/${projectId}`}
           projectId={projectId}
           configurationRevision={currentConfiguration.revision}
           assignments={currentConfiguration.configuration.skills}
           agents={skillAgents}
-          actions={session ? skillActions : null}
+          actions={session && authorizationContext ? skillActions : null}
           assignmentDisabledReason={assignmentDisabledReason}
           onAssignmentPendingChange={setSkillAssignmentPending}
           onConfigurationChanged={(updated) => {

@@ -9,10 +9,11 @@ namespace Agentweaver.Projects.Config;
 public sealed class ProjectMarketplaceSkillContentService(
     ProjectMarketplaceSourceService sources,
     SkillMarketplaceBrowseService marketplace,
-    SkillContentService skills)
+    SkillContentService skills,
+    SkillTrustProjectionService trust)
 {
     /// <summary>Reads the exact selected commit/path and delegates byte validation to the Skills owner.</summary>
-    public async Task<SkillContentPreview> PreviewAsync(
+    public async Task<MarketplaceSkillContentPreview> PreviewAsync(
         ProjectAuthorizationContext caller,
         string projectId,
         Guid sourceId,
@@ -35,7 +36,24 @@ public sealed class ProjectMarketplaceSkillContentService(
                 verifyCurrentReadAuthorityAsync,
                 cancellationToken)
             .ConfigureAwait(false);
-        return skills.Preview(ToCandidate(files));
+        var preview = skills.Preview(ToCandidate(files));
+        var projection = await trust.ForMarketplacePreviewAsync(
+                projectId, source, request, preview, cancellationToken)
+            .ConfigureAwait(false);
+        await verifyCurrentReadAuthorityAsync(cancellationToken).ConfigureAwait(false);
+        var currentSource = await sources.GetForBrowseAsync(
+                caller, projectId, sourceId, request.ExpectedSourceRevision, cancellationToken)
+            .ConfigureAwait(false);
+        await verifyCurrentReadAuthorityAsync(cancellationToken).ConfigureAwait(false);
+        if (currentSource != source)
+            throw MarketplaceSourceException.RevisionConflict();
+        return new MarketplaceSkillContentPreview(
+            preview.Name,
+            preview.Description,
+            preview.ContentDigest,
+            preview.ResourceCount,
+            preview.TotalBytes,
+            projection);
     }
 
     /// <summary>

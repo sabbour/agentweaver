@@ -9,6 +9,7 @@ import type {
 } from './SkillsMarketplacePanel';
 import type {
   MarketplaceBrowsePage,
+  MarketplaceSkillContentPreview,
   MarketplaceSource,
   SkillContentInventoryPage,
   SkillContentPackageResult,
@@ -59,6 +60,26 @@ const browsePage: MarketplaceBrowsePage = {
   hasMore: false,
 };
 
+const marketplacePreview = {
+  ...preview,
+  trust: {
+    projectId: 'project-1',
+    skillId: null,
+    revision: null,
+    contentDigest: preview.contentDigest,
+    sourceRevision: String(source.revision),
+    resolvedCommitSha: browsePage.resolvedCommitSha,
+    selectedPath: 'skills/sample',
+    state: 'unknown' as const,
+    classification: null,
+    evidenceCreatedAt: null,
+    evidenceAgeSeconds: null,
+    isRevoked: false,
+    errorCode: null,
+    error: 'Content validation passed. Preview does not establish admission readiness.',
+  },
+};
+
 /** The candidate returned by the mocked package action for an uploaded skill. */
 const packagedCandidate = {
   skillMarkdown: btoa('# Sample skill'),
@@ -79,7 +100,7 @@ function createActions(overrides: Partial<SkillsMarketplaceActions> = {}): Skill
     updateSource: vi.fn().mockResolvedValue({ ...source, revision: source.revision + 1 }),
     removeSource: vi.fn().mockResolvedValue({ ...source, state: 'removed', revision: source.revision + 1 }),
     browseSource: vi.fn().mockResolvedValue(browsePage),
-    previewMarketplaceSkill: vi.fn().mockResolvedValue(preview),
+    previewMarketplaceSkill: vi.fn().mockResolvedValue(marketplacePreview),
     importMarketplaceSkill: vi.fn().mockResolvedValue(importedSkill),
     listSkillInventory: vi.fn().mockResolvedValue({
       configurationRevision: 4,
@@ -88,6 +109,15 @@ function createActions(overrides: Partial<SkillsMarketplaceActions> = {}): Skill
       pageSize: 25,
       nextCursor: null,
     } satisfies SkillContentInventoryPage),
+    readSkillTrust: vi.fn().mockResolvedValue({
+      ...marketplacePreview.trust,
+      skillId: 'skill-1',
+      revision: 3,
+      state: 'admitted',
+      evidenceCreatedAt: '2026-10-10T00:00:00Z',
+      evidenceAgeSeconds: 60,
+      error: null,
+    }),
     previewSkillContent: vi.fn().mockResolvedValue(preview),
     importSkillContent: vi.fn().mockResolvedValue(importedSkill),
     updateSkillAssignment: vi.fn().mockResolvedValue({
@@ -260,6 +290,233 @@ describe('Skills and marketplace panel', () => {
     });
   });
 
+  it('shows exact revision trust age, revocation, errors, isolation, and built-in exemption', async () => {
+    const baseRevision = {
+      skillId: 'skill-known',
+      revision: 2,
+      name: 'Known skill',
+      description: 'Known trust evidence',
+      contentDigest: 'sha256:known',
+      resourceCount: 1,
+      totalBytes: 32,
+      createdByActorId: 'actor-1',
+      createdAt: '2026-10-10T00:00:00Z',
+      sourceId: null,
+      sourceRevision: null,
+      requestedRef: null,
+      resolvedCommitSha: null,
+      selectedPath: null,
+      isRevoked: false,
+      revokedByActorId: null,
+      revokedAt: null,
+    };
+    const inventory = {
+      configurationRevision: 4,
+      assignments: [],
+      revisions: [
+        baseRevision,
+        { ...baseRevision, skillId: 'skill-revoked', name: 'Revoked skill', revision: 1, isRevoked: true },
+        { ...baseRevision, skillId: 'skill-built-in', name: 'Built-in skill', revision: 4 },
+        { ...baseRevision, skillId: 'skill-isolated', name: 'Isolated skill', revision: 5 },
+        { ...baseRevision, skillId: 'skill-error', name: 'Error skill', revision: 6 },
+      ],
+      pageSize: 25,
+      nextCursor: null,
+    } satisfies SkillContentInventoryPage;
+    const actions = createActions({
+      listSkillInventory: vi.fn().mockResolvedValue(inventory),
+      readSkillTrust: vi.fn().mockImplementation(
+        (projectId: string, skillId: string, revision: number) => {
+          if (skillId === 'skill-error')
+            return Promise.reject(new Error('trust service unavailable'));
+          return Promise.resolve({
+            ...marketplacePreview.trust,
+            projectId: skillId === 'skill-isolated' ? 'project-2' : projectId,
+            skillId,
+            revision,
+            contentDigest: inventory.revisions.find((item) =>
+              item.skillId === skillId && item.revision === revision)!.contentDigest,
+            state: skillId === 'skill-revoked'
+              ? 'revoked'
+              : skillId === 'skill-built-in'
+                ? 'builtInExempt'
+                : 'admitted',
+            evidenceCreatedAt: '2026-10-10T00:00:00Z',
+            evidenceAgeSeconds: 120,
+            isRevoked: skillId === 'skill-revoked',
+            error: skillId === 'skill-revoked' ? 'The Skill revision was revoked.' : null,
+          });
+        },
+      ),
+    });
+    renderPanel(actions);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill inventory' }));
+    await screen.findByText('Known skill');
+    expect(actions.readSkillTrust).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Known skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Revoked skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Built-in skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Isolated skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Error skill' }));
+    await screen.findByText('Trust status: Admitted');
+    expect(screen.getByText(/Exact project revision: 2/)).toBeTruthy();
+    expect(screen.getAllByText(/Evidence age: 120 second\(s\)/).length).toBeGreaterThan(0);
+    expect(screen.getByText('Trust status: Revoked')).toBeTruthy();
+    expect(screen.getByText('Trust status: Built-in — exempt')).toBeTruthy();
+    expect(screen.getByText(/trust projection belongs to another project/)).toBeTruthy();
+    expect(screen.getByText(/trust service unavailable/)).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'Open Skills policies' })).toHaveLength(3);
+  });
+
+  it('keeps the inventory responsive while trust status is pending', async () => {
+    const inventory = {
+      configurationRevision: 4,
+      assignments: [],
+      revisions: [{
+        skillId: 'skill-pending',
+        revision: 2,
+        name: 'Pending trust skill',
+        description: 'Trust is loaded separately.',
+        contentDigest: 'sha256:pending',
+        resourceCount: 0,
+        totalBytes: 20,
+        createdByActorId: 'actor-1',
+        createdAt: '2026-10-10T00:00:00Z',
+        sourceId: null,
+        sourceRevision: null,
+        requestedRef: null,
+        resolvedCommitSha: null,
+        selectedPath: null,
+        isRevoked: false,
+        revokedByActorId: null,
+        revokedAt: null,
+      }],
+      pageSize: 25,
+      nextCursor: null,
+    } satisfies SkillContentInventoryPage;
+    const pendingTrust = new Promise<MarketplaceSkillContentPreview['trust']>(() => undefined);
+    const actions = createActions({
+      listSkillInventory: vi.fn().mockResolvedValue(inventory),
+      readSkillTrust: vi.fn().mockReturnValue(pendingTrust),
+    });
+    renderPanel(actions);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill inventory' }));
+    await screen.findByText('Pending trust skill');
+    expect(actions.readSkillTrust).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Pending trust skill' }));
+    expect(await screen.findByText('Loading trust status for Pending trust skill…')).toBeTruthy();
+    expect(screen.getByText('Pending trust skill')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Refresh skill inventory' }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
+  it('clears pending trust when an inventory refresh fails', async () => {
+    const inventory = {
+      configurationRevision: 4,
+      assignments: [],
+      revisions: [{
+        skillId: 'skill-pending',
+        revision: 2,
+        name: 'Pending trust skill',
+        description: 'Trust is loaded separately.',
+        contentDigest: 'sha256:pending',
+        resourceCount: 0,
+        totalBytes: 20,
+        createdByActorId: 'actor-1',
+        createdAt: '2026-10-10T00:00:00Z',
+        sourceId: null,
+        sourceRevision: null,
+        requestedRef: null,
+        resolvedCommitSha: null,
+        selectedPath: null,
+        isRevoked: false,
+        revokedByActorId: null,
+        revokedAt: null,
+      }],
+      pageSize: 25,
+      nextCursor: null,
+    } satisfies SkillContentInventoryPage;
+    const actions = createActions({
+      listSkillInventory: vi.fn()
+        .mockResolvedValueOnce(inventory)
+        .mockRejectedValueOnce(new Error('inventory refresh failed')),
+      readSkillTrust: vi.fn().mockReturnValue(
+        new Promise<MarketplaceSkillContentPreview['trust']>(() => undefined)),
+    });
+    renderPanel(actions);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill inventory' }));
+    await screen.findByText('Pending trust skill');
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Pending trust skill' }));
+    await screen.findByText('Loading trust status for Pending trust skill…');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh skill inventory' }));
+
+    expect(await screen.findByText(/inventory refresh failed/)).toBeTruthy();
+    expect(screen.queryByText('Loading trust status for Pending trust skill…')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Load trust status for Pending trust skill' })).toBeTruthy();
+  });
+
+  it('requires a trust retry after an inventory refresh fails', async () => {
+    const revision = {
+      skillId: 'skill-1',
+      revision: 2,
+      name: 'Imported skill',
+      description: 'Trust changes independently of the inventory page.',
+      contentDigest: 'sha256:sample',
+      resourceCount: 1,
+      totalBytes: 32,
+      createdByActorId: 'actor-1',
+      createdAt: '2026-10-10T00:00:00Z',
+      sourceId: null,
+      sourceRevision: null,
+      requestedRef: null,
+      resolvedCommitSha: null,
+      selectedPath: null,
+      isRevoked: false,
+      revokedByActorId: null,
+      revokedAt: null,
+    };
+    const inventory = {
+      configurationRevision: 4,
+      assignments: [],
+      revisions: [revision],
+      pageSize: 25,
+      nextCursor: null,
+    } satisfies SkillContentInventoryPage;
+    const admitted = {
+      ...marketplacePreview.trust,
+      skillId: revision.skillId,
+      revision: revision.revision,
+      state: 'admitted' as const,
+      evidenceCreatedAt: '2026-10-10T00:00:00Z',
+      evidenceAgeSeconds: 60,
+      error: null,
+    };
+    const actions = createActions({
+      listSkillInventory: vi.fn()
+        .mockResolvedValueOnce(inventory)
+        .mockRejectedValueOnce(new Error('inventory refresh failed')),
+      readSkillTrust: vi.fn()
+        .mockResolvedValueOnce(admitted)
+        .mockResolvedValueOnce({ ...admitted, state: 'revoked', isRevoked: true, error: 'The Skill revision was revoked.' }),
+    });
+    renderPanel(actions);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill inventory' }));
+    await screen.findByText('Imported skill');
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Imported skill' }));
+    await screen.findByText('Trust status: Admitted');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh skill inventory' }));
+
+    expect(await screen.findByText(/inventory refresh failed/)).toBeTruthy();
+    expect(screen.queryByText('Trust status: Admitted')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Load trust status for Imported skill' }));
+    expect(await screen.findByText('Trust status: Revoked')).toBeTruthy();
+  });
+
   it('shows owner errors when skill inventory cannot be read', async () => {
     const actions = createActions({
       listSkillInventory: vi.fn().mockRejectedValue(new Error('project owner permission required')),
@@ -275,7 +532,7 @@ describe('Skills and marketplace panel', () => {
     const actions = createActions({
       listSources: vi.fn().mockResolvedValue([source]),
       browseSource: vi.fn().mockResolvedValue(browsePage),
-      previewMarketplaceSkill: vi.fn().mockResolvedValue(preview),
+      previewMarketplaceSkill: vi.fn().mockResolvedValue(marketplacePreview),
       importMarketplaceSkill: vi.fn().mockResolvedValue(importedSkill),
     });
     renderPanel(actions);
@@ -295,6 +552,8 @@ describe('Skills and marketplace panel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
     await screen.findByLabelText('Marketplace skill preview');
+    expect(screen.getByText('Trust status: Unknown')).toBeTruthy();
+    expect(screen.getByText(/Exact project revision: not imported/)).toBeTruthy();
     expect(actions.previewMarketplaceSkill).toHaveBeenCalledWith('project-1', 'source-1', {
       expectedSourceRevision: 7,
       resolvedCommitSha: browsePage.resolvedCommitSha,
@@ -316,15 +575,76 @@ describe('Skills and marketplace panel', () => {
       .toBe(true);
   });
 
+  it('does not offer a marketplace import when admission denies the preview', async () => {
+    const deniedPreview: MarketplaceSkillContentPreview = {
+      ...marketplacePreview,
+      trust: {
+        ...marketplacePreview.trust,
+        state: 'denied',
+        errorCode: 'skill_admission_denied',
+        error: 'The canonical Skills policy denied the revision.',
+      },
+    };
+    const actions = createActions({
+      listSources: vi.fn().mockResolvedValue([source]),
+      browseSource: vi.fn().mockResolvedValue(browsePage),
+      previewMarketplaceSkill: vi.fn().mockResolvedValue(deniedPreview),
+    });
+    renderPanel(actions);
+    openMarketplaces();
+
+    await screen.findByText('example/skills · main · revision 7 · active');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    await screen.findByText('0123456789abcdef');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    await screen.findByLabelText('Marketplace skill preview');
+
+    expect(screen.getByText('Trust status: Denied')).toBeTruthy();
+    expect(screen.getAllByText('The canonical Skills policy denied the revision.').length)
+      .toBeGreaterThan(0);
+    expect(screen.queryByText(/ready to import/i)).toBeNull();
+    expect((screen.getByRole('button', { name: 'Import selected source skill' }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(actions.importMarketplaceSkill).not.toHaveBeenCalled();
+  });
+
+  it('does not present a preview-only built-in inventory match as admitted', async () => {
+    const actions = createActions({
+      listSources: vi.fn().mockResolvedValue([source]),
+      browseSource: vi.fn().mockResolvedValue(browsePage),
+      previewMarketplaceSkill: vi.fn().mockResolvedValue({
+        ...marketplacePreview,
+        trust: {
+          ...marketplacePreview.trust,
+          state: 'builtInExempt',
+          classification: 'BuiltInExempt',
+          error: 'Built-in — exempt',
+        },
+      }),
+    });
+    renderPanel(actions);
+    openMarketplaces();
+
+    await screen.findByText('example/skills · main · revision 7 · active');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    await screen.findByText('0123456789abcdef');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+
+    expect(await screen.findByLabelText('Marketplace skill preview')).toBeTruthy();
+    expect(screen.getByText('Trust status: Built-in inventory match')).toBeTruthy();
+    expect(screen.getByText(/Import will check the current admission policy/)).toBeTruthy();
+    expect(screen.queryByText(/current admission policy admits this skill/)).toBeNull();
+  });
+
   it('reuses a source import key after failure and ignores a late preview after search changes', async () => {
-    let resolvePreview!: (value: SkillContentPreview) => void;
-    const pendingPreview = new Promise<SkillContentPreview>((resolve) => {
+    let resolvePreview!: (value: MarketplaceSkillContentPreview) => void;
+    const pendingPreview = new Promise<MarketplaceSkillContentPreview>((resolve) => {
       resolvePreview = resolve;
     });
     const actions = createActions({
       listSources: vi.fn().mockResolvedValue([source]),
       browseSource: vi.fn().mockResolvedValue(browsePage),
-      previewMarketplaceSkill: vi.fn().mockResolvedValue(preview),
+      previewMarketplaceSkill: vi.fn().mockResolvedValue(marketplacePreview),
       importMarketplaceSkill: vi.fn()
         .mockRejectedValueOnce(new Error('temporary import failure'))
         .mockRejectedValueOnce(new Error('retry import failure'))
@@ -364,7 +684,7 @@ describe('Skills and marketplace panel', () => {
     await waitFor(() => expect(actions.previewMarketplaceSkill).toHaveBeenCalledTimes(3));
     fireEvent.change(screen.getByLabelText('Search skills'), { target: { value: 'third query' } });
     await act(async () => {
-      resolvePreview({ ...preview, name: 'Late source skill' });
+      resolvePreview({ ...marketplacePreview, name: 'Late source skill' });
       await pendingPreview;
     });
     expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
@@ -372,8 +692,8 @@ describe('Skills and marketplace panel', () => {
   });
 
   it('ignores a pending source preview when refreshing to a new source revision', async () => {
-    let resolvePreview!: (value: SkillContentPreview) => void;
-    const pendingPreview = new Promise<SkillContentPreview>((resolve) => {
+    let resolvePreview!: (value: MarketplaceSkillContentPreview) => void;
+    const pendingPreview = new Promise<MarketplaceSkillContentPreview>((resolve) => {
       resolvePreview = resolve;
     });
     const refreshedSource = { ...source, revision: 8 };
@@ -398,7 +718,7 @@ describe('Skills and marketplace panel', () => {
     fireEvent.click(refreshButton);
     await screen.findByText('example/skills · main · revision 8 · active');
     await act(async () => {
-      resolvePreview(preview);
+      resolvePreview(marketplacePreview);
       await pendingPreview;
     });
 
@@ -434,6 +754,14 @@ describe('Skills and marketplace panel', () => {
     const refreshedActions = createActions({
       listSources: vi.fn().mockResolvedValue([refreshedSource]),
       browseSource: vi.fn().mockResolvedValue(refreshedPage),
+      previewMarketplaceSkill: vi.fn().mockResolvedValue({
+        ...marketplacePreview,
+        trust: {
+          ...marketplacePreview.trust,
+          sourceRevision: String(refreshedSource.revision),
+          resolvedCommitSha: refreshedPage.resolvedCommitSha,
+        },
+      }),
     });
     rendered.rerender(
       <SkillsMarketplacePanel
@@ -459,9 +787,9 @@ describe('Skills and marketplace panel', () => {
   });
 
   it('ignores a late preview while actions reload the same source revision', async () => {
-    let resolvePreview!: (value: SkillContentPreview) => void;
+    let resolvePreview!: (value: MarketplaceSkillContentPreview) => void;
     let resolveSources!: (value: MarketplaceSource[]) => void;
-    const pendingPreview = new Promise<SkillContentPreview>((resolve) => {
+    const pendingPreview = new Promise<MarketplaceSkillContentPreview>((resolve) => {
       resolvePreview = resolve;
     });
     const pendingSources = new Promise<MarketplaceSource[]>((resolve) => {
@@ -496,7 +824,7 @@ describe('Skills and marketplace panel', () => {
     expect(screen.queryByText('0123456789abcdef')).toBeNull();
     expect(screen.getByText('Loading marketplace sources…')).toBeTruthy();
     await act(async () => {
-      resolvePreview(preview);
+      resolvePreview(marketplacePreview);
       await pendingPreview;
     });
     expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
@@ -515,7 +843,7 @@ describe('Skills and marketplace panel', () => {
     const actions = createActions({
       listSources: vi.fn().mockResolvedValue([source]),
       browseSource: vi.fn().mockResolvedValue(browsePage),
-      previewMarketplaceSkill: vi.fn().mockResolvedValue(preview),
+      previewMarketplaceSkill: vi.fn().mockResolvedValue(marketplacePreview),
       importMarketplaceSkill: vi.fn().mockResolvedValue({
         ...importedSkill,
         contentDigest: 'sha256:other-content',

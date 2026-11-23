@@ -52,6 +52,21 @@ public sealed class SkillAdmissionService(
             .ConfigureAwait(false);
     }
 
+    internal async Task<ProjectSkillAdmissionFenceRecord> LockFenceForReadAsync(
+        CancellationToken cancellationToken)
+    {
+        return await db.SkillAdmissionFences
+            .FromSqlRaw("""
+                SELECT id, state, generation, release_inventory_revision,
+                       platform_skills_policy_sha256, updated_at
+                FROM projects_config.project_skill_admission_fence
+                WHERE id = 1
+                FOR SHARE
+                """)
+            .SingleAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     internal async Task BeginCutoverAsync(
         string releaseInventoryRevision,
         CancellationToken cancellationToken)
@@ -427,7 +442,6 @@ public sealed class SkillAdmissionService(
               AND resolved_commit_sha = {resolvedCommitSha}
               AND selected_path = {selectedPath}
               AND content_digest = {contentDigest}
-            FOR SHARE
             """).SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
