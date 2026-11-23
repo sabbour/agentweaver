@@ -25,6 +25,8 @@ public sealed partial class ProjectsConfigPostgresTests
         await using var writerDb = CreateDbContext();
         await using var controllerDb = CreateDbContext();
         await ResetSkillAdmissionCutoverAsync(writerDb);
+        try
+        {
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
             CreateDbContextOptions(), TimeProvider.System);
         var setup = await CreateTrustEvidenceSetupAsync(writerDb, authorityStore);
@@ -80,7 +82,11 @@ public sealed partial class ProjectsConfigPostgresTests
                      {original.CreatedAt}, 'ThirdParty', 'CallerClaimed')
                 """));
         Assert.Contains("skill admission fence blocks imports", blocked.MessageText);
-        await ResetSkillAdmissionCutoverAsync(writerDb);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(writerDb);
+        }
     }
 
     [SkillAdmissionNativeAcsFact]
@@ -88,6 +94,8 @@ public sealed partial class ProjectsConfigPostgresTests
     {
         await using var db = CreateDbContext();
         await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
             CreateDbContextOptions(), TimeProvider.System);
         var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
@@ -169,7 +177,11 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.False(await db.SkillAdmissions.AnyAsync(
             item => item.ProjectId == setup.Project.Project.ProjectId &&
                 item.SkillId == "forged-built-in"));
-        await ResetSkillAdmissionCutoverAsync(db);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
     }
 
     [SkillAdmissionNativeAcsFact]
@@ -177,6 +189,8 @@ public sealed partial class ProjectsConfigPostgresTests
     {
         await using var db = CreateDbContext();
         await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
             CreateDbContextOptions(), TimeProvider.System);
         var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
@@ -244,7 +258,11 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(1, await db.SkillImportIdempotency.CountAsync(
             item => item.ProjectId == setup.Project.Project.ProjectId &&
                 item.IdempotencyKey == request.IdempotencyKey));
-        await ResetSkillAdmissionCutoverAsync(db);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
     }
 
     public sealed class SkillAdmissionNativeAcsFactAttribute : FactAttribute
@@ -858,6 +876,7 @@ public sealed partial class ProjectsConfigPostgresTests
         ProjectsConfigDbContext db,
         ProjectsConfigPrivilegedAuthorityStore authorityStore)
     {
+        await ResetSkillAdmissionCutoverAsync(db);
         var project = await CreateSkillInventoryProjectAsync(db, authorityStore);
         var objects = new SkillTestObjectStore();
         var configurations = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
