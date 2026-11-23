@@ -147,6 +147,43 @@ dependency error, revocation, stale binding, or tuple mismatch stops the
 callback. For a model turn, verification repeats the source and model checks.
 Budgets retain their independent no-send checks.
 
+Native Guardrails escalation defers only the normalized finding decision. The
+existing action policy, model pin, dispatch checks, and Guardrails classifiers
+still run. The Orchestrator puts the owner-verified turn ID and input digest in
+native `PolicyInput`, journals the classifier evidence, saves the retained
+native evaluation, and opens one coordinator approval gate. No HTTP or
+database lock remains open while a human decision is pending.
+
+```mermaid
+sequenceDiagram
+    participant Host as AgentHost
+    participant Orchestrator
+    participant Guardrails
+    participant ACS as Native ACS
+    participant Owner as Decision owner
+    participant Human
+    Host->>Orchestrator: Authorize exact model turn
+    Orchestrator->>Guardrails: Run pinned checks
+    Guardrails-->>Orchestrator: Normalized findings and evidence
+    Orchestrator->>ACS: Evaluate retained PolicyInput
+    ACS-->>Orchestrator: Escalate
+    Orchestrator->>Owner: Save turn-bound suspension
+    Owner->>Owner: Publish idempotent approval gate
+    Orchestrator-->>Host: approval_pending
+    Human->>Owner: Approve exact request
+    Host->>Orchestrator: Retry same turn and digest
+    Orchestrator->>Owner: Read current approval and authority
+    Orchestrator->>ACS: Resolve retained evaluation
+    ACS-->>Orchestrator: Allow
+    Orchestrator->>Orchestrator: Recheck restrictions and consume grant
+    Orchestrator-->>Host: Verified admission
+```
+
+An operation can be retried after a restart in the gap between evidence and
+suspension or between suspension and inbox publication. A pending gate with a
+different subject is a collision, not a weak bypass. Approval rejects a changed
+turn ID or argument digest and cannot authorize a sibling operation.
+
 ### Start the root AgentHost
 
 After Orchestrator commits an accepted root and admits the first message, it

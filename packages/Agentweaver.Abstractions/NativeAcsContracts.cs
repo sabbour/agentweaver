@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
@@ -132,6 +133,11 @@ public sealed record NativeAcsRemoteMcpEvaluationFacts(
     long GatewayEnforcementGeneration,
     RemoteMcpCatalogScanEvidence ScanEvidence);
 
+/// <summary>Exact owner turn identity and argument digest bound to one approval-capable policy evaluation.</summary>
+public sealed record NativeAcsApprovalEvaluationFacts(
+    string TurnId,
+    string ArgumentsDigest);
+
 /// <summary>
 /// Bounded runtime facts for native ACS evaluation. A null human identity means that verified
 /// human facts are unavailable; callers must not infer them from Broker subject, actor ID, or UPN.
@@ -145,7 +151,8 @@ public sealed record NativeAcsEvaluationSnapshot(
     NativeAcsNetworkEvaluationFacts? Network = null,
     NativeAcsModelUseEvaluationFacts? ModelUse = null,
     NativeAcsGuardrailsEvaluationFacts? Guardrails = null,
-    NativeAcsToolEvaluationFacts? Tool = null);
+    NativeAcsToolEvaluationFacts? Tool = null,
+    NativeAcsApprovalEvaluationFacts? Approval = null);
 
 /// <summary>A bounded validation diagnostic. It does not include source snippets.</summary>
 public sealed record NativeAcsDiagnostic(
@@ -172,4 +179,6 @@ public sealed record NativeAcsEvaluationResult(
     PolicyEvaluationOutcome Outcome,
     PolicyEvaluationReasonCode ReasonCode,
     string ArtifactSha256,
-    string? DiagnosticCode = null);
+    string? DiagnosticCode = null,
+    JsonElement? RetainedPolicyInput = null,
+    JsonElement? RetainedApproval = null);

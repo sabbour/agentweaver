@@ -586,7 +586,8 @@ public static class NativeAcsUnifiedPolicyProfile
             }
 
             var root = document.RootElement;
-            if (!HasProperties(root, "required_checks", "blocked_findings") ||
+            if ((!HasProperties(root, "required_checks", "blocked_findings") &&
+                 !HasProperties(root, "required_checks", "blocked_findings", "escalation")) ||
                 !root.TryGetProperty("required_checks", out var checksElement) ||
                 checksElement.ValueKind != JsonValueKind.Array ||
                 checksElement.GetArrayLength() > 16 ||
@@ -643,7 +644,42 @@ public static class NativeAcsUnifiedPolicyProfile
                 findings.Add(new NativeAcsGuardrailsBlockedFinding(checkId, code, severity));
             }
 
-            policy = new NativeAcsGuardrailsPolicy(checks.ToImmutable(), findings.ToImmutable());
+            var escalationRules = ImmutableArray.CreateBuilder<NativeAcsGuardrailsEscalationRule>();
+            if (root.TryGetProperty("escalation", out var escalationElement))
+            {
+                if (!HasProperties(escalationElement, "version", "rules") ||
+                    !TryString(escalationElement, "version", out var escalationVersion) ||
+                    escalationVersion != NativeAcsGuardrailsPolicy.EscalationVersion ||
+                    !escalationElement.TryGetProperty("rules", out var rulesElement) ||
+                    rulesElement.ValueKind != JsonValueKind.Array ||
+                    rulesElement.GetArrayLength() > 48)
+                {
+                    failureCode = "guardrails_data_escalation";
+                    return false;
+                }
+
+                var escalations = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var ruleElement in rulesElement.EnumerateArray())
+                {
+                    if (!HasProperties(ruleElement, "check_id", "code", "severity") ||
+                        !TryString(ruleElement, "check_id", out var checkId) ||
+                        !TryString(ruleElement, "code", out var code) ||
+                        !TryString(ruleElement, "severity", out var severity) ||
+                        !checkIds.Contains(checkId) ||
+                        !IsIdentifier(code) ||
+                        severity is not ("low" or "medium" or "high" or "critical") ||
+                        blocked.Contains($"{checkId}\0{code}\0{severity}") ||
+                        !escalations.Add($"{checkId}\0{code}\0{severity}"))
+                    {
+                        failureCode = "guardrails_data_escalation_rule";
+                        return false;
+                    }
+                    escalationRules.Add(new(checkId, code, severity));
+                }
+            }
+
+            policy = new NativeAcsGuardrailsPolicy(
+                checks.ToImmutable(), findings.ToImmutable(), escalationRules.ToImmutable());
             failureCode = string.Empty;
             return true;
         }
@@ -763,9 +799,18 @@ public sealed record NativeAcsGuardrailsBlockedFinding(
     string Code,
     string Severity);
 
+public sealed record NativeAcsGuardrailsEscalationRule(
+    string CheckId,
+    string Code,
+    string Severity);
+
 public sealed record NativeAcsGuardrailsPolicy(
     ImmutableArray<NativeAcsGuardrailsRequiredCheck> RequiredChecks,
-    ImmutableArray<NativeAcsGuardrailsBlockedFinding> BlockedFindings);
+    ImmutableArray<NativeAcsGuardrailsBlockedFinding> BlockedFindings,
+    ImmutableArray<NativeAcsGuardrailsEscalationRule> EscalationRules = default)
+{
+    public const string EscalationVersion = "guardrails-escalation-v1";
+}
 
 public sealed record NativeAcsUnifiedPolicyInspection(
     bool IsValid,

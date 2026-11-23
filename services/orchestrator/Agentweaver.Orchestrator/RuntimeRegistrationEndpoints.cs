@@ -69,6 +69,12 @@ public static class RuntimeRegistrationEndpoints
         services.AddScoped<RuntimeRegistrationOwner>();
         services.AddScoped<RuntimeSkillContentOwner>();
         services.AddScoped<RuntimeActionOwner>();
+        if (services.Any(descriptor => descriptor.ServiceType == typeof(RuntimeNativePolicyGate)))
+            services.AddSingleton(serviceProvider => new RuntimeNativeApprovalOwnerStore(
+                serviceProvider.GetRequiredService<Npgsql.NpgsqlDataSource>(),
+                options.Schema,
+                serviceProvider.GetRequiredService<CoordinatorDecisionOwnerStore>(),
+                serviceProvider.GetRequiredService<CoordinationOwnerStore>()));
         return true;
     }
 

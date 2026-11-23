@@ -826,6 +826,78 @@ public sealed class NativeAcsPolicyTests
         AssertNoEvaluationWorkspaces();
     }
 
+    [NativeAcsFact]
+    public async Task NativeGuardrailsEscalationRetainsExactTurnAndDigestAcrossApprovalResolution()
+    {
+        var artifact = CreateUnifiedArtifact();
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequireNativeRuntime()), WorkRoot);
+        var turnId = "turn-owner-bound";
+        var digest = new string('b', 64);
+        var snapshot = Snapshot("model.turn") with
+        {
+            Guardrails = GuardrailsFacts(
+                new NativeAcsGuardrailsFindingFacts(
+                    "prompt-shields", "sensitive-request", "medium")),
+            Approval = new NativeAcsApprovalEvaluationFacts(turnId, digest)
+        };
+
+        var suspended = await evaluator.EvaluateComposedForApprovalAsync(
+            artifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            snapshot);
+
+        Assert.Equal("approval_required", suspended.DiagnosticCode);
+        Assert.NotNull(suspended.RetainedPolicyInput);
+        var retainedApproval = suspended.RetainedPolicyInput!.Value
+            .GetProperty("policy_target").GetProperty("value").GetProperty("approval");
+        Assert.Equal(turnId, retainedApproval.GetProperty("turn_id").GetString());
+        Assert.Equal(digest, retainedApproval.GetProperty("arguments_digest").GetString());
+        var retainedJson = suspended.RetainedPolicyInput.Value.GetRawText();
+        Assert.Contains("prompt-shields", retainedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-input-sentinel", retainedJson, StringComparison.OrdinalIgnoreCase);
+
+        var changedDigest = await evaluator.ResolveComposedApprovalAsync(
+            artifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            snapshot with
+            {
+                Approval = snapshot.Approval! with { ArgumentsDigest = new string('c', 64) }
+            },
+            suspended.RetainedPolicyInput.Value,
+            suspended.RetainedApproval,
+            approve: true);
+        Assert.Equal("approval_binding_changed", changedDigest.DiagnosticCode);
+
+        var approved = await evaluator.ResolveComposedApprovalAsync(
+            artifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            snapshot,
+            suspended.RetainedPolicyInput.Value,
+            suspended.RetainedApproval,
+            approve: true);
+        Assert.Equal(PolicyEvaluationOutcome.Allow, approved.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.Allowed, approved.ReasonCode);
+
+        var hardDeny = await evaluator.EvaluateComposedForApprovalAsync(
+            artifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            snapshot with
+            {
+                Guardrails = GuardrailsFacts(
+                    new NativeAcsGuardrailsFindingFacts(
+                        "prompt-shields", "sensitive-request", "medium"),
+                    new NativeAcsGuardrailsFindingFacts(
+                        "prompt-shields", "prompt-injection", "high"))
+            });
+        Assert.Equal(PolicyEvaluationOutcome.Deny, hardDeny.Outcome);
+        Assert.Null(hardDeny.DiagnosticCode);
+    }
+
     [Fact]
     public void UnifiedProfileRoundTripsAndKeepsDomainEditsIsolated()
     {
@@ -911,6 +983,20 @@ public sealed class NativeAcsPolicyTests
                 "\"required_checks\": [",
                 "\"approval\": {\"mode\": \"auto\"}, \"required_checks\": [",
                 StringComparison.Ordinal));
+        var requireApproval = ReplaceComposedFile(
+            original,
+            NativeAcsUnifiedPolicyProfile.GuardrailsDataPath,
+            UnifiedGuardrailsData.Replace(
+                "\"escalation\": {",
+                "\"require_approval\": true, \"escalation\": {",
+                StringComparison.Ordinal));
+        var timeoutAllow = ReplaceComposedFile(
+            original,
+            NativeAcsUnifiedPolicyProfile.GuardrailsDataPath,
+            UnifiedGuardrailsData.Replace(
+                "\"version\": \"guardrails-escalation-v1\",",
+                "\"version\": \"guardrails-escalation-v1\", \"on_timeout\": \"allow\",",
+                StringComparison.Ordinal));
         var extraFile = Rehash(original with
         {
             Files = original.Files.Add(new NativeAcsArtifactFile(
@@ -920,6 +1006,8 @@ public sealed class NativeAcsPolicyTests
 
         Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(unknownField).IsValid);
         Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(approvalField).IsValid);
+        Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(requireApproval).IsValid);
+        Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(timeoutAllow).IsValid);
         Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(extraFile).IsValid);
         Assert.Equal("model_use_data_shape",
             Assert.Single(NativeAcsUnifiedPolicyProfile.Inspect(unknownField).Diagnostics,
@@ -1165,7 +1253,17 @@ public sealed class NativeAcsPolicyTests
               "code": "prompt-injection",
               "severity": "high"
             }
-          ]
+          ],
+          "escalation": {
+            "version": "guardrails-escalation-v1",
+            "rules": [
+              {
+                "check_id": "prompt-shields",
+                "code": "sensitive-request",
+                "severity": "medium"
+              }
+            ]
+          }
         }
         """;
 

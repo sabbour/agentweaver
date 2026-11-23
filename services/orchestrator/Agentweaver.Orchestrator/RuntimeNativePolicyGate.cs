@@ -113,6 +113,22 @@ public sealed record RuntimeNativePolicyPreparedRevision(
     bool AcceptedAtRun,
     bool Current);
 
+public sealed record RuntimeNativePolicyRetainedEvaluation(
+    RuntimeNativePolicySourceReference Source,
+    string ArtifactSha256,
+    JsonElement PolicyInput,
+    JsonElement? Approval);
+
+public sealed record RuntimeNativePolicyGuardrailsResult(
+    string BindingHash,
+    ImmutableArray<RuntimeNativePolicyRetainedEvaluation> Escalations,
+    RuntimeNativePolicyPreparation Preparation,
+    ImmutableArray<NativeAcsGuardrailsCheckFacts> Checks,
+    ImmutableArray<NativeAcsGuardrailsFindingFacts> Findings)
+{
+    public bool RequiresApproval => !Escalations.IsDefaultOrEmpty;
+}
+
 /// <summary>
 /// Applies the native Policy profile to runtime model and tool callback boundaries.
 /// </summary>
@@ -268,7 +284,7 @@ public sealed class RuntimeNativePolicyGate(
         return release;
     }
 
-    public async Task<string> RequireGuardrailsAsync(
+    public async Task<RuntimeNativePolicyGuardrailsResult> RequireGuardrailsAsync(
         RuntimeNativePolicyPreparation preparation,
         RuntimeRegistration registration,
         RuntimeActionRequest request,
@@ -276,6 +292,7 @@ public sealed class RuntimeNativePolicyGate(
         ImmutableArray<NativeAcsGuardrailsFindingFacts> allFindings,
         CancellationToken cancellationToken)
     {
+        var escalations = ImmutableArray.CreateBuilder<RuntimeNativePolicyRetainedEvaluation>();
         foreach (var revision in preparation.Revisions)
         {
             var required = revision.Guardrails.RequiredChecks;
@@ -286,7 +303,7 @@ public sealed class RuntimeNativePolicyGate(
             var applicableFindings = allFindings
                 .Where(finding => checkIds.Contains(finding.CheckId))
                 .ToImmutableArray();
-            var result = await EvaluateComposedAsync(
+            var result = await EvaluateComposedForApprovalAsync(
                 revision.Source.Artifact,
                 NativeAcsDomainId.Guardrails,
                 InterventionPoint.PreModelCall,
@@ -295,8 +312,22 @@ public sealed class RuntimeNativePolicyGate(
                     request,
                     modelUse: null,
                     guardrails: new NativeAcsGuardrailsEvaluationFacts(
-                        "userInput", "text", applicableChecks, applicableFindings)),
+                        "userInput", "text", applicableChecks, applicableFindings),
+                    approval: new NativeAcsApprovalEvaluationFacts(
+                        registration.Binding.TurnId, request.InputHash)),
                 cancellationToken).ConfigureAwait(false);
+            if (result.DiagnosticCode == "approval_required")
+            {
+                if (!OperatingSystem.IsLinux() ||
+                    result.RetainedPolicyInput is not { } input)
+                    throw new RuntimeAuthorizationException(UnavailableCode);
+                escalations.Add(new(
+                    ToReference(revision),
+                    result.ArtifactSha256,
+                    input.Clone(),
+                    result.RetainedApproval?.Clone()));
+                continue;
+            }
             RequireAllowed(result);
         }
         var material = preparation.Binding.BindingHash + "\n" +
@@ -305,7 +336,81 @@ public sealed class RuntimeNativePolicyGate(
             "\n" +
             string.Join("\n", allFindings.Select(finding =>
                 $"{finding.CheckId}\0{finding.Code}\0{finding.Severity}"));
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        return new(
+            Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material))),
+            escalations.ToImmutable(),
+            preparation,
+            checks,
+            allFindings);
+
+        static RuntimeNativePolicySourceReference ToReference(
+            RuntimeNativePolicyPreparedRevision item) =>
+            new(
+                item.Source.ScopeType,
+                item.Source.ScopeId,
+                item.Source.PolicyId,
+                item.Source.Revision,
+                item.Source.ContentSha256);
+    }
+
+    public async Task ResolveApprovalAsync(
+        RuntimeRegistration registration,
+        RuntimeActionRequest request,
+        RuntimeNativePolicyGuardrailsResult retained,
+        bool approve,
+        CancellationToken cancellationToken)
+    {
+        if (!retained.RequiresApproval)
+            throw new RuntimeAuthorizationException("runtime_native_policy_approval_invalid");
+        foreach (var escalation in retained.Escalations)
+        {
+            var revision = retained.Preparation.Revisions.SingleOrDefault(item =>
+                ToReference(item) == escalation.Source);
+            if (revision is null ||
+                retained.Checks.IsDefault ||
+                retained.Findings.IsDefault)
+                throw new RuntimeAuthorizationException("runtime_native_policy_approval_binding_changed");
+            var requiredIds = revision.Guardrails.RequiredChecks
+                .Select(check => check.ProviderId)
+                .ToHashSet(StringComparer.Ordinal);
+            var result = await (evaluator?.ResolveComposedApprovalAsync(
+                revision.Source.Artifact,
+                NativeAcsDomainId.Guardrails,
+                AgentControlSpecification.InterventionPoint.PreModelCall,
+                Snapshot(
+                    registration,
+                    request,
+                    guardrails: new NativeAcsGuardrailsEvaluationFacts(
+                        "userInput",
+                        "text",
+                        retained.Checks.Where(check => requiredIds.Contains(check.ProviderId))
+                            .ToImmutableArray(),
+                        retained.Findings.Where(finding => requiredIds.Contains(finding.CheckId))
+                            .ToImmutableArray()),
+                    approval: new NativeAcsApprovalEvaluationFacts(
+                        registration.Binding.TurnId,
+                        request.InputHash)),
+                escalation.PolicyInput,
+                escalation.Approval,
+                approve,
+                cancellationToken) ??
+                throw new RuntimeAuthorizationException(UnavailableCode)).ConfigureAwait(false);
+            if (result.DiagnosticCode is "approval_binding_changed" ||
+                result.ArtifactSha256 != escalation.ArtifactSha256 ||
+                approve && (result.Outcome != Agentweaver.Abstractions.PolicyEvaluationOutcome.Allow ||
+                            result.ReasonCode != Agentweaver.Abstractions.PolicyEvaluationReasonCode.Allowed) ||
+                !approve && result.Outcome != Agentweaver.Abstractions.PolicyEvaluationOutcome.Deny)
+                throw new RuntimeAuthorizationException("runtime_native_policy_approval_binding_changed");
+        }
+
+        static RuntimeNativePolicySourceReference ToReference(
+            RuntimeNativePolicyPreparedRevision item) =>
+            new(
+                item.Source.ScopeType,
+                item.Source.ScopeId,
+                item.Source.PolicyId,
+                item.Source.Revision,
+                item.Source.ContentSha256);
     }
 
     private async Task<ImmutableArray<RuntimeNativePolicyPreparedRevision>> ReadAndValidateAsync(
@@ -449,7 +554,8 @@ public sealed class RuntimeNativePolicyGate(
         RuntimeActionRequest request,
         NativeAcsModelUseEvaluationFacts? modelUse = null,
         NativeAcsGuardrailsEvaluationFacts? guardrails = null,
-        NativeAcsToolEvaluationFacts? tool = null) =>
+        NativeAcsToolEvaluationFacts? tool = null,
+        NativeAcsApprovalEvaluationFacts? approval = null) =>
         new(
             new SessionIdentity(
                 registration.Binding.ProjectId,
@@ -461,7 +567,8 @@ public sealed class RuntimeNativePolicyGate(
         {
             ModelUse = modelUse,
             Guardrails = guardrails,
-            Tool = tool
+            Tool = tool,
+            Approval = approval
         };
 
     private static NativeAcsToolEvaluationFacts ReadToolFacts(
@@ -677,6 +784,16 @@ public sealed class RuntimeNativePolicyGate(
         NativeAcsEvaluationSnapshot snapshot,
         CancellationToken cancellationToken) =>
         evaluator?.EvaluateComposedAsync(artifact, domain, point, snapshot, cancellationToken)
+        ?? throw new RuntimeAuthorizationException(UnavailableCode);
+
+    private Task<NativeAcsEvaluationResult> EvaluateComposedForApprovalAsync(
+        NativeAcsArtifact artifact,
+        NativeAcsDomainId domain,
+        InterventionPoint point,
+        NativeAcsEvaluationSnapshot snapshot,
+        CancellationToken cancellationToken) =>
+        evaluator?.EvaluateComposedForApprovalAsync(
+            artifact, domain, point, snapshot, cancellationToken)
         ?? throw new RuntimeAuthorizationException(UnavailableCode);
 
     private static ImmutableArray<NativeAcsGuardrailsRequiredCheck> CombineRequiredChecks(

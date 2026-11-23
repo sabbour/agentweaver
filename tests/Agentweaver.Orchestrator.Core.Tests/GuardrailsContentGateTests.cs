@@ -134,6 +134,103 @@ public sealed class GuardrailsContentGateTests
     }
 
     [Fact]
+    public async Task NativePolicyOwnsFindingDecisionWhileIndependentActionPolicyRemainsDominant()
+    {
+        const string findingPolicy = """
+            apiVersion: governance.toolkit/v1
+            version: "1.0"
+            name: project-policy
+            scope: project
+            default_action: allow
+            rules:
+              - name: deny-findings
+                condition: "guardrails_finding_count > 0"
+                action: deny
+                priority: 100
+            """;
+        var deferredFixture = await CreateFixtureAsync(
+            projectPolicy: findingPolicy,
+            outcomes:
+            [
+                GuardrailsClassifierResult.Detected(
+                    [new GuardrailsFinding("prompt_injection", GuardrailsFindingSeverity.High)])
+            ]);
+
+        var legacy = await deferredFixture.Gate.EvaluateAsync(
+            deferredFixture.AcceptedRun, deferredFixture.Request);
+        var native = await deferredFixture.Gate.EvaluateAsync(
+            deferredFixture.AcceptedRun with
+            {
+                DeferredFindingChecks =
+                [
+                    new("check", AdapterVersion.ToString(), 1, "options-check")
+                ]
+            },
+            deferredFixture.Request with { OperationId = Guid.NewGuid() });
+
+        Assert.Equal(GuardrailsDecision.Withhold, legacy.Decision);
+        Assert.Equal(GuardrailsReasonCode.PolicyDenied, legacy.ReasonCode);
+        Assert.Equal(GuardrailsDecision.Allow, native.Decision);
+        Assert.Equal(GuardrailsReasonCode.Allowed, native.ReasonCode);
+        Assert.Single(native.Findings);
+
+        var actionDenied = await CreateFixtureAsync(projectPolicy: ProjectDenyAction);
+        var independent = await actionDenied.Gate.EvaluateAsync(
+            actionDenied.AcceptedRun with
+            {
+                ActionId = "remote.tool.call",
+                DeferredFindingChecks =
+                [
+                    new("check", AdapterVersion.ToString(), 1, "options-check")
+                ]
+            },
+            actionDenied.Request);
+        Assert.Equal(GuardrailsDecision.Withhold, independent.Decision);
+        Assert.Equal(GuardrailsReasonCode.PolicyDenied, independent.ReasonCode);
+    }
+
+    [Fact]
+    public async Task NativePolicyDefersOnlyCoveredChecksAndPreservesUncoveredFindingDecision()
+    {
+        const string findingPolicy = """
+            apiVersion: governance.toolkit/v1
+            version: "1.0"
+            name: project-policy
+            scope: project
+            default_action: allow
+            rules:
+              - name: deny-findings
+                condition: "guardrails_finding_count > 0"
+                action: deny
+                priority: 100
+            """;
+        var fixture = await CreateFixtureAsync(
+            projectPolicy: findingPolicy,
+            providerIds: ["covered", "uncovered"],
+            outcomes:
+            [
+                GuardrailsClassifierResult.Detected(
+                    [new GuardrailsFinding("covered_finding", GuardrailsFindingSeverity.High)]),
+                GuardrailsClassifierResult.Detected(
+                    [new GuardrailsFinding("uncovered_finding", GuardrailsFindingSeverity.Medium)])
+            ]);
+
+        var result = await fixture.Gate.EvaluateAsync(
+            fixture.AcceptedRun with
+            {
+                DeferredFindingChecks =
+                [
+                    new("covered", AdapterVersion.ToString(), 1, "options-covered")
+                ]
+            },
+            fixture.Request);
+
+        Assert.Equal(GuardrailsDecision.Withhold, result.Decision);
+        Assert.Equal(GuardrailsReasonCode.PolicyDenied, result.ReasonCode);
+        Assert.Equal(["covered_finding", "uncovered_finding"], result.Findings.Select(item => item.Code));
+    }
+
+    [Fact]
     public void GuardrailsFindingCannotPromoteAnExistingPolicyDeny()
     {
         var denied = new AgtPolicyEvaluationResult(
@@ -471,7 +568,16 @@ public sealed class GuardrailsContentGateTests
     [Fact]
     public async Task ResponseLossAndRestartReplayDoNotReleaseTwice()
     {
-        var fixture = await CreateFixtureAsync();
+        var classifierCalls = 0;
+        var fixture = await CreateFixtureAsync(
+            classifier: (_, _, _) =>
+            {
+                classifierCalls++;
+                return Task.FromResult(GuardrailsClassifierResult.Detected(
+                    [new GuardrailsFinding(
+                        classifierCalls == 1 ? "first_finding" : "different_finding",
+                        GuardrailsFindingSeverity.High)]));
+            });
         fixture.Journal.LoseAcknowledgmentAfterFirstAppend = true;
         var firstAttempt = await fixture.Gate.EvaluateAsync(
             fixture.AcceptedRun,
@@ -488,7 +594,10 @@ public sealed class GuardrailsContentGateTests
             fixture.AcceptedRun,
             fixture.Request);
 
-        Assert.Equal(GuardrailsReasonCode.JournalDuplicate, replay.ReasonCode);
+        Assert.Equal(GuardrailsDecision.Allow, replay.Decision);
+        Assert.Equal(GuardrailsReasonCode.Allowed, replay.ReasonCode);
+        Assert.Equal("first_finding", Assert.Single(replay.Findings).Code);
+        Assert.Equal(1, classifierCalls);
     }
 
     [Fact]
@@ -812,6 +921,16 @@ public sealed class GuardrailsContentGateTests
         public int AppendCalls { get; private set; }
         public GuardrailsJournalAppendStatus? ForcedStatus { get; set; }
         public bool LoseAcknowledgmentAfterFirstAppend { get; set; }
+
+        public Task<GuardrailsJournalReadResult> ReadAsync(
+            Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            var evidence = Evidence.SingleOrDefault(item => item.OperationId == operationId);
+            return Task.FromResult<GuardrailsJournalReadResult>(evidence is null
+                ? new(GuardrailsJournalReadStatus.NotFound)
+                : new(GuardrailsJournalReadStatus.Found, evidence));
+        }
 
         public Task<GuardrailsJournalAppendStatus> AppendAsync(
             GuardrailsEvaluationEvidence evidence,

@@ -29,9 +29,12 @@ export const nativeAcsRequiredMethods = [
   'NativeEvaluationTimeoutFailsClosed',
   'ComposedNativeSelectorKeepsDomainDecisionsIndependent',
   'UnifiedNativeModelAndGuardrailsDecisionsAreHashBound',
+  'NativeGuardrailsEscalationRetainsExactTurnAndDigestAcrossApprovalResolution',
   'ProjectNativeValidationUsesExactArtifactWithoutNetworkData',
 ].map((name) => `Agentweaver.Policy.Acs.Tests.NativeAcsPolicyTests.${name}`)
-  .concat('Agentweaver.Policy.Acs.Tests.RuntimeNativePolicyGateTests.NativePolicyBlocksEveryWithheldModelSendAndBindsRevision');
+  .concat(
+    'Agentweaver.Policy.Acs.Tests.RuntimeNativePolicyGateTests.NativePolicyBlocksEveryWithheldModelSendAndBindsRevision',
+    'Agentweaver.Policy.Acs.Tests.RuntimeNativePolicyGateTests.NativeApprovalRejectsChangedOwnerTurnAndArgumentDigest');
 
 export function loadBrokerWeights(path = brokerWeightsPath) {
   return JSON.parse(readFileSync(path, 'utf8'));

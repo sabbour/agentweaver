@@ -270,11 +270,14 @@ public sealed class SuspendResumeEndpointRegistrationTests
             descriptor.ServiceType == typeof(IRuntimeNativePolicySource));
         Assert.Contains(services, descriptor =>
             descriptor.ServiceType == typeof(IRuntimeNativePolicyAdmissionStore));
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(RuntimeNativeApprovalOwnerStore));
         using var serviceProvider = services.BuildServiceProvider();
         using var scope = serviceProvider.CreateScope();
         var owner = scope.ServiceProvider.GetRequiredService<RuntimeActionOwner>();
         var registration = TestRegistration(null);
         var ordinaryAction = TestAction(registration, "tool.read");
+        Assert.NotNull(scope.ServiceProvider.GetService<RuntimeNativeApprovalOwnerStore>());
 
         await owner.RequireCostTurnEnabledAsync(
             new DefaultHttpContext(), registration, ordinaryAction,

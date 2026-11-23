@@ -2020,7 +2020,7 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | GET | `/registrations/{runtimeInstanceId:guid}` | Read current registration. |
 | GET | `/registrations/{runtimeInstanceId:guid}/skills` | Read accepted runtime skill material. |
 | POST | `/actions/authorize` | Authorize action and commit guarded admission. Returns HTTP 428 with `runtime_guardrails_content_required` when ordered Guardrails checks apply to a model turn. |
-| POST | `/actions/authorize-content` | Authorize a model turn with its exact UTF-8 text so the ordered Guardrails checks can run. The text is never stored. |
+| POST | `/actions/authorize-content` | Authorize a model turn with its exact UTF-8 text so the ordered Guardrails checks can run. Native escalation returns `409 runtime_native_policy_approval_pending` after the exact turn suspension and coordinator gate are durable. The text is never stored. |
 | POST | `/actions/verify` | Revalidate action proof. |
 | POST | `/actions/credit-denials/read` | Read action credit denial. |
 | POST | `/actions/numeric-denials/read` | Read an immutable numeric-limit denial by attempt. |

@@ -392,7 +392,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         CoordinationActor actor,
         SessionIdentity identity,
         AuthorizedRunSelection selection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forUpdate = false)
     {
         ValidateInput(actor, identity, selection);
         if (transaction is not null && !ReferenceEquals(transaction.Connection, connection))
@@ -405,7 +406,7 @@ internal sealed class CoordinatorDecisionOwnerStore
                          actor,
                          identity,
                          selection.Authorization.TenantId,
-                         forUpdate: false))
+                         forUpdate))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))

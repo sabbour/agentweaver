@@ -37,12 +37,41 @@ public sealed class NativeAcsPolicyEvaluator
         CancellationToken cancellationToken = default) =>
         EvaluateCoreAsync(artifact, interventionPoint, snapshot, domain, cancellationToken);
 
+    /// <summary>Evaluates a composed policy and retains the exact native input and approval handle for restart-safe resolution.</summary>
+    public Task<NativeAcsEvaluationResult> EvaluateComposedForApprovalAsync(
+        NativeAcsArtifact artifact,
+        NativeAcsDomainId domain,
+        InterventionPoint interventionPoint,
+        NativeAcsEvaluationSnapshot snapshot,
+        CancellationToken cancellationToken = default) =>
+        EvaluateCoreAsync(artifact, interventionPoint, snapshot, domain, cancellationToken, retainApproval: true);
+
+    /// <summary>Re-evaluates and resolves the retained native escalation only when its input, handle, and action identity still match.</summary>
+    public Task<NativeAcsEvaluationResult> ResolveComposedApprovalAsync(
+        NativeAcsArtifact artifact,
+        NativeAcsDomainId domain,
+        InterventionPoint interventionPoint,
+        NativeAcsEvaluationSnapshot snapshot,
+        JsonElement retainedPolicyInput,
+        JsonElement? retainedApproval,
+        bool approve,
+        CancellationToken cancellationToken = default) =>
+        EvaluateCoreAsync(
+            artifact,
+            interventionPoint,
+            snapshot,
+            domain,
+            cancellationToken,
+            approvalBinding: new(retainedPolicyInput, retainedApproval, approve));
+
     private async Task<NativeAcsEvaluationResult> EvaluateCoreAsync(
         NativeAcsArtifact artifact,
         InterventionPoint interventionPoint,
         NativeAcsEvaluationSnapshot snapshot,
         NativeAcsDomainId? domain,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool retainApproval = false,
+        NativeAcsRetainedApprovalBinding? approvalBinding = null)
     {
         ArgumentNullException.ThrowIfNull(artifact);
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -92,6 +121,9 @@ public sealed class NativeAcsPolicyEvaluator
         if (domain == NativeAcsDomainId.ToolPermissions &&
             (snapshot.Tool is not { } tool || !IsValidToolFacts(tool)))
             return Error(artifactHash, "snapshot_invalid");
+        if (snapshot.Approval is { } approval &&
+            !IsValidApprovalFacts(approval))
+            return Error(artifactHash, "snapshot_invalid");
 
         if (!Enum.IsDefined(interventionPoint))
             return Error(artifactHash, "intervention_point_invalid");
@@ -109,7 +141,25 @@ public sealed class NativeAcsPolicyEvaluator
             WriteArtifact(workDirectory, artifact);
 
             var manifestPath = Path.Combine(workDirectory, "manifest.yaml");
-            var control = AgentControl.FromPath(manifestPath);
+            ApprovalResolver? resolver = retainApproval
+                ? (_, result, _) => ValueTask.FromResult(
+                    ApprovalResolution.Suspend(result.Verdict.Approval, result.ActionIdentity))
+                : approvalBinding is { } binding
+                    ? (_, result, _) =>
+                    {
+                        var matches = result.PolicyInput is { } policyInput &&
+                            !string.IsNullOrWhiteSpace(result.ActionIdentity) &&
+                            JsonElement.DeepEquals(policyInput, binding.PolicyInput) &&
+                            NullableJsonEquals(result.Verdict.Approval, binding.Approval);
+                        binding.Matched = matches;
+                        return ValueTask.FromResult(matches
+                            ? binding.Approve
+                                ? ApprovalResolution.Allow(result.ActionIdentity!)
+                                : ApprovalResolution.Deny()
+                            : ApprovalResolution.Suspend(result.Verdict.Approval, result.ActionIdentity));
+                    }
+            : null;
+            var control = AgentControl.FromPath(manifestPath, approvalResolver: resolver);
             using var snapshotDocument = JsonDocument.Parse(
                 JsonSerializer.SerializeToUtf8Bytes(CreateSnapshot(snapshot, domain, artifact)));
             var result = await control.EvaluateInterventionPointAsync(
@@ -125,6 +175,17 @@ public sealed class NativeAcsPolicyEvaluator
                     PolicyEvaluationOutcome.Allow,
                     PolicyEvaluationReasonCode.Allowed,
                     artifactHash);
+            else if ((result.Verdict.Decision == Decision.Escalate ||
+                      result.Verdict.Decision == Decision.Deny &&
+                          result.Verdict.Approval is not null) &&
+                     retainApproval)
+                evaluation = new NativeAcsEvaluationResult(
+                    PolicyEvaluationOutcome.Error,
+                    PolicyEvaluationReasonCode.DefaultDeny,
+                    artifactHash,
+                    DiagnosticCode: "approval_required",
+                    result.PolicyInput,
+                    result.Verdict.Approval);
             else if (result.Verdict.Decision == Decision.Deny)
                 evaluation = cancellationToken.IsCancellationRequested
                     ? Error(artifactHash, "evaluation_cancelled")
@@ -134,6 +195,8 @@ public sealed class NativeAcsPolicyEvaluator
                             PolicyEvaluationOutcome.Deny,
                             PolicyEvaluationReasonCode.DefaultDeny,
                             artifactHash);
+            else if (approvalBinding is { Matched: false })
+                evaluation = Error(artifactHash, "approval_binding_changed");
             else
                 evaluation = Error(artifactHash, "unsupported_verdict");
         }
@@ -251,6 +314,12 @@ public sealed class NativeAcsPolicyEvaluator
         value.All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    private static bool IsValidApprovalFacts(NativeAcsApprovalEvaluationFacts facts) =>
+        IsIdentifier(facts.TurnId) &&
+        facts.ArgumentsDigest is { Length: 64 } &&
+        facts.ArgumentsDigest.All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
     private const int GuardrailsMaximumChecks = 16;
     private const int GuardrailsMaximumFindings = 48;
 
@@ -364,6 +433,9 @@ public sealed class NativeAcsPolicyEvaluator
                                 remote.ScanEvidence)
                             : null)
                     : null,
+                snapshot.Approval is { } approval
+                    ? new NativeAcsApprovalFacts(approval.TurnId, approval.ArgumentsDigest)
+                    : null,
                 domain is { } selectedDomain
                     ? NativeAcsUnifiedPolicyProfile.IsCandidate(artifact)
                         ? NativeAcsUnifiedPolicyProfile.GetPolicyId(selectedDomain)
@@ -405,6 +477,22 @@ public sealed class NativeAcsPolicyEvaluator
             PolicyEvaluationReasonCode.DefaultDeny,
             artifactHash);
 
+    private static bool NullableJsonEquals(JsonElement? left, JsonElement? right) =>
+        left.HasValue == right.HasValue &&
+        (!left.HasValue || JsonElement.DeepEquals(
+            left.GetValueOrDefault(), right.GetValueOrDefault()));
+
+    private sealed class NativeAcsRetainedApprovalBinding(
+        JsonElement policyInput,
+        JsonElement? approval,
+        bool approve)
+    {
+        public JsonElement PolicyInput { get; } = policyInput.Clone();
+        public JsonElement? Approval { get; } = approval?.Clone();
+        public bool Approve { get; } = approve;
+        public bool Matched { get; set; }
+    }
+
     private sealed record NativeAcsSnapshotDocument(
         [property: JsonPropertyName("model_request")] NativeAcsModelRequest ModelRequest);
 
@@ -428,6 +516,8 @@ public sealed class NativeAcsPolicyEvaluator
         NativeAcsGuardrailsFacts? Guardrails,
         [property: JsonPropertyName("tool"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         NativeAcsToolFacts? Tool,
+        [property: JsonPropertyName("approval"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        NativeAcsApprovalFacts? Approval,
         [property: JsonPropertyName("domain_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? DomainId);
 
@@ -489,6 +579,10 @@ public sealed class NativeAcsPolicyEvaluator
         [property: JsonPropertyName("content_class")] string ContentClass,
         [property: JsonPropertyName("checks")] NativeAcsGuardrailsCheck[] Checks,
         [property: JsonPropertyName("findings")] NativeAcsGuardrailsFinding[] Findings);
+
+    private sealed record NativeAcsApprovalFacts(
+        [property: JsonPropertyName("turn_id")] string TurnId,
+        [property: JsonPropertyName("arguments_digest")] string ArgumentsDigest);
 
     private sealed record NativeAcsGuardrailsCheck(
         [property: JsonPropertyName("provider_id")] string ProviderId,
