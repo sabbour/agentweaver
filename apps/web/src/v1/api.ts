@@ -133,6 +133,7 @@ import type {
   SessionStatusSnapshot,
   SessionTurnContent,
   SessionTreeSnapshot,
+  RunEgressPage,
   SourceControlOutputCaptureDiff,
   SourceControlOutputCaptureDetail,
   SourceControlOutputFileContent,
@@ -1621,6 +1622,47 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+  }
+
+  /** Reads one no-store page of stored outbound network flows for a run. */
+  async readRunEgress(
+    token: string,
+    runId: string,
+    options: { limit?: number; cursor?: string | null; signal?: AbortSignal } = {},
+    tenantSelector?: string | null,
+  ): Promise<RunEgressPage> {
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    if (options.cursor != null) query.set('cursor', options.cursor);
+    const suffix = query.size > 0 ? `?${query}` : '';
+    const page = await this.request<RunEgressPage>(
+      token,
+      `/runs/${encodeSegments(runId)}/egress${suffix}`,
+      { signal: options.signal },
+      this.baseUrl,
+      tenantSelector,
+    );
+    const validItems = Array.isArray(page?.items) && page.items.every((item) =>
+      item &&
+      (item.host === null || typeof item.host === 'string') &&
+      (item.address === null || typeof item.address === 'string') &&
+      Number.isInteger(item.port) &&
+      (item.verdict === 'allowed' || item.verdict === 'denied') &&
+      typeof item.firstSeen === 'string' &&
+      typeof item.lastSeen === 'string' &&
+      Number.isSafeInteger(item.count));
+    if (page?.runId !== runId ||
+        typeof page.coverage !== 'string' ||
+        (page.delayedUntil !== null && typeof page.delayedUntil !== 'string') ||
+        !validItems ||
+        (page.nextCursor !== null && typeof page.nextCursor !== 'string')) {
+      throw new GatewayError(
+        502,
+        { code: 'owner_contract_invalid' },
+        'The service returned an invalid stored egress page.',
+      );
+    }
+    return page;
   }
 
   /** Reads current activity and blockers for one coordination session. */
