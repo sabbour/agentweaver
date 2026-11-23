@@ -484,14 +484,11 @@ public sealed class RuntimeNativePolicyGate(
                 owner.InvocationArgumentDigest);
         if (request.RemoteToolOwner is { } remote)
         {
+            var scanEvidence = RuntimeActionContract.RequireRemoteToolOwnerT3(remote);
             if (remote.AgentId != registration.Binding.AgentId ||
                 remote.TurnId != registration.Binding.TurnId ||
                 remote.CallId.Length == 0 ||
-                remote.ScanEvidence.State != RemoteMcpScanState.Completed ||
-                remote.ScanEvidence.CatalogSha256 != remote.CatalogDigest ||
-                remote.ScanEvidence.ConfigurationRevision != remote.ConnectionConfigurationRevision ||
-                remote.ScanEvidence.DiscoveryRevision != remote.ConnectionDiscoveryRevision ||
-                remote.GatewayEnforcementGeneration <= 0)
+                scanEvidence.State != RemoteMcpScanState.Completed)
                 throw new RuntimeAuthorizationException("runtime_remote_tool_scan_binding_invalid");
             return new(
                 remote.ToolId,
@@ -519,10 +516,10 @@ public sealed class RuntimeNativePolicyGate(
                     remote.ToolRevision,
                     remote.ToolDigest,
                     remote.TransportProfile,
-                    remote.TransportOptionsSha256,
-                    remote.GatewayDescriptorSha256,
-                    remote.GatewayEnforcementGeneration,
-                    remote.ScanEvidence));
+                    remote.TransportOptionsSha256!,
+                    remote.GatewayDescriptorSha256!,
+                    remote.GatewayEnforcementGeneration!.Value,
+                    scanEvidence));
         }
         throw new RuntimeAuthorizationException("runtime_action_tool_owner_required");
     }

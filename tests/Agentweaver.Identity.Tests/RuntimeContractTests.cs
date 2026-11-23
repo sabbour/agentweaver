@@ -49,6 +49,41 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
+    public void RemoteToolT3FactsAreOptionalGenerallyAndRequiredAtTheT3Boundary()
+    {
+        var owner = new RuntimeActionRemoteToolOwnerProjection(
+            1,
+            "agent-1",
+            "node-1",
+            "call-1",
+            new string('a', 64),
+            "turn-1",
+            Guid.NewGuid().ToString("D"),
+            new string('b', 64),
+            "connection-1",
+            2,
+            3,
+            new string('c', 64),
+            new string('d', 64),
+            "remote.lookup",
+            "tool-r1",
+            new string('e', 64),
+            "StreamableHttp20250618");
+        var request = new RuntimeActionRequest(
+            1, Guid.NewGuid(), 1, 1, Guid.NewGuid(), "tool.read", new string('f', 64))
+        {
+            IsToolInvocation = true,
+            RemoteToolOwner = owner
+        };
+
+        RuntimeActionContract.Validate(request);
+        Assert.Equal(
+            "runtime_action_remote_tool_owner_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeActionContract.RequireRemoteToolOwnerT3(owner)).Code);
+    }
+
+    [Fact]
     public void PositiveHostedCreditCapRequiresDispatchIdentityWithoutAModelTurnCount()
     {
         var binding = CreateRegistration().Binding with

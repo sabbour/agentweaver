@@ -53,10 +53,10 @@ public sealed record RuntimeActionRemoteToolOwnerProjection(
     string ToolRevision,
     string ToolDigest,
     string TransportProfile,
-    string TransportOptionsSha256,
-    string GatewayDescriptorSha256,
-    long GatewayEnforcementGeneration,
-    RemoteMcpCatalogScanEvidence ScanEvidence);
+    string? TransportOptionsSha256 = null,
+    string? GatewayDescriptorSha256 = null,
+    long? GatewayEnforcementGeneration = null,
+    RemoteMcpCatalogScanEvidence? ScanEvidence = null);
 
 /// <summary>Bounded SDK tool facts that the owner evaluates for one native callback.</summary>
 public sealed record RuntimeActionToolOwnerProjection(
@@ -122,8 +122,8 @@ public static class RuntimeActionContract
             throw new RuntimeAuthorizationException("runtime_action_tool_owner_required");
         if (!request.IsNativeToolCallback && request.ToolOwner is not null)
             throw new RuntimeAuthorizationException("runtime_action_tool_owner_invalid");
-        if (request.IsToolInvocation && request.ToolOwner is null && request.RemoteToolOwner is null ||
-            (!request.IsToolInvocation || request.ToolOwner is not null) && request.RemoteToolOwner is not null)
+        if ((!request.IsToolInvocation || request.ToolOwner is not null) &&
+            request.RemoteToolOwner is not null)
             throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
         if (request.ToolOwner is { } owner)
             ValidateToolOwner(request, owner);
@@ -185,9 +185,7 @@ public static class RuntimeActionContract
             !IsBoundedIdentifier(owner.ToolId) ||
             !IsBoundedIdentifier(owner.TransportProfile) ||
             owner.ConnectionConfigurationRevision <= 0 ||
-            owner.ConnectionDiscoveryRevision <= 0 ||
-            owner.GatewayEnforcementGeneration <= 0 ||
-            owner.ScanEvidence is null)
+            owner.ConnectionDiscoveryRevision <= 0)
             throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
         RuntimeContractValidation.ValidateHash(owner.ArgumentDigest);
         RuntimeContractValidation.ValidateHash(owner.SnapshotDigest);
@@ -196,8 +194,30 @@ public static class RuntimeActionContract
         if (!IsBoundedIdentifier(owner.ToolRevision))
             throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
         RuntimeContractValidation.ValidateHash(owner.ToolDigest);
-        RuntimeContractValidation.ValidateHash(owner.TransportOptionsSha256);
-        RuntimeContractValidation.ValidateHash(owner.GatewayDescriptorSha256);
+        if (owner.TransportOptionsSha256 is not null)
+            RuntimeContractValidation.ValidateHash(owner.TransportOptionsSha256);
+        if (owner.GatewayDescriptorSha256 is not null)
+            RuntimeContractValidation.ValidateHash(owner.GatewayDescriptorSha256);
+        if (owner.GatewayEnforcementGeneration is <= 0)
+            throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
+        if (owner.ScanEvidence is { } evidence &&
+            (evidence.ConfigurationRevision != owner.ConnectionConfigurationRevision ||
+             evidence.DiscoveryRevision != owner.ConnectionDiscoveryRevision ||
+             evidence.CatalogSha256 != owner.CatalogDigest))
+            throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
+    }
+
+    public static RemoteMcpCatalogScanEvidence RequireRemoteToolOwnerT3(
+        RuntimeActionRemoteToolOwnerProjection owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ValidateRemoteToolOwner(owner);
+        if (owner.TransportOptionsSha256 is null ||
+            owner.GatewayDescriptorSha256 is null ||
+            owner.GatewayEnforcementGeneration is not > 0 ||
+            owner.ScanEvidence is null)
+            throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
+        return owner.ScanEvidence;
     }
 
     /// <summary>Requires an owner dispatch ID for bounded or hard-credit-limited native model turns.</summary>

@@ -382,8 +382,8 @@ internal sealed class ReviewedRemoteToolAgent(
                     invocation.NativeCallId, invocation.AgentId, invocation.NodeId,
                     invocation.ToolName, invocation.ArgumentsJson), cancellationToken).ConfigureAwait(false);
         var expectedEnvironment = new ReviewedRemoteToolEnvironmentState(
-            request.RemoteToolOwner!.GatewayDescriptorSha256,
-            request.RemoteToolOwner.GatewayEnforcementGeneration);
+            request.RemoteToolOwner!.GatewayDescriptorSha256!,
+            request.RemoteToolOwner.GatewayEnforcementGeneration!.Value);
         if (currentEnvironment != expectedEnvironment)
             throw new RuntimeAuthorizationException("runtime_remote_tool_gateway_changed");
     }
@@ -590,7 +590,7 @@ internal sealed class ReviewedRemoteToolAgent(
         {
             TurnId = remoteOwner.TurnId,
             GatewayDescriptorSha256 = remoteOwner.GatewayDescriptorSha256,
-            GatewayEnforcementGeneration = remoteOwner.GatewayEnforcementGeneration
+            GatewayEnforcementGeneration = remoteOwner.GatewayEnforcementGeneration!.Value
         };
     }
 
