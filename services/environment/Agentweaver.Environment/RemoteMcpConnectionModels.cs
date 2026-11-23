@@ -18,7 +18,7 @@ internal static class RemoteMcpConnectionModel
             {
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_connections_revisions",
-                    "row_revision > 0 AND current_configuration_revision > 0 AND (current_discovery_revision IS NULL OR current_discovery_revision > 0)");
+                    "row_revision > 0 AND current_configuration_revision > 0 AND (current_discovery_revision IS NULL OR current_discovery_revision > 0) AND ((accepted_configuration_revision IS NULL AND accepted_discovery_revision IS NULL) OR (accepted_configuration_revision > 0 AND accepted_discovery_revision > 0))");
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_connections_state",
                     "state IN ('Draft', 'Enabled', 'Disabled', 'Removed')");
@@ -31,6 +31,8 @@ internal static class RemoteMcpConnectionModel
             entity.Property(row => row.RowRevision).HasColumnName("row_revision");
             entity.Property(row => row.CurrentConfigurationRevision).HasColumnName("current_configuration_revision");
             entity.Property(row => row.CurrentDiscoveryRevision).HasColumnName("current_discovery_revision");
+            entity.Property(row => row.AcceptedConfigurationRevision).HasColumnName("accepted_configuration_revision");
+            entity.Property(row => row.AcceptedDiscoveryRevision).HasColumnName("accepted_discovery_revision");
             entity.Property(row => row.State).HasColumnName("state").HasMaxLength(16);
             entity.Property(row => row.CreatedAt).HasColumnName("created_at");
             entity.Property(row => row.UpdatedAt).HasColumnName("updated_at");
@@ -125,6 +127,9 @@ internal static class RemoteMcpConnectionModel
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_catalog_snapshots_tools_json",
                     "jsonb_typeof(tools_json) = 'array'");
+                table.HasCheckConstraint(
+                    "ck_environment_remote_mcp_catalog_snapshots_scan_evidence",
+                    "scan_evidence_json IS NULL OR jsonb_typeof(scan_evidence_json) = 'object'");
             });
             entity.HasKey(row => new
                 {
@@ -143,6 +148,7 @@ internal static class RemoteMcpConnectionModel
             entity.Property(row => row.CatalogSha256).HasColumnName("catalog_sha256").HasMaxLength(64);
             entity.Property(row => row.RegistryMetadataSha256).HasColumnName("registry_metadata_sha256").HasMaxLength(64);
             entity.Property(row => row.ToolsJson).HasColumnName("tools_json").HasColumnType("jsonb");
+            entity.Property(row => row.ScanEvidenceJson).HasColumnName("scan_evidence_json").HasColumnType("jsonb");
             entity.Property(row => row.AppliedPolicyReference).HasColumnName("applied_policy_reference").HasMaxLength(512);
             entity.Property(row => row.EnvironmentTenantId).HasColumnName("environment_tenant_id").HasMaxLength(256);
             entity.Property(row => row.EnvironmentProjectId).HasColumnName("environment_project_id").HasMaxLength(256);
@@ -174,7 +180,7 @@ internal static class RemoteMcpConnectionModel
                     "request_fingerprint ~ '^[0-9a-f]{64}$'");
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_connection_idempotency_operation",
-                    "operation IN ('Create', 'Update', 'Enable', 'Disable', 'Remove', 'SaveDiscovery')");
+                    "operation IN ('Create', 'Update', 'Enable', 'Disable', 'Remove', 'SaveDiscovery', 'AcceptDiscovery')");
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_connection_idempotency_result",
                     "jsonb_typeof(result_json) = 'object'");
@@ -209,6 +215,8 @@ internal sealed class RemoteMcpConnectionRow
     public long RowRevision { get; set; }
     public long CurrentConfigurationRevision { get; set; }
     public long? CurrentDiscoveryRevision { get; set; }
+    public long? AcceptedConfigurationRevision { get; set; }
+    public long? AcceptedDiscoveryRevision { get; set; }
     public string State { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
@@ -254,6 +262,7 @@ internal sealed class RemoteMcpCatalogSnapshotRow
     public string CatalogSha256 { get; set; } = string.Empty;
     public string? RegistryMetadataSha256 { get; set; }
     public string ToolsJson { get; set; } = "[]";
+    public string? ScanEvidenceJson { get; set; }
     public string AppliedPolicyReference { get; set; } = string.Empty;
     public string EnvironmentTenantId { get; set; } = string.Empty;
     public string EnvironmentProjectId { get; set; } = string.Empty;

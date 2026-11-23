@@ -106,14 +106,20 @@ public sealed record RemoteMcpConnectionReviewReference
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         // A reference must point at something a call could use: an enabled connection with a pinned catalog.
-        if (snapshot.Head.State != RemoteMcpConnectionState.Enabled || snapshot.Catalog is null)
+        if (snapshot.Head.State != RemoteMcpConnectionState.Enabled ||
+            snapshot.Catalog is null ||
+            snapshot.AcceptedCatalog is null ||
+            snapshot.AcceptedConfiguration is null ||
+            snapshot.Head.AcceptedDiscoveryRevision != snapshot.AcceptedCatalog.DiscoveryRevision ||
+            snapshot.Head.AcceptedConfigurationRevision != snapshot.AcceptedCatalog.ConfigurationRevision ||
+            snapshot.AcceptedConfiguration.ConfigurationRevision != snapshot.AcceptedCatalog.ConfigurationRevision)
             throw new InvalidOperationException("Only an enabled connection with a pinned catalog can be reviewed.");
         return new(
             snapshot.Head.Connection,
-            snapshot.Configuration.ConfigurationRevision,
-            snapshot.Configuration.ConfigurationSha256,
-            snapshot.Catalog.DiscoveryRevision,
-            snapshot.Catalog.CatalogSha256);
+            snapshot.AcceptedConfiguration.ConfigurationRevision,
+            snapshot.AcceptedConfiguration.ConfigurationSha256,
+            snapshot.AcceptedCatalog.DiscoveryRevision,
+            snapshot.AcceptedCatalog.CatalogSha256);
     }
 }
 
@@ -213,6 +219,12 @@ public static class RemoteMcpConnectionReview
         var oauth = current.Configuration.AuthenticationMode == RemoteMcpAuthenticationMode.DelegatedOAuth;
         if (oauth && current.Configuration.IdentityBindingReference is null)
             return Deny(RemoteMcpInvocationDenial.IdentityBindingMissing, reviewRequired: false, current);
+        if (current.AcceptedCatalog is null ||
+            current.AcceptedCatalog.DiscoveryRevision != reviewed.DiscoveryRevision ||
+            current.AcceptedCatalog.CatalogSha256 != reviewed.CatalogSha256 ||
+            current.AcceptedCatalog.ScanEvidence is null ||
+            current.AcceptedCatalog.ScanEvidence.State != RemoteMcpScanState.Completed)
+            return Deny(RemoteMcpInvocationDenial.CatalogNotPinned, reviewRequired: true, current);
         // Environment allows the call. For delegated OAuth the caller still needs a current Identity
         // credential decision, so return the binding reference for that check.
         return new(
@@ -236,7 +248,20 @@ public static class RemoteMcpConnectionReview
             IdentityBindingReference: null,
             // Return the current reference when one exists, so the caller can show what a new review
             // would pin. Never return the binding reference on a denial.
-            current is { Head.State: RemoteMcpConnectionState.Enabled, Catalog: not null }
-                ? RemoteMcpConnectionReviewReference.FromSnapshot(current)
+            current is { Head.State: RemoteMcpConnectionState.Enabled, AcceptedCatalog: not null }
+                ? TryFromSnapshot(current)
                 : null);
+
+    private static RemoteMcpConnectionReviewReference? TryFromSnapshot(
+        RemoteMcpConnectionSnapshot snapshot)
+    {
+        try
+        {
+            return RemoteMcpConnectionReviewReference.FromSnapshot(snapshot);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 }

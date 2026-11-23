@@ -173,6 +173,16 @@ public static class RemoteMcpToolProviderBinding
             snapshot.Head.CurrentConfigurationRevision != configuration.ConfigurationRevision ||
             snapshot.Head.CurrentDiscoveryRevision != catalog.DiscoveryRevision)
             return Deny(RemoteMcpToolProviderBindingDenial.CatalogStale);
+        if (snapshot.AcceptedConfiguration is null ||
+            snapshot.AcceptedCatalog is null ||
+            snapshot.AcceptedConfiguration.ConfigurationRevision != configuration.ConfigurationRevision ||
+            snapshot.AcceptedConfiguration.ConfigurationSha256 != configuration.ConfigurationSha256 ||
+            snapshot.AcceptedCatalog.ConfigurationRevision != configuration.ConfigurationRevision ||
+            snapshot.AcceptedCatalog.DiscoveryRevision != catalog.DiscoveryRevision ||
+            snapshot.AcceptedCatalog.CatalogSha256 != catalog.CatalogSha256 ||
+            snapshot.AcceptedCatalog.ScanEvidence is null ||
+            snapshot.AcceptedCatalog.ScanEvidence.State != RemoteMcpScanState.Completed)
+            return Deny(RemoteMcpToolProviderBindingDenial.CatalogStale);
 
         // Report every missing tool at once, sorted, so the caller can fix the package or connection in one pass.
         var discovered = catalog.Tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);

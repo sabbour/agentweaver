@@ -7,7 +7,7 @@ namespace Agentweaver.Environment;
 public static class EnvironmentMigrator
 {
     private const string LockName = "agentweaver.environment.migrate";
-    private const int CurrentSchemaVersion = 16;
+    private const int CurrentSchemaVersion = 17;
     private static readonly string[] SupportedMigrationIds =
     [
         "20261006150000_InitialEnvironmentLifecycle",
@@ -26,6 +26,7 @@ public static class EnvironmentMigrator
         "20261117221544_EnvironmentSandboxEgressAudit",
         "20261119034552_PlatformPolicyProofReceipts",
         "20261119050000_PlatformPolicyHoldReservationFence",
+        "20261123100433_RemoteMcpCatalogScanEvidence",
     ];
 
     /// <summary>Ordered versions assigned to the EF migration history for maintenance planning.</summary>

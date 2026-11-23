@@ -64,8 +64,10 @@ entrypoints keep accepting only the finite network profile.
 
 ## Opt-in model-use and Guardrails profile
 
-`composable-domains-v2` adds six reviewed files for model, Guardrails, and tool
-permissions. It keeps the actions and network modules unchanged:
+`composable-domains-v2.1` adds six reviewed files for model, Guardrails, and
+tool permissions. It keeps the actions and network modules unchanged. The
+validator also accepts historical pinned `composable-domains-v2` artifacts with
+the exact legacy `tool-permissions.rego` module and its scan-less data shape:
 
 | Domain or component | Policy ID or path | Rule |
 | --- | --- | --- |
@@ -73,19 +75,41 @@ permissions. It keeps the actions and network modules unchanged:
 | Model-use data | `policy/model_use/data.json` | Contains a closed list of exact `allow` or `deny` rules. Missing provider fields are represented as `null`; they are not wildcards. |
 | Guardrails | `agentweaver_guardrails`, `policy/guardrails.rego` | Requires the ordered `UserInput`/`Text` checks and denies blocked normalized findings. |
 | Guardrails data | `policy/guardrails/data.json` | Contains exact ordered provider, adapter, schema, and options revisions plus blocked finding code and severity tuples. |
-| Tool permissions | `agentweaver_tool_permissions`, `policy/tool-permissions.rego` | Matches the exact SDK tool, owner action, callback phase, permission kind, and read, write, or shell capability. |
-| Tool-permission data | `policy/tool_permissions/data.json` | Contains the closed set of exact tool and callback permission rules. |
+| Tool permissions | `agentweaver_tool_permissions`, `policy/tool-permissions.rego` | Matches the exact SDK or reviewed remote tool, owner action, callback phase, permission kind, capabilities, and required Remote MCP scan results. |
+| Tool-permission data | `policy/tool_permissions/data.json` | Contains the closed set of tool permission rules and the Remote MCP required-check and risk-threshold list. |
 | Selector | `agentweaver_domains_v2`, `policy/domains.rego` | Selects one of the five domains at `pre_model_call`. |
 
 The tool-permission data keeps `create` and `edit` as separate names:
 
 ```json
-{"rules":[
+{"remote_mcp_scan_requirements":[
+  {"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}
+],"rules":[
   {"tool_name":"view","action_id":"tool.read","phase":"invocation","permission_kind":null,"read_access":true,"write_access":false,"shell_access":false},
   {"tool_name":"view","action_id":"tool.read","phase":"permission","permission_kind":"read","read_access":true,"write_access":false,"shell_access":false},
   {"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false}
 ]}
 ```
+
+Remote MCP policies add the required checks and their maximum risk scores at
+the data root. The default policy requires poisoned-description, hidden
+Unicode, look-alike-name, and cross-server-collision checks at score `0`.
+Baseline drift is an optional observation:
+
+```json
+{"remote_mcp_scan_requirements":[
+  {"check_id":"mcp.poisoned-description","required":true,"maximum_risk_score":0},
+  {"check_id":"mcp.hidden-instructions-unicode","required":true,"maximum_risk_score":0},
+  {"check_id":"mcp.lookalike-name","required":true,"maximum_risk_score":0},
+  {"check_id":"mcp.cross-server-collision","required":true,"maximum_risk_score":0},
+  {"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}
+]}
+```
+
+Remote tool facts bind the exact reviewed snapshot, gateway descriptor and
+enforcement generation, transport options, and owner scan evidence. A failed,
+missing, stale, errored, or required `Unknown` check denies. Optional
+observations remain `Unknown` without changing the decision.
 
 Tool permission facts do not carry command text, file contents, credentials,
 or display diffs. The runtime supplies exact bounded identity and digest fields.

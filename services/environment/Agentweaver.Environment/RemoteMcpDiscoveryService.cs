@@ -199,6 +199,8 @@ public sealed class RemoteMcpDiscoveryService(
 
         var (catalog, appliedPolicy) = await ReadCatalogAsync(current.Configuration, cancellationToken)
             .ConfigureAwait(false);
+        var peers = await store.GetPeerCatalogsForDiscoveryAsync(
+            caller, projectId, connectionId, cancellationToken).ConfigureAwait(false);
         // The store saves the catalog only if the row is still at the expected revision. A disable,
         // update, or remove that committed during the network reads makes this save fail with a conflict.
         return await store.SaveDiscoveryAsync(
@@ -207,6 +209,7 @@ public sealed class RemoteMcpDiscoveryService(
             connectionId,
             expectedRowRevision,
             catalog,
+            peers,
             registryMetadataSha256,
             appliedPolicy,
             idempotencyKey,

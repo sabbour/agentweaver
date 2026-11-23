@@ -185,6 +185,27 @@
       ]
     },
     {
+      "name": "Remote MCP catalog scans and reviewed send admission",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/RemoteMcpScanContracts.cs",
+        "services/environment/Agentweaver.Environment/RemoteMcpCatalogScanner.cs",
+        "services/environment/Agentweaver.Environment/RemoteMcpConnectionStore.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/ReviewedRemoteToolAgent.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/RuntimeNativePolicyGate.cs",
+        "tests/Agentweaver.Environment.Tests/RemoteMcpCatalogScan",
+        "tests/Agentweaver.Environment.Tests/RemoteMcpCatalogScannerTests.cs",
+        "tests/Agentweaver.Orchestrator.Core.Tests/ReviewedRemoteToolAgentTests.cs"
+      ],
+      "required": [
+        "docs/diagrams/src/flagship/v1-remote-mcp-scan-admission.json",
+        "docs/architecture/remote-mcp-connections.md",
+        "docs/architecture/agenthost.md",
+        "docs/architecture/design/session-material-runtime-recovery.md",
+        "docs/specs/native-acs-composable-domains.md",
+        "docs/guide/testing.md"
+      ]
+    },
+    {
       "name": "BYOK metadata CLI",
       "sourcePrefixes": [
         "tools/Agentweaver.Cli/Commands/CliApplication.cs",

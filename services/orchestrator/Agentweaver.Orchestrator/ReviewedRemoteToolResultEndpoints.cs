@@ -72,6 +72,12 @@ internal sealed class ReviewedRemoteToolResultVerifier(
             proof.ToolName,
             proof.CanonicalArgumentsJson);
         RequireExactCall(call, proof);
+        if (proof.TurnId is null ||
+            proof.GatewayDescriptorSha256 is null ||
+            proof.GatewayEnforcementGeneration <= 0 ||
+            proof.SnapshotBinding.TransportOptionsSha256 is null ||
+            proof.SnapshotBinding.ScanEvidence is null)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_proof_binding_invalid");
 
         var request = new RuntimeActionRequest(
             1,
@@ -82,7 +88,29 @@ internal sealed class ReviewedRemoteToolResultVerifier(
             call.ActionId,
             call.InputHash)
         {
-            IsToolInvocation = true
+            IsToolInvocation = true,
+            RemoteToolOwner = new(
+                1,
+                snapshot.AgentId,
+                snapshot.NodeId,
+                proof.NativeCallId,
+                proof.ArgumentsDigest,
+                proof.TurnId,
+                snapshot.SnapshotId.ToString("D"),
+                snapshot.SnapshotDigest,
+                snapshot.ConnectionId,
+                snapshot.ConnectionConfigurationRevision,
+                snapshot.ConnectionDiscoveryRevision!.Value,
+                snapshot.ConfigurationSha256,
+                snapshot.CatalogDigest,
+                snapshot.ToolId,
+                snapshot.ToolRevision,
+                snapshot.ToolDigest,
+                snapshot.TransportProfile,
+                proof.SnapshotBinding.TransportOptionsSha256,
+                proof.GatewayDescriptorSha256,
+                proof.GatewayEnforcementGeneration,
+                proof.SnapshotBinding.ScanEvidence)
         };
         var admission = new RuntimeActionAdmission(
             1,

@@ -1221,6 +1221,10 @@ namespace Agentweaver.Environment.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("registry_metadata_sha256");
 
+                    b.Property<string>("ScanEvidenceJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("scan_evidence_json");
+
                     b.Property<string>("ToolsJson")
                         .IsRequired()
                         .HasColumnType("jsonb")
@@ -1236,6 +1240,8 @@ namespace Agentweaver.Environment.Migrations
                             t.HasCheckConstraint("ck_environment_remote_mcp_catalog_snapshots_digests", "catalog_sha256 ~ '^[0-9a-f]{64}$' AND (registry_metadata_sha256 IS NULL OR registry_metadata_sha256 ~ '^[0-9a-f]{64}$') AND egress_intent_sha256 ~ '^[0-9a-f]{64}$'");
 
                             t.HasCheckConstraint("ck_environment_remote_mcp_catalog_snapshots_revisions", "configuration_revision > 0 AND discovery_revision > 0");
+
+                            t.HasCheckConstraint("ck_environment_remote_mcp_catalog_snapshots_scan_evidence", "scan_evidence_json IS NULL OR jsonb_typeof(scan_evidence_json) = 'object'");
 
                             t.HasCheckConstraint("ck_environment_remote_mcp_catalog_snapshots_tools_json", "jsonb_typeof(tools_json) = 'array'");
                         });
@@ -1455,7 +1461,7 @@ namespace Agentweaver.Environment.Migrations
                         {
                             t.HasCheckConstraint("ck_environment_remote_mcp_connection_idempotency_fingerprint", "request_fingerprint ~ '^[0-9a-f]{64}$'");
 
-                            t.HasCheckConstraint("ck_environment_remote_mcp_connection_idempotency_operation", "operation IN ('Create', 'Update', 'Enable', 'Disable', 'Remove', 'SaveDiscovery')");
+                            t.HasCheckConstraint("ck_environment_remote_mcp_connection_idempotency_operation", "operation IN ('Create', 'Update', 'Enable', 'Disable', 'Remove', 'SaveDiscovery', 'AcceptDiscovery')");
 
                             t.HasCheckConstraint("ck_environment_remote_mcp_connection_idempotency_result", "jsonb_typeof(result_json) = 'object'");
                         });
@@ -1476,6 +1482,14 @@ namespace Agentweaver.Environment.Migrations
                     b.Property<Guid>("ConnectionId")
                         .HasColumnType("uuid")
                         .HasColumnName("connection_id");
+
+                    b.Property<long?>("AcceptedConfigurationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("accepted_configuration_revision");
+
+                    b.Property<long?>("AcceptedDiscoveryRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("accepted_discovery_revision");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -1511,7 +1525,7 @@ namespace Agentweaver.Environment.Migrations
 
                     b.ToTable("remote_mcp_connections", "environment", t =>
                         {
-                            t.HasCheckConstraint("ck_environment_remote_mcp_connections_revisions", "row_revision > 0 AND current_configuration_revision > 0 AND (current_discovery_revision IS NULL OR current_discovery_revision > 0)");
+                            t.HasCheckConstraint("ck_environment_remote_mcp_connections_revisions", "row_revision > 0 AND current_configuration_revision > 0 AND (current_discovery_revision IS NULL OR current_discovery_revision > 0) AND ((accepted_configuration_revision IS NULL AND accepted_discovery_revision IS NULL) OR (accepted_configuration_revision > 0 AND accepted_discovery_revision > 0))");
 
                             t.HasCheckConstraint("ck_environment_remote_mcp_connections_state", "state IN ('Draft', 'Enabled', 'Disabled', 'Removed')");
                         });

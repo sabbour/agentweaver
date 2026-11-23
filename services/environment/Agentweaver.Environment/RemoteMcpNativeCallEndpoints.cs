@@ -12,6 +12,26 @@ namespace Agentweaver.Environment;
 /// <summary>Maps the trusted internal Remote MCP native-call dispatch route.</summary>
 public static class RemoteMcpNativeCallEndpoints
 {
+    public const string EnvironmentStatePath = "/internal/runtime/remote-mcp/environment-state";
+
+    public static IEndpointRouteBuilder MapRemoteMcpEnvironmentState(this IEndpointRouteBuilder endpoints)
+    {
+        endpoints.MapPost(EnvironmentStatePath, async (
+            RemoteMcpGatewayEnvironmentStateRequest request,
+            HttpContext context,
+            RemoteMcpManagedGatewayPolicy managedGateway,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            RemoteMcpTrustedServiceTlsComposition.RequireOrchestratorPeer(context);
+            var state = await managedGateway.ReadEnvironmentStateAsync(
+                request.EnvironmentFence, request.SnapshotBinding, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(state);
+        });
+        return endpoints;
+    }
+
     /// <summary>
     /// Validates the bounded request and current call authority, then fails closed while native transport is unavailable.
     /// </summary>

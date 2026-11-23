@@ -36,7 +36,14 @@ public sealed record RemoteToolResultSnapshotBinding(
     string ToolSchemaDigest,
     string PermissionActionId,
     string PermissionPurpose,
-    string PermissionMetadataDigest);
+    string PermissionMetadataDigest)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TransportOptionsSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RemoteMcpCatalogScanEvidence? ScanEvidence { get; init; }
+}
 
 /// <summary>
 /// Runtime proof linking a remote-tool result to an accepted run, exact reviewed snapshot,
@@ -78,6 +85,15 @@ public sealed record RemoteToolResultProof(
     PolicyEvaluationReasonCode ReasonCode,
     SessionMaterialResultContentClass ContentClass)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TurnId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GatewayDescriptorSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public long GatewayEnforcementGeneration { get; init; }
+
     /// <summary>Prevents proof fields from appearing in default diagnostic output.</summary>
     public override string ToString() => nameof(RemoteToolResultProof) + " [REDACTED]";
 }

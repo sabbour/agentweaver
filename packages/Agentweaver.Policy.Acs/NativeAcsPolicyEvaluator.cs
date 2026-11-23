@@ -225,7 +225,26 @@ public sealed class NativeAcsPolicyEvaluator
             (facts.ShellAccess ? 1 : 0) == 1 &&
         (facts.Phase == "invocation"
             ? facts.PermissionKind is null && facts.InvocationArgumentDigest is null
-            : facts.PermissionKind is not null && facts.InvocationArgumentDigest is not null);
+            : facts.PermissionKind is not null && facts.InvocationArgumentDigest is not null) &&
+        (facts.RemoteMcp is null || IsValidRemoteMcpFacts(facts.RemoteMcp));
+
+    private static bool IsValidRemoteMcpFacts(NativeAcsRemoteMcpEvaluationFacts facts) =>
+        IsIdentifier(facts.AgentId) &&
+        IsIdentifier(facts.NodeId) &&
+        IsIdentifier(facts.SnapshotId) &&
+        IsIdentifier(facts.ConnectionId) &&
+        IsIdentifier(facts.TransportProfile) &&
+        facts.ConnectionConfigurationRevision > 0 &&
+        facts.ConnectionDiscoveryRevision > 0 &&
+        facts.GatewayEnforcementGeneration > 0 &&
+        IsSha256(facts.SnapshotDigest) &&
+        IsSha256(facts.ConfigurationSha256) &&
+        IsSha256(facts.CatalogDigest) &&
+        IsIdentifier(facts.ToolRevision) &&
+        IsSha256(facts.ToolDigest) &&
+        IsSha256(facts.TransportOptionsSha256) &&
+        IsSha256(facts.GatewayDescriptorSha256) &&
+        facts.ScanEvidence is not null;
 
     private static bool IsSha256(string? value) =>
         value is { Length: 64 } &&
@@ -333,7 +352,17 @@ public sealed class NativeAcsPolicyEvaluator
                         tool.ToolName, tool.CallId, tool.Phase, tool.ArgumentDigest,
                         tool.SdkSessionId, tool.MessageId, tool.TurnId,
                         tool.ReadAccess, tool.WriteAccess, tool.ShellAccess,
-                        tool.PermissionKind, tool.InvocationArgumentDigest)
+                        tool.PermissionKind, tool.InvocationArgumentDigest,
+                        tool.RemoteMcp is { } remote
+                            ? new NativeAcsRemoteMcpFacts(
+                                remote.AgentId, remote.NodeId, remote.SnapshotId, remote.SnapshotDigest,
+                                remote.ConnectionId, remote.ConnectionConfigurationRevision,
+                                remote.ConnectionDiscoveryRevision, remote.ConfigurationSha256,
+                                remote.CatalogDigest, remote.ToolRevision, remote.ToolDigest,
+                                remote.TransportProfile, remote.TransportOptionsSha256,
+                                remote.GatewayDescriptorSha256, remote.GatewayEnforcementGeneration,
+                                remote.ScanEvidence)
+                            : null)
                     : null,
                 domain is { } selectedDomain
                     ? NativeAcsUnifiedPolicyProfile.IsCandidate(artifact)
@@ -414,7 +443,27 @@ public sealed class NativeAcsPolicyEvaluator
         [property: JsonPropertyName("write_access")] bool WriteAccess,
         [property: JsonPropertyName("shell_access")] bool ShellAccess,
         [property: JsonPropertyName("permission_kind")] string? PermissionKind,
-        [property: JsonPropertyName("invocation_argument_digest")] string? InvocationArgumentDigest);
+        [property: JsonPropertyName("invocation_argument_digest")] string? InvocationArgumentDigest,
+        [property: JsonPropertyName("remote_mcp"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        NativeAcsRemoteMcpFacts? RemoteMcp);
+
+    private sealed record NativeAcsRemoteMcpFacts(
+        [property: JsonPropertyName("agent_id")] string AgentId,
+        [property: JsonPropertyName("node_id")] string NodeId,
+        [property: JsonPropertyName("snapshot_id")] string SnapshotId,
+        [property: JsonPropertyName("snapshot_digest")] string SnapshotDigest,
+        [property: JsonPropertyName("connection_id")] string ConnectionId,
+        [property: JsonPropertyName("connection_configuration_revision")] long ConnectionConfigurationRevision,
+        [property: JsonPropertyName("connection_discovery_revision")] long ConnectionDiscoveryRevision,
+        [property: JsonPropertyName("configuration_sha256")] string ConfigurationSha256,
+        [property: JsonPropertyName("catalog_digest")] string CatalogDigest,
+        [property: JsonPropertyName("tool_revision")] string ToolRevision,
+        [property: JsonPropertyName("tool_digest")] string ToolDigest,
+        [property: JsonPropertyName("transport_profile")] string TransportProfile,
+        [property: JsonPropertyName("transport_options_sha256")] string TransportOptionsSha256,
+        [property: JsonPropertyName("gateway_descriptor_sha256")] string GatewayDescriptorSha256,
+        [property: JsonPropertyName("gateway_enforcement_generation")] long GatewayEnforcementGeneration,
+        [property: JsonPropertyName("scan_evidence")] RemoteMcpCatalogScanEvidence ScanEvidence);
 
     private sealed record NativeAcsNetworkFacts(
         [property: JsonPropertyName("check_kind")] string CheckKind,

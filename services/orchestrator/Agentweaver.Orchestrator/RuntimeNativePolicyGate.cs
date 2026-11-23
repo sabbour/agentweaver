@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using AgentControlSpecification;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -118,7 +119,8 @@ public sealed record RuntimeNativePolicyPreparedRevision(
 public sealed class RuntimeNativePolicyGate(
     IRuntimeNativePolicySource source,
     IRuntimeNativePolicyAdmissionStore admissionStore,
-    NativeAcsPolicyEvaluator? evaluator)
+    NativeAcsPolicyEvaluator? evaluator,
+    IReviewedRemoteToolSnapshotResolver? snapshots = null)
 {
     public const string UnavailableCode = "runtime_native_policy_unavailable";
     public const string DeniedCode = "runtime_native_policy_denied";
@@ -141,6 +143,9 @@ public sealed class RuntimeNativePolicyGate(
             : null;
         var revisions = await ReadAndValidateAsync(
             registration, accepted, cancellationToken).ConfigureAwait(false);
+        if (request.RemoteToolOwner is not null)
+            await RequireReviewedRemoteToolSnapshotAsync(
+                registration, accepted, request.RemoteToolOwner, cancellationToken).ConfigureAwait(false);
         RuntimeNativePolicyAdmissionBinding? invocation = null;
         if (request.ToolOwner?.Phase == "permission")
             invocation = await RequireInvocationBindingAsync(
@@ -459,24 +464,124 @@ public sealed class RuntimeNativePolicyGate(
             Tool = tool
         };
 
-    private static NativeAcsToolEvaluationFacts ReadToolFacts(RuntimeActionRequest request)
+    private static NativeAcsToolEvaluationFacts ReadToolFacts(
+        RuntimeRegistration registration, RuntimeActionRequest request)
     {
-        var owner = request.ToolOwner
-            ?? throw new RuntimeAuthorizationException("runtime_action_tool_owner_required");
         RuntimeActionContract.Validate(request);
-        return new(
-            owner.ToolName,
-            owner.CallId,
-            owner.Phase,
-            owner.ArgumentDigest,
-            owner.SdkSessionId,
-            owner.MessageId.ToString("D"),
-            owner.TurnId,
-            owner.ReadAccess,
-            owner.WriteAccess,
-            owner.ShellAccess,
-            owner.PermissionKind,
-            owner.InvocationArgumentDigest);
+        if (request.ToolOwner is { } owner)
+            return new(
+                owner.ToolName,
+                owner.CallId,
+                owner.Phase,
+                owner.ArgumentDigest,
+                owner.SdkSessionId,
+                owner.MessageId.ToString("D"),
+                owner.TurnId,
+                owner.ReadAccess,
+                owner.WriteAccess,
+                owner.ShellAccess,
+                owner.PermissionKind,
+                owner.InvocationArgumentDigest);
+        if (request.RemoteToolOwner is { } remote)
+        {
+            if (remote.AgentId != registration.Binding.AgentId ||
+                remote.TurnId != registration.Binding.TurnId ||
+                remote.CallId.Length == 0 ||
+                remote.ScanEvidence.State != RemoteMcpScanState.Completed ||
+                remote.ScanEvidence.CatalogSha256 != remote.CatalogDigest ||
+                remote.ScanEvidence.ConfigurationRevision != remote.ConnectionConfigurationRevision ||
+                remote.ScanEvidence.DiscoveryRevision != remote.ConnectionDiscoveryRevision ||
+                remote.GatewayEnforcementGeneration <= 0)
+                throw new RuntimeAuthorizationException("runtime_remote_tool_scan_binding_invalid");
+            return new(
+                remote.ToolId,
+                remote.CallId,
+                "invocation",
+                remote.ArgumentDigest,
+                remote.SnapshotId,
+                remote.CallId,
+                remote.TurnId,
+                request.ActionId == "tool.read",
+                request.ActionId == "tool.write",
+                false,
+                null,
+                null,
+                new(
+                    remote.AgentId,
+                    remote.NodeId,
+                    remote.SnapshotId,
+                    remote.SnapshotDigest,
+                    remote.ConnectionId,
+                    remote.ConnectionConfigurationRevision,
+                    remote.ConnectionDiscoveryRevision,
+                    remote.ConfigurationSha256,
+                    remote.CatalogDigest,
+                    remote.ToolRevision,
+                    remote.ToolDigest,
+                    remote.TransportProfile,
+                    remote.TransportOptionsSha256,
+                    remote.GatewayDescriptorSha256,
+                    remote.GatewayEnforcementGeneration,
+                    remote.ScanEvidence));
+        }
+        throw new RuntimeAuthorizationException("runtime_action_tool_owner_required");
+    }
+
+    private async Task RequireReviewedRemoteToolSnapshotAsync(
+        RuntimeRegistration registration,
+        AuthorizedRunSelection accepted,
+        RuntimeActionRemoteToolOwnerProjection owner,
+        CancellationToken cancellationToken)
+    {
+        if (snapshots is null ||
+            !Guid.TryParseExact(owner.SnapshotId, "D", out var snapshotId) ||
+            owner.AgentId != registration.Binding.AgentId ||
+            owner.TurnId != registration.Binding.TurnId)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_binding_invalid");
+        var reference = new ReviewedRemoteToolSnapshotReference(
+            registration.Binding.ProjectId,
+            snapshotId,
+            owner.SnapshotDigest,
+            owner.AgentId,
+            owner.NodeId);
+        var selected = accepted.Selection.Snapshot;
+        if (!selected.TryGetProperty("projectConfiguration", out var projectConfiguration) ||
+            !projectConfiguration.TryGetProperty("reviewedRemoteToolSnapshots", out var references) ||
+            references.ValueKind != JsonValueKind.Array ||
+            !references.EnumerateArray().Any(element =>
+            {
+                try
+                {
+                    var candidate = JsonSerializer.Deserialize<ReviewedRemoteToolSnapshotReference>(
+                        element.GetRawText(),
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                    return candidate is not null &&
+                        candidate.ProjectId == reference.ProjectId &&
+                        candidate.SnapshotId == reference.SnapshotId &&
+                        candidate.SnapshotDigest == reference.SnapshotDigest &&
+                        candidate.AgentId == reference.AgentId &&
+                        candidate.NodeId == reference.NodeId;
+                }
+                catch (JsonException)
+                {
+                    return false;
+                }
+            }))
+            throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_not_selected");
+        var snapshot = await snapshots.ResolveAsync(reference, cancellationToken).ConfigureAwait(false);
+        if (snapshot is null ||
+            snapshot.ConnectionId != owner.ConnectionId ||
+            snapshot.ConnectionConfigurationRevision != owner.ConnectionConfigurationRevision ||
+            snapshot.ConnectionDiscoveryRevision != owner.ConnectionDiscoveryRevision ||
+            snapshot.ConfigurationSha256 != owner.ConfigurationSha256 ||
+            snapshot.CatalogDigest != owner.CatalogDigest ||
+            snapshot.ToolId != owner.ToolId ||
+            snapshot.ToolRevision != owner.ToolRevision ||
+            snapshot.ToolDigest != owner.ToolDigest ||
+            snapshot.TransportProfile != owner.TransportProfile ||
+            snapshot.TransportOptionsSha256 != owner.TransportOptionsSha256 ||
+            snapshot.ScanEvidence != owner.ScanEvidence)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_binding_invalid");
     }
 
     private async Task<RuntimeNativePolicyAdmissionBinding> RequireInvocationBindingAsync(
@@ -553,7 +658,7 @@ public sealed class RuntimeNativePolicyGate(
                 cancellationToken).ConfigureAwait(false));
             return;
         }
-        var tool = ReadToolFacts(request);
+        var tool = ReadToolFacts(registration, request);
         RequireAllowed(await EvaluateComposedAsync(
             revision.Source.Artifact,
             NativeAcsDomainId.Actions,

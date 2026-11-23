@@ -177,7 +177,7 @@ internal sealed class RuntimeActionOwner(
         CancellationToken cancellationToken)
     {
         var gate = services.GetService<RuntimeNativePolicyGate>();
-        if (request.IsNativeToolCallback)
+        if (request.IsNativeToolCallback || request.RemoteToolOwner is not null)
             return await (gate ?? throw new RuntimeAuthorizationException(
                 RuntimeNativePolicyGate.UnavailableCode))
                 .PrepareAuthorizeAsync(
@@ -203,7 +203,7 @@ internal sealed class RuntimeActionOwner(
         CancellationToken cancellationToken)
     {
         var gate = services.GetService<RuntimeNativePolicyGate>();
-        if (request.IsNativeToolCallback)
+        if (request.IsNativeToolCallback || request.RemoteToolOwner is not null)
         {
             _ = await (gate ?? throw new RuntimeAuthorizationException(
                 RuntimeNativePolicyGate.UnavailableCode))
@@ -223,7 +223,7 @@ internal sealed class RuntimeActionOwner(
         CancellationToken cancellationToken)
     {
         var gate = services.GetService<RuntimeNativePolicyGate>();
-        if (!request.IsNativeToolCallback)
+        if (!request.IsNativeToolCallback && request.RemoteToolOwner is null)
             return;
         _ = await (gate ?? throw new RuntimeAuthorizationException(
                 RuntimeNativePolicyGate.UnavailableCode))

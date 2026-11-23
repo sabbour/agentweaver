@@ -422,6 +422,19 @@ are also required. The latter counts fake model sends and source revisions
 through the opt-in Orchestrator policy gate. These tests do not activate ACS or
 change the deployed v4 Policy path.
 
+Run the Remote MCP scan and send-boundary regressions after the Release build:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~RemoteMcpCatalogScan|FullyQualifiedName~EnvironmentRemoteMcpDiscoveryPostgresTests"
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~ReviewedRemoteToolAgentTests
+```
+
+The Environment tests cover accepted-baseline persistence, replay, required
+and optional checks, scanner version binding, complete-catalog findings, and
+scan failure recovery. The Orchestrator tests cover exact reviewed-tool facts,
+gateway revocation after approval, durable admission acknowledgment, and zero
+transport sends after denial or journal failure.
+
 ## Test the canonical Policy API
 
 The Platform head tests check snapshot consistency, current authority,

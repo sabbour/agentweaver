@@ -52,6 +52,13 @@ public sealed record RemoteMcpInvocationValidityRequest(
     string ToolName,
     string ToolRevision);
 
+public sealed record AcceptRemoteMcpDiscoveryRequest(
+    long ExpectedRowRevision,
+    long ConfigurationRevision,
+    long DiscoveryRevision,
+    string CatalogSha256,
+    string IdempotencyKey);
+
 /// <summary>Maps authenticated project APIs for Remote MCP connection management.</summary>
 public static class RemoteMcpConnectionEndpoints
 {
@@ -339,6 +346,36 @@ public static class RemoteMcpConnectionEndpoints
                     caller!, reviewed, request.ToolName, request.ToolRevision, cancellationToken)
                     .ConfigureAwait(false);
                 return Results.Ok(validity);
+            }).ConfigureAwait(false);
+        });
+
+        group.MapPost("/{connectionId:guid}/accept", async (
+            string projectId,
+            Guid connectionId,
+            AcceptRemoteMcpDiscoveryRequest request,
+            HttpContext context,
+            RemoteMcpConnectionStore store,
+            IRemoteMcpScanRequirementSource requirements,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteAsync(context, async () =>
+            {
+                var currentRequirements = await requirements.ReadCurrentAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                var result = await store.AcceptDiscoveryAsync(
+                    caller!,
+                    projectId,
+                    connectionId,
+                    request.ExpectedRowRevision,
+                    request.ConfigurationRevision,
+                    request.DiscoveryRevision,
+                    request.CatalogSha256,
+                    currentRequirements,
+                    request.IdempotencyKey,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(result);
             }).ConfigureAwait(false);
         });
 

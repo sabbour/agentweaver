@@ -70,6 +70,20 @@ retries with the same event identity and bytes after refreshing its source
 authority. The owner returns the original acknowledgment instead of storing a
 second object. A retry with changed content is not equivalent.
 
+### Remote tool recovery
+
+A recovered runtime cannot reuse an earlier Remote MCP permission decision.
+It resolves the exact reviewed snapshot and re-reads the accepted catalog,
+scan evidence, current gateway descriptor and enforcement generation, runtime
+registration, active turn, and action authority. A changed catalog, tool,
+transport option, gateway generation, or policy requirement starts a new
+review and authorization.
+
+The send path requires a durable action-journal acknowledgment before it can
+hand bytes to Environment. A denial, stale scan, lost journal acknowledgment,
+or gateway revocation produces zero sends. A saved result is replayed only
+after its exact call proof and current authority pass the same rechecks.
+
 ## Acceptance and validation
 
 The tests use a controlled SDK transport and object store. The owner integration

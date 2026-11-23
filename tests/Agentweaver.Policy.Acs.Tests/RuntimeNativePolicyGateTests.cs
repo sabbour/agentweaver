@@ -169,6 +169,71 @@ public sealed class RuntimeNativePolicyGateTests
             gate.PrepareAuthorizeAsync(registration, accepted, secondary, default));
     }
 
+    [Fact]
+    public async Task RemoteSnapshotGateUsesScanEvidenceContentEquality()
+    {
+        var source = new FixtureSource(ToolArtifact(allowEdit: true));
+        var (baseRegistration, baseAccepted) = RunBinding("byok-model");
+        var snapshot = RemoteSnapshot(baseRegistration);
+        var selection = JsonSerializer.SerializeToElement(new
+        {
+            modelSelection = baseAccepted.Selection.Snapshot.GetProperty("modelSelection"),
+            projectConfiguration = new
+            {
+                reviewedRemoteToolSnapshots = new[] { snapshot.Reference }
+            }
+        });
+        var accepted = baseAccepted with
+        {
+            Selection = baseAccepted.Selection with { Snapshot = selection }
+        };
+        var registration = baseRegistration with
+        {
+            Binding = baseRegistration.Binding with
+            {
+                AcceptedSelectionHash = RuntimeContractValidation.Hash(
+                    Encoding.UTF8.GetBytes(selection.GetRawText()))
+            }
+        };
+        var roundTripped = JsonSerializer.Deserialize<RemoteMcpCatalogScanEvidence>(
+            JsonSerializer.Serialize(snapshot.ScanEvidence))!;
+        var request = RemoteRequest(registration, snapshot, roundTripped);
+        var resolver = new FixtureSnapshotResolver(snapshot);
+        var withResolver = new RuntimeNativePolicyGate(
+            source,
+            new FixtureAdmissionStore(),
+            new NativeAcsPolicyEvaluator(
+                new NativeAcsArtifactValidator(
+                    Path.Combine(AppContext.BaseDirectory, "missing-opa")),
+                WorkRoot),
+            resolver);
+
+        var reachedEvaluation = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            withResolver.PrepareAuthorizeAsync(
+                registration, accepted, request, default));
+        Assert.Equal(RuntimeNativePolicyGate.UnavailableCode, reachedEvaluation.Code);
+
+        var changed = new RemoteMcpCatalogScanEvidence(
+            roundTripped.ContractVersion,
+            roundTripped.ScannerId,
+            roundTripped.ScannerVersion,
+            roundTripped.ConfigurationRevision,
+            roundTripped.DiscoveryRevision,
+            roundTripped.CatalogSha256,
+            roundTripped.BaselineDiscoveryRevision,
+            roundTripped.BaselineCatalogSha256,
+            roundTripped.EvaluatedAt,
+            roundTripped.State,
+            roundTripped.Checks.SetItem(
+                0, roundTripped.Checks[0] with { ReasonCode = "changed" }),
+            roundTripped.ErrorCode);
+        var mismatch = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            withResolver.PrepareAuthorizeAsync(
+                registration, accepted, RemoteRequest(registration, snapshot, changed), default));
+
+        Assert.Equal("runtime_remote_tool_snapshot_binding_invalid", mismatch.Code);
+    }
+
     [RuntimeNativePolicyFact]
     public async Task FinalVerificationRejectsPolicyUpdatedWhileVerificationIsInFlight()
     {
@@ -575,9 +640,103 @@ public sealed class RuntimeNativePolicyGateTests
             """{"required_checks":[],"blocked_findings":[]}""",
             allowEdit
                 ? """
-                  {"rules":[{"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false},{"tool_name":"edit","action_id":"tool.write","phase":"permission","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false}]}
+                  {"remote_mcp_scan_requirements":[{"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}],"rules":[{"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false},{"tool_name":"edit","action_id":"tool.write","phase":"permission","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false}]}
                   """
-                : """{"rules":[]}""");
+                : """{"remote_mcp_scan_requirements":[{"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}],"rules":[]}""");
+
+    private static ReviewedRemoteToolSnapshot RemoteSnapshot(RuntimeRegistration registration)
+    {
+        var evidence = new RemoteMcpCatalogScanEvidence(
+            1,
+            RemoteMcpCatalogScanEvidence.CurrentScannerId,
+            RemoteMcpCatalogScanEvidence.CurrentScannerVersion,
+            4,
+            8,
+            new string('c', 64),
+            null,
+            null,
+            DateTimeOffset.Parse("2026-11-23T00:00:00Z"),
+            RemoteMcpScanState.Completed,
+            RemoteMcpCatalogScanEvidence.CheckIds.Select(checkId =>
+                new RemoteMcpScanCheckEvidence(
+                    checkId,
+                    checkId == RemoteMcpCatalogScanEvidence.BaselineDriftCheck
+                        ? RemoteMcpScanOutcome.Unknown
+                        : RemoteMcpScanOutcome.Pass,
+                    null,
+                    checkId == RemoteMcpCatalogScanEvidence.BaselineDriftCheck
+                        ? "remote_mcp_accepted_baseline_absent"
+                        : null)).ToImmutableArray());
+        return new(
+            Guid.NewGuid(),
+            registration.Binding.ProjectId,
+            registration.Binding.AgentId,
+            "node-1",
+            "connection-1",
+            5,
+            4,
+            8,
+            "Enabled",
+            new string('b', 64),
+            "https://mcp.example.com/mcp",
+            null,
+            "None",
+            null,
+            "StreamableHttp20250618",
+            null,
+            "catalog-8",
+            new string('c', 64),
+            "remote.lookup",
+            "tool-r1",
+            new string('d', 64),
+            "schema-r1",
+            new string('e', 64),
+            """{"name":"remote.lookup"}""",
+            """{"type":"object"}""",
+            new(
+                "tool.read",
+                RuntimeActionContract.Purpose,
+                """{"source":"review"}"""),
+            evidence);
+    }
+
+    private static RuntimeActionRequest RemoteRequest(
+        RuntimeRegistration registration,
+        ReviewedRemoteToolSnapshot snapshot,
+        RemoteMcpCatalogScanEvidence evidence) =>
+        new(
+            1,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            registration.Binding.ExecutionFence,
+            Guid.NewGuid(),
+            "tool.read",
+            new string('f', 64))
+        {
+            IsToolInvocation = true,
+            RemoteToolOwner = new(
+                1,
+                snapshot.AgentId,
+                snapshot.NodeId,
+                "call-1",
+                new string('1', 64),
+                registration.Binding.TurnId,
+                snapshot.SnapshotId.ToString("D"),
+                snapshot.SnapshotDigest,
+                snapshot.ConnectionId,
+                snapshot.ConnectionConfigurationRevision,
+                snapshot.ConnectionDiscoveryRevision!.Value,
+                snapshot.ConfigurationSha256,
+                snapshot.CatalogDigest,
+                snapshot.ToolId,
+                snapshot.ToolRevision,
+                snapshot.ToolDigest,
+                snapshot.TransportProfile,
+                snapshot.TransportOptionsSha256,
+                new string('2', 64),
+                1,
+                evidence)
+        };
 
     private static RuntimeActionRequest ToolRequest(
         RuntimeRegistration registration, string phase)
@@ -735,6 +894,17 @@ public sealed class RuntimeNativePolicyGateTests
     }
 
     private static string WorkRoot => Path.Combine(AppContext.BaseDirectory, "runtime-native-policy-work");
+
+    private sealed class FixtureSnapshotResolver(
+        ReviewedRemoteToolSnapshot snapshot) : IReviewedRemoteToolSnapshotResolver
+    {
+        public Task<ReviewedRemoteToolSnapshot?> ResolveAsync(
+            ReviewedRemoteToolSnapshotReference reference,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(reference.SnapshotDigest == snapshot.SnapshotDigest
+                ? snapshot
+                : null);
+    }
 
     private sealed class FixtureSource(NativeAcsArtifact artifact) : IRuntimeNativePolicySource
     {

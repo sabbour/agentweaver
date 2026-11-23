@@ -1,3 +1,4 @@
+using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -17,6 +18,7 @@ public sealed class RemoteMcpConnectionEndpointRegistrationTests
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
         builder.Services.AddScoped<RemoteMcpConnectionStore>();
+        builder.Services.AddSingleton<IRemoteMcpScanRequirementSource, UnavailableScanRequirementSource>();
         builder.Services.AddSingleton<IRemoteMcpDiscoverySource, UnavailableRemoteMcpDiscoverySource>();
         builder.Services.AddScoped<RemoteMcpDiscoveryService>();
         await using var app = builder.Build();
@@ -34,5 +36,12 @@ public sealed class RemoteMcpConnectionEndpointRegistrationTests
                 endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods.Contains(HttpMethods.Delete) == true);
 
         Assert.NotNull(deleteEndpoint.RequestDelegate);
+    }
+
+    private sealed class UnavailableScanRequirementSource : IRemoteMcpScanRequirementSource
+    {
+        public Task<System.Collections.Immutable.ImmutableArray<RemoteMcpScanRequirement>>
+            ReadCurrentAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

@@ -139,6 +139,40 @@ public sealed class RemoteMcpConnectionReviewTests
         Assert.Throws<InvalidOperationException>(() =>
             RemoteMcpConnectionReviewReference.FromSnapshot(
                 Snapshot(Configuration(), Catalog("forecast"), RemoteMcpConnectionState.Disabled)));
+        Assert.Throws<InvalidOperationException>(() =>
+            RemoteMcpConnectionReviewReference.FromSnapshot(
+                new(
+                    Snapshot(Configuration(), Catalog("forecast")).Head with { },
+                    Configuration(),
+                    Catalog("forecast"))));
+    }
+
+    [Fact]
+    public void ReenabledConnectionWithoutCurrentCatalogReturnsCatalogNotPinned()
+    {
+        var pinned = Snapshot(Configuration(), Catalog("forecast"));
+        var reviewed = RemoteMcpConnectionReviewReference.FromSnapshot(pinned);
+        var reenabled = new RemoteMcpConnectionSnapshot(
+                new(
+                    pinned.Head.Connection,
+                    5,
+                    pinned.Head.CurrentConfigurationRevision,
+                    RemoteMcpConnectionState.Enabled,
+                    null,
+                    pinned.Head.AcceptedDiscoveryRevision,
+                    pinned.Head.AcceptedConfigurationRevision),
+                pinned.Configuration,
+                null,
+                pinned.AcceptedCatalog,
+                pinned.AcceptedConfiguration);
+        var tool = pinned.Catalog!.Tools[0];
+
+        var validity = RemoteMcpConnectionReview.Evaluate(
+                reviewed, reenabled, tool.Name, tool.ToolRevision);
+
+        Assert.False(validity.Allowed);
+        Assert.Equal(RemoteMcpInvocationDenial.CatalogNotPinned, validity.Denial);
+        Assert.Null(validity.CurrentReference);
     }
 
     [Fact]
@@ -160,16 +194,21 @@ public sealed class RemoteMcpConnectionReviewTests
     private static RemoteMcpConnectionSnapshot Snapshot(
         RemoteMcpConnectionConfiguration configuration,
         RemoteMcpDiscoveryCatalogPin? catalog,
-        RemoteMcpConnectionState state = RemoteMcpConnectionState.Enabled) =>
+        RemoteMcpConnectionState state = RemoteMcpConnectionState.Enabled,
+        RemoteMcpDiscoveryCatalogPin? acceptedCatalog = null) =>
         new(
             new RemoteMcpConnectionHead(
                 Connection,
                 rowRevision: 3,
                 configuration.ConfigurationRevision,
                 state,
-                catalog?.DiscoveryRevision),
+                catalog?.DiscoveryRevision,
+                acceptedCatalog?.DiscoveryRevision ?? catalog?.DiscoveryRevision,
+                acceptedCatalog?.ConfigurationRevision ?? catalog?.ConfigurationRevision),
             configuration,
-            catalog);
+            catalog,
+            acceptedCatalog ?? catalog,
+            acceptedCatalog is null ? configuration : configuration);
 
     private static RemoteMcpConnectionConfiguration Configuration(
         long revision = 1,
@@ -197,6 +236,30 @@ public sealed class RemoteMcpConnectionReviewTests
             : """{"type":"object"}""";
         var parsed = RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(
             $$$"""{"result":{"tools":[{"name":"{{{toolName}}}","inputSchema":{{{schema}}}}]}}"""));
-        return new(Connection, configurationRevision, discoveryRevision, parsed.CatalogSha256, null, parsed.Tools);
+        var evidence = new RemoteMcpCatalogScanEvidence(
+            1,
+            RemoteMcpCatalogScanEvidence.CurrentScannerId,
+            RemoteMcpCatalogScanEvidence.CurrentScannerVersion,
+            configurationRevision,
+            discoveryRevision,
+            parsed.CatalogSha256,
+            null,
+            null,
+            DateTimeOffset.Parse("2026-11-23T00:00:00Z"),
+            RemoteMcpScanState.Completed,
+            RemoteMcpCatalogScanEvidence.CheckIds.Select(checkId =>
+                new RemoteMcpScanCheckEvidence(
+                    checkId,
+                    RemoteMcpScanOutcome.Pass,
+                    null,
+                    null)).ToImmutableArray());
+        return new(
+            Connection,
+            configurationRevision,
+            discoveryRevision,
+            parsed.CatalogSha256,
+            null,
+            parsed.Tools,
+            scanEvidence: evidence);
     }
 }

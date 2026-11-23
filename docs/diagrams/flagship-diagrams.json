@@ -65,6 +65,11 @@
       "docs": ["docs/architecture/agenthost.md"]
     },
     {
+      "name": "v1-remote-mcp-scan-admission",
+      "concept": "Remote MCP catalog scan baseline and canonical send admission",
+      "docs": ["docs/architecture/remote-mcp-connections.md"]
+    },
+    {
       "name": "v1-knowledge-memory",
       "concept": "Knowledge authority, Memory provider binding, and bounded context",
       "docs": ["docs/architecture/knowledge-memory.md"]

@@ -50,6 +50,8 @@ public sealed class ReviewedRemoteToolRegistryServerPin
 /// </summary>
 public sealed class ReviewedRemoteToolSnapshot
 {
+    public const int CurrentDigestVersion = 2;
+
     public ReviewedRemoteToolSnapshot(
         Guid snapshotId,
         string projectId,
@@ -76,7 +78,8 @@ public sealed class ReviewedRemoteToolSnapshot
         string toolSchemaDigest,
         string toolMetadataJson,
         string toolSchemaJson,
-        ReviewedRemoteToolPermissionMetadata permission)
+        ReviewedRemoteToolPermissionMetadata permission,
+        RemoteMcpCatalogScanEvidence? scanEvidence = null)
     {
         SnapshotId = snapshotId != Guid.Empty
             ? snapshotId
@@ -121,6 +124,15 @@ public sealed class ReviewedRemoteToolSnapshot
         CanonicalToolSchemaJson = ReviewedRemoteToolJson.CanonicalizeObject(
             toolSchemaJson, nameof(toolSchemaJson));
         Permission = permission ?? throw new ArgumentNullException(nameof(permission));
+        ScanEvidence = scanEvidence;
+        if (scanEvidence is not null &&
+            (scanEvidence.CatalogSha256 != CatalogDigest ||
+             scanEvidence.DiscoveryRevision != ConnectionDiscoveryRevision ||
+             scanEvidence.ConfigurationRevision != ConnectionConfigurationRevision))
+            throw new ArgumentException("The catalog scan evidence does not match the reviewed snapshot.", nameof(scanEvidence));
+        TransportOptionsSha256 =
+            RemoteMcpTransportAdapterOptions.ForProfile(
+                Enum.Parse<RemoteMcpTransportProfile>(TransportProfile, ignoreCase: false)).OptionsSha256;
         SnapshotDigest = ReviewedRemoteToolJson.Hash(WriteSnapshotDigestInput());
         Reference = new(ProjectId, SnapshotId, SnapshotDigest, AgentId, NodeId);
     }
@@ -140,6 +152,7 @@ public sealed class ReviewedRemoteToolSnapshot
     public string AuthenticationMode { get; }
     public string? IdentityBindingReference { get; }
     public string TransportProfile { get; }
+    public string TransportOptionsSha256 { get; }
     public ReviewedRemoteToolRegistryServerPin? RegistryServerPin { get; }
     public string CatalogRevision { get; }
     public string CatalogDigest { get; }
@@ -151,6 +164,7 @@ public sealed class ReviewedRemoteToolSnapshot
     public string CanonicalToolMetadataJson { get; }
     public string CanonicalToolSchemaJson { get; }
     public ReviewedRemoteToolPermissionMetadata Permission { get; }
+    public RemoteMcpCatalogScanEvidence? ScanEvidence { get; }
     public string SnapshotDigest { get; }
     public ReviewedRemoteToolSnapshotReference Reference { get; }
 
@@ -161,6 +175,8 @@ public sealed class ReviewedRemoteToolSnapshot
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
+            if (ScanEvidence is not null)
+                writer.WriteNumber("digestVersion", CurrentDigestVersion);
             writer.WriteString("snapshotId", SnapshotId);
             writer.WriteString("projectId", ProjectId);
             writer.WriteString("agentId", AgentId);
@@ -208,6 +224,12 @@ public sealed class ReviewedRemoteToolSnapshot
             writer.WriteString("permissionActionId", Permission.ActionId);
             writer.WriteString("permissionPurpose", Permission.Purpose);
             writer.WriteString("permissionMetadataDigest", Permission.Digest);
+            if (ScanEvidence is not null)
+            {
+                writer.WriteString("transportOptionsSha256", TransportOptionsSha256);
+                writer.WritePropertyName("scanEvidence");
+                JsonSerializer.Serialize(writer, ScanEvidence);
+            }
             writer.WriteEndObject();
         }
 

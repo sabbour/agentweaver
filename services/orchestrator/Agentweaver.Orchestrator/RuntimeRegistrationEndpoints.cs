@@ -64,7 +64,8 @@ public static class RuntimeRegistrationEndpoints
         services.AddScoped(serviceProvider => new RuntimeNativePolicyGate(
             serviceProvider.GetRequiredService<IRuntimeNativePolicySource>(),
             serviceProvider.GetRequiredService<IRuntimeNativePolicyAdmissionStore>(),
-            serviceProvider.GetService<NativeAcsPolicyEvaluator>()));
+            serviceProvider.GetService<NativeAcsPolicyEvaluator>(),
+            serviceProvider.GetService<IReviewedRemoteToolSnapshotResolver>()));
         services.AddScoped<RuntimeRegistrationOwner>();
         services.AddScoped<RuntimeSkillContentOwner>();
         services.AddScoped<RuntimeActionOwner>();

@@ -91,6 +91,12 @@ public static class RemoteMcpCallVerificationComposition
         builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(TlsKey, (services, _) =>
             new RuntimeServiceTlsIdentity(
                 options, "Orchestrator", "Environment", services.GetRequiredService<TimeProvider>()));
+        builder.Services.AddHttpClient<ReviewedRemoteToolEnvironmentClient>(client =>
+            client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(services =>
+                services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(TlsKey).CreateHandler());
+        builder.Services.AddScoped<IReviewedRemoteToolEnvironmentReader>(services =>
+            services.GetRequiredService<ReviewedRemoteToolEnvironmentClient>());
         builder.WebHost.ConfigureKestrel(server =>
         {
             var loader = server.ConfigurationLoader ?? server.Configure(builder.Configuration.GetSection("Kestrel"));
