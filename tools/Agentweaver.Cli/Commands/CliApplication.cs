@@ -88,6 +88,14 @@ public static class CliApplication
                 return await PolicyCommands.RunAsync(
                     args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, ct).ConfigureAwait(false);
             }
+            if (args[0] == "run")
+            {
+                var actualRuntime = runtime ?? new CliRuntimeOptions();
+                using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                return await RunCommands.RunAsync(
+                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, error, ct)
+                    .ConfigureAwait(false);
+            }
             if (args[0] == "copilot")
             {
                 var actualRuntime = runtime ?? new CliRuntimeOptions();
@@ -532,6 +540,8 @@ public static class CliApplication
           agentweaver policy validate --scope project --project-id <id> --input <export-file> [target options]
           agentweaver policy apply --scope platform --input <export-file> --expected-revision <revision|none> --reason <text> [target options]
           agentweaver policy history --scope platform [--page-size <1-100>] [--cursor <token>] [target options]
+          agentweaver run egress <runId> [--limit <1-100>] [--cursor <cursor>]
+              [--scope projects.admin] [target options without project/run binding]
           agentweaver platform byok list [target options]
           agentweaver platform byok show <providerId> [target options]
           agentweaver platform byok add --name <name> --type <openai|azure|anthropic>

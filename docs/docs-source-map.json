@@ -23,6 +23,7 @@
     "docs/index.md",
     "docs/guide/quickstart.md",
     "docs/guide/cli.md",
+    "docs/guide/manage-agenthost-egress.md",
     "docs/guide/manage-model-providers.md",
     "docs/guide/manage-project-byok-provider-metadata.md",
     "docs/guide/configure-providers.md",
