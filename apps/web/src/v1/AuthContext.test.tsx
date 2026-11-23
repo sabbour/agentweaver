@@ -65,6 +65,7 @@ vi.mock('./config', () => ({
 import { AuthProvider, useAuth } from './AuthContext';
 import { ProjectModelProviderDrafts } from './ProjectModelProviderDrafts';
 import { DeploymentByokBindings } from './DeploymentByokBindings';
+import { RunEgressPanel } from './RunEgressPanel';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -148,6 +149,7 @@ function Harness() {
   const [ensured, setEnsured] = useState('not-ensured');
   const [unboundToken, setUnboundToken] = useState('none');
   const [projectToken, setProjectToken] = useState('none');
+  const [projectEgress, setProjectEgress] = useState('not-read');
   const [policyRead, setPolicyRead] = useState('not-read');
   const [concurrentPolicyResult, setConcurrentPolicyResult] = useState('not-started');
   const firstPolicyAbortRef = useRef<AbortController | null>(null);
@@ -283,9 +285,24 @@ function Harness() {
       }}>
         Use project session
       </button>
+      <button type="button" onClick={() => {
+        void auth.apiCall(async (accessToken) => {
+          const context = await gatewayClient.getAuthorizationContext(accessToken);
+          await gatewayClient.readRunEgress(
+            accessToken,
+            'run-1',
+            { limit: 50, cursor: null },
+            context.tenantId,
+          );
+          setProjectEgress(`${accessToken}:${context.tenantId}`);
+        }, { projectId: 'project-1' }).catch(() => setProjectEgress('failed'));
+      }}>
+        Read project egress
+      </button>
       <output>ensure:{ensured}</output>
       <output>unbound:{unboundToken}</output>
       <output>project:{projectToken}</output>
+      <output>egress:{projectEgress}</output>
       <output>{auth.session?.accessToken ?? 'signed-out'}</output>
       <output>name:{auth.session?.displayName ?? 'none'}</output>
       <output>{auth.restoringSession ? 'restoring' : 'not-restoring'}</output>
@@ -297,6 +314,33 @@ function Harness() {
       <output>api-tenant:{observedTenant ?? 'none'}</output>
       <output>policy:{policyRead}</output>
       <output>policy-concurrent:{concurrentPolicyResult}</output>
+    </div>
+  );
+}
+
+function RunEgressAuthHarness() {
+  const auth = useAuth();
+  const [showEgress, setShowEgress] = useState(false);
+  const [activeToken, setActiveToken] = useState('signed-out');
+  return (
+    <div>
+      <button type="button" onClick={() => { void auth.authorize(null); }}>Sign in for unbound access</button>
+      <button type="button" onClick={() => setShowEgress(true)}>Show run egress</button>
+      <button
+        type="button"
+        onClick={() => {
+          void auth.apiCall(async (accessToken) => {
+            if (accessToken === 'access-1')
+              throw new GatewayError(401, { code: 'unauthorized' }, 'Refresh required.');
+            setActiveToken(accessToken);
+          });
+        }}
+      >
+        Refresh active session
+      </button>
+      <output>active-token:{activeToken}</output>
+      <output>active-session:{auth.session?.accessToken ?? 'signed-out'}</output>
+      {showEgress && <RunEgressPanel projectId="project-1" runId="run-1" />}
     </div>
   );
 }
@@ -481,6 +525,118 @@ describe('Broker refresh coordination', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Use unbound session' }));
     await screen.findByText('unbound:access-1');
+  });
+
+  it('finishes project egress sign-in against the current unbound session scope', async () => {
+    render(<AuthProvider><RunEgressAuthHarness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for unbound access' }));
+    await completePopupSignIn();
+    expect(await screen.findByText('active-session:access-1')).toBeTruthy();
+
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(
+      token('project-access', 'project-refresh'),
+    );
+    vi.mocked(gatewayClient.getAuthorizationContext).mockImplementation(
+      async (accessToken, tenantSelector) => ({
+        contractVersion: 1,
+        issuer: 'projects-config',
+        actorId: 'actor-1',
+        tenantId: tenantSelector ?? 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: accessToken === 'project-access' ? 'project-1' : null,
+        boundRunId: null,
+        effectiveAuthority: [],
+      }),
+    );
+    const readEgress = vi.spyOn(gatewayClient, 'readRunEgress').mockResolvedValue({
+      runId: 'run-1',
+      coverage: 'Unavailable',
+      delayedUntil: null,
+      items: [],
+      nextCursor: null,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show run egress' }));
+    await completeSilentSignIn({ error: 'login_required' });
+    const projectSignIn = await screen.findByRole('button', { name: 'Sign in for this project' });
+    await waitFor(() => expect(projectSignIn.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(projectSignIn);
+    await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ binding: { projectId: 'project-1' } }),
+      'challenge',
+    ));
+
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('access-2', 'refresh-2'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh active session' }));
+    expect(await screen.findByText('active-token:access-2')).toBeTruthy();
+    await completePopupSignIn('project-code');
+
+    expect(await screen.findByText(
+      'Coverage unavailable. This view shows stored records only.',
+    )).toBeTruthy();
+    expect(readEgress).toHaveBeenCalledWith(
+      'project-access',
+      'run-1',
+      { limit: 50, cursor: null, signal: expect.any(AbortSignal) },
+      'tenant-1',
+    );
+  });
+
+  it('resolves and reads egress with the refreshed exact project session while unbound stays active', async () => {
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('project-access', 'project-refresh'));
+    const projectSignInExchangeCount = mocks.exchangeAuthorizationCode.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for project' }));
+    await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ binding: { projectId: 'project-1' } }),
+      'challenge',
+    ));
+    await completePopupSignIn('project-code');
+    await waitFor(() => expect(mocks.exchangeAuthorizationCode)
+      .toHaveBeenCalledTimes(projectSignInExchangeCount + 1));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText('access-1')).toBeTruthy();
+
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('project-access-refreshed'));
+    vi.mocked(gatewayClient.getAuthorizationContext)
+      .mockRejectedValueOnce(new GatewayError(401, { code: 'expired' }, 'Expired.'))
+      .mockResolvedValueOnce({
+        contractVersion: 1,
+        issuer: 'projects-config',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: 'project-1',
+        boundRunId: null,
+        effectiveAuthority: [],
+      });
+    const readEgress = vi.spyOn(gatewayClient, 'readRunEgress').mockResolvedValue({
+      runId: 'run-1',
+      coverage: 'Unavailable',
+      delayedUntil: null,
+      items: [],
+      nextCursor: null,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Read project egress' }));
+    expect(await screen.findByText('egress:project-access-refreshed:tenant-1')).toBeTruthy();
+    expect(screen.getByText('access-1')).toBeTruthy();
+    expect(mocks.refreshBrokerToken).toHaveBeenCalledWith(
+      expect.anything(),
+      'project-refresh',
+    );
+    expect(readEgress).toHaveBeenCalledWith(
+      'project-access-refreshed',
+      'run-1',
+      { limit: 50, cursor: null },
+      'tenant-1',
+    );
   });
 
   it('loads project drafts after first authorization while context bootstrap runs', async () => {

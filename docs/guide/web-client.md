@@ -90,7 +90,8 @@ The client uses these routes:
 | `/projects/:projectId/diagnostics` | Read platform areas that are not ready and failed runs. |
 | `/projects/:projectId/heartbeat` | Read seven-day metric tiles and the runs that are working or blocked. |
 | `/projects/:projectId/cluster` | Read the platform component report. |
-| `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. |
+| `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. The header links to stored run Egress. |
+| `/projects/:projectId/runs/:runId/history?view=egress` | Read server-ordered stored outbound network flows for the run with exact project authority. The page shows Session tree, Activity, and Egress tabs. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
 | `/platform-settings` | Read the platform component report. Only tenant and platform administrators can read it. |
 | `/policies` | Read saved Platform Policy source or validate an in-memory Project Policy draft. |
@@ -170,6 +171,20 @@ use a project-bound Broker session with no run and do not accept credentials.
 See [project connections](../experience/connections.md). Existing
 `/orchestrations/:runId` links keep their query parameters when they open the
 run.
+
+The **Egress** history view keeps the active unbound session for Session tree
+and Activity. Before it reads egress, it silently acquires a session bound only
+to the exact project. It verifies the actor, binding, and tenant in the
+Projects authorization context, then sends that confirmed tenant with each
+egress page request. If silent project sign-in needs action, the page offers
+**Sign in for this project**.
+
+Egress pages contain 50 stored records. Select **Load more** to read the
+next cursor. Every successful page shows that coverage is unavailable and
+that the view contains stored records only. The view does not treat an empty
+successful page as a load failure. It retries transient failures, restarts at
+the first page for an invalid cursor, and clears rows and pagination after
+terminal access loss.
 
 The rail footer shows your name from the sign-in token's `name` claim, or
 `preferred_username` when `name` is absent. If the token has neither claim,

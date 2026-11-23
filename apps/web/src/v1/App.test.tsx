@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => ({
   getSessionStatus: vi.fn(),
   getProjectRunHistorySessions: vi.fn(),
   replayProjectRunHistoryEvents: vi.fn(),
+  readRunEgress: vi.fn(),
   getDecisions: vi.fn(),
   sendProjectRunMessage: vi.fn(),
   searchKnowledge: vi.fn(),
@@ -123,6 +124,7 @@ vi.mock('./api', () => ({
     getSessionStatus: mocks.getSessionStatus,
     getProjectRunHistorySessions: mocks.getProjectRunHistorySessions,
     replayProjectRunHistoryEvents: mocks.replayProjectRunHistoryEvents,
+    readRunEgress: mocks.readRunEgress,
     getDecisions: mocks.getDecisions,
     sendProjectRunMessage: mocks.sendProjectRunMessage,
     searchKnowledge: mocks.searchKnowledge,
@@ -600,6 +602,13 @@ describe('v1 web project scoping', () => {
     mocks.getProjectRunHistorySessions.mockReset();
     mocks.replayProjectRunHistoryEvents.mockReset().mockResolvedValue({
       events: [], hasMore: false, nextCursor: null,
+    });
+    mocks.readRunEgress.mockReset().mockResolvedValue({
+      runId: 'run-1',
+      coverage: 'Unavailable',
+      delayedUntil: null,
+      items: [],
+      nextCursor: null,
     });
     mocks.getDecisions.mockReset();
     mocks.sendProjectRunMessage.mockReset();
@@ -3185,6 +3194,59 @@ describe('v1 web project scoping', () => {
     expect(mocks.replayProjectRunHistoryEvents).toHaveBeenCalledWith(
       'broker-token', 'p1', 'work-run', null, 100, 'tenant-1',
     );
+  });
+
+  it('opens the egress deep link with the history tabs and exact project authority', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.getAuthorizationContext.mockResolvedValue({
+      contractVersion: 1,
+      issuer: 'https://broker.test',
+      actorId: 'user-1',
+      tenantId: 'tenant-1',
+      membershipRevision: 1,
+      boundProjectId: 'p1',
+      boundRunId: null,
+      effectiveAuthority: [],
+    });
+    mocks.readRunEgress.mockResolvedValue({
+      runId: 'work-run',
+      coverage: 'Unavailable',
+      delayedUntil: null,
+      items: [],
+      nextCursor: null,
+    });
+    window.history.replaceState(
+      {},
+      '',
+      '/projects/p1/runs/work-run/history?view=egress',
+    );
+    render(<App />);
+
+    expect((await screen.findByRole('tab', { name: 'Egress' })).getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByText(
+      'Coverage unavailable. This view shows stored records only.',
+    )).toBeTruthy();
+    expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p1' }, false);
+    expect(mocks.readRunEgress).toHaveBeenCalledWith(
+      'broker-token',
+      'work-run',
+      { limit: 50, cursor: null, signal: expect.any(AbortSignal) },
+      'tenant-1',
+    );
+    expect(screen.getByRole('tab', { name: 'Session tree' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeTruthy();
+  });
+
+  it('links to egress from the run sign-in screen', async () => {
+    mocks.binding = { projectId: 'other-project', runId: 'other-run' };
+    mocks.ensureSession.mockResolvedValue(false);
+    window.history.replaceState({}, '', '/projects/p1/runs/run-1');
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Orchestration' });
+    const link = screen.getByRole('link', { name: 'Egress' });
+    expect(link.getAttribute('href')).toBe('/projects/p1/runs/run-1/history?view=egress');
+    expect(await screen.findByRole('button', { name: 'Sign in for this project and run' })).toBeTruthy();
   });
 
   it('uses the shared pager for project-wide discovery', async () => {

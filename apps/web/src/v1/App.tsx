@@ -121,6 +121,7 @@ import { NewSessionPage } from './NewSessionPage';
 import { clearPendingRun, readPendingRun } from './pendingRun';
 import { clearPendingChat } from './chiefOfStaff';
 import { StopRunButton } from './StopRunButton';
+import { RunEgressPanel } from './RunEgressPanel';
 import { AgentsView } from './AgentsView';
 import { CastTeamPage } from './CastTeamPage';
 import { PlatformSettingsPage } from './PlatformSettingsPage';
@@ -3302,7 +3303,15 @@ function RunPage() {
   if (!authorized) {
     return (
       <>
-        <PageHeading title="Orchestration" description={`Run ${runId}`} page="Orchestrations" />
+        <PageHeading
+          title="Orchestration"
+          description={`Run ${runId}`}
+          page="Orchestrations"
+          actions={<Link className="v1-link-button"
+            to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/history?view=egress`}>
+            Egress
+          </Link>}
+        />
         {/* Show a loader while the silent sign-in runs. Ask the user only if it failed. */}
         {silentBind === 'failed' ? (
           <Panel title="Sign in to open this run">
@@ -3391,6 +3400,10 @@ function RunPage() {
             state={currentRunStatus?.executionState}
             onStopped={() => void refreshRef.current()}
           />
+          <Link className="v1-link-button"
+            to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/history?view=egress`}>
+            Egress
+          </Link>
           <Button appearance="secondary" aria-label="Refresh run" icon={<ArrowClockwiseRegular />} disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh</Button>
         </>}
       />
@@ -3699,7 +3712,7 @@ function ProjectRunHistoryPage() {
   const { apiCall, authorize, ensureSession } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedView = searchParams.get('view');
-  const view = requestedView === 'activity' ? 'activity' : 'sessions';
+  const view = requestedView === 'activity' || requestedView === 'egress' ? requestedView : 'sessions';
   const [tree, setTree] = useState<SessionTreeSnapshot | null>(null);
   const [events, setEvents] = useState<SessionEventEnvelope[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -3713,13 +3726,14 @@ function ProjectRunHistoryPage() {
   const historyKey = JSON.stringify([projectId, runId, view]);
 
   useEffect(() => {
-    if (requestedView === 'sessions' || requestedView === 'activity') return;
+    if (requestedView === 'sessions' || requestedView === 'activity' || requestedView === 'egress') return;
     const normalized = new URLSearchParams(searchParams);
     normalized.set('view', 'sessions');
     setSearchParams(normalized, { replace: true });
   }, [requestedView, searchParams, setSearchParams]);
 
   const fetchHistory = useCallback(async (cursor: string | null) => {
+    if (view === 'egress') throw new Error('Egress uses its own project authorization.');
     if (!await ensureSession(null, false)) return null;
     if (view === 'sessions') {
       const result = await apiCall((token, tenantSelector) =>
@@ -3766,7 +3780,14 @@ function ProjectRunHistoryPage() {
       setNextCursor(history.page.nextCursor ?? null);
       setHasMore(history.page.hasMore);
     }
-  }, []);
+  }, [
+    setEvents,
+    setHasMore,
+    setNeedsSignIn,
+    setNextCursor,
+    setSelectedSession,
+    setTree,
+  ]);
 
   const load = useCallback(async (cursor: string | null = null) => {
     const generation = ++requestGeneration.current;
@@ -3792,9 +3813,21 @@ function ProjectRunHistoryPage() {
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [applyHistory, fetchHistory, historyKey]);
+  }, [
+    applyHistory,
+    fetchHistory,
+    historyKey,
+    setError,
+    setEvents,
+    setHasMore,
+    setLoadedKey,
+    setLoading,
+    setNextCursor,
+    setTree,
+  ]);
 
   useEffect(() => {
+    if (view === 'egress') return;
     const generation = ++requestGeneration.current;
     let active = true;
     void fetchHistory(null).then((history) => {
@@ -3810,7 +3843,7 @@ function ProjectRunHistoryPage() {
       if (active && generation === requestGeneration.current) setLoading(false);
     });
     return () => { active = false; };
-  }, [applyHistory, fetchHistory, historyKey]);
+  }, [applyHistory, fetchHistory, historyKey, view]);
 
   const isLoading = loading || loadedKey !== historyKey;
   const selectedNode = tree?.nodes.find((node) => node.identity.sessionId === selectedSession) ?? null;
@@ -3831,7 +3864,11 @@ function ProjectRunHistoryPage() {
       >
         <Tab value="sessions">Session tree</Tab>
         <Tab value="activity">Activity</Tab>
+        <Tab value="egress">Egress</Tab>
       </TabList>
+      {view === 'egress' ? (
+        <RunEgressPanel projectId={projectId} runId={runId} />
+      ) : <>
       {needsSignIn && (
         <Panel title="Sign in for project history">
           <Button appearance="primary" onClick={() => void authorize(null).then(() => load(null))}>
@@ -3871,6 +3908,7 @@ function ProjectRunHistoryPage() {
           )}
         </Panel>
       )}
+      </>}
     </div>
   );
 }

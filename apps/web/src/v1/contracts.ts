@@ -1179,6 +1179,26 @@ export interface ProjectRunPage {
   nextCursor: string | null;
 }
 
+/** One stored outbound network flow attributed to a run. */
+export interface RunEgressRecord {
+  host: string | null;
+  address: string | null;
+  port: number;
+  verdict: 'allowed' | 'denied';
+  firstSeen: string;
+  lastSeen: string;
+  count: number;
+}
+
+/** One server-ordered page of stored outbound network flows for a run. */
+export interface RunEgressPage {
+  runId: string;
+  coverage: string;
+  delayedUntil: string | null;
+  items: RunEgressRecord[];
+  nextCursor: string | null;
+}
+
 /** Repository owner and name as Agentweaver stored them. */
 export interface ProjectSourceControlRepository {
   owner: string;

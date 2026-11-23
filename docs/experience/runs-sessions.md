@@ -109,6 +109,18 @@ The `view` query selects `chat`, `topology`, `approvals`, `activity`,
 `changes`, `usage`, or `selection` (**Run settings**). The page opens **Chat**
 by default and replaces an unknown value with `chat`.
 
+Select **Egress** in the Orchestration header to open
+`/projects/:projectId/runs/:runId/history?view=egress`. The **Run history**
+page keeps Session tree and Activity beside the Egress tab. If the Broker
+requires action for project sign-in, select **Sign in for this project**.
+
+The Egress table shows `host`, `address`, `port`, `verdict`, `firstSeen`,
+`lastSeen`, and `count` in server order. Select **Load more** for the next
+50-record page. **No stored records** means the request succeeded with an
+empty result. The coverage notice means this view shows stored records only.
+Transient failures offer **Retry**. An invalid cursor restarts at page 1.
+After access is lost, the table and cursor are cleared.
+
 **Run settings** shows the settings the run started with. Changing project
 settings doesn't change them. It lists the model reference, the project
 configuration revision, and the platform defaults revision. The table

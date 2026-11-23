@@ -74,6 +74,27 @@ agentweaver run egress RUN_ID --scope projects.admin --tenant-id TENANT_ID --lim
 Replace `TENANT_ID` with the tenant used on the first page. When `nextCursor`
 is `null`, the page has no successor.
 
+## Read egress in the web client
+
+Open a run from Orchestrations, then select **Egress** in the run header. The
+Run history page opens
+`/projects/:projectId/runs/:runId/history?view=egress`.
+
+The web client uses a session bound to that exact project for this view. It
+confirms the project binding, actor, and tenant before it sends the egress
+request. Select **Sign in for this project** when silent sign-in needs user
+action. The client uses 50 records per page and keeps the server order. Select
+**Load more** while a next cursor exists.
+
+Each successful page shows:
+
+> Coverage unavailable. This view shows stored records only.
+
+The table shows `host`, `address`, `port`, `verdict`, `firstSeen`, `lastSeen`,
+and `count`. An empty successful page says **No stored records**. A failed load
+shows the request error and keeps it separate from an empty result. Select
+**Retry** for a transient failure.
+
 ## Read the result
 
 The command writes one JSON object to standard output:

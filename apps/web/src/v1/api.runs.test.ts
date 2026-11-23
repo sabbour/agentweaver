@@ -52,6 +52,58 @@ describe('Gateway run, metrics, and notification routes', () => {
     expect(new Headers(fetcher.mock.calls[1][1]?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
   });
 
+  it('reads stored run egress with cursor pagination, an explicit tenant, and no store', async () => {
+    const { fetcher, client } = clientReturning({
+      body: {
+        runId: 'run 1',
+        coverage: 'Unavailable',
+        delayedUntil: null,
+        items: [{
+          host: 'api.example.test',
+          address: '203.0.113.10',
+          port: 443,
+          verdict: 'allowed',
+          firstSeen: '2026-11-20T10:00:00Z',
+          lastSeen: '2026-11-20T10:01:00Z',
+          count: 2,
+        }],
+        nextCursor: 'cursor 2',
+      },
+    });
+
+    const page = await client.readRunEgress(
+      'token',
+      'run 1',
+      { limit: 50, cursor: 'cursor 1' },
+      'tenant-1',
+    );
+
+    expect(page.items[0].host).toBe('api.example.test');
+    expect(String(fetcher.mock.calls[0][0])).toBe(
+      `${base}/runs/run%201/egress?limit=50&cursor=cursor+1`,
+    );
+    expect(fetcher.mock.calls[0][1]?.cache).toBe('no-store');
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-Agentweaver-Tenant'))
+      .toBe('tenant-1');
+  });
+
+  it('rejects a stored egress page for another run', async () => {
+    const { client } = clientReturning({
+      body: {
+        runId: 'other',
+        coverage: 'Unavailable',
+        delayedUntil: null,
+        items: [],
+        nextCursor: null,
+      },
+    });
+
+    await expect(client.readRunEgress('token', 'run-1')).rejects.toMatchObject({
+      status: 502,
+      code: 'owner_contract_invalid',
+    });
+  });
+
   it('sends create and cancel with an idempotency key and start without a body', async () => {
     const { fetcher, client } = clientReturning(
       { status: 201, body: { runId: 'r1', rootSessionId: 's1', state: 'awaiting_binding', binding: {} } },
