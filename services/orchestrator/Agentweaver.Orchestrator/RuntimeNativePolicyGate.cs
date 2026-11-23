@@ -444,7 +444,9 @@ public sealed class RuntimeNativePolicyGate(
         var revisions = snapshot.Accepted.Select(item => (Item: item, AcceptedAtRun: true))
             .Concat(snapshot.Current.Select(item => (Item: item, AcceptedAtRun: false)))
             .ToImmutableArray();
-        var prepared = ImmutableArray.CreateBuilder<RuntimeNativePolicyPreparedRevision>();
+        var prepared = new Dictionary<
+            (string ScopeType, string ScopeId, string PolicyId, long Revision, string ContentSha256),
+            RuntimeNativePolicyPreparedRevision>();
         foreach (var pair in revisions)
         {
             var revision = pair.Item;
@@ -467,14 +469,31 @@ public sealed class RuntimeNativePolicyGate(
             var inspection = NativeAcsUnifiedPolicyProfile.Inspect(revision.Artifact);
             if (!inspection.IsValid || inspection.GuardrailsPolicy is null)
                 throw new RuntimeAuthorizationException(UnavailableCode);
-            prepared.Add(new(
-                revision,
-                inspection.GuardrailsPolicy,
-                pair.AcceptedAtRun,
-                !pair.AcceptedAtRun));
+            var key = (
+                revision.ScopeType,
+                revision.ScopeId,
+                revision.PolicyId,
+                revision.Revision,
+                revision.ContentSha256);
+            if (prepared.TryGetValue(key, out var existing))
+            {
+                prepared[key] = existing with
+                {
+                    AcceptedAtRun = existing.AcceptedAtRun || pair.AcceptedAtRun,
+                    Current = existing.Current || !pair.AcceptedAtRun
+                };
+            }
+            else
+            {
+                prepared.Add(key, new(
+                    revision,
+                    inspection.GuardrailsPolicy,
+                    pair.AcceptedAtRun,
+                    !pair.AcceptedAtRun));
+            }
         }
 
-        return prepared
+        return prepared.Values
             .OrderBy(item => item.Source.ScopeType, StringComparer.Ordinal)
             .ThenBy(item => item.Source.ScopeId, StringComparer.Ordinal)
             .ThenBy(item => item.Source.Revision)

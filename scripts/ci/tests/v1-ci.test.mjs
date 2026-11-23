@@ -267,7 +267,7 @@ test('native ACS tests use the locked Linux runtime and must execute in CI', () 
       new URL(`../../../tests/Agentweaver.Policy.Acs.Tests/${name}.cs`, import.meta.url), 'utf8'))
     .join('\n');
   const coverageSettings = readFileSync(new URL('../../../coverage.runsettings', import.meta.url), 'utf8');
-  assert.equal(nativeAcsRequiredMethods.length, 9);
+  assert.equal(nativeAcsRequiredMethods.length, 11);
   for (const method of nativeAcsRequiredMethods)
     assert.ok(source.includes(`Task ${method.split('.').at(-1)}()`) || source.includes(`void ${method.split('.').at(-1)}()`), method);
   assert.match(runner, /entry\.name === 'native-acs'[\s\S]*--runtime', 'linux-x64'[\s\S]*AgentweaverUseLinuxX64LockFile=true/);
