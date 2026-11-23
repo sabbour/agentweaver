@@ -88,6 +88,37 @@ public static class SkillContentEndpoints
     /// <returns>The same route builder for endpoint composition.</returns>
     public static IEndpointRouteBuilder MapSkillContentEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost("/api/platform/skills/admission/cutover", async (
+                SkillReleaseInventoryManifest request,
+                HttpContext context,
+                ProjectAuthorizationOwner authorizationOwner,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                try
+                {
+                    RejectQuery(context);
+                    var caller = await ResolveCallerAsync(
+                            context, authorizationOwner, cancellationToken)
+                        .ConfigureAwait(false);
+                    await context.RequestServices
+                        .GetRequiredService<SkillAdmissionService>()
+                        .ActivateAsync(caller, request, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.NoContent();
+                }
+                catch (ProjectConfigException exception)
+                {
+                    return ToProblem(exception);
+                }
+                catch (SkillContentServiceException exception)
+                {
+                    return ToProblem(exception);
+                }
+            })
+            .RequireAuthorization()
+            .WithName("ActivateSkillAdmissionCutover");
+
         var preview = app.MapGroup("/api/skills").RequireAuthorization();
         preview.MapPost("/preview", async (
             PreviewSkillContentRequest request,

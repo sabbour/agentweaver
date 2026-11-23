@@ -21,6 +21,12 @@ public sealed class ProjectSkillTrustEvidenceRecord
     public string? SelectedPath { get; set; }
     public required byte[] ReportSetJson { get; set; }
     public required string ReportSetSha256 { get; set; }
+    public SkillTrustScoreStatus ScoreStatus { get; set; }
+    public int? HeuristicScore { get; set; }
+    public SkillTrustTier? TrustTier { get; set; }
+    public bool SignatureVerified { get; set; }
+    public bool CapabilityDeclarationValid { get; set; }
+    public bool ShortDescription { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
 

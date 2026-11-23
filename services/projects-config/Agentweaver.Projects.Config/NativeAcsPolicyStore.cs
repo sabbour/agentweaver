@@ -62,6 +62,9 @@ internal sealed class NativeAcsPolicyStore(
             return replay;
         }
 
+        await SkillAdmissionService.LockPolicyScopeAnchorAsync(
+                db, request.ScopeType, request.ScopeId, cancellationToken)
+            .ConfigureAwait(false);
         var currentRevision = await LockHeadAsync(db, request, cancellationToken).ConfigureAwait(false);
         if (currentRevision != request.ExpectedRevision)
             throw ProjectConfigException.Conflict("The native ACS policy head has changed.");

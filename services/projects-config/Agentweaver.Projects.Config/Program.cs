@@ -186,12 +186,19 @@ builder.Services.AddScoped<ModelProviderCredentialPublicationV2Service>();
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Projects.Config");
 builder.Services.AddScoped<NativeAcsPolicyStore>();
+builder.Services.AddSingleton(SkillReleasePublisherKeys.FromConfiguration(builder.Configuration));
+builder.Services.AddScoped<SkillAdmissionService>();
 builder.Services.AddMemoryCache();
 // Missing OPA must not stop unrelated service functions. Policy validation then reports that OPA is unavailable.
 if (builder.Configuration["ACS_OPA_PATH"] is { } acsOpaPath &&
     !string.IsNullOrWhiteSpace(acsOpaPath) &&
     Path.IsPathFullyQualified(acsOpaPath))
+{
     builder.Services.AddSingleton(new NativeAcsArtifactValidator(acsOpaPath));
+    builder.Services.AddScoped(provider => new NativeAcsPolicyEvaluator(
+        provider.GetRequiredService<NativeAcsArtifactValidator>(),
+        Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "acs-evaluation"))));
+}
 builder.Services.AddSingleton<NativeAcsPolicyRequestGate>();
 // History stays in Knowledge, so use the mounted backend CA and forward only the request caller.
 builder.Services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
@@ -231,7 +238,8 @@ builder.Services.AddScoped<SkillContentService>(services => new SkillContentServ
     services.GetRequiredService<ProjectsConfigDbContext>(),
     services.GetService<SkillContentObjectStore>(),
     services.GetRequiredService<ProjectsConfigService>(),
-    services.GetRequiredService<TimeProvider>()));
+    services.GetRequiredService<TimeProvider>(),
+    services.GetRequiredService<SkillAdmissionService>()));
 builder.Services.AddScoped<ProjectGovernanceDecisionStore>();
 builder.Services.AddScoped<ProjectSkillTrustEvidenceService>();
 builder.Services.AddScoped<ISkillContentService>(services => services.GetRequiredService<SkillContentService>());

@@ -45,6 +45,12 @@
           ]
         },
         {
+          "table": "project_skill_builtin_releases",
+          "privileges": [
+            "SELECT"
+          ]
+        },
+        {
           "table": "platform_runtime_heads",
           "privileges": [
             "SELECT",
@@ -138,6 +144,14 @@
           ]
         },
         {
+          "table": "project_skill_admission_fence",
+          "privileges": [
+            "SELECT",
+            "INSERT",
+            "UPDATE"
+          ]
+        },
+        {
           "table": "project_configuration_revisions",
           "privileges": [
             "SELECT",
@@ -196,6 +210,30 @@
             },
             {
               "trigger": "project_skill_trust_evidence_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
+          "table": "project_skill_admissions",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_skill_admissions_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_skill_admissions_no_truncate",
               "function": "reject_immutable_record_mutation()",
               "triggerType": 34,
               "message": "records in %.% are immutable",
@@ -711,6 +749,14 @@
         {
           "signature": "stamp_governance_decision_transaction_id()",
           "execute": false
+        },
+        {
+          "signature": "require_skill_admission_writer()",
+          "execute": false
+        },
+        {
+          "signature": "register_verified_skill_release(uuid, text, text, text, text, text, text, text, timestamp with time zone)",
+          "execute": true
         },
         {
           "signature": "reject_authority_audit_mutation()",

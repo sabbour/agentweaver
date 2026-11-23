@@ -20,6 +20,7 @@ public sealed record ValidatedSkillContent(
     string Name,
     string Description,
     string Instructions,
+    ImmutableArray<string> CapabilityRequests,
     ImmutableArray<ValidatedSkillContentResource> Resources,
     string ContentDigest);
 
@@ -48,7 +49,46 @@ public static class SkillContentValidator
         Encoding.UTF8.GetBytes(
             $"---\nname: {System.Text.Json.JsonSerializer.Serialize(content.Name)}\n" +
             $"description: {System.Text.Json.JsonSerializer.Serialize(content.Description)}\n" +
+            (content.CapabilityRequests.IsEmpty
+                ? string.Empty
+                : "capabilities:\n" +
+                    string.Join(string.Empty, content.CapabilityRequests.Select(
+                        capability => $"  - {System.Text.Json.JsonSerializer.Serialize(capability)}\n"))) +
             $"---\n{content.Instructions}\n");
+
+    internal static bool HasValidCapabilityDeclaration(ReadOnlyMemory<byte> skillMarkdown)
+    {
+        var markdown = DecodeText(skillMarkdown.Span, "SKILL.md");
+        if (!TrySplitFrontmatter(markdown, out var frontmatter, out _))
+            return false;
+        try
+        {
+            using var reader = new StringReader(frontmatter);
+            var yaml = new YamlStream();
+            yaml.Load(reader);
+            if (yaml.Documents is not { Count: 1 } ||
+                yaml.Documents[0].RootNode is not YamlMappingNode mapping ||
+                !mapping.Children.TryGetValue(
+                    new YamlScalarNode("capabilities"), out var declaration) ||
+                declaration is not YamlSequenceNode sequence ||
+                sequence.Children.Count is < 1 or > 64)
+                return false;
+            var capabilities = sequence.Children
+                .Select(node => (node as YamlScalarNode)?.Value)
+                .ToArray();
+            return capabilities.All(capability =>
+                    !string.IsNullOrWhiteSpace(capability) &&
+                    capability.Length <= 256 &&
+                    capability.All(character =>
+                        char.IsAsciiLetterOrDigit(character) ||
+                        character is '.' or '_' or '-' or ':')) &&
+                capabilities.Distinct(StringComparer.Ordinal).Count() == capabilities.Length;
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Parses and validates the skill candidate, normalizes resource paths, sorts resources, and computes the content digest.
@@ -70,7 +110,7 @@ public static class SkillContentValidator
         if (!TrySplitFrontmatter(markdown, out var frontmatter, out var body))
             throw Invalid("SKILL.md must begin with YAML frontmatter delimited by '---' lines.");
 
-        var (name, description) = ParseFrontmatter(frontmatter);
+        var (name, description, capabilities) = ParseFrontmatter(frontmatter);
         if (string.IsNullOrWhiteSpace(name))
             throw Invalid("SKILL.md frontmatter must include a non-empty 'name'.");
         name = name.Trim();
@@ -138,13 +178,13 @@ public static class SkillContentValidator
             name,
             description,
             instructions,
+            capabilities,
             orderedResources,
-            SkillRuntimeContentContract.ComputeContentDigest(
-                name, description, instructions, immutableResources));
+            ComputeContentDigest(name, description, instructions, capabilities, immutableResources));
     }
 
     /// <summary>Reads a single YAML mapping and accepts only scalar name and description fields.</summary>
-    private static (string? Name, string? Description) ParseFrontmatter(string text)
+    private static (string? Name, string? Description, ImmutableArray<string> Capabilities) ParseFrontmatter(string text)
     {
         try
         {
@@ -158,6 +198,8 @@ public static class SkillContentValidator
             string? description = null;
             var sawName = false;
             var sawDescription = false;
+            var capabilities = ImmutableArray<string>.Empty;
+            var sawCapabilities = false;
             foreach (var (keyNode, valueNode) in mapping.Children)
             {
                 if (keyNode is not YamlScalarNode { Value: not null } key)
@@ -181,9 +223,30 @@ public static class SkillContentValidator
                         sawDescription = true;
                     }
                 }
+                else if (key.Value == "capabilities")
+                {
+                    if (sawCapabilities || valueNode is not YamlSequenceNode sequence ||
+                        sequence.Children.Count is < 1 or > 64)
+                        throw Invalid("SKILL.md frontmatter 'capabilities' must be a unique list of 1-64 strings.");
+                    var values = sequence.Children.Select(node =>
+                        node is YamlScalarNode { Value: not null } scalar
+                            ? scalar.Value
+                            : throw Invalid("Skill capability requests must be string scalars.")).ToArray();
+                    if (values.Any(value =>
+                            string.IsNullOrWhiteSpace(value) ||
+                            value.Length > 256 ||
+                            value.All(char.IsWhiteSpace) ||
+                            value.Any(character =>
+                                !char.IsAsciiLetterOrDigit(character) &&
+                                character is not ('.' or '_' or '-' or ':'))) ||
+                        values.Distinct(StringComparer.Ordinal).Count() != values.Length)
+                        throw Invalid("Skill capability requests must be unique bounded identifiers.");
+                    capabilities = values.ToImmutableArray();
+                    sawCapabilities = true;
+                }
             }
 
-            return (name, description);
+            return (name, description, capabilities);
         }
         catch (YamlDotNet.Core.YamlException exception)
         {
@@ -252,6 +315,15 @@ public static class SkillContentValidator
         }
         return true;
     }
+
+    private static string ComputeContentDigest(
+        string name,
+        string description,
+        string instructions,
+        ImmutableArray<string> capabilities,
+        ImmutableArray<SkillRuntimeContentResourceV1> resources)
+        => SkillRuntimeContentContract.ComputeContentDigest(
+            name, description, instructions, resources);
 
     /// <summary>Decodes strict UTF-8 and reports which manifest or resource failed decoding.</summary>
     private static string DecodeText(ReadOnlySpan<byte> bytes, string source)

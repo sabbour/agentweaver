@@ -1315,6 +1315,21 @@ public sealed class P1PostgresInitializerTests
                 },
                 GovernanceCheckpointTable(),
                 AppendOnlyTable("project_skill_trust_evidence"),
+                new TablePlan(
+                    "project_skill_admission_fence",
+                    ["SELECT", "INSERT", "UPDATE"],
+                    null,
+                    false,
+                    null,
+                    null),
+                AppendOnlyTable("project_skill_admissions"),
+                new TablePlan(
+                    "project_skill_builtin_releases",
+                    ["SELECT"],
+                    null,
+                    false,
+                    null,
+                    null),
             ],
             Functions =
             [
@@ -1331,6 +1346,8 @@ public sealed class P1PostgresInitializerTests
                 new("reject_governance_decision_head_removal()", false),
                 new("require_governance_checkpoint_anchor()", false),
                 new("stamp_governance_decision_transaction_id()", false),
+                new("require_skill_admission_writer()", false),
+                new("register_verified_skill_release(uuid, text, text, text, text, text, text, text, timestamp with time zone)", true),
             ],
         };
         services[1] = services[1] with

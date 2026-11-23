@@ -9,10 +9,12 @@ namespace Agentweaver.Policy.Acs;
 public static class NativeAcsUnifiedPolicyProfile
 {
     public const string LegacyProfileId = "composable-domains-v2";
-    public const string ProfileId = "composable-domains-v2.1";
+    public const string ProfileIdV2 = "composable-domains-v2.1";
+    public const string ProfileId = "composable-domains-v3";
     public const string ModelUsePolicyId = "agentweaver_model_use";
     public const string GuardrailsPolicyId = "agentweaver_guardrails";
     public const string ToolPermissionsPolicyId = "agentweaver_tool_permissions";
+    public const string SkillsPolicyId = "agentweaver_skills";
     public const string SelectorPolicyId = "agentweaver_domains_v2";
 
     internal const string ModelUseModulePath = "policy/model-use.rego";
@@ -21,27 +23,40 @@ public static class NativeAcsUnifiedPolicyProfile
     internal const string GuardrailsDataPath = "policy/guardrails/data.json";
     internal const string ToolPermissionsModulePath = "policy/tool-permissions.rego";
     internal const string ToolPermissionsDataPath = "policy/tool_permissions/data.json";
+    internal const string SkillsModulePath = "policy/skills.rego";
+    internal const string SkillsDataPath = "policy/skills/data.json";
     internal const string SelectorModulePath = "policy/domains.rego";
 
-    private const string ManifestResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.manifest.yaml";
-    private const string SelectorModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.domains.rego";
+    private const string ManifestResourceV2 = "Agentweaver.Policy.Acs.ComposableDomainsV2.manifest.yaml";
+    private const string SelectorModuleResourceV2 = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.domains.rego";
+    private const string ManifestResource = "Agentweaver.Policy.Acs.ComposableDomainsV3.manifest.yaml";
+    private const string SelectorModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV3.policy.domains.rego";
     private const string ModelUseModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.model-use.rego";
     private const string GuardrailsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.guardrails.rego";
-    private const string ToolPermissionsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.tool-permissions.rego";
+    private const string ToolPermissionsModuleResourceV2 = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.tool-permissions.rego";
+    private const string ToolPermissionsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV3.policy.tool-permissions.rego";
     private const string LegacyToolPermissionsModuleResource =
         "Agentweaver.Policy.Acs.ComposableDomainsV2Legacy.policy.tool-permissions.rego";
+    private const string SkillsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV3.policy.skills.rego";
     private const string ActionsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV1.policy.actions.rego";
     private const string NetworkModuleResource = "Agentweaver.Policy.Acs.FiniteNetworkV1.policy.network.rego";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly byte[] ManifestBytesV2 = ReadAsset(ManifestResourceV2);
+    private static readonly byte[] SelectorModuleBytesV2 = ReadAsset(SelectorModuleResourceV2);
     private static readonly byte[] ManifestBytes = ReadAsset(ManifestResource);
     private static readonly byte[] ActionsModuleBytes = ReadAsset(ActionsModuleResource);
     private static readonly byte[] NetworkModuleBytes = ReadAsset(NetworkModuleResource);
     private static readonly byte[] SelectorModuleBytes = ReadAsset(SelectorModuleResource);
     private static readonly byte[] ModelUseModuleBytes = ReadAsset(ModelUseModuleResource);
     private static readonly byte[] GuardrailsModuleBytes = ReadAsset(GuardrailsModuleResource);
+    private static readonly byte[] ToolPermissionsModuleBytesV2 =
+        ReadAsset(ToolPermissionsModuleResourceV2);
     private static readonly byte[] ToolPermissionsModuleBytes = ReadAsset(ToolPermissionsModuleResource);
     private static readonly byte[] LegacyToolPermissionsModuleBytes =
         ReadAsset(LegacyToolPermissionsModuleResource);
+    private static readonly byte[] SkillsModuleBytes = ReadAsset(SkillsModuleResource);
+    private const string DefaultSkillsDataJson =
+        "{\"schemaVersion\":1,\"minimumScore\":500,\"requireCompletedEvidence\":true}";
 
     public static bool IsCandidate(NativeAcsArtifact artifact)
     {
@@ -73,14 +88,18 @@ public static class NativeAcsUnifiedPolicyProfile
     {
         ArgumentNullException.ThrowIfNull(artifact);
         var diagnostics = ImmutableArray.CreateBuilder<NativeAcsDiagnostic>();
+        var skillsEnabled = artifact.ManifestBytes.AsSpan().SequenceEqual(ManifestBytes);
 
         if (artifact.ManifestBytes.IsDefaultOrEmpty ||
             artifact.ManifestBytes.Length > NativeAcsArtifactValidator.MaximumManifestBytes ||
-            !artifact.ManifestBytes.AsSpan().SequenceEqual(ManifestBytes))
+            !skillsEnabled &&
+            !artifact.ManifestBytes.AsSpan().SequenceEqual(ManifestBytesV2))
             return Invalid(diagnostics, "unified_manifest",
                 "The unified ACS manifest does not match the reviewed profile.");
 
-        if (artifact.Files.IsDefault || artifact.Files.Length != (projectScope ? 10 : 11))
+        if (artifact.Files.IsDefault ||
+            artifact.Files.Length !=
+                (projectScope ? skillsEnabled ? 12 : 10 : skillsEnabled ? 13 : 11))
             return Invalid(diagnostics, "unified_file_closure",
                 "The unified ACS artifact must contain all reviewed domain files.");
 
@@ -97,9 +116,8 @@ public static class NativeAcsUnifiedPolicyProfile
             totalBytes += file.Bytes.Length;
         }
 
-        if (totalBytes > NativeAcsArtifactValidator.MaximumArtifactBytes ||
-            !files.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(
-            [
+        string[] expectedPaths =
+        [
                 NativeAcsComposableDomainsProfile.ActionsModulePath,
                 NativeAcsComposableDomainsProfile.ActionsDataPath,
                 NativeAcsComposableDomainsProfile.NetworkModulePath,
@@ -110,8 +128,15 @@ public static class NativeAcsUnifiedPolicyProfile
                 GuardrailsDataPath,
                 ToolPermissionsModulePath,
                 ToolPermissionsDataPath,
-                .. projectScope ? [] : new[] { NativeAcsComposableDomainsProfile.NetworkDataPath }
-            ]))
+                .. skillsEnabled
+                    ? new[] { SkillsModulePath, SkillsDataPath }
+                    : Array.Empty<string>(),
+                .. projectScope
+                    ? Array.Empty<string>()
+                    : new[] { NativeAcsComposableDomainsProfile.NetworkDataPath }
+            ];
+        if (totalBytes > NativeAcsArtifactValidator.MaximumArtifactBytes ||
+            !files.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(expectedPaths))
             return Invalid(diagnostics, "unified_file_closure",
                 "The unified ACS artifact must contain only the reviewed domain files.");
 
@@ -119,11 +144,14 @@ public static class NativeAcsUnifiedPolicyProfile
             files[ToolPermissionsModulePath], LegacyToolPermissionsModuleBytes);
         if (!Matches(files[NativeAcsComposableDomainsProfile.ActionsModulePath], ActionsModuleBytes) ||
             !Matches(files[NativeAcsComposableDomainsProfile.NetworkModulePath], NetworkModuleBytes) ||
-            !Matches(files[SelectorModulePath], SelectorModuleBytes) ||
+            !Matches(files[SelectorModulePath],
+                skillsEnabled ? SelectorModuleBytes : SelectorModuleBytesV2) ||
             !Matches(files[ModelUseModulePath], ModelUseModuleBytes) ||
             !Matches(files[GuardrailsModulePath], GuardrailsModuleBytes) ||
-            (!Matches(files[ToolPermissionsModulePath], ToolPermissionsModuleBytes) &&
-                !legacyToolPermissions))
+            (!Matches(files[ToolPermissionsModulePath],
+                skillsEnabled ? ToolPermissionsModuleBytes : ToolPermissionsModuleBytesV2) &&
+                !legacyToolPermissions) ||
+            skillsEnabled && !Matches(files[SkillsModulePath], SkillsModuleBytes))
             return Invalid(diagnostics, "unified_module",
                 "Unified ACS Rego modules must match the reviewed templates.");
 
@@ -158,7 +186,7 @@ public static class NativeAcsUnifiedPolicyProfile
                     StrictUtf8.GetString(files[NativeAcsComposableDomainsProfile.NetworkDataPath].Bytes.AsSpan()));
                 var networkResult = NativeAcsFiniteNetworkProfile.Validate(network);
                 if (!networkResult.IsValid || networkResult.Policy is null)
-                    return new(false, [], null, null, null, networkResult.Diagnostics);
+                    return new(false, [], null, null, null, null, networkResult.Diagnostics);
                 networkPolicy = networkResult.Policy;
             }
             catch (DecoderFallbackException)
@@ -184,18 +212,34 @@ public static class NativeAcsUnifiedPolicyProfile
             return Invalid(diagnostics, toolCode,
                 "The tool-permissions domain data does not match its closed schema.",
                 ToolPermissionsDataPath);
+        NativeAcsSkillsPolicy? skillsPolicy = null;
+        if (skillsEnabled &&
+            !TryReadSkills(files[SkillsDataPath].Bytes, out skillsPolicy, out var skillsCode))
+            return Invalid(diagnostics, skillsCode,
+                "The Skills domain data does not match its closed schema.",
+                SkillsDataPath);
 
-        return new(
-            true,
-            projectScope
+        ImmutableArray<NativeAcsDomainId> domains = projectScope
+            ? skillsEnabled
                 ? [NativeAcsDomainId.Actions, NativeAcsDomainId.ModelUse,
+                    NativeAcsDomainId.Guardrails, NativeAcsDomainId.ToolPermissions,
+                    NativeAcsDomainId.Skills]
+                : [NativeAcsDomainId.Actions, NativeAcsDomainId.ModelUse,
                     NativeAcsDomainId.Guardrails, NativeAcsDomainId.ToolPermissions]
+            : skillsEnabled
+                ? [NativeAcsDomainId.Actions, NativeAcsDomainId.PlatformNetwork,
+                    NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails,
+                    NativeAcsDomainId.ToolPermissions, NativeAcsDomainId.Skills]
                 : [NativeAcsDomainId.Actions, NativeAcsDomainId.PlatformNetwork,
                     NativeAcsDomainId.ModelUse, NativeAcsDomainId.Guardrails,
-                    NativeAcsDomainId.ToolPermissions],
+                    NativeAcsDomainId.ToolPermissions];
+        return new(
+            true,
+            domains,
             networkPolicy,
             modelUsePolicy,
             guardrailsPolicy,
+            skillsPolicy,
             []);
     }
 
@@ -204,21 +248,97 @@ public static class NativeAcsUnifiedPolicyProfile
         string networkDataJson,
         string modelUseDataJson,
         string guardrailsDataJson,
-        string? toolPermissionsDataJson = null)
+        string? domainDataJson = null,
+        string? skillsDataJson = null)
     {
         ArgumentNullException.ThrowIfNull(networkDataJson);
+        var toolPermissionsDataJson = domainDataJson;
+        if (skillsDataJson is null && LooksLikeSkillsData(domainDataJson))
+        {
+            skillsDataJson = domainDataJson;
+            toolPermissionsDataJson = null;
+        }
         return CreateArtifactCore(
             actionsDataJson, networkDataJson, modelUseDataJson, guardrailsDataJson,
-            toolPermissionsDataJson);
+            toolPermissionsDataJson, skillsDataJson);
     }
+
+    public static NativeAcsArtifact CreateArtifactV2(
+        string actionsDataJson,
+        string networkDataJson,
+        string modelUseDataJson,
+        string guardrailsDataJson)
+        => CreateArtifactCore(
+            actionsDataJson, networkDataJson, modelUseDataJson, guardrailsDataJson,
+            toolPermissionsDataJson: null, skillsDataJson: null);
 
     public static NativeAcsArtifact CreateProjectArtifact(
         string actionsDataJson,
         string modelUseDataJson,
         string guardrailsDataJson,
-        string? toolPermissionsDataJson = null) =>
-        CreateArtifactCore(actionsDataJson, null, modelUseDataJson, guardrailsDataJson,
-            toolPermissionsDataJson);
+        string? domainDataJson = null,
+        string? skillsDataJson = null)
+    {
+        var toolPermissionsDataJson = domainDataJson;
+        if (skillsDataJson is null && LooksLikeSkillsData(domainDataJson))
+        {
+            skillsDataJson = domainDataJson;
+            toolPermissionsDataJson = null;
+        }
+        return CreateArtifactCore(
+            actionsDataJson, null, modelUseDataJson, guardrailsDataJson,
+            toolPermissionsDataJson, skillsDataJson);
+    }
+
+    public static NativeAcsArtifact CreateProjectArtifactV2(
+        string actionsDataJson,
+        string modelUseDataJson,
+        string guardrailsDataJson) =>
+        CreateArtifactCore(
+            actionsDataJson, null, modelUseDataJson, guardrailsDataJson,
+            toolPermissionsDataJson: null, skillsDataJson: null);
+
+    internal static NativeAcsArtifact DowngradeToV2(NativeAcsArtifact artifact)
+    {
+        var files = artifact.Files
+            .Where(file => file.RelativePath is not (SkillsModulePath or SkillsDataPath))
+            .Select(file => file.RelativePath switch
+            {
+                SelectorModulePath => new NativeAcsArtifactFile(
+                    SelectorModulePath, SelectorModuleBytesV2.ToImmutableArray()),
+                ToolPermissionsModulePath => new NativeAcsArtifactFile(
+                    ToolPermissionsModulePath, ToolPermissionsModuleBytesV2.ToImmutableArray()),
+                _ => file,
+            })
+            .ToImmutableArray();
+        var v2 = artifact with
+        {
+            ManifestBytes = ManifestBytesV2.ToImmutableArray(),
+            Files = files,
+            ContentSha256 = string.Empty,
+        };
+        return v2 with
+        {
+            ContentSha256 = NativeAcsArtifactValidator.ComputeContentSha256(v2)
+        };
+    }
+
+    private static bool LooksLikeSkillsData(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("schemaVersion", out _) &&
+                document.RootElement.TryGetProperty("minimumScore", out _);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     public static ImmutableArray<RemoteMcpScanRequirement> ReadRemoteMcpScanRequirements(
         NativeAcsArtifact artifact)
@@ -241,13 +361,15 @@ public static class NativeAcsUnifiedPolicyProfile
         string? networkDataJson,
         string modelUseDataJson,
         string guardrailsDataJson,
-        string? toolPermissionsDataJson)
+        string? toolPermissionsDataJson,
+        string? skillsDataJson)
     {
         ArgumentNullException.ThrowIfNull(actionsDataJson);
         ArgumentNullException.ThrowIfNull(modelUseDataJson);
         ArgumentNullException.ThrowIfNull(guardrailsDataJson);
+        var skillsEnabled = skillsDataJson is not null;
         var artifact = new NativeAcsArtifact(
-            ManifestBytes.ToImmutableArray(),
+            (skillsEnabled ? ManifestBytes : ManifestBytesV2).ToImmutableArray(),
             [
                 new NativeAcsArtifactFile(
                     NativeAcsComposableDomainsProfile.ActionsModulePath,
@@ -257,7 +379,8 @@ public static class NativeAcsUnifiedPolicyProfile
                     StrictUtf8.GetBytes(actionsDataJson).ToImmutableArray()),
                 new NativeAcsArtifactFile(
                     SelectorModulePath,
-                    SelectorModuleBytes.ToImmutableArray()),
+                    (skillsEnabled ? SelectorModuleBytes : SelectorModuleBytesV2)
+                        .ToImmutableArray()),
                 new NativeAcsArtifactFile(
                     NativeAcsComposableDomainsProfile.NetworkModulePath,
                     NetworkModuleBytes.ToImmutableArray()),
@@ -281,11 +404,23 @@ public static class NativeAcsUnifiedPolicyProfile
                     StrictUtf8.GetBytes(guardrailsDataJson).ToImmutableArray()),
                 new NativeAcsArtifactFile(
                     ToolPermissionsModulePath,
-                    ToolPermissionsModuleBytes.ToImmutableArray()),
+                    (skillsEnabled ? ToolPermissionsModuleBytes : ToolPermissionsModuleBytesV2)
+                        .ToImmutableArray()),
                 new NativeAcsArtifactFile(
                     ToolPermissionsDataPath,
                     StrictUtf8.GetBytes(toolPermissionsDataJson ?? DefaultToolPermissionsData)
-                        .ToImmutableArray())
+                        .ToImmutableArray()),
+                .. skillsEnabled
+                    ? new[]
+                    {
+                        new NativeAcsArtifactFile(
+                            SkillsModulePath,
+                            SkillsModuleBytes.ToImmutableArray()),
+                        new NativeAcsArtifactFile(
+                            SkillsDataPath,
+                            StrictUtf8.GetBytes(skillsDataJson!).ToImmutableArray())
+                    }
+                    : Array.Empty<NativeAcsArtifactFile>()
             ],
             string.Empty);
         return artifact with
@@ -315,6 +450,12 @@ public static class NativeAcsUnifiedPolicyProfile
         AddChange(NativeAcsDomainId.ModelUse, ModelUseDataPath);
         AddChange(NativeAcsDomainId.Guardrails, GuardrailsDataPath);
         AddChange(NativeAcsDomainId.ToolPermissions, ToolPermissionsDataPath);
+        if (beforeFiles.ContainsKey(SkillsDataPath) &&
+            afterFiles.ContainsKey(SkillsDataPath))
+            AddChange(NativeAcsDomainId.Skills, SkillsDataPath);
+        else if (beforeFiles.ContainsKey(SkillsDataPath) !=
+                 afterFiles.ContainsKey(SkillsDataPath))
+            changed.Add(NativeAcsDomainId.Skills);
         return new(true, changed.ToImmutable(), []);
 
         void AddChange(NativeAcsDomainId domain, string path)
@@ -331,6 +472,7 @@ public static class NativeAcsUnifiedPolicyProfile
         NativeAcsDomainId.ModelUse => ModelUsePolicyId,
         NativeAcsDomainId.Guardrails => GuardrailsPolicyId,
         NativeAcsDomainId.ToolPermissions => ToolPermissionsPolicyId,
+        NativeAcsDomainId.Skills => SkillsPolicyId,
         _ => throw new ArgumentOutOfRangeException(nameof(domain))
     };
 
@@ -689,6 +831,47 @@ public static class NativeAcsUnifiedPolicyProfile
         }
     }
 
+    private static bool TryReadSkills(
+        ImmutableArray<byte> bytes,
+        out NativeAcsSkillsPolicy? policy,
+        out string failureCode)
+    {
+        policy = null;
+        failureCode = "skills_data_json";
+        try
+        {
+            using var document = JsonDocument.Parse(bytes.ToArray());
+            if (HasDuplicateProperties(document.RootElement))
+            {
+                failureCode = "skills_data_duplicate_key";
+                return false;
+            }
+            var root = document.RootElement;
+            if (!HasProperties(root, "schemaVersion", "minimumScore", "requireCompletedEvidence") ||
+                !root.TryGetProperty("schemaVersion", out var schemaVersion) ||
+                schemaVersion.ValueKind != JsonValueKind.Number ||
+                !schemaVersion.TryGetInt32(out var schema) ||
+                schema != 1 ||
+                !root.TryGetProperty("minimumScore", out var minimumScore) ||
+                minimumScore.ValueKind != JsonValueKind.Number ||
+                !minimumScore.TryGetInt32(out var score) ||
+                score is < 0 or > 1000 ||
+                !root.TryGetProperty("requireCompletedEvidence", out var completed) ||
+                completed.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                failureCode = "skills_data_shape";
+                return false;
+            }
+            policy = new NativeAcsSkillsPolicy(score, completed.GetBoolean());
+            failureCode = string.Empty;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryString(JsonElement element, string name, out string value)
     {
         value = string.Empty;
@@ -762,7 +945,7 @@ public static class NativeAcsUnifiedPolicyProfile
         string? path = null)
     {
         diagnostics.Add(new NativeAcsDiagnostic(code, message, path));
-        return new(false, [], null, null, null, diagnostics.ToImmutable());
+        return new(false, [], null, null, null, null, diagnostics.ToImmutable());
     }
 
     private static byte[] ReadAsset(string name)
@@ -812,10 +995,15 @@ public sealed record NativeAcsGuardrailsPolicy(
     public const string EscalationVersion = "guardrails-escalation-v1";
 }
 
+public sealed record NativeAcsSkillsPolicy(
+    int MinimumScore,
+    bool RequireCompletedEvidence);
+
 public sealed record NativeAcsUnifiedPolicyInspection(
     bool IsValid,
     ImmutableArray<NativeAcsDomainId> Domains,
     NativeAcsFiniteNetworkPolicy? NetworkPolicy,
     NativeAcsModelUsePolicy? ModelUsePolicy,
     NativeAcsGuardrailsPolicy? GuardrailsPolicy,
+    NativeAcsSkillsPolicy? SkillsPolicy,
     ImmutableArray<NativeAcsDiagnostic> Diagnostics);

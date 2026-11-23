@@ -138,6 +138,12 @@ public sealed record NativeAcsApprovalEvaluationFacts(
     string TurnId,
     string ArgumentsDigest);
 
+/// <summary>Server-owned Skill admission facts for canonical Skills policy evaluation.</summary>
+public sealed record NativeAcsSkillsEvaluationFacts(
+    int TrustScore,
+    bool EvidenceComplete,
+    bool BuiltInExempt);
+
 /// <summary>
 /// Bounded runtime facts for native ACS evaluation. A null human identity means that verified
 /// human facts are unavailable; callers must not infer them from Broker subject, actor ID, or UPN.
@@ -152,7 +158,8 @@ public sealed record NativeAcsEvaluationSnapshot(
     NativeAcsModelUseEvaluationFacts? ModelUse = null,
     NativeAcsGuardrailsEvaluationFacts? Guardrails = null,
     NativeAcsToolEvaluationFacts? Tool = null,
-    NativeAcsApprovalEvaluationFacts? Approval = null);
+    NativeAcsApprovalEvaluationFacts? Approval = null,
+    NativeAcsSkillsEvaluationFacts? Skills = null);
 
 /// <summary>A bounded validation diagnostic. It does not include source snippets.</summary>
 public sealed record NativeAcsDiagnostic(

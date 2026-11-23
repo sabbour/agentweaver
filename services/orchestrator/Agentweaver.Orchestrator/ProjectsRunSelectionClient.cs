@@ -709,6 +709,12 @@ internal sealed class ProjectsRunSelectionClient(
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
+        if (response.StatusCode == HttpStatusCode.UnprocessableEntity)
+            throw new CoordinationException(
+                "runtime_skill_content_denied", StatusCodes.Status422UnprocessableEntity);
+        if (response.StatusCode == HttpStatusCode.ServiceUnavailable)
+            throw new CoordinationException(
+                "runtime_skill_content_unavailable", StatusCodes.Status503ServiceUnavailable);
         if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Conflict)
             throw new CoordinationException("runtime_skill_content_unavailable", StatusCodes.Status409Conflict);
         if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)

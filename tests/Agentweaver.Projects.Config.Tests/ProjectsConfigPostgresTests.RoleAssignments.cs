@@ -594,7 +594,9 @@ public sealed partial class ProjectsConfigPostgresTests
                     projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint),
                     projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint),
                     projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[]),
-                    projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text)
+                    projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text),
+                    projects_config.register_verified_skill_release(
+                        uuid, text, text, text, text, text, text, text, timestamptz)
                 TO "{roleName}"
                 """);
             await using var runtime = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
@@ -620,11 +622,21 @@ public sealed partial class ProjectsConfigPostgresTests
                 REVOKE ALL ON FUNCTION projects_config.read_p1_project(
                     uuid, text, text, text, uuid, bigint, uuid, bigint) FROM "{roleName}"
                 """);
+            await OwnerSqlAsync($"""
+                REVOKE ALL ON FUNCTION projects_config.register_verified_skill_release(
+                    uuid, text, text, text, text, text, text, text, timestamptz)
+                FROM "{roleName}"
+                """);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(runtime));
             await OwnerSqlAsync($"""
                 GRANT EXECUTE ON FUNCTION projects_config.read_p1_project(
                     uuid, text, text, text, uuid, bigint, uuid, bigint) TO "{roleName}"
+                """);
+            await OwnerSqlAsync($"""
+                GRANT EXECUTE ON FUNCTION projects_config.register_verified_skill_release(
+                    uuid, text, text, text, text, text, text, text, timestamptz)
+                TO "{roleName}"
                 """);
             await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(runtime);
 
@@ -685,6 +697,11 @@ public sealed partial class ProjectsConfigPostgresTests
                 await OwnerSqlAsync($"""
                     REVOKE ALL ON FUNCTION projects_config.read_p1_project(
                         uuid, text, text, text, uuid, bigint, uuid, bigint) FROM "{roleName}"
+                    """);
+                await OwnerSqlAsync($"""
+                    REVOKE ALL ON FUNCTION projects_config.register_verified_skill_release(
+                        uuid, text, text, text, text, text, text, text, timestamptz)
+                    FROM "{roleName}"
                     """);
                 await OwnerSqlAsync($"REVOKE ALL ON SCHEMA projects_config FROM \"{roleName}\"");
                 await OwnerSqlAsync($"DROP ROLE \"{roleName}\"");

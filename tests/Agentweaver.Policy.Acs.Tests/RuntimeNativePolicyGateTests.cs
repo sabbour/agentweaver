@@ -269,6 +269,38 @@ public sealed class RuntimeNativePolicyGateTests
     }
 
     [RuntimeNativePolicyFact]
+    public async Task AcceptedRunPinSurvivesUpgradeFromComposableDomainsV2()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()),
+            WorkRoot);
+        var acceptedArtifact = NativeAcsUnifiedPolicyProfile.DowngradeToV2(
+            Artifact("allow"));
+        var source = new FixtureSource(acceptedArtifact);
+        source.SetAcceptedAndCurrent(
+            acceptedArtifact,
+            Artifact("allow", skillsEnabled: true));
+        var gate = new RuntimeNativePolicyGate(
+            source, new FixtureAdmissionStore(), evaluator);
+        var services = new ServiceCollection()
+            .AddSingleton(gate)
+            .BuildServiceProvider();
+        var owner = new RuntimeActionOwner(
+            null!, null!, null!, null!, null!, null!, null!, null!, services,
+            new OrchestratorOptions(
+                "https://issuer.test/",
+                "orchestrator",
+                "https://projects.test/",
+                "projects",
+                "https://events.test/",
+                "events"));
+        var (registration, accepted) = RunBinding("byok-model");
+
+        await RequireModelSendAsync(
+            owner, gate, registration, accepted, ModelTurnRequest(registration));
+    }
+
+    [RuntimeNativePolicyFact]
     public async Task NativePolicyBlocksEveryWithheldModelSendAndBindsRevision()
     {
         var evaluator = new NativeAcsPolicyEvaluator(
@@ -605,7 +637,10 @@ public sealed class RuntimeNativePolicyGateTests
             registration, request, retained, approve: true, default);
     }
 
-    private static NativeAcsArtifact Artifact(string effect, bool escalates = false) =>
+    private static NativeAcsArtifact Artifact(
+        string effect,
+        bool escalates = false,
+        bool skillsEnabled = false) =>
         NativeAcsUnifiedPolicyProfile.CreateArtifact(
             """{"allowed_action_ids":["model.turn"]}""",
             """
@@ -682,7 +717,11 @@ public sealed class RuntimeNativePolicyGateTests
                     }
                     """)}}
             }
-            """);
+            """,
+            domainDataJson: null,
+            skillsEnabled
+                ? """{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}"""
+                : null);
 
     private static NativeAcsArtifact ToolArtifact(bool allowEdit) =>
         NativeAcsUnifiedPolicyProfile.CreateArtifact(
@@ -995,6 +1034,15 @@ public sealed class RuntimeNativePolicyGateTests
             _acceptedArtifact = artifact;
             _currentArtifact = artifact;
             _acceptedRevision++;
+            _currentRevision++;
+        }
+
+        public void SetAcceptedAndCurrent(
+            NativeAcsArtifact acceptedArtifact,
+            NativeAcsArtifact currentArtifact)
+        {
+            _acceptedArtifact = acceptedArtifact;
+            _currentArtifact = currentArtifact;
             _currentRevision++;
         }
 

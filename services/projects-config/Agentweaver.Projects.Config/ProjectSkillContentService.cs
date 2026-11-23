@@ -39,6 +39,9 @@ public sealed class SkillContentServiceException(string code, string message, in
     public static SkillContentServiceException Unavailable() =>
         new("skill_content_unavailable", "Skill content storage is not configured.",
             StatusCodes.Status503ServiceUnavailable);
+
+    internal static SkillContentServiceException Unavailable(string message) =>
+        new("skill_content_unavailable", message, StatusCodes.Status503ServiceUnavailable);
 }
 
 /// <summary>
@@ -48,12 +51,15 @@ public sealed class SkillContentService(
     ProjectsConfigDbContext db,
     SkillContentObjectStore? objects,
     ProjectsConfigService configurations,
-    TimeProvider timeProvider) : ISkillContentService, ISkillAssignmentService
+    TimeProvider timeProvider,
+    SkillAdmissionService? admission = null) : ISkillContentService, ISkillAssignmentService
 {
+    private readonly SkillAdmissionService _admission = admission ?? new SkillAdmissionService(db, timeProvider);
     public const int DefaultInventoryPageSize = SkillMarketplaceBrowseService.DefaultPageSize;
     public const int MaxInventoryPageSize = SkillMarketplaceBrowseService.MaxPageSize;
 
     private const int InventoryCursorVersion = 1;
+    private static readonly TimeSpan MaximumSkillEvidenceAge = TimeSpan.FromDays(30);
     private const string InventoryCursorOrder = "skillId-ascending,revision-descending";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -183,6 +189,28 @@ public sealed class SkillContentService(
         ProjectAuthorizationContext caller,
         string projectId,
         SkillContentImportRequest request,
+        CancellationToken cancellationToken) =>
+        await ImportCoreAsync(
+            caller, projectId, request, ownerProvenance: null, cancellationToken)
+            .ConfigureAwait(false);
+
+    internal async Task<SkillContentImportReceipt> ImportOwnerVerifiedAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        SkillContentImportRequest request,
+        SkillContentOwnerProvenance ownerProvenance,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(ownerProvenance);
+        return await ImportCoreAsync(
+            caller, projectId, request, ownerProvenance, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SkillContentImportReceipt> ImportCoreAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        SkillContentImportRequest request,
+        SkillContentOwnerProvenance? ownerProvenance,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -201,7 +229,6 @@ public sealed class SkillContentService(
         var content = request.Candidate.Validate();
         if (!string.Equals(content.ContentDigest, request.ExpectedContentDigest, StringComparison.Ordinal))
             throw SkillContentServiceException.Conflict("The previewed skill content digest has changed.");
-        SkillContentScanAdmission.Scan(content, content.ContentDigest, 1, timeProvider);
         var requestDigest = ImportRequestDigest(request);
         var scopeDigest = IdempotencyScopeDigest(caller, projectId, request.IdempotencyKey);
 
@@ -209,6 +236,29 @@ public sealed class SkillContentService(
         await using var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
+        var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+        if (fence.State == ProjectSkillAdmissionFenceState.Draining)
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "Skill content imports are draining for admission cutover.");
+        if (ownerProvenance is not null)
+        {
+            await ownerProvenance.VerifyCurrentSourceAsync(cancellationToken).ConfigureAwait(false);
+            var lockedSource = await LockMarketplaceSourceAsync(
+                    projectId, ownerProvenance.Source.SourceId, cancellationToken)
+                .ConfigureAwait(false);
+            if (lockedSource != ownerProvenance.Source)
+                throw MarketplaceSourceException.RevisionConflict();
+            if (!string.Equals(
+                    ownerProvenance.ResolvedCommitSha,
+                    request.Source?.ResolvedCommitSha,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    ownerProvenance.SelectedPath,
+                    request.Source?.SelectedPath,
+                    StringComparison.Ordinal))
+                throw SkillContentServiceException.Conflict(
+                    "The verified marketplace source binding changed during import.");
+        }
 
         // The digest scope includes project, actor, and key; an existing row is replayed only for identical request data.
         var prior = await db.SkillImportIdempotency.AsNoTracking()
@@ -233,6 +283,22 @@ public sealed class SkillContentService(
             throw SkillContentServiceException.Conflict("The expected skill revision is no longer current.");
 
         var revision = checked((current?.Revision ?? 0) + 1);
+        var policy = fence.State == ProjectSkillAdmissionFenceState.Active
+            ? await _admission.ReadPolicySnapshotAsync(projectId, lockHeads: true, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+        var reports = SkillContentScanAdmission.ScanReports(
+            content,
+            SkillContentScanAdmission.StoredOwnerId(projectId, skillId),
+            revision,
+            timeProvider,
+            ownerProvenance is null
+                ? PromptContentScanProvenance.Authored
+                : PromptContentScanProvenance.Git,
+            ownerProvenance is null
+                ? null
+                : ownerProvenance.Source.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ownerProvenance?.ResolvedCommitSha);
         var objectKey = MakeObjectKey(projectId, skillId, revision, content.ContentDigest);
         // The deterministic revision key lets an exact retry verify/reuse a blob if its database transaction did not commit.
         var reference = await store.WriteAsync(objectKey, content, cancellationToken).ConfigureAwait(false);
@@ -243,7 +309,7 @@ public sealed class SkillContentService(
 
         var now = timeProvider.GetUtcNow();
         await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
-        db.SkillContentRevisions.Add(new ProjectSkillContentRevisionRecord
+        var revisionRecord = new ProjectSkillContentRevisionRecord
         {
             ProjectId = projectId,
             SkillId = skillId,
@@ -261,7 +327,101 @@ public sealed class SkillContentService(
             RequestedRef = request.Source?.RequestedRef,
             ResolvedCommitSha = request.Source?.ResolvedCommitSha,
             SelectedPath = request.Source?.SelectedPath,
-        });
+            AdmissionClassification = policy is null
+                ? ProjectSkillAdmissionClassification.LegacyThirdParty
+                : ownerProvenance is null
+                    ? ProjectSkillAdmissionClassification.ThirdParty
+                    : ProjectSkillAdmissionClassification.ThirdParty,
+            SourceAuthorityKind = ownerProvenance is null
+                ? ProjectSkillSourceAuthorityKind.CallerClaimed
+                : ProjectSkillSourceAuthorityKind.MarketplaceVerified,
+        };
+        db.SkillContentRevisions.Add(revisionRecord);
+        if (fence.State == ProjectSkillAdmissionFenceState.Active)
+        {
+            var release = ownerProvenance is null
+                ? null
+                : await _admission.FindReleaseAsync(
+                    ownerProvenance.Source.Repository,
+                    ownerProvenance.ResolvedCommitSha,
+                    ownerProvenance.SelectedPath,
+                    content.ContentDigest,
+                    fence.ReleaseInventoryRevision!,
+                    cancellationToken).ConfigureAwait(false);
+            if (release is not null)
+                revisionRecord.AdmissionClassification = ProjectSkillAdmissionClassification.BuiltInExempt;
+            var score = SkillTrustScore.Compute(
+                content.Description,
+                release?.SignatureSha256 is not null,
+                !content.CapabilityRequests.IsEmpty);
+            await _admission.EvaluateAsync(
+                    projectId,
+                    policy!,
+                    score,
+                    evidenceComplete: reports.All(report =>
+                        report.Status == PromptContentScanStatus.Completed),
+                    builtInExempt: release?.SignatureSha256 is not null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var reportSetJson = JsonSerializer.SerializeToUtf8Bytes(reports, JsonOptions);
+            var evidence = new ProjectSkillTrustEvidenceRecord
+            {
+                EvidenceId = Guid.NewGuid(),
+                ProjectId = projectId,
+                SkillId = skillId,
+                Revision = revision,
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                IdempotencyKey = request.IdempotencyKey,
+                RequestFingerprint = requestDigest,
+                ContentDigest = content.ContentDigest,
+                SourceId = request.Source?.SourceId,
+                SourceRevision = request.Source?.SourceRevision,
+                RequestedRef = request.Source?.RequestedRef,
+                ResolvedCommitSha = request.Source?.ResolvedCommitSha,
+                SelectedPath = request.Source?.SelectedPath,
+                ReportSetJson = reportSetJson,
+                ReportSetSha256 = Hash(reportSetJson),
+                ScoreStatus = score.Status,
+                HeuristicScore = score.Value,
+                TrustTier = score.Tier,
+                SignatureVerified = score.SignatureVerified,
+                CapabilityDeclarationValid = score.CapabilityDeclarationValid,
+                ShortDescription = score.ShortDescription,
+                CreatedAt = now,
+            };
+            db.SkillTrustEvidence.Add(evidence);
+            db.SkillAdmissions.Add(new ProjectSkillAdmissionRecord
+            {
+                AdmissionId = Guid.NewGuid(),
+                ProjectId = projectId,
+                SkillId = skillId,
+                Revision = revision,
+                EvidenceId = evidence.EvidenceId,
+                CutoverGeneration = fence.Generation,
+                Classification = revisionRecord.AdmissionClassification,
+                SourceAuthorityKind = revisionRecord.SourceAuthorityKind,
+                VerifiedSourceId = ownerProvenance?.Source.SourceId.ToString("D"),
+                VerifiedSourceRevision = ownerProvenance?.Source.Revision.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                VerifiedRequestedRef = ownerProvenance?.Source.RequestedRef,
+                VerifiedResolvedCommitSha = ownerProvenance?.ResolvedCommitSha,
+                VerifiedSelectedPath = ownerProvenance?.SelectedPath,
+                ReleaseId = release?.ReleaseId,
+                TrustedPublisherId = release?.TrustedPublisherId,
+                SignatureSha256 = release?.SignatureSha256,
+                PlatformPolicyId = policy!.PlatformPolicyId,
+                PlatformPolicyRevision = policy.PlatformPolicyRevision,
+                PlatformPolicySha256 = policy.PlatformPolicySha256,
+                ProjectPolicyId = policy.ProjectPolicyId,
+                ProjectPolicyRevision = policy.ProjectPolicyRevision,
+                ProjectPolicySha256 = policy.ProjectPolicySha256,
+                CreatedAt = now,
+            });
+            if (release is null && score.Value < policy.MinimumScore)
+                throw SkillAdmissionService.AdmissionDenied(
+                    "The Skill trust score does not meet the current policy.");
+        }
         var receipt = new SkillContentImportReceipt(
             skillId,
             revision,
@@ -283,6 +443,20 @@ public sealed class SkillContentService(
         });
         try
         {
+            if (ownerProvenance is not null)
+            {
+                await ownerProvenance.VerifyCurrentSourceAsync(cancellationToken).ConfigureAwait(false);
+                var lockedSource = await LockMarketplaceSourceAsync(
+                        projectId, ownerProvenance.Source.SourceId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (lockedSource != ownerProvenance.Source)
+                    throw MarketplaceSourceException.RevisionConflict();
+                await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+            }
+            if (fence.State != ProjectSkillAdmissionFenceState.Open)
+                await db.Database.ExecuteSqlRawAsync(
+                    "SELECT set_config('agentweaver.skill_admission_v1', '1', true)",
+                    cancellationToken).ConfigureAwait(false);
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -340,6 +514,7 @@ public sealed class SkillContentService(
     internal async Task<ProjectSkillTrustEvidenceSaveResult> PersistTrustEvidenceAsync(
         ProjectAuthorizationContext caller,
         ProjectSkillContentRevisionRecord revisionSnapshot,
+        ValidatedSkillContent content,
         string idempotencyKey,
         string requestFingerprint,
         byte[] reportSetJson,
@@ -361,6 +536,12 @@ public sealed class SkillContentService(
         await using var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
+        var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+        var policy = fence.State == ProjectSkillAdmissionFenceState.Active
+            ? await _admission.ReadPolicySnapshotAsync(
+                    revisionSnapshot.ProjectId, lockHeads: true, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
         await EnsureWriteAccessAsync(caller, revisionSnapshot.ProjectId, cancellationToken).ConfigureAwait(false);
         var current = await FindAvailableRevisionAsync(
             revisionSnapshot.ProjectId,
@@ -396,6 +577,39 @@ public sealed class SkillContentService(
             return new ProjectSkillTrustEvidenceSaveResult(existing, Replayed: true);
         }
 
+        var release = fence.State == ProjectSkillAdmissionFenceState.Active &&
+            current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified &&
+            current.ResolvedCommitSha is not null &&
+            current.SelectedPath is not null &&
+            current.SourceId is not null &&
+            Guid.TryParse(current.SourceId, out var sourceId)
+            ? await _admission.FindReleaseAsync(
+                    await db.MarketplaceSources
+                        .Where(source => source.ProjectId == current.ProjectId &&
+                            source.SourceId == sourceId)
+                        .Select(source => source.Repository)
+                        .SingleAsync(cancellationToken)
+                        .ConfigureAwait(false),
+                    current.ResolvedCommitSha,
+                    current.SelectedPath,
+                    current.ContentDigest,
+                    fence.ReleaseInventoryRevision!,
+                    cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+        var score = SkillTrustScore.Compute(
+            content.Description,
+            release?.SignatureSha256 is not null,
+            !content.CapabilityRequests.IsEmpty);
+        if (policy is not null)
+            await _admission.EvaluateAsync(
+                    current.ProjectId,
+                    policy,
+                    score,
+                    evidenceComplete: true,
+                    builtInExempt: release?.SignatureSha256 is not null,
+                    cancellationToken)
+                .ConfigureAwait(false);
         var record = new ProjectSkillTrustEvidenceRecord
         {
             EvidenceId = Guid.NewGuid(),
@@ -414,13 +628,85 @@ public sealed class SkillContentService(
             SelectedPath = current.SelectedPath,
             ReportSetJson = reportSetJson.ToArray(),
             ReportSetSha256 = reportSetSha256,
+            ScoreStatus = score.Status,
+            HeuristicScore = score.Value,
+            TrustTier = score.Tier,
+            SignatureVerified = score.SignatureVerified,
+            CapabilityDeclarationValid = score.CapabilityDeclarationValid,
+            ShortDescription = score.ShortDescription,
             // PostgreSQL stores timestamps at microsecond precision, so retries use one stable decision time.
             CreatedAt = ToPostgresTimestampPrecision(timeProvider.GetUtcNow()),
         };
+        try
+        {
+            var refreshedReports =
+                JsonSerializer.Deserialize<ImmutableArray<PromptContentScanReportV1>>(
+                    reportSetJson, JsonOptions);
+            SkillContentScanAdmission.RequirePassingReports(
+                SkillContentScanAdmission.CreateInputs(
+                    content,
+                    SkillContentScanAdmission.StoredOwnerId(current.ProjectId, current.SkillId),
+                    current.Revision,
+                    current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                        ? PromptContentScanProvenance.Git
+                        : PromptContentScanProvenance.Authored,
+                    current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                        ? current.SourceRevision
+                        : null,
+                    current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                        ? current.ResolvedCommitSha
+                        : null),
+                refreshedReports,
+                DateTimeOffset.MinValue,
+                record.CreatedAt);
+        }
+        catch (JsonException)
+        {
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The required Skill admission evidence is corrupt.");
+        }
         db.SkillTrustEvidence.Add(record);
         try
         {
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (policy is not null)
+            {
+                var priorAdmission = await db.SkillAdmissions
+                    .Where(item => item.ProjectId == current.ProjectId &&
+                        item.SkillId == current.SkillId &&
+                        item.Revision == current.Revision)
+                    .OrderByDescending(item => item.CreatedAt)
+                    .FirstAsync(cancellationToken).ConfigureAwait(false);
+                db.SkillAdmissions.Add(new ProjectSkillAdmissionRecord
+                {
+                    AdmissionId = Guid.NewGuid(),
+                    ProjectId = priorAdmission.ProjectId,
+                    SkillId = priorAdmission.SkillId,
+                    Revision = priorAdmission.Revision,
+                    EvidenceId = record.EvidenceId,
+                    CutoverGeneration = fence.Generation,
+                    Classification = priorAdmission.Classification,
+                    SourceAuthorityKind = priorAdmission.SourceAuthorityKind,
+                    VerifiedSourceId = priorAdmission.VerifiedSourceId,
+                    VerifiedSourceRevision = priorAdmission.VerifiedSourceRevision,
+                    VerifiedRequestedRef = priorAdmission.VerifiedRequestedRef,
+                    VerifiedResolvedCommitSha = priorAdmission.VerifiedResolvedCommitSha,
+                    VerifiedSelectedPath = priorAdmission.VerifiedSelectedPath,
+                    ReleaseId = priorAdmission.ReleaseId,
+                    TrustedPublisherId = priorAdmission.TrustedPublisherId,
+                    SignatureSha256 = priorAdmission.SignatureSha256,
+                    PlatformPolicyId = policy.PlatformPolicyId,
+                    PlatformPolicyRevision = policy.PlatformPolicyRevision,
+                    PlatformPolicySha256 = policy.PlatformPolicySha256,
+                    ProjectPolicyId = policy.ProjectPolicyId,
+                    ProjectPolicyRevision = policy.ProjectPolicyRevision,
+                    ProjectPolicySha256 = policy.ProjectPolicySha256,
+                    CreatedAt = priorAdmission.CreatedAt >= record.CreatedAt
+                        ? priorAdmission.CreatedAt.AddTicks(10)
+                        : record.CreatedAt,
+                });
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
             await EnsureWriteAccessAsync(caller, current.ProjectId, cancellationToken).ConfigureAwait(false);
             _ = await FindAvailableRevisionAsync(
                 current.ProjectId,
@@ -605,7 +891,22 @@ public sealed class SkillContentService(
         }
 
         var store = objects ?? throw SkillContentServiceException.Unavailable();
+        await using var admissionRead = await db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            .ConfigureAwait(false);
+        var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+        if (fence.State == ProjectSkillAdmissionFenceState.Draining)
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "Skill runtime admission is draining for cutover.");
+        var policy = fence.State == ProjectSkillAdmissionFenceState.Active
+            ? await _admission.ReadPolicySnapshotAsync(projectId, lockHeads: true, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
         var result = ImmutableArray.CreateBuilder<SkillRuntimeContentV1>();
+        var admitted = new List<(
+            ProjectSkillAdmissionRecord Admission,
+            ProjectSkillTrustEvidenceRecord Evidence,
+            ValidatedSkillContent Content)>();
         foreach (var assignment in assignments)
         {
             var revision = await FindAvailableRevisionAsync(
@@ -616,11 +917,64 @@ public sealed class SkillContentService(
                 cancellationToken).ConfigureAwait(false);
             var verified = await SkillContentScanAdmission.ReadVerifiedContentAsync(
                 store, revision, cancellationToken).ConfigureAwait(false);
-            SkillContentScanAdmission.Scan(
-                verified,
-                SkillContentScanAdmission.StoredOwnerId(projectId, revision.SkillId),
-                revision.Revision,
-                timeProvider);
+            if (policy is null)
+            {
+                SkillContentScanAdmission.Scan(
+                    verified,
+                    SkillContentScanAdmission.StoredOwnerId(projectId, revision.SkillId),
+                    revision.Revision,
+                    timeProvider);
+            }
+            else
+            {
+                var admission = await db.SkillAdmissions.AsNoTracking()
+                    .Where(item =>
+                        item.ProjectId == projectId &&
+                        item.SkillId == revision.SkillId &&
+                        item.Revision == revision.Revision)
+                    .OrderByDescending(item => item.CreatedAt)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false) ??
+                    throw SkillAdmissionService.AdmissionDenied(
+                        "The Skill revision has no cutover admission binding.");
+                var evidence = await db.SkillTrustEvidence.AsNoTracking().SingleOrDefaultAsync(
+                        item => item.EvidenceId == admission.EvidenceId,
+                        cancellationToken)
+                    .ConfigureAwait(false) ??
+                    throw SkillAdmissionService.AdmissionUnavailable(
+                        "The required Skill admission evidence is unavailable.");
+                ValidateRuntimeEvidence(admission, evidence, revision, verified, timeProvider.GetUtcNow());
+                ProjectMarketplaceSourceRecord? source = null;
+                if (admission.VerifiedSourceId is not null &&
+                    Guid.TryParse(admission.VerifiedSourceId, out var sourceId))
+                    source = await LockMarketplaceSourceAsync(
+                            projectId, sourceId, cancellationToken)
+                        .ConfigureAwait(false);
+                var release = admission.ReleaseId is { } releaseId
+                    ? await LockBuiltInReleaseAsync(releaseId, cancellationToken)
+                        .ConfigureAwait(false)
+                    : null;
+                var revoked = await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
+                    item.ProjectId == projectId &&
+                    item.SkillId == revision.SkillId &&
+                    item.Revision == revision.Revision,
+                    cancellationToken).ConfigureAwait(false);
+                SkillAdmissionService.RequirePassingAdmission(
+                    admission, evidence, policy, source, release, revoked);
+                await _admission.EvaluateAsync(
+                        projectId,
+                        policy,
+                        SkillTrustScore.Compute(
+                            verified.Description,
+                            evidence.SignatureVerified,
+                            evidence.CapabilityDeclarationValid),
+                        evidenceComplete: evidence.ReportSetJson.Length > 0,
+                        builtInExempt: admission.Classification ==
+                            ProjectSkillAdmissionClassification.BuiltInExempt,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                admitted.Add((admission, evidence, verified));
+            }
             await EnsureCurrentRunAuthorityAsync(caller, projectId, runId, cancellationToken)
                 .ConfigureAwait(false);
             if (await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
@@ -639,7 +993,164 @@ public sealed class SkillContentService(
         }
 
         await EnsureCurrentRunAuthorityAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (policy is not null)
+        {
+            var finalPolicy = await _admission.ReadPolicySnapshotAsync(
+                    projectId, lockHeads: true, cancellationToken)
+                .ConfigureAwait(false);
+            if (policy != finalPolicy)
+                throw SkillContentServiceException.Conflict(
+                    "The Skill admission policy changed while projecting the run.");
+            foreach (var (admission, evidence, content) in admitted)
+            {
+                ProjectMarketplaceSourceRecord? source = null;
+                if (admission.VerifiedSourceId is not null &&
+                    Guid.TryParse(admission.VerifiedSourceId, out var sourceId))
+                    source = await LockMarketplaceSourceAsync(
+                            projectId, sourceId, cancellationToken)
+                        .ConfigureAwait(false);
+                var release = admission.ReleaseId is { } releaseId
+                    ? await LockBuiltInReleaseAsync(releaseId, cancellationToken)
+                        .ConfigureAwait(false)
+                    : null;
+                var revoked = await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
+                    item.ProjectId == projectId &&
+                    item.SkillId == admission.SkillId &&
+                    item.Revision == admission.Revision,
+                    cancellationToken).ConfigureAwait(false);
+                SkillAdmissionService.RequirePassingAdmission(
+                    admission, evidence, finalPolicy, source, release, revoked);
+                await _admission.EvaluateAsync(
+                        projectId,
+                        finalPolicy,
+                        SkillTrustScore.Compute(
+                            content.Description,
+                            evidence.SignatureVerified,
+                            evidence.CapabilityDeclarationValid),
+                        evidenceComplete: evidence.ReportSetJson.Length > 0,
+                        builtInExempt: admission.Classification ==
+                            ProjectSkillAdmissionClassification.BuiltInExempt,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        await admissionRead.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result.ToImmutable();
+    }
+
+    private Task<ProjectMarketplaceSourceRecord?> LockMarketplaceSourceAsync(
+        string projectId,
+        Guid sourceId,
+        CancellationToken cancellationToken) =>
+        db.MarketplaceSources.FromSqlInterpolated($"""
+            SELECT project_id, source_id, name, normalized_name, repository,
+                   requested_ref, subpath, revision, state, created_by_actor_id,
+                   updated_by_actor_id, created_at, updated_at
+            FROM projects_config.marketplace_sources
+            WHERE project_id = {projectId}
+              AND source_id = {sourceId}
+              AND state = 'Active'
+            FOR SHARE
+            """).SingleOrDefaultAsync(cancellationToken);
+
+    private Task<ProjectSkillBuiltInReleaseRecord?> LockBuiltInReleaseAsync(
+        Guid releaseId,
+        CancellationToken cancellationToken) =>
+        db.SkillBuiltInReleases.FromSqlInterpolated($"""
+            SELECT release_id, inventory_revision, repository, resolved_commit_sha,
+                   selected_path, content_digest, trusted_publisher_id,
+                   signature_sha256, is_active, created_at
+            FROM projects_config.project_skill_builtin_releases
+            WHERE release_id = {releaseId}
+            FOR SHARE
+            """).SingleOrDefaultAsync(cancellationToken);
+
+    private static void ValidateRuntimeEvidence(
+        ProjectSkillAdmissionRecord admission,
+        ProjectSkillTrustEvidenceRecord evidence,
+        ProjectSkillContentRevisionRecord revision,
+        ValidatedSkillContent content,
+        DateTimeOffset evaluatedAt)
+    {
+        RequireFreshRuntimeEvidence(evidence.CreatedAt, evaluatedAt);
+        if (admission.ProjectId != revision.ProjectId ||
+            admission.SkillId != revision.SkillId ||
+            admission.Revision != revision.Revision ||
+            admission.Classification != revision.AdmissionClassification ||
+            admission.SourceAuthorityKind != revision.SourceAuthorityKind ||
+            admission.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified &&
+            (admission.VerifiedSourceId != revision.SourceId ||
+             admission.VerifiedSourceRevision != revision.SourceRevision ||
+             admission.VerifiedRequestedRef != revision.RequestedRef ||
+             admission.VerifiedResolvedCommitSha != revision.ResolvedCommitSha ||
+             admission.VerifiedSelectedPath != revision.SelectedPath) ||
+            evidence.ProjectId != revision.ProjectId ||
+            evidence.SkillId != revision.SkillId ||
+            evidence.Revision != revision.Revision ||
+            evidence.ContentDigest != revision.ContentDigest ||
+            evidence.SourceId != revision.SourceId ||
+            evidence.SourceRevision != revision.SourceRevision ||
+            evidence.RequestedRef != revision.RequestedRef ||
+            evidence.ResolvedCommitSha != revision.ResolvedCommitSha ||
+            evidence.SelectedPath != revision.SelectedPath ||
+            evidence.ReportSetSha256 != Hash(evidence.ReportSetJson))
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The required Skill admission evidence is corrupt or stale.");
+        var recomputedScore = SkillTrustScore.Compute(
+            content.Description,
+            evidence.SignatureVerified,
+            !content.CapabilityRequests.IsEmpty);
+        if (evidence.ScoreStatus != recomputedScore.Status ||
+            evidence.HeuristicScore != recomputedScore.Value ||
+            evidence.TrustTier != recomputedScore.Tier ||
+            evidence.CapabilityDeclarationValid != recomputedScore.CapabilityDeclarationValid ||
+            evidence.ShortDescription != recomputedScore.ShortDescription)
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The required Skill admission score is corrupt or stale.");
+        ImmutableArray<PromptContentScanReportV1> reports;
+        try
+        {
+            reports = JsonSerializer.Deserialize<ImmutableArray<PromptContentScanReportV1>>(
+                evidence.ReportSetJson, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The required Skill admission evidence is corrupt.");
+        }
+        var inputs = SkillContentScanAdmission.CreateInputs(
+            content,
+            SkillContentScanAdmission.StoredOwnerId(revision.ProjectId, revision.SkillId),
+            revision.Revision,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? PromptContentScanProvenance.Git
+                : PromptContentScanProvenance.Authored,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? revision.SourceRevision
+                : null,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? revision.ResolvedCommitSha
+                : null);
+        try
+        {
+            SkillContentScanAdmission.RequirePassingReports(
+                inputs, reports, DateTimeOffset.MinValue, evidence.CreatedAt);
+        }
+        catch (SkillContentServiceException)
+        {
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The required Skill admission evidence is incomplete or invalid.");
+        }
+    }
+
+    internal static void RequireFreshRuntimeEvidence(
+        DateTimeOffset createdAt,
+        DateTimeOffset evaluatedAt)
+    {
+        if (createdAt > evaluatedAt ||
+            evaluatedAt - createdAt > MaximumSkillEvidenceAge)
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The required Skill admission evidence is stale.");
     }
 
     /// <summary>Validates enabled skill pins and assignments against the active cast and non-revoked stored revisions.</summary>
@@ -650,9 +1161,30 @@ public sealed class SkillContentService(
         ProjectConfiguration configuration,
         SkillContentObjectStore? skillContentObjects,
         TimeProvider timeProvider,
+        Agentweaver.Policy.Acs.NativeAcsPolicyEvaluator? policyEvaluator,
         CancellationToken cancellationToken)
     {
         var normalized = ProjectConfigurationValidator.ValidateTransition(previous, configuration);
+        var admissionService = new SkillAdmissionService(
+            db, timeProvider, evaluator: policyEvaluator);
+        ProjectSkillAdmissionFenceRecord? fence = null;
+        try
+        {
+            fence = await admissionService.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException exception) when (
+            exception.SqlState == PostgresErrorCodes.UndefinedTable)
+        {
+            fence = null;
+        }
+        if (fence?.State == ProjectSkillAdmissionFenceState.Draining)
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "Skill runtime admission is draining for cutover.");
+        var policy = fence?.State == ProjectSkillAdmissionFenceState.Active
+            ? await admissionService.ReadPolicySnapshotAsync(
+                    projectId, lockHeads: true, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
         var activeAgentIds = normalized.Casting
             .Select(item => item.AgentId)
             .ToHashSet(StringComparer.Ordinal);
@@ -689,6 +1221,58 @@ public sealed class SkillContentService(
                 SkillContentScanAdmission.StoredOwnerId(projectId, revision.SkillId),
                 revision.Revision,
                 timeProvider);
+            if (policy is not null)
+            {
+                var admission = await db.SkillAdmissions.AsNoTracking()
+                    .Where(item => item.ProjectId == projectId &&
+                        item.SkillId == revision.SkillId &&
+                        item.Revision == revision.Revision)
+                    .OrderByDescending(item => item.CreatedAt)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false) ??
+                    throw SkillAdmissionService.AdmissionDenied(
+                        "The Skill revision has no cutover admission binding.");
+                var evidence = await db.SkillTrustEvidence.AsNoTracking().SingleOrDefaultAsync(
+                        item => item.EvidenceId == admission.EvidenceId,
+                        cancellationToken)
+                    .ConfigureAwait(false) ??
+                    throw SkillAdmissionService.AdmissionUnavailable(
+                        "The required Skill admission evidence is unavailable.");
+                ValidateRuntimeEvidence(
+                    admission, evidence, revision, verified, timeProvider.GetUtcNow());
+                ProjectMarketplaceSourceRecord? source = null;
+                if (admission.VerifiedSourceId is not null &&
+                    Guid.TryParse(admission.VerifiedSourceId, out var sourceId))
+                    source = await db.MarketplaceSources.AsNoTracking().SingleOrDefaultAsync(
+                        item => item.ProjectId == projectId &&
+                            item.SourceId == sourceId &&
+                            item.State == ProjectMarketplaceSourceState.Active,
+                        cancellationToken).ConfigureAwait(false);
+                var release = admission.ReleaseId is { } releaseId
+                    ? await db.SkillBuiltInReleases.AsNoTracking().SingleOrDefaultAsync(
+                        item => item.ReleaseId == releaseId,
+                        cancellationToken).ConfigureAwait(false)
+                    : null;
+                var revoked = await db.SkillContentRevocations.AsNoTracking().AnyAsync(
+                    item => item.ProjectId == projectId &&
+                        item.SkillId == revision.SkillId &&
+                        item.Revision == revision.Revision,
+                    cancellationToken).ConfigureAwait(false);
+                SkillAdmissionService.RequirePassingAdmission(
+                    admission, evidence, policy, source, release, revoked);
+                await admissionService.EvaluateAsync(
+                        projectId,
+                        policy,
+                        SkillTrustScore.Compute(
+                            verified.Description,
+                            evidence.SignatureVerified,
+                            evidence.CapabilityDeclarationValid),
+                        evidenceComplete: true,
+                        builtInExempt: admission.Classification ==
+                            ProjectSkillAdmissionClassification.BuiltInExempt,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         return normalized;
     }

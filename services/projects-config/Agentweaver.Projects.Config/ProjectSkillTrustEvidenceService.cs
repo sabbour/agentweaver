@@ -59,6 +59,7 @@ internal sealed class ProjectSkillTrustEvidenceService(
         var saved = await skills.PersistTrustEvidenceAsync(
             caller,
             input.Revision,
+            input.Content,
             idempotencyKey,
             fingerprint,
             reportSetJson,
@@ -172,10 +173,15 @@ internal sealed class ProjectSkillTrustEvidenceService(
             Hash(Encoding.UTF8.GetBytes($"{projectId}\0{revision.SkillId}")),
             revision.Revision,
             "SKILL.md",
-            // Stored source fields do not verify that the content came from Git.
-            PromptContentScanProvenance.Authored,
-            null,
-            null);
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? PromptContentScanProvenance.Git
+                : PromptContentScanProvenance.Authored,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? revision.SourceRevision
+                : null,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? revision.ResolvedCommitSha
+                : null);
         var inputs = ImmutableArray.CreateBuilder<PromptContentScanInput>(content.Resources.Length + 1);
         inputs.Add(new PromptContentScanInput(
             PromptContentScanInputKind.SkillMarkdown,

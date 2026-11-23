@@ -363,6 +363,8 @@ public sealed class ProjectSkillContentRevisionRecord
     public string? RequestedRef { get; set; }
     public string? ResolvedCommitSha { get; set; }
     public string? SelectedPath { get; set; }
+    public ProjectSkillAdmissionClassification AdmissionClassification { get; set; }
+    public ProjectSkillSourceAuthorityKind SourceAuthorityKind { get; set; }
 }
 
 /// <summary>Actor-scoped idempotency key and request digest for a completed skill import.</summary>

@@ -1,9 +1,12 @@
+using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Data;
 using System.Text;
 using System.Text.Json;
 using AgentGovernance.Security;
 using Agentweaver.Abstractions;
 using Agentweaver.Projects.Config;
+using Agentweaver.Policy.Acs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -15,6 +18,246 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     private const string TrustEvidenceMarker = "skill-trust-private-marker";
+
+    [Fact]
+    public async Task SkillCutoverWaitsForInFlightWriterThenBlocksOlderReplica()
+    {
+        await using var writerDb = CreateDbContext();
+        await using var controllerDb = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(writerDb);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(writerDb, authorityStore);
+        await using var writer = await writerDb.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
+        _ = await writerDb.SkillAdmissionFences
+            .FromSqlRaw("""
+                SELECT id, state, generation, release_inventory_revision,
+                       platform_skills_policy_sha256, updated_at
+                FROM projects_config.project_skill_admission_fence
+                WHERE id = 1
+                FOR UPDATE
+                """)
+            .SingleAsync();
+        var cutover = new SkillAdmissionService(controllerDb, TimeProvider.System).BeginCutoverAsync(
+            "drain-" + setup.Project.Suffix, CancellationToken.None);
+        await Task.Delay(100);
+        Assert.False(cutover.IsCompleted);
+
+        var original = await writerDb.SkillContentRevisions.SingleAsync(item =>
+            item.ProjectId == setup.Project.Project.ProjectId &&
+            item.SkillId == setup.Imported.SkillId);
+        writerDb.SkillContentRevisions.Add(new ProjectSkillContentRevisionRecord
+        {
+            ProjectId = original.ProjectId,
+            SkillId = "in-flight-writer",
+            Revision = 1,
+            Name = original.Name,
+            Description = original.Description,
+            ContentDigest = original.ContentDigest,
+            ObjectKey = original.ObjectKey,
+            ResourceCount = original.ResourceCount,
+            TotalBytes = original.TotalBytes,
+            CreatedByActorId = original.CreatedByActorId,
+            CreatedAt = original.CreatedAt,
+            AdmissionClassification = ProjectSkillAdmissionClassification.LegacyThirdParty,
+            SourceAuthorityKind = ProjectSkillSourceAuthorityKind.CallerClaimed,
+        });
+        await writerDb.SaveChangesAsync();
+        await writer.CommitAsync();
+        await cutover;
+
+        var blocked = await Assert.ThrowsAsync<PostgresException>(() =>
+            writerDb.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO projects_config.project_skill_content_revisions
+                    (project_id, skill_id, revision, name, description, content_digest,
+                     object_key, resource_count, total_bytes, created_by_actor_id, created_at,
+                     admission_classification, source_authority_kind)
+                VALUES
+                    ({original.ProjectId}, 'older-replica', 1, {original.Name},
+                     {original.Description}, {original.ContentDigest}, {original.ObjectKey},
+                     {original.ResourceCount}, {original.TotalBytes}, {original.CreatedByActorId},
+                     {original.CreatedAt}, 'ThirdParty', 'CallerClaimed')
+                """));
+        Assert.Contains("skill admission fence blocks imports", blocked.MessageText);
+        await ResetSkillAdmissionCutoverAsync(writerDb);
+    }
+
+    [SkillAdmissionNativeAcsFact]
+    public async Task SkillAdmissionCutoverGatesWritersAndRejectsForgedExemptionWithoutARevision()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        using var publisher = RSA.Create(2048);
+        var admission = new SkillAdmissionService(
+            db,
+            TimeProvider.System,
+            PublisherKeys(publisher, "agentweaver-owner"));
+        await SeedSkillsPolicyAsync(
+            db,
+            setup.Project.Owner,
+            """{"schemaVersion":1,"minimumScore":600,"requireCompletedEvidence":true}""");
+        await admission.BeginCutoverAsync(
+            "release-" + setup.Project.Suffix, CancellationToken.None);
+
+        var candidate = SkillCandidate(
+            "A sufficiently long approved instruction for the cutover test.",
+            "# Cutover\n");
+        var preview = setup.Skills.Preview(candidate);
+        var request = new SkillContentImportRequest(
+            "cutover-blocked-" + setup.Project.Suffix,
+            preview.ContentDigest,
+            "forged-built-in",
+            null,
+            new SkillContentSourceSelection(
+                "built-in", "forged", "main", new string('b', 40), "skills/forged"),
+            candidate);
+        var draining = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            setup.Skills.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                request,
+                CancellationToken.None));
+        Assert.Equal("skill_admission_unavailable", draining.Code);
+        Assert.False(await db.SkillContentRevisions.AnyAsync(
+            item => item.ProjectId == setup.Project.Project.ProjectId &&
+                item.SkillId == "forged-built-in"));
+
+        var source = new ProjectMarketplaceSourceRecord
+        {
+            ProjectId = setup.Project.Project.ProjectId,
+            SourceId = Guid.NewGuid(),
+            Name = "Built-in release",
+            NormalizedName = "BUILT-IN RELEASE",
+            Repository = "agentweaver/release-skills",
+            RequestedRef = "main",
+            Revision = 1,
+            State = ProjectMarketplaceSourceState.Active,
+            CreatedByActorId = setup.Project.Owner.ActorId,
+            UpdatedByActorId = setup.Project.Owner.ActorId,
+            CreatedAt = TimeProvider.System.GetUtcNow(),
+            UpdatedAt = TimeProvider.System.GetUtcNow(),
+        };
+        _ = await admission.RegisterVerifiedInventoryAsync(
+            SignedInventory(
+                publisher,
+                "release-" + setup.Project.Suffix,
+                "agentweaver-owner",
+                source.Repository,
+                new string('c', 40),
+                "skills/release-only",
+                new string('d', 64)),
+            CancellationToken.None);
+        await admission.ActivateCutoverAsync(CancellationToken.None);
+
+        var denied = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            setup.Skills.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                request with { IdempotencyKey = "cutover-denied-" + setup.Project.Suffix },
+                CancellationToken.None));
+        Assert.Equal("skill_admission_denied", denied.Code);
+        Assert.False(await db.SkillContentRevisions.AnyAsync(
+            item => item.ProjectId == setup.Project.Project.ProjectId &&
+                item.SkillId == "forged-built-in"));
+        Assert.False(await db.SkillImportIdempotency.AnyAsync(
+            item => item.ProjectId == setup.Project.Project.ProjectId &&
+                item.IdempotencyKey == "cutover-denied-" + setup.Project.Suffix));
+        Assert.False(await db.SkillAdmissions.AnyAsync(
+            item => item.ProjectId == setup.Project.Project.ProjectId &&
+                item.SkillId == "forged-built-in"));
+        await ResetSkillAdmissionCutoverAsync(db);
+    }
+
+    [SkillAdmissionNativeAcsFact]
+    public async Task SkillAdmissionExactRetryWritesOneRevisionEvidenceAndReceipt()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        using var publisher = RSA.Create(2048);
+        var admission = new SkillAdmissionService(
+            db,
+            TimeProvider.System,
+            PublisherKeys(publisher, "agentweaver-owner"));
+        await SeedSkillsPolicyAsync(
+            db,
+            setup.Project.Owner,
+            """{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}""");
+        await admission.BeginCutoverAsync(
+            "replay-" + setup.Project.Suffix, CancellationToken.None);
+        var source = new ProjectMarketplaceSourceRecord
+        {
+            ProjectId = setup.Project.Project.ProjectId,
+            SourceId = Guid.NewGuid(),
+            Name = "Release",
+            NormalizedName = "RELEASE",
+            Repository = "agentweaver/release-skills",
+            RequestedRef = "main",
+            Revision = 1,
+            State = ProjectMarketplaceSourceState.Active,
+            CreatedByActorId = setup.Project.Owner.ActorId,
+            UpdatedByActorId = setup.Project.Owner.ActorId,
+            CreatedAt = TimeProvider.System.GetUtcNow(),
+            UpdatedAt = TimeProvider.System.GetUtcNow(),
+        };
+        var content = SkillCandidate(
+            "A sufficiently long approved instruction for exact replay.",
+            "# Replay\n");
+        var preview = setup.Skills.Preview(content);
+        _ = await admission.RegisterVerifiedInventoryAsync(
+            SignedInventory(
+                publisher,
+                "replay-" + setup.Project.Suffix,
+                "agentweaver-owner",
+                source.Repository,
+                new string('a', 40),
+                "skills/replay",
+                preview.ContentDigest),
+            CancellationToken.None);
+        await admission.ActivateCutoverAsync(CancellationToken.None);
+        var request = new SkillContentImportRequest(
+            "replay-admission-" + setup.Project.Suffix,
+            preview.ContentDigest,
+            "replay-skill",
+            null,
+            null,
+            content);
+
+        var first = await setup.Skills.ImportAsync(
+            setup.Project.Owner, setup.Project.Project.ProjectId, request, CancellationToken.None);
+        var replay = await setup.Skills.ImportAsync(
+            setup.Project.Owner, setup.Project.Project.ProjectId, request, CancellationToken.None);
+
+        Assert.Equal(first, replay);
+        Assert.Equal(1, await db.SkillAdmissions.CountAsync(
+            item => item.ProjectId == setup.Project.Project.ProjectId &&
+                item.SkillId == first.SkillId));
+        Assert.Equal(1, await db.SkillTrustEvidence.CountAsync(
+            item => item.ProjectId == setup.Project.Project.ProjectId &&
+                item.SkillId == first.SkillId));
+        Assert.Equal(1, await db.SkillImportIdempotency.CountAsync(
+            item => item.ProjectId == setup.Project.Project.ProjectId &&
+                item.IdempotencyKey == request.IdempotencyKey));
+        await ResetSkillAdmissionCutoverAsync(db);
+    }
+
+    public sealed class SkillAdmissionNativeAcsFactAttribute : FactAttribute
+    {
+        public SkillAdmissionNativeAcsFactAttribute()
+        {
+            var opaPath = Environment.GetEnvironmentVariable("ACS_OPA_PATH");
+            if (!OperatingSystem.IsLinux() ||
+                string.IsNullOrWhiteSpace(opaPath) ||
+                !File.Exists(opaPath))
+                Skip = "The Skill admission native evaluation requires the pinned Linux ACS and OPA assets.";
+        }
+    }
 
     [Fact]
     public async Task PersistsExactSkillScanEvidenceAndPendingDecision()
@@ -649,6 +892,116 @@ public sealed partial class ProjectsConfigPostgresTests
                 new PooledDbContextFactory<ProjectsConfigDbContext>(CreateDbContextOptions()),
                 TimeProvider.System));
         return new SkillTrustEvidenceTestSetup(project, skills, evidence, imported, candidate);
+    }
+
+    private static async Task SeedSkillsPolicyAsync(
+        ProjectsConfigDbContext db,
+        ProjectAuthorizationContext owner,
+        string skillsDataJson)
+    {
+        var artifact = NativeAcsUnifiedPolicyProfile.CreateArtifact(
+            """{"allowed_action_ids":[]}""",
+            """
+            {"agentweaver":{"platform_egress":{"profile":"finite-network-v1","mode":"Allowlist","approved":[{"host":"approved.example.com","port":443}],"system":{"catalog":"hosted-copilot-v1","destinations":[{"host":"api.business.githubcopilot.com","port":443},{"host":"api.enterprise.githubcopilot.com","port":443},{"host":"api.github.com","port":443},{"host":"api.githubcopilot.com","port":443},{"host":"api.individual.githubcopilot.com","port":443}]}}}}
+            """,
+            """{"rules":[]}""",
+            """{"required_checks":[],"blocked_findings":[]}""",
+            skillsDataJson);
+        var now = TimeProvider.System.GetUtcNow();
+        var head = await db.NativeAcsPolicyHeads.SingleOrDefaultAsync(item =>
+            item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+            item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId);
+        var revision = (head?.CurrentRevision ?? 0) + 1;
+        if (head is null)
+        {
+            db.NativeAcsPolicyHeads.Add(new NativeAcsPolicyHeadRecord
+            {
+                ScopeType = NativeAcsPolicyScopeType.Platform,
+                ScopeId = ProjectAuthorizationOwner.PlatformResourceId,
+                PolicyId = "canonical",
+                CurrentRevision = revision,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        else
+        {
+            head.CurrentRevision = revision;
+            head.UpdatedAt = now;
+        }
+        db.NativeAcsPolicyRevisions.Add(new NativeAcsPolicyRevisionRecord
+        {
+            ScopeType = NativeAcsPolicyScopeType.Platform,
+            ScopeId = ProjectAuthorizationOwner.PlatformResourceId,
+            PolicyId = "canonical",
+            Revision = revision,
+            ContentSha256 = artifact.ContentSha256,
+            ManifestBytes = artifact.ManifestBytes.ToArray(),
+            CreatedByIssuer = owner.Issuer,
+            CreatedByActorId = owner.ActorId,
+            MembershipId = owner.MembershipId,
+            MembershipRevision = owner.MembershipRevision,
+            RoleAssignmentId = Guid.NewGuid(),
+            RoleAssignmentRevision = 1,
+            Reason = "Skill admission test.",
+            CorrelationId = Guid.NewGuid().ToString("D"),
+            CreatedAt = now,
+        });
+        foreach (var file in artifact.Files)
+        {
+            db.NativeAcsPolicyArtifactFiles.Add(new NativeAcsPolicyArtifactFileRecord
+            {
+                ScopeType = NativeAcsPolicyScopeType.Platform,
+                ScopeId = ProjectAuthorizationOwner.PlatformResourceId,
+                PolicyId = "canonical",
+                Revision = revision,
+                RelativePath = file.RelativePath,
+                Bytes = file.Bytes.ToArray(),
+            });
+        }
+        await db.SaveChangesAsync();
+    }
+
+    private static SkillReleasePublisherKeys PublisherKeys(RSA publisher, string publisherId) =>
+        new([new SkillReleasePublisherKey(publisherId, publisher.ExportSubjectPublicKeyInfoPem())]);
+
+    private static SkillReleaseInventoryManifest SignedInventory(
+        RSA publisher,
+        string inventoryRevision,
+        string publisherId,
+        string repository,
+        string commitSha,
+        string path,
+        string contentDigest)
+    {
+        var releases = ImmutableArray.Create(new SkillReleaseInventoryEntry(
+            repository, commitSha, path, contentDigest));
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new
+            {
+                schemaVersion = SkillReleaseInventoryManifest.CurrentSchemaVersion,
+                inventoryRevision,
+                publisherId,
+                releases,
+            },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return new SkillReleaseInventoryManifest(
+            SkillReleaseInventoryManifest.CurrentSchemaVersion,
+            inventoryRevision,
+            publisherId,
+            releases,
+            Convert.ToBase64String(publisher.SignData(
+                payload, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)));
+    }
+
+    private static async Task ResetSkillAdmissionCutoverAsync(ProjectsConfigDbContext db)
+    {
+        var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+        fence.State = ProjectSkillAdmissionFenceState.Open;
+        fence.Generation++;
+        fence.ReleaseInventoryRevision = null;
+        fence.PlatformSkillsPolicySha256 = null;
+        await db.SaveChangesAsync();
     }
 
     private static string Hash(ReadOnlySpan<byte> content) =>

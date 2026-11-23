@@ -51,6 +51,45 @@ public sealed class NativeAcsPolicyTests
         """;
 
     [Fact]
+    public void SkillsDomainUsesClosedScoreAndEvidencePolicy()
+    {
+        var artifact = NativeAcsUnifiedPolicyProfile.CreateArtifact(
+            """{"allowed_action_ids":["merge","model.turn"]}""",
+            ComposedNetworkData,
+            UnifiedModelUseData,
+            UnifiedGuardrailsData,
+            """{"schemaVersion":1,"minimumScore":600,"requireCompletedEvidence":true}""");
+
+        var inspection = NativeAcsUnifiedPolicyProfile.Inspect(artifact);
+
+        Assert.True(inspection.IsValid);
+        Assert.Contains(NativeAcsDomainId.Skills, inspection.Domains);
+        Assert.Equal(600, inspection.SkillsPolicy!.MinimumScore);
+        Assert.True(inspection.SkillsPolicy.RequireCompletedEvidence);
+        var invalid = ReplaceComposedFile(
+            artifact,
+            "policy/skills/data.json",
+            """{"schemaVersion":1,"minimumScore":600,"requireCompletedEvidence":true,"relax":true}""");
+        Assert.False(NativeAcsUnifiedPolicyProfile.Inspect(invalid).IsValid);
+    }
+
+    [Fact]
+    public void ExistingComposableDomainsV2ArtifactRemainsValidWithoutSkills()
+    {
+        var artifact = NativeAcsUnifiedPolicyProfile.CreateArtifactV2(
+            """{"allowed_action_ids":["merge","model.turn"]}""",
+            ComposedNetworkData,
+            UnifiedModelUseData,
+            UnifiedGuardrailsData);
+
+        var inspection = NativeAcsUnifiedPolicyProfile.Inspect(artifact);
+
+        Assert.True(inspection.IsValid);
+        Assert.DoesNotContain(NativeAcsDomainId.Skills, inspection.Domains);
+        Assert.Null(inspection.SkillsPolicy);
+    }
+
+    [Fact]
     public void RejectsTamperedArtifactsAndNonCanonicalPaths()
     {
         var opaPath = Path.Combine(AppContext.BaseDirectory, "missing-opa");
