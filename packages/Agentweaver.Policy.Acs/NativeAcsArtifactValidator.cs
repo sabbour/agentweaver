@@ -68,6 +68,12 @@ public sealed class NativeAcsArtifactValidator
         "input.policy_target.value.approval.turn_id",
         "input.policy_target.value.approval.arguments_digest"
     };
+    private static readonly HashSet<string> AllowedSkillsInputPaths = new(StringComparer.Ordinal)
+    {
+        "input.policy_target.value.skills.trust_score",
+        "input.policy_target.value.skills.evidence_complete",
+        "input.policy_target.value.skills.built_in_exempt"
+    };
     private static readonly HashSet<string> AllowedToolInputPaths = new(StringComparer.Ordinal)
     {
         "input.policy_target.value.action_id",
@@ -319,6 +325,7 @@ public sealed class NativeAcsArtifactValidator
                                 AllowedDomainSelectorInputPaths,
                             NativeAcsUnifiedPolicyProfile.ModelUseModulePath => AllowedModelUseInputPaths,
                             NativeAcsUnifiedPolicyProfile.GuardrailsModulePath => AllowedGuardrailsInputPaths,
+                            NativeAcsUnifiedPolicyProfile.SkillsModulePath => AllowedSkillsInputPaths,
                             NativeAcsUnifiedPolicyProfile.ToolPermissionsModulePath => AllowedToolInputPaths,
                             _ => new HashSet<string>(StringComparer.Ordinal)
                         }
