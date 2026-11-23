@@ -204,6 +204,8 @@ Call `GET /api/v1/runs/{runId}/egress` through the Gateway to read stored
 attributed outbound traffic for one run. Gateway sets `Cache-Control: no-store`
 early and forwards the caller bearer token and optional `X-Agentweaver-Tenant`
 header to Orchestrator (`GET /api/runs/{runId}/egress`).
+Use the [`agentweaver run egress` guide](../guide/manage-agenthost-egress.md)
+for CLI authentication, one-page output, and cursor handling.
 
 Orchestrator validates the caller token, scopes, and explicit `tenant_id`,
 `project_id`, and `run_id` bindings, rejects purpose-bound or duplicate-claim

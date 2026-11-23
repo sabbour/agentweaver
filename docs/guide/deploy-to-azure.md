@@ -249,8 +249,10 @@ The Environment identity receives `Log Analytics Reader` on the install
 workspace. See the [ACNS forwarding details](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/README.md#acns-flow-log-forwarding)
 and [Kustomize audit behavior](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#agenthost-egress-audit).
 Stored attributed egress records are read through `GET /api/v1/runs/{runId}/egress`,
-which returns `coverage: "Unavailable"` and `delayedUntil: null`; see
-[Read stored run egress](../architecture/environment-egress.md#read-stored-run-egress).
+which returns `coverage: "Unavailable"` and `delayedUntil: null`. Use
+[`agentweaver run egress`](./manage-agenthost-egress.md) to read a stored page.
+See [Read stored run egress](../architecture/environment-egress.md#read-stored-run-egress)
+for the service flow and authorization rules.
 
 The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It never creates, requires, or verifies a human

@@ -62,6 +62,7 @@ export default defineConfig({
             { text: 'Configure an Azure OpenAI BYOK model', link: '/guide/configure-byok-azure-openai' },
             { text: 'Build and configure the web client', link: '/guide/web-client' },
             { text: 'Read and dismiss notifications', link: '/guide/notifications' },
+            { text: 'Read stored AgentHost egress', link: '/guide/manage-agenthost-egress' },
             { text: 'Use the Gateway', link: '/guide/gateway' },
             { text: 'Chief of Staff', link: '/guide/chief-of-staff' },
             { text: 'Read platform component status', link: '/guide/platform-components' },

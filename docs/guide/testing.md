@@ -204,7 +204,7 @@ repository root:
 dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --configuration Release --filter "FullyQualifiedName~EnvironmentRunEgressTests"
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~RunEgressEndpointTests"
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayRunEgressTests"
-dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayOpenApiParityTests"
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~RunEgressCommandTests|FullyQualifiedName~GatewayOpenApiParityTests"
 ```
 
 The Environment and Orchestrator tests use disposable PostgreSQL databases and
@@ -213,6 +213,9 @@ Projects authority revalidation, `Platform/default` admin and project/tenant
 read grants, visible-run resolution with hidden duplicates, keyset pagination
 with equal timestamps, cursor scope binding, `Cache-Control: no-store`, and
 `503` dependency errors.
+The CLI tests check exact GET dispatch, escaped run IDs and cursors, tenant
+headers, unbound default and `projects.admin` credentials, live-contract drift,
+stdout and stderr separation, page shape, and error exits.
 
 ## Run the standard test suites
 

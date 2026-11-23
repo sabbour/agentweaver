@@ -176,6 +176,40 @@ Broker rejects the change if another request changes that revision first.
 `disconnect` revokes the connection. `status` and these changes return safe
 connection details; they do not return GitHub credentials.
 
+## Read stored run egress
+
+Use `run egress` to read one page of stored outbound traffic for a run:
+
+```powershell
+agentweaver run egress RUN_ID
+agentweaver run egress RUN_ID --limit 25
+agentweaver run egress RUN_ID --limit 25 --cursor CURSOR
+```
+
+The command uses the cached Broker sign-in and the base `openid api.read
+offline_access` scopes. The Gateway checks current tenant, project, and role
+authority for every request. To read through the Platform/default
+administrator path, sign in with `projects.admin` and select that scope for the
+command:
+
+```powershell
+agentweaver auth login --scope projects.admin
+agentweaver run egress RUN_ID --scope projects.admin
+```
+
+The command uses an unbound credential. Do not pass `--project-id` or
+`--run-id`. `--limit` accepts 1 through 100. If you omit it, the Gateway uses
+50. Pass `nextCursor` unchanged to read the next page.
+
+Standard output contains one JSON object with `runId`, `coverage`,
+`delayedUntil`, `items`, and `nextCursor`. `coverage: "Unavailable"` is a valid
+page result. It means the source contains only stored attributed flows; the CLI
+writes a notice to standard error and exits with code 0. Errors leave standard
+output empty and exit with code 1. Cancellation exits with code 130.
+
+See [Manage AgentHost egress reads](./manage-agenthost-egress.md) for the
+authorization and paging workflow.
+
 ## Read, validate, and apply Platform Policy
 
 The policy commands read, validate, export, and apply the canonical Platform

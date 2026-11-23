@@ -116,6 +116,24 @@ public sealed class GatewayOpenApiParityTests
         Assert.Contains("not cacheable",
             executionPlanHeaders["Cache-Control"]?["description"]?.GetValue<string>());
 
+        const string runEgressPath = "/api/v1/runs/{runId}/egress";
+        JsonObject runEgressRoute = Assert.IsType<JsonObject>(
+            discovered["paths"]?[runEgressPath]?["get"]);
+        JsonObject runEgress = FindOperation(discovered, "readRunEgress");
+        Assert.True(JsonNode.DeepEquals(runEgressRoute, runEgress));
+        Assert.Null(runEgress["requestBody"]);
+        Assert.DoesNotContain(
+            Assert.IsType<JsonArray>(runEgress["parameters"]).OfType<JsonObject>(),
+            parameter => parameter["in"]?.GetValue<string>() == "header" &&
+                         parameter["name"]?.GetValue<string>() == "X-Agentweaver-Project-Authorization");
+        JsonObject runEgressLimit = Assert.Single(
+            Assert.IsType<JsonArray>(runEgress["parameters"]).OfType<JsonObject>(),
+            parameter => parameter["name"]?.GetValue<string>() == "limit");
+        Assert.Equal(1, runEgressLimit["schema"]?["minimum"]?.GetValue<int>());
+        Assert.Equal(100, runEgressLimit["schema"]?["maximum"]?.GetValue<int>());
+        Assert.Equal(50, runEgressLimit["schema"]?["default"]?.GetValue<int>());
+        Assert.Equal(2048, CursorMaximum(runEgress));
+
         JsonObject executionPlanSchema =
             Assert.IsType<JsonObject>(schemas["CoordinationExecutionPlanSnapshot"]);
         Assert.Equal(
@@ -226,6 +244,7 @@ public sealed class GatewayOpenApiParityTests
             .ToArray();
         Assert.Contains("sendProjectRunMessage", operationIds);
         Assert.Contains("sendMessage", operationIds);
+        Assert.Contains("readRunEgress", operationIds);
     }
 
     private static string ResolveCliApphost()
