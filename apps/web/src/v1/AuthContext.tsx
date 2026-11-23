@@ -36,6 +36,7 @@ import type {
   BrokerConsentPrompt,
   BrokerTokenResponse,
   ProjectAuthorizationContextResponse,
+  ProjectSummary,
 } from './contracts';
 import { gatewayClient, GatewayError } from './api';
 import { clearRecentRuns } from './recentRuns';
@@ -67,6 +68,12 @@ export type PlatformPolicyIdentity = Pick<
   ConfirmedAuthorizationContext,
   'issuer' | 'actorId' | 'tenantId'
 >;
+
+export interface ProjectPolicyAccess {
+  identity: PlatformPolicyIdentity;
+  projects: ProjectSummary[];
+  projectId: string | null;
+}
 
 export interface PlatformPolicyRefreshResult {
   refreshed: boolean;
@@ -119,6 +126,17 @@ interface AuthContextValue {
   ) => Promise<PlatformPolicyRevisionReadResult>;
   validatePlatformPolicyArtifact: (
     tenantSelector: string,
+    artifact: PlatformPolicyArtifactRequest,
+    signal?: AbortSignal,
+  ) => Promise<PlatformPolicyValidationResult>;
+  establishProjectPolicyAccess: (
+    tenantSelector: string,
+    projectId: string | null,
+    signal?: AbortSignal,
+  ) => Promise<ProjectPolicyAccess>;
+  validateProjectPolicyArtifact: (
+    tenantSelector: string,
+    projectId: string,
     artifact: PlatformPolicyArtifactRequest,
     signal?: AbortSignal,
   ) => Promise<PlatformPolicyValidationResult>;
@@ -206,6 +224,7 @@ function sessionFromToken(token: BrokerTokenResponse, binding: AuthorizationBind
 
 interface PlatformPolicyAccessSnapshot {
   identity: PlatformPolicyIdentity;
+  authorizationContext: ProjectAuthorizationContextResponse;
   activeSession: AuthSession;
   unboundSession: AuthSession;
   authSessionGeneration: number;
@@ -1196,6 +1215,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     policyAccessRef.current = {
       identity,
+      authorizationContext: unboundContext,
       activeSession: active,
       unboundSession: unbound,
       authSessionGeneration: activeGeneration,
@@ -1272,6 +1292,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [isCurrentPlatformPolicyAccess, requirePlatformPolicyAccess]);
 
+  const establishProjectPolicyAccess = useCallback(async (
+    tenantSelector: string,
+    selectedProjectId: string | null,
+    signal?: AbortSignal,
+  ): Promise<ProjectPolicyAccess> => {
+    const identity = await establishPlatformPolicyAccess(tenantSelector, signal);
+    const access = requirePlatformPolicyAccess(tenantSelector);
+    const projects = await gatewayClient.listProjects(
+      access.unboundSession.accessToken,
+      tenantSelector,
+    );
+    if (!Array.isArray(projects) || projects.some((project) =>
+      !project || typeof project !== 'object' ||
+      typeof project.projectId !== 'string' ||
+      !Array.isArray(project.effectiveRoles)))
+      throw new GatewayError(502, { code: 'project_policy_response_invalid' },
+        'Project Policy access could not be checked.');
+    if (!isCurrentPlatformPolicyAccess(access, tenantSelector))
+      throw new GatewayError(401, { code: 'policy_access_expired' },
+        'Project Policy access must be checked again.');
+
+    const writeProjectsFor = (projectId: string) =>
+      access.authorizationContext.effectiveAuthority.some((grant) =>
+        grant.permissions.some((permission) => permission.permission === 'writeProjects') &&
+        ((grant.resourceType === 'project' && grant.resourceId === projectId) ||
+         (grant.resourceType === 'tenant' && grant.resourceId === tenantSelector)));
+    const canAuthor = (project: ProjectSummary) =>
+      writeProjectsFor(project.projectId) &&
+      project.effectiveRoles.some((role) =>
+        (role.resourceType === 'project' &&
+          role.resourceId === project.projectId &&
+          role.role === 'owner') ||
+        (role.resourceType === 'tenant' &&
+          role.resourceId === tenantSelector &&
+          role.role === 'tenantAdmin'));
+    const eligible = projects.filter(canAuthor);
+    if (selectedProjectId) {
+      const visible = projects.find((project) => project.projectId === selectedProjectId);
+      if (!visible)
+        throw new GatewayError(404, { code: 'project_policy_not_found' },
+          'The selected Project is unavailable.');
+      if (!canAuthor(visible))
+        throw new GatewayError(403, { code: 'project_policy_access_denied' },
+          'Project Policy access was denied.');
+    }
+    return { identity, projects: eligible, projectId: selectedProjectId };
+  }, [
+    establishPlatformPolicyAccess,
+    isCurrentPlatformPolicyAccess,
+    requirePlatformPolicyAccess,
+  ]);
+
   const validatePlatformPolicyArtifact = useCallback(async (
     tenantSelector: string,
     artifact: PlatformPolicyArtifactRequest,
@@ -1292,6 +1364,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (reason) {
       if (reason instanceof GatewayError &&
           reason.status === 403 &&
+          policyAccessRef.current === access)
+        policyAccessRef.current = null;
+      throw reason;
+    }
+  }, [isCurrentPlatformPolicyAccess, requirePlatformPolicyAccess]);
+
+  const validateProjectPolicyArtifact = useCallback(async (
+    tenantSelector: string,
+    projectId: string,
+    artifact: PlatformPolicyArtifactRequest,
+    signal?: AbortSignal,
+  ): Promise<PlatformPolicyValidationResult> => {
+    const access = requirePlatformPolicyAccess(tenantSelector);
+    try {
+      const result = await gatewayClient.validateProjectPolicyArtifact(
+        access.unboundSession.accessToken,
+        tenantSelector,
+        projectId,
+        artifact,
+        signal,
+      );
+      if (!isCurrentPlatformPolicyAccess(access, tenantSelector))
+        throw new GatewayError(401, { code: 'policy_access_expired' },
+          'Project Policy access must be checked again.');
+      return result;
+    } catch (reason) {
+      if (reason instanceof GatewayError &&
+          (reason.status === 403 || reason.status === 404) &&
           policyAccessRef.current === access)
         policyAccessRef.current = null;
       throw reason;
@@ -1345,6 +1445,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
     validatePlatformPolicyArtifact,
+    establishProjectPolicyAccess,
+    validateProjectPolicyArtifact,
     refreshPlatformPolicySession,
     authorizationContext,
     authorizationContextLoading,
@@ -1369,6 +1471,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isActiveSession,
     readPlatformPolicyRevision,
     validatePlatformPolicyArtifact,
+    establishProjectPolicyAccess,
+    validateProjectPolicyArtifact,
     resolveAuthorizationContext,
     refreshPlatformPolicySession,
     session,

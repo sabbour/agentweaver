@@ -2,4 +2,5 @@
 "Agentweaver.Web": minor
 ---
 
-Add a raw Platform Policy draft editor with server-side validation.
+Add raw Platform Policy editing and local Project Policy request validation on
+the Policies route.

@@ -6,6 +6,7 @@ import {
   firstRunTourStorageKey,
   markFirstRunTourComplete,
 } from '../components/onboarding/firstRunTourStorage';
+import { savePendingRun } from './pendingRun';
 
 const authMocks = vi.hoisted(() => ({
   buildAuthorizeUrl: vi.fn((
@@ -64,6 +65,7 @@ vi.mock('./config', async (importOriginal) => ({
 import App from './App';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
+import { buildPlatformPolicyValidationArtifact, createPlatformPolicyTextBuffer } from './platformPolicyContracts';
 import {
   PlatformPoliciesControllerProvider,
   usePlatformPoliciesController,
@@ -134,6 +136,11 @@ let unauthorizedTenantOnce: string | null;
 let unauthorizedValidationTenantOnce: string | null;
 let resolveHistory: ((response: Response) => void) | null;
 let requests: { url: string; init?: RequestInit }[];
+let projectValidationStatus: number;
+let projectAuthority: boolean;
+let unauthorizedProjectValidationOnce: boolean;
+let abortProjectValidationOnce: boolean;
+let resolveProjectValidation: ((response: Response) => void) | null;
 
 async function completeSignIn(code = 'code-1'): Promise<void> {
   await waitFor(() => expect(fetch).toHaveBeenCalled());
@@ -232,6 +239,11 @@ describe('Platform Policies served route', () => {
     vi.clearAllMocks();
     policyStatus = 200;
     validationStatus = 200;
+    projectValidationStatus = 200;
+    projectAuthority = false;
+    unauthorizedProjectValidationOnce = false;
+    abortProjectValidationOnce = false;
+    resolveProjectValidation = null;
     omitSnapshotHead = false;
     delayHistory = false;
     unauthorizedTenantOnce = null;
@@ -280,7 +292,11 @@ describe('Platform Policies served route', () => {
           membershipRevision: 1,
           boundProjectId: runBinding ? 'project-1' : null,
           boundRunId: runBinding ? 'run-1' : null,
-          effectiveAuthority: [],
+          effectiveAuthority: projectAuthority ? [{
+            resourceType: 'project',
+            resourceId: 'project-1',
+            permissions: [{ permission: 'writeProjects', roleRevision: 1 }],
+          }] : [],
         });
       }
       if (url.pathname === '/api/v1/policies/platform/revisions') {
@@ -320,6 +336,33 @@ describe('Platform Policies served route', () => {
             ? jsonResponse({ isValid: true, diagnostics: [] })
             : jsonResponse({ detail: 'private server detail' }, validationStatus);
       }
+      if (url.pathname === '/api/v1/policies/projects/project-1/validate') {
+        if (abortProjectValidationOnce) {
+          abortProjectValidationOnce = false;
+          throw new DOMException('The request was cancelled.', 'AbortError');
+        }
+        if (unauthorizedProjectValidationOnce) {
+          unauthorizedProjectValidationOnce = false;
+          return jsonResponse({ detail: 'private server detail' }, 401);
+        }
+        if (resolveProjectValidation === null && projectValidationStatus === 202)
+          return new Promise<Response>((resolve) => {
+            resolveProjectValidation = resolve;
+          });
+        return projectValidationStatus === 422
+            ? jsonResponse({
+                title: 'native_acs_policy_invalid',
+                status: 422,
+                code: 'native_acs_policy_invalid',
+                diagnostics: [],
+              }, 422)
+            : jsonResponse(
+                projectValidationStatus === 200
+                  ? { isValid: true, diagnostics: [] }
+                  : { detail: 'private server detail' },
+                projectValidationStatus,
+              );
+      }
       return jsonResponse({ items: [], count: 0, nextCursor: null });
     });
     const controlledClient = new AgentweaverGatewayClient('/api/v1', fetcher);
@@ -339,7 +382,31 @@ describe('Platform Policies served route', () => {
       (token, tenant, artifact, signal) =>
         controlledClient.validatePlatformPolicyArtifact(token, tenant, artifact, signal),
     );
-    vi.spyOn(gatewayClient, 'listProjects').mockResolvedValue([]);
+    vi.spyOn(gatewayClient, 'validateProjectPolicyArtifact').mockImplementation(
+      (token, tenant, projectId, artifact, signal) =>
+        controlledClient.validateProjectPolicyArtifact(
+          token,
+          tenant,
+          projectId,
+          artifact,
+          signal,
+        ),
+    );
+    vi.spyOn(gatewayClient, 'listProjects').mockImplementation(async () =>
+      projectAuthority ? [{
+        projectId: 'project-1',
+        name: 'Project One',
+        state: 'active',
+        revision: 1,
+        configurationRevision: 1,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        effectiveRoles: [{
+          resourceType: 'project',
+          resourceId: 'project-1',
+          role: 'owner',
+        }],
+      }] : []);
     vi.spyOn(gatewayClient, 'listNotifications').mockResolvedValue({
       items: [],
       count: 0,
@@ -372,6 +439,388 @@ describe('Platform Policies served route', () => {
     expect(policyCalls.length).toBeGreaterThanOrEqual(2);
     for (const { init } of policyCalls)
       expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
+  it('validates an imported Project draft through App without reading a Policy head', async () => {
+    projectAuthority = true;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    const platformCallCount = policyRequests().length;
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect((projectPicker as HTMLSelectElement).value).toBe('project-1'));
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+
+    const manifest = createPlatformPolicyTextBuffer('\uFEFFname: project-policy\r\n');
+    const artifact = await buildPlatformPolicyValidationArtifact(manifest, [
+      {
+        relativePath: 'rules/example.rego',
+        content: createPlatformPolicyTextBuffer('allow: true\r'),
+      },
+    ]);
+    const request = `\uFEFF${JSON.stringify({ artifact })}\n`;
+    fireEvent.change(screen.getByLabelText('Project Policy validation request'), {
+      target: { files: [new File([request], 'project-policy.json', { type: 'application/json' })] },
+    });
+    await waitFor(() => expect(
+      (screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value,
+    ).toBe('\uFEFFname: project-policy\n'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    expect(await screen.findByText('The Project Policy draft is valid.')).toBeTruthy();
+    expect(policyRequests()).toHaveLength(platformCallCount);
+    expect(screen.getByRole('link', { name: 'Platform Policies' })).toBeTruthy();
+
+    const validationCall = requests.filter(({ url }) =>
+      url.includes('/policies/projects/project-1/validate')).at(-1);
+    expect(validationCall?.url).toBe(
+      'https://app.test/api/v1/policies/projects/project-1/validate',
+    );
+    expect(new Headers(validationCall?.init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(new Headers(validationCall?.init?.headers).get('Authorization')).toBe('Bearer access-1');
+    expect(JSON.parse(String(validationCall?.init?.body))).toEqual({ artifact });
+    expect(requests.some(({ url }) =>
+      url.includes('/policies/projects/project-1') && !url.endsWith('/validate'))).toBe(false);
+  });
+
+  it('ignores a Project validation response after the draft is edited', async () => {
+    projectAuthority = true;
+    projectValidationStatus = 202;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, {
+      target: { value: 'project-1' },
+    });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(resolveProjectValidation).not.toBeNull());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'changed after validation' },
+    });
+    await act(async () => {
+      resolveProjectValidation?.(jsonResponse({ isValid: true, diagnostics: [] }));
+    });
+    expect(screen.queryByText('The Project Policy draft is valid.')).toBeNull();
+    expect((screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('changed after validation');
+  });
+
+  it('clears an edited Project draft after a late denial for the same activation', async () => {
+    projectAuthority = true;
+    projectValidationStatus = 202;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'before late denial' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(resolveProjectValidation).not.toBeNull());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'edited before denial' },
+    });
+    await act(async () => {
+      resolveProjectValidation?.(jsonResponse({ detail: 'private server detail' }, 403));
+    });
+
+    expect(await screen.findByText(
+      'You do not have permission to access this Project Policy.',
+    )).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Project Policy manifest' })).toBeNull();
+    expect(requests.filter(({ url }) =>
+      url.includes('/policies/projects/project-1/validate'))).toHaveLength(1);
+  });
+
+  it('lets a newer edit win while an imported request is still being read', async () => {
+    projectAuthority = true;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+
+    const importedArtifact = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer('name: delayed-import\r\n'),
+      [],
+    );
+    const delayed = deferred<ArrayBuffer>();
+    const delayedFile = new File([], 'delayed.json', { type: 'application/json' });
+    vi.spyOn(delayedFile, 'arrayBuffer').mockReturnValue(delayed.promise);
+    fireEvent.change(screen.getByLabelText('Project Policy validation request'), {
+      target: { files: [delayedFile] },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'newer editor draft' },
+    });
+    await act(async () => {
+      delayed.resolve(new TextEncoder().encode(
+        JSON.stringify({ artifact: importedArtifact }),
+      ).buffer);
+      await delayed.promise;
+    });
+    await waitFor(() => expect(
+      (screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value,
+    ).toBe('newer editor draft'));
+  });
+
+  it('clears a Project draft when the App activates another binding for the same actor and tenant', async () => {
+    projectAuthority = true;
+    authMocks.exchangeAuthorizationCode.mockImplementation(async (_config, _transaction, code) => ({
+      access_token: code === 'binding-code' ? 'run-token' : 'access-1',
+      refresh_token: code === 'binding-code' ? 'refresh-run' : 'refresh-1',
+      token_type: 'Bearer',
+      expires_in: 3600,
+    }));
+    vi.spyOn(gatewayClient, 'bindChiefOfStaffConversation').mockResolvedValue({
+      conversationId: 'conversation-1',
+      revision: 1,
+    } as never);
+    vi.spyOn(gatewayClient, 'startProjectRun').mockResolvedValue({
+      projectId: 'project-1',
+      runId: 'run-1',
+      status: 'starting',
+    } as never);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      screen.getByRole('textbox', { name: 'Project Policy manifest' }),
+    ).toBeTruthy());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'unbound private draft' },
+    });
+
+    savePendingRun({
+      projectId: 'project-1',
+      runId: 'run-1',
+      createdAt: new Date().toISOString(),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    await waitFor(() => expect(gatewayClient.bindChiefOfStaffConversation).toHaveBeenCalled());
+    const silentFrame = await waitFor(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Silent sign-in"]'));
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', {
+        origin: 'https://app.test',
+        source: silentFrame?.contentWindow,
+        data: {
+          type: 'agentweaver.identity.callback',
+          code: 'binding-code',
+          state: 'state-1',
+        },
+      }));
+    });
+    await waitFor(() => expect(gatewayClient.startProjectRun).toHaveBeenCalledWith(
+      'run-token',
+      'project-1',
+      'run-1',
+      null,
+    ));
+
+    act(() => {
+      window.history.pushState({}, '', '/policies');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(
+      screen.getByRole('textbox', { name: 'Project Policy manifest' }),
+    ).toBeTruthy());
+    expect((screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('');
+  });
+
+  it('does not let an old Project response clear a current Platform draft', async () => {
+    projectAuthority = true;
+    projectValidationStatus = 202;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(resolveProjectValidation).not.toBeNull());
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'platform' },
+    });
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'current platform draft' },
+    });
+    await act(async () => {
+      resolveProjectValidation?.(jsonResponse({ detail: 'denied' }, 403));
+    });
+    expect((screen.getByRole('textbox', { name: 'Platform Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('current platform draft');
+    expect(screen.getByText('Saved Platform Policy revisions')).toBeTruthy();
+  });
+
+  it('keeps the rail gate Platform-specific while Project mode is active', async () => {
+    projectAuthority = true;
+    policyStatus = 403;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('You do not have permission to access Platform Policies.');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      screen.getByRole('textbox', { name: 'Project Policy manifest' }),
+    ).toBeTruthy());
+    expect(screen.queryByRole('link', { name: 'Platform Policies' })).toBeNull();
+    expect(policyRequests().length).toBe(1);
+  });
+
+  it('clears a Project draft when current access is denied after an edit', async () => {
+    projectAuthority = true;
+    projectValidationStatus = 403;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'local sensitive draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    expect(await screen.findByText(
+      'You do not have permission to access this Project Policy.',
+    )).toBeTruthy();
+
+    projectValidationStatus = 200;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(
+      (screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value,
+    ).toBe(''));
+  });
+
+  it('rechecks Project access and resends one unchanged draft after a 401', async () => {
+    projectAuthority = true;
+    unauthorizedProjectValidationOnce = true;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, {
+      target: { value: 'project-1' },
+    });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: retry\r\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+
+    await waitFor(() => expect(requests.filter(({ url }) =>
+      url.includes('/policies/projects/project-1/validate'))).toHaveLength(2));
+    expect(await screen.findByText('The Project Policy draft is valid.')).toBeTruthy();
+    const calls = requests.filter(({ url }) =>
+      url.includes('/policies/projects/project-1/validate'));
+    expect(calls).toHaveLength(2);
+    expect(calls.map(({ init }) => String(init?.body))).toEqual([
+      String(calls[1]?.init?.body),
+      String(calls[1]?.init?.body),
+    ]);
+    expect(authMocks.refreshBrokerToken).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks Project access without resending after a same-scope abort', async () => {
+    projectAuthority = true;
+    abortProjectValidationOnce = true;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'keep aborted draft' },
+    });
+    const contextChecks = () => requests.filter(({ url }) =>
+      url.endsWith('/authorization/context')).length;
+    const contextCount = contextChecks();
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+
+    await waitFor(() => expect(contextChecks()).toBeGreaterThan(contextCount));
+    expect(requests.filter(({ url }) =>
+      url.includes('/policies/projects/project-1/validate'))).toHaveLength(1);
+    expect((screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value)
+      .toBe('keep aborted draft');
   });
 
   it('loads a saved revision into a local draft and validates it without writing', async () => {

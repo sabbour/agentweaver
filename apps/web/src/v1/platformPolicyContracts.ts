@@ -317,7 +317,25 @@ export async function buildPlatformPolicyValidationArtifact(
         throw new Error('Platform Policy file paths cannot conflict with directories.');
     }
   }
-  const fields = [manifestBytes, ...sortedFiles.flatMap((file) => [file.pathBytes, file.bytes])];
+  const contentSha256 = await hashPlatformPolicyArtifact(
+    manifestBytes,
+    sortedFiles.map(({ pathBytes, bytes }) => ({ pathBytes, bytes })),
+  );
+  return {
+    manifestBytes: Array.from(manifestBytes),
+    files: encodedFiles.map(({ relativePath, bytes }) => ({
+      relativePath,
+      bytes: Array.from(bytes),
+    })),
+    contentSha256,
+  };
+}
+
+async function hashPlatformPolicyArtifact(
+  manifestBytes: Uint8Array,
+  files: { pathBytes: Uint8Array; bytes: Uint8Array }[],
+): Promise<string> {
+  const fields = [manifestBytes, ...files.flatMap((file) => [file.pathBytes, file.bytes])];
   const prefix = encodeUtf8('agentweaver-native-acs-artifact-v1\0');
   const inputLength = prefix.byteLength + fields.reduce((length, field) => length + 4 + field.byteLength, 0);
   const input = new Uint8Array(inputLength);
@@ -330,14 +348,99 @@ export async function buildPlatformPolicyValidationArtifact(
   if (!globalThis.crypto?.subtle)
     throw new Error('Policy validation is unavailable in this browser.');
   const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', input));
-  const contentSha256 = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export interface PlatformPolicyDraftImport {
+  manifest: PlatformPolicyTextBuffer;
+  files: { relativePath: string; content: PlatformPolicyTextBuffer }[];
+}
+
+export async function parsePlatformPolicyValidationRequestFile(
+  requestBytes: Uint8Array,
+): Promise<PlatformPolicyDraftImport> {
+  if (requestBytes.byteLength > PLATFORM_POLICY_MAX_HTTP_BYTES)
+    throw new Error('The Policy validation request exceeds 5,242,880 bytes.');
+
+  const json = decodeUtf8(requestBytes);
+  if (json === null)
+    throw new Error('The Policy validation request must contain UTF-8 JSON.');
+  let value: unknown;
+  try {
+    value = JSON.parse(json.startsWith('\uFEFF') ? json.slice(1) : json);
+  } catch {
+    throw new Error('The selected Policy validation request is not valid JSON.');
+  }
+  if (!isRecord(value) || !hasExactKeys(value, ['artifact']) || !isRecord(value.artifact))
+    throw new Error('The file must contain one complete {artifact} validation request.');
+  const artifact = value.artifact;
+  if (!hasExactKeys(artifact, ['manifestBytes', 'files', 'contentSha256']) ||
+      !Array.isArray(artifact.files) ||
+      artifact.files.length > MAX_FILES ||
+      !isHash(artifact.contentSha256))
+    throw new Error('The Policy validation request artifact is invalid.');
+
+  const manifestBytes = readByteArray(artifact.manifestBytes, MAX_MANIFEST_BYTES);
+  if (!manifestBytes)
+    throw new Error('The Policy manifest exceeds 65,536 bytes or is invalid.');
+  const manifest = decodeUtf8(manifestBytes);
+  if (manifest === null)
+    throw new Error('The Policy manifest must contain valid UTF-8 text.');
+
+  const seenPaths = new Set<string>();
+  let totalBytes = manifestBytes.byteLength;
+  const files: {
+    relativePath: string;
+    content: string;
+    pathBytes: Uint8Array;
+    bytes: Uint8Array;
+  }[] = [];
+  for (const fileValue of artifact.files) {
+    if (!isRecord(fileValue) ||
+        !hasExactKeys(fileValue, ['relativePath', 'bytes']) ||
+        !isRelativePath(fileValue.relativePath) ||
+        seenPaths.has(fileValue.relativePath)) {
+      throw new Error('The Policy validation request contains invalid or duplicate file paths.');
+    }
+    const bytes = readByteArray(fileValue.bytes, MAX_FILE_BYTES, true);
+    if (!bytes)
+      throw new Error('A Policy file exceeds 262,144 bytes or is invalid.');
+    totalBytes += bytes.byteLength;
+    if (totalBytes > MAX_ARTIFACT_BYTES)
+      throw new Error('The Policy artifact exceeds 1,048,576 bytes.');
+    const content = decodeUtf8(bytes);
+    if (content === null)
+      throw new Error(`Policy file ${fileValue.relativePath} must contain valid UTF-8 text.`);
+    seenPaths.add(fileValue.relativePath);
+    files.push({
+      relativePath: fileValue.relativePath,
+      content,
+      pathBytes: encodeUtf8(fileValue.relativePath),
+      bytes,
+    });
+  }
+  for (const file of files) {
+    const segments = file.relativePath.split('/');
+    for (let index = 1; index < segments.length; index += 1) {
+      if (seenPaths.has(segments.slice(0, index).join('/')))
+        throw new Error('Policy file paths cannot conflict with directories.');
+    }
+  }
+  const sorted = [...files].sort((left, right) =>
+    left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0);
+  const hash = await hashPlatformPolicyArtifact(
+    manifestBytes,
+    sorted.map(({ pathBytes, bytes }) => ({ pathBytes, bytes })),
+  );
+  if (hash !== artifact.contentSha256)
+    throw new Error('The Policy validation request hash does not match its artifact bytes.');
+
   return {
-    manifestBytes: Array.from(manifestBytes),
-    files: encodedFiles.map(({ relativePath, bytes }) => ({
+    manifest: createPlatformPolicyTextBuffer(manifest),
+    files: files.map(({ relativePath, content }) => ({
       relativePath,
-      bytes: Array.from(bytes),
+      content: createPlatformPolicyTextBuffer(content),
     })),
-    contentSha256,
   };
 }
 

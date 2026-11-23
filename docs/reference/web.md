@@ -20,13 +20,13 @@ Paths in this table are relative to `apps/web`.
 | `src/main.tsx` | React mount, Strict Mode, and top-level render error boundary. |
 | `src/App.tsx` | Stable entry that exports `src/v1/App.tsx`. |
 | `src/v1/App.tsx` | Authentication gates, shell, routes, project/configuration/Knowledge pages, Platform Policies, and run tabs. |
-| `src/v1/AuthContext.tsx` | In-memory sessions, exact project and run authorization, isolated unbound Platform Policy reads, refresh, and current tenant context. |
+| `src/v1/AuthContext.tsx` | In-memory sessions, exact project and run authorization, isolated unbound Policy access, refresh, and current tenant context. |
 | `src/v1/authProtocol.ts` | PKCE, state and callback validation, consent, project/run selectors, and Broker scope selection. |
 | `src/v1/config.ts` | Runtime and build-time configuration. |
 | `src/v1/api.ts` | Gateway HTTP client, structured errors, project BYOK Draft operations, explicit-tenant Platform Policy reads with response bounds, header forwarding, and server-sent events (SSE) parsing. |
 | `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including project BYOK Draft contracts and the project issue and pull request list pages used by the Priority picker. |
-| `src/v1/platformPolicyContracts.ts` | Bounds and validates Platform Policy history, revision metadata, UTF-8 manifest bytes, and source files. |
-| `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only saved history and source. |
+| `src/v1/platformPolicyContracts.ts` | Bounds and validates Policy history, revision metadata, UTF-8 manifest bytes, source files, validation requests, and canonical hashes. |
+| `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only Platform history and local Project validation. |
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client, callback messages, and the actionable setup message for `github_repo_app_not_configured`. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
@@ -89,7 +89,7 @@ data hooks are not mounted.
 | `/sessions` | `SessionsPage`. |
 | `/assistant` | `NewSessionPage`; `project` or `projectId` preselects the project. |
 | `/platform-settings` | `PlatformSettingsPage`. |
-| `/policies` | `PlatformPoliciesPage`; a confirmed tenant selector and successful Platform Policy history read gate the saved history and revision source. |
+| `/policies` | `PlatformPoliciesPage`; Platform mode reads saved history, while Project mode validates an in-memory local artifact for one authorized Project. |
 | `/projects/:projectId/team/cast` | `CastTeamPage`. |
 | `/projects/:projectId/runs/:runId/history` | Project-authorized Session tree or Activity history for the selected run. Current project readers can open it without run-accepting authority; run-bound tokens remain limited to their run. |
 | `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `chat`, `topology`, `approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**). Missing or unknown values open `chat`. |
@@ -244,7 +244,7 @@ change the provider `name`. Create and update requests send provider metadata,
 not API keys or credential versions. The editor displays the provider state but
 does not publish credentials or activate a provider.
 
-### Platform Policy reads
+### Policy validation
 
 Platform Policy reads use a separate unbound session. When the browser has no
 unbound session, `AuthContext` starts a hidden PKCE request with `prompt=none`.
@@ -252,16 +252,25 @@ This request keeps the active run session and interactive consent flow intact.
 
 The browser compares the active and unbound authorization contexts for the
 same issuer, actor, and explicit tenant. It sends the unbound token and
-`X-Agentweaver-Tenant` on the Platform Policy history and revision routes. The
-history read is the access check; a successful empty history means the caller
-is authorized and no policy is saved. The client does not use a
-`projects.admin` claim as this check.
+`X-Agentweaver-Tenant` on Policy routes. The Platform history read is the
+Platform access check. Project mode lists visible Projects, then requires
+Project Owner or TenantAdmin plus `writeProjects` on the exact selected Project.
+PlatformAdmin alone does not pass this check.
 
-The shared controller clears policy data when the session, tenant, or identity
-changes. A `401` triggers one unbound-session refresh, identity check, and
-history recheck before the client retries the selected read. It checks access
-again on route entry, when the tab becomes visible, and every 60 seconds while
-the tab stays visible.
+Project mode imports one local `{artifact}` validation request. The codec
+checks the 5 MiB request limit, 1 MiB artifact limit, exact byte arrays, UTF-8,
+and SHA-256 hash. The draft stays in browser memory. Project mode does not
+request a Policy head, revision, preview, save, or apply route.
+
+The shared controller keeps scope activation separate from the draft version.
+Editing clears stale diagnostics and stops their attempt. A response from an
+earlier scope or Project cannot change the current scope. A denial or missing
+Project clears the current Project draft.
+
+A `401` triggers one unbound-session refresh and same-scope access check before
+one retry of an unchanged draft. An aborted attempt rechecks access without
+resending. The controller checks access on route entry, when the tab becomes
+visible, and every 60 seconds while the tab stays visible.
 
 Callback handlers check the expected origin, popup, state, and transaction
 binding. The HTML bootstrap removes callback query values before assets load.

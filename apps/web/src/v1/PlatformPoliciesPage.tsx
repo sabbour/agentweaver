@@ -11,15 +11,31 @@ export function PlatformPoliciesPage() {
   const policy = usePlatformPoliciesController();
   const page = policy.history;
   const empty = page?.policyId === null;
+  const scopeName = policy.scope === 'platform' ? 'Platform' : 'Project';
+  const selectedProjectMissing = policy.projectId &&
+    !policy.projects.some((project) => project.projectId === policy.projectId);
 
   return (
     <>
       <PageHeading
-        title="Platform Policies"
-        description="Read saved source and revisions, edit a raw draft, and validate it."
+        title={`${scopeName} Policies`}
+        description={policy.scope === 'platform'
+          ? 'Read saved source and revisions, edit a raw draft, and validate it.'
+          : 'Import and edit a local Project Policy validation request.'}
         breadcrumb={false}
       />
-      <section aria-label="Platform Policy access">
+      <section aria-label={`${scopeName} Policy access`}>
+        <Field label="Policy scope">
+          <select
+            className="v1-select"
+            aria-label="Policy scope"
+            value={policy.scope}
+            onChange={(event) => policy.setScope(event.currentTarget.value as 'platform' | 'project')}
+          >
+            <option value="platform">Platform</option>
+            <option value="project">Project</option>
+          </select>
+        </Field>
         <Field label="Tenant ID">
           <Input
             value={policy.tenantId}
@@ -27,6 +43,26 @@ export function PlatformPoliciesPage() {
             autoComplete="off"
           />
         </Field>
+        {policy.scope === 'project' && (
+          <Field label="Project">
+            <select
+              className="v1-select"
+              aria-label="Project"
+              value={policy.projectId}
+              onChange={(event) => policy.setProjectId(event.currentTarget.value)}
+            >
+              <option value="">Select a Project</option>
+              {selectedProjectMissing && (
+                <option value={policy.projectId}>{policy.projectId}</option>
+              )}
+              {policy.projects.map((project) => (
+                <option key={project.projectId} value={project.projectId}>
+                  {project.name} ({project.projectId})
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <div className="v1-actions">
           <Button
             appearance="primary"
@@ -40,32 +76,59 @@ export function PlatformPoliciesPage() {
       </section>
 
       {policy.status === 'checking' && (
-        <p role="status" aria-live="polite">Checking current Platform Policy access…</p>
+        <p role="status" aria-live="polite">Checking current {scopeName} Policy access…</p>
       )}
       {policy.status === 'needsTenant' && (
         <p role="status">Enter a tenant ID, then select Retry.</p>
       )}
       {policy.status === 'denied' && (
-        <p role="alert">You do not have permission to access Platform Policies.</p>
+        <p role="alert">{policy.scope === 'platform'
+          ? 'You do not have permission to access Platform Policies.'
+          : 'You do not have permission to access this Project Policy.'}</p>
       )}
       {policy.status === 'unavailable' && (
-        <p role="alert">Platform Policies could not load. Select Retry.</p>
+        <p role="alert">{policy.scope === 'platform'
+          ? 'Platform Policies could not load. Select Retry.'
+          : 'Project Policy access could not load. Select Retry.'}</p>
       )}
       {policy.draftError && <p role="alert">{policy.draftError}</p>}
 
-      {policy.authorized && page && (
+      {policy.scope === 'project' &&
+        policy.status === 'ready' &&
+        !policy.projectId &&
+        policy.projects.length === 0 && (
+          <p role="status">No writable Projects are available in this tenant.</p>
+        )}
+
+      {policy.authorized && (policy.scope === 'project' || page) && (
         <>
-        <section aria-label="Platform Policy draft">
+        <section aria-label={`${scopeName} Policy draft`}>
           <h2>Draft editor</h2>
           <p>Validation checks this draft. It does not save or apply changes.</p>
-          {policy.detail && (
+          {policy.scope === 'project' && (
+            <Field label="Validation request">
+              <input
+                className="v1-select"
+                type="file"
+                accept=".json,application/json"
+                aria-label="Project Policy validation request"
+                onChange={async (event) => {
+                  const input = event.currentTarget;
+                  const file = input.files?.[0];
+                  if (file) await policy.importDraft(file);
+                  input.value = '';
+                }}
+              />
+            </Field>
+          )}
+          {policy.scope === 'platform' && policy.detail && (
             <Button appearance="secondary" onClick={policy.loadDraftFromSavedSource}>
               Load viewed revision into draft
             </Button>
           )}
           <Field label="Manifest">
             <PlatformPolicyTextarea
-              label="Platform Policy manifest"
+              label={`${scopeName} Policy manifest`}
               buffer={policy.draftManifest}
               onChange={policy.setDraftManifest}
               rows={16}
@@ -111,11 +174,11 @@ export function PlatformPoliciesPage() {
             </Button>
           </div>
           {policy.validation?.isValid && (
-            <p role="status">The Platform Policy draft is valid.</p>
+            <p role="status">The {scopeName} Policy draft is valid.</p>
           )}
           {policy.validation && !policy.validation.isValid && (
             <section aria-label="Validation diagnostics" role="alert">
-              <h3>The Platform Policy draft has errors.</h3>
+              <h3>The {scopeName} Policy draft has errors.</h3>
               {policy.validation.diagnostics.length === 0 ? (
                 <p>The validator returned no diagnostic details.</p>
               ) : (
@@ -136,6 +199,7 @@ export function PlatformPoliciesPage() {
           )}
         </section>
 
+        {policy.scope === 'platform' && page && (
         <section aria-label="Saved Platform Policy" aria-live="polite">
           <div className="v1-actions">
             <Badge appearance="tint" color="informative">Saved source</Badge>
@@ -194,6 +258,7 @@ export function PlatformPoliciesPage() {
             </>
           )}
         </section>
+        )}
         </>
       )}
 

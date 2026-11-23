@@ -3,10 +3,16 @@ import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { GatewayError } from './api';
 import { useAuth } from './AuthContext';
-import type { PlatformPolicyIdentity, PlatformPolicyRefreshResult } from './AuthContext';
+import type {
+  PlatformPolicyIdentity,
+  PlatformPolicyRefreshResult,
+  ProjectPolicyAccess,
+} from './AuthContext';
+import type { ProjectSummary } from './contracts';
 import {
   buildPlatformPolicyValidationArtifact,
   createPlatformPolicyTextBuffer,
+  parsePlatformPolicyValidationRequestFile,
   PLATFORM_POLICY_SCOPE_ID,
 } from './platformPolicyContracts';
 import type {
@@ -18,6 +24,7 @@ import type {
 } from './platformPolicyContracts';
 
 type PolicyPageStatus = 'idle' | 'checking' | 'needsTenant' | 'ready' | 'denied' | 'unavailable';
+export type PolicyScope = 'platform' | 'project';
 
 interface PolicyRevisionSelection {
   policyId: string;
@@ -47,10 +54,16 @@ interface ExpectedRefreshChange {
 }
 
 export interface PlatformPoliciesControllerValue {
+  scope: PolicyScope;
+  setScope: (scope: PolicyScope) => void;
   tenantId: string;
   setTenantId: (tenantId: string) => void;
+  projectId: string;
+  setProjectId: (projectId: string) => void;
+  projects: ProjectSummary[];
   status: PolicyPageStatus;
   authorized: boolean;
+  platformNavigationAuthorized: boolean;
   history: PlatformPolicyRevisionPage | null;
   historyLoading: boolean;
   historyError: string | null;
@@ -69,6 +82,7 @@ export interface PlatformPoliciesControllerValue {
   removeDraftFile: (id: number) => void;
   setDraftFilePath: (id: number, value: string) => void;
   setDraftFileContent: (id: number, content: PlatformPolicyTextBuffer) => void;
+  importDraft: (file: File) => Promise<void>;
   loadDraftFromSavedSource: () => void;
   validateDraft: () => void;
   loadMore: () => void;
@@ -130,12 +144,18 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
     validatePlatformPolicyArtifact,
+    establishProjectPolicyAccess,
+    validateProjectPolicyArtifact,
     refreshPlatformPolicySession,
   } = auth;
   const location = useLocation();
+  const [scope, setScopeState] = useState<PolicyScope>('platform');
   const [tenantId, setTenantIdState] = useState(auth.authorizationContext?.tenantId ?? '');
+  const [projectId, setProjectIdState] = useState('');
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [status, setStatus] = useState<PolicyPageStatus>('idle');
   const [authorized, setAuthorizedState] = useState(false);
+  const [platformNavigationAuthorized, setPlatformNavigationAuthorized] = useState(false);
   const [history, setHistoryState] = useState<PlatformPolicyRevisionPage | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -150,14 +170,20 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden');
   const requestGenerationRef = useRef(0);
   const validationGenerationRef = useRef(0);
+  const importGenerationRef = useRef(0);
   const validationControllerRef = useRef<AbortController | null>(null);
   const draftFileIdRef = useRef(0);
   const identityEpochRef = useRef(0);
   const currentRequestRef = useRef<AbortController | null>(null);
   const policyIdentityRef = useRef<PlatformPolicyIdentity | null>(null);
   const draftIdentityRef = useRef<PlatformPolicyIdentity | null>(null);
+  const draftScopeRef = useRef<PolicyScope | null>(null);
+  const draftProjectRef = useRef<string | null>(null);
+  const draftAuthSessionEpochRef = useRef<number | null>(null);
   const historyRef = useRef<PlatformPolicyRevisionPage | null>(null);
   const tenantRef = useRef(tenantId);
+  const scopeRef = useRef<PolicyScope>(scope);
+  const projectRef = useRef(projectId);
   const tenantWasSelectedRef = useRef(false);
   const authorizedRef = useRef(false);
   const statusRef = useRef(status);
@@ -202,8 +228,14 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   }, []);
 
   const bindDraftToCurrentIdentity = useCallback(() => {
-    if (policyIdentityRef.current)
+    if (policyIdentityRef.current) {
       draftIdentityRef.current = policyIdentityRef.current;
+      draftScopeRef.current = scopeRef.current;
+      draftProjectRef.current = scopeRef.current === 'project' ? projectRef.current : null;
+      draftAuthSessionEpochRef.current = scopeRef.current === 'project'
+        ? latestAuthRef.current.authSessionEpoch
+        : null;
+    }
   }, []);
 
   const clearDraftValidation = useCallback((
@@ -226,6 +258,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     nextStatus: PolicyPageStatus,
     preserveDraftError = false,
     preserveDraft = false,
+    preservePlatformNavigation = false,
   ) => {
     const validationCanceled = validationControllerRef.current !== null;
     capturePolicyLinkFocus();
@@ -236,12 +269,19 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       setDraftManifestState(createPlatformPolicyTextBuffer(''));
       setDraftFiles([]);
       draftIdentityRef.current = null;
+      draftScopeRef.current = null;
+      draftProjectRef.current = null;
+      draftAuthSessionEpochRef.current = null;
+      importGenerationRef.current += 1;
     }
     if (validationCanceled && !preserveDraftError && nextStatus === 'checking')
       setDraftError('Platform Policy access changed. Validate the draft again when access is ready.');
     currentRequestRef.current?.abort();
     currentRequestRef.current = null;
     policyIdentityRef.current = null;
+    if (!preservePlatformNavigation)
+      setPlatformNavigationAuthorized(false);
+    setProjects([]);
     setAuthorized(false);
     setHistory(null);
     setHistoryLoading(false);
@@ -257,21 +297,54 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     tenantRef.current = value;
     setTenantIdState(value);
     if (userSelected && changed) tenantWasSelectedRef.current = true;
-    if (changed)
+    if (changed) {
+      projectRef.current = '';
+      setProjectIdState('');
       clearPolicyState(value.trim() ? 'idle' : 'needsTenant');
+    }
   }, [clearPolicyState]);
 
   const setTenantId = useCallback((value: string) => {
     updateTenantId(value, true);
   }, [updateTenantId]);
 
+  const setScope = useCallback((value: PolicyScope) => {
+    if (scopeRef.current === value) return;
+    scopeRef.current = value;
+    setScopeState(value);
+    clearPolicyState(
+      tenantRef.current.trim() ? 'idle' : 'needsTenant',
+      false,
+      false,
+      value === 'project',
+    );
+    if (tenantRef.current.trim())
+      window.setTimeout(() => { void runCheckRef.current?.(tenantRef.current); }, 0);
+  }, [clearPolicyState]);
+
+  const setProjectId = useCallback((value: string) => {
+    if (projectRef.current === value) return;
+    projectRef.current = value;
+    setProjectIdState(value);
+    clearPolicyState(
+      tenantRef.current.trim() ? 'idle' : 'needsTenant',
+      false,
+      false,
+      true,
+    );
+    if (tenantRef.current.trim())
+      window.setTimeout(() => { void runCheckRef.current?.(tenantRef.current); }, 0);
+  }, [clearPolicyState]);
+
   const setDraftManifest = useCallback((buffer: PlatformPolicyTextBuffer) => {
+    importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
     setDraftManifestState(buffer);
   }, [bindDraftToCurrentIdentity, clearDraftValidation]);
 
   const addDraftFile = useCallback(() => {
+    importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
     const id = ++draftFileIdRef.current;
@@ -286,12 +359,14 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   }, [bindDraftToCurrentIdentity, clearDraftValidation]);
 
   const removeDraftFile = useCallback((id: number) => {
+    importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
     setDraftFiles((current) => current.filter((file) => file.id !== id));
   }, [bindDraftToCurrentIdentity, clearDraftValidation]);
 
   const setDraftFilePath = useCallback((id: number, value: string) => {
+    importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
     setDraftFiles((current) => current.map((file) =>
@@ -302,6 +377,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     id: number,
     content: PlatformPolicyTextBuffer,
   ) => {
+    importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
     setDraftFiles((current) => current.map((file) =>
@@ -310,8 +386,54 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         : file));
   }, [bindDraftToCurrentIdentity, clearDraftValidation]);
 
+  const importDraft = useCallback(async (file: File) => {
+    if (scopeRef.current !== 'project' ||
+        !authorizedRef.current ||
+        statusRef.current !== 'ready' ||
+        !policyIdentityRef.current ||
+        !projectRef.current)
+      return;
+    const importIdentityEpoch = identityEpochRef.current;
+    const importScope = scopeRef.current;
+    const importTenant = tenantRef.current;
+    const importProject = projectRef.current;
+    const importGeneration = ++importGenerationRef.current;
+    try {
+      if (file.size > 5 * 1024 * 1024)
+        throw new Error('The Policy validation request exceeds 5,242,880 bytes.');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const imported = await parsePlatformPolicyValidationRequestFile(bytes);
+      if (identityEpochRef.current !== importIdentityEpoch ||
+          scopeRef.current !== importScope ||
+          tenantRef.current !== importTenant ||
+          projectRef.current !== importProject ||
+          importGenerationRef.current !== importGeneration ||
+          !authorizedRef.current)
+        return;
+      bindDraftToCurrentIdentity();
+      clearDraftValidation();
+      setDraftManifestState(imported.manifest);
+      setDraftFiles(imported.files.map((importedFile) => ({
+        id: ++draftFileIdRef.current,
+        relativePath: importedFile.relativePath,
+        content: importedFile.content,
+      })));
+    } catch (reason) {
+      if (identityEpochRef.current !== importIdentityEpoch ||
+          scopeRef.current !== importScope ||
+          tenantRef.current !== importTenant ||
+          projectRef.current !== importProject ||
+          importGenerationRef.current !== importGeneration)
+        return;
+      setDraftError(reason instanceof Error
+        ? reason.message
+        : 'The selected Policy validation request could not be imported.');
+    }
+  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+
   const loadDraftFromSavedSource = useCallback(() => {
-    if (!authorizedRef.current || !detail) return;
+    if (scopeRef.current !== 'platform' || !authorizedRef.current || !detail) return;
+    importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
     setDraftManifestState(createPlatformPolicyTextBuffer(detail.artifact.manifest));
@@ -387,6 +509,79 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       clearPolicyState('needsTenant');
       return;
     }
+    if (scopeRef.current === 'project') {
+      const selectedProject = projectRef.current;
+      currentRequestRef.current?.abort();
+      const controller = new AbortController();
+      currentRequestRef.current = controller;
+      const identityEpoch = ++identityEpochRef.current;
+      const requestGeneration = ++requestGenerationRef.current;
+      clearDraftValidation(true, 'Project Policy access changed. Validate the draft again when access is ready.');
+      policyIdentityRef.current = null;
+      setAuthorized(false);
+      setHistory(null);
+      setHistoryLoading(false);
+      setHistoryError(null);
+      setDetail(null);
+      setDetailLoading(false);
+      setDetailError(null);
+      setProjects([]);
+      setPageStatus('checking');
+
+      let resolvedIdentity: PlatformPolicyIdentity | null = expectedIdentity;
+      try {
+        const access: ProjectPolicyAccess = await establishProjectPolicyAccess(
+          selectedTenant,
+          selectedProject || null,
+          controller.signal,
+        );
+        if (!isCurrentRequest(identityEpoch, requestGeneration, controller)) return;
+        if (expectedIdentity && !sameIdentity(access.identity, expectedIdentity))
+          throw new GatewayError(403, { code: 'policy_identity_changed' },
+            'Project Policy access was denied.');
+        resolvedIdentity = access.identity;
+        policyIdentityRef.current = access.identity;
+        setProjects(access.projects);
+        setAuthorized(Boolean(selectedProject));
+        setPageStatus('ready');
+      } catch (reason) {
+        if (!isCurrentRequest(identityEpoch, requestGeneration, controller)) return;
+        if (reason instanceof GatewayError &&
+            reason.status === 401 &&
+            retryCount === 0) {
+          clearPolicyState('checking', false, true, true);
+          const recoveryIdentityEpoch = identityEpochRef.current;
+          const recoveryRequestGeneration = requestGenerationRef.current;
+          const expectedRefresh = expectPolicyRefreshChange(selectedTenant);
+          const refreshResult = await refreshPlatformPolicySession();
+          if (!isCurrentRecovery(
+            recoveryIdentityEpoch,
+            recoveryRequestGeneration,
+            selectedTenant,
+            expectedRefresh,
+            refreshResult,
+          )) return;
+          if (refreshResult.refreshed) {
+            await runCheckRef.current?.(selectedTenant, resolvedIdentity, 1);
+            return;
+          }
+        }
+        if (reason instanceof GatewayError &&
+            (reason.status === 403 || reason.status === 404)) {
+          clearPolicyState('denied', false, false, true);
+          if (reason.status === 404)
+            setDraftError('The selected Project is unavailable. Choose another Project.');
+        } else {
+          clearPolicyState('unavailable', false, true, true);
+        }
+      } finally {
+        if (currentRequestRef.current === controller) {
+          currentRequestRef.current = null;
+        }
+      }
+      return;
+    }
+
     if (statusRef.current === 'checking' &&
         tenantRef.current === selectedTenant &&
         currentRequestRef.current)
@@ -427,6 +622,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       policyIdentityRef.current = identity;
       setHistory(firstPage);
       setAuthorized(true);
+      setPlatformNavigationAuthorized(true);
       setPageStatus('ready');
       historyAuthorized = true;
 
@@ -503,6 +699,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     }
   }, [
     establishPlatformPolicyAccess,
+    establishProjectPolicyAccess,
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
     refreshPlatformPolicySession,
@@ -523,10 +720,13 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
 
   const validateDraft = useCallback(() => {
     const identity = policyIdentityRef.current;
+    const activeProject = projectRef.current;
+    const authSessionEpoch = latestAuthRef.current.authSessionEpoch;
     if (!authorizedRef.current ||
         statusRef.current !== 'ready' ||
         !identity ||
-        tenantRef.current.trim() !== identity.tenantId)
+        tenantRef.current.trim() !== identity.tenantId ||
+        (scopeRef.current === 'project' && !activeProject))
       return;
 
     clearDraftValidation();
@@ -548,6 +748,158 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         tenantRef.current.trim() === identity.tenantId
       );
     };
+    const isCurrentProjectActivation = () =>
+      identityEpochRef.current === identityEpoch &&
+      scopeRef.current === 'project' &&
+      authorizedRef.current &&
+      statusRef.current === 'ready' &&
+      policyIdentityRef.current !== null &&
+      sameIdentity(policyIdentityRef.current, identity) &&
+      tenantRef.current.trim() === identity.tenantId &&
+      projectRef.current === activeProject &&
+      latestAuthRef.current.authSessionEpoch === authSessionEpoch;
+    const isCurrentProjectValidation = () =>
+      isCurrentProjectActivation() &&
+      validationGenerationRef.current === generation &&
+      validationControllerRef.current === controller &&
+      !controller.signal.aborted;
+
+    if (scopeRef.current === 'project') {
+      void (async () => {
+        let artifact: Awaited<ReturnType<typeof buildPlatformPolicyValidationArtifact>>;
+        try {
+          artifact = await buildPlatformPolicyValidationArtifact(
+            draftManifest,
+            draftFiles.map(({ relativePath, content }) => ({ relativePath, content })),
+          );
+          if (!isCurrentProjectValidation()) return;
+          let result: PlatformPolicyValidationResult | undefined;
+          try {
+            result = await validateProjectPolicyArtifact(
+              identity.tenantId,
+              activeProject,
+              artifact,
+              controller.signal,
+            );
+          } catch (reason) {
+            if (reason instanceof DOMException && reason.name === 'AbortError') {
+              if (!isCurrentProjectActivation()) return;
+              try {
+                const access = await establishProjectPolicyAccess(
+                  identity.tenantId,
+                  activeProject,
+                );
+                if (!isCurrentProjectActivation() || !sameIdentity(access.identity, identity))
+                  return;
+                policyIdentityRef.current = access.identity;
+                setProjects(access.projects);
+                setPageStatus('ready');
+              } catch (accessReason) {
+                if (!isCurrentProjectActivation()) return;
+                if (accessReason instanceof GatewayError &&
+                    (accessReason.status === 403 || accessReason.status === 404))
+                  clearPolicyState('denied', false, false, true);
+                else
+                  setDraftError('Project Policy access could not be checked. Try again.');
+              }
+              return;
+            }
+            if (reason instanceof GatewayError &&
+                (reason.status === 403 || reason.status === 404)) {
+              if (isCurrentProjectActivation())
+                clearPolicyState('denied', false, false, true);
+              return;
+            }
+            if (!isCurrentProjectValidation()) return;
+            if (reason instanceof GatewayError && reason.status === 401) {
+              const recoveryIdentityEpoch = identityEpochRef.current;
+              const recoveryRequestGeneration = requestGenerationRef.current;
+              const expectedRefresh = expectPolicyRefreshChange(identity.tenantId);
+              const refreshResult = await refreshPlatformPolicySession();
+              if (!isCurrentRecovery(
+                recoveryIdentityEpoch,
+                recoveryRequestGeneration,
+                identity.tenantId,
+                expectedRefresh,
+                refreshResult,
+              ) || !isCurrentProjectValidation()) return;
+              if (refreshResult.refreshed) {
+                let access: ProjectPolicyAccess;
+                try {
+                  access = await establishProjectPolicyAccess(
+                    identity.tenantId,
+                    activeProject,
+                  );
+                } catch (accessReason) {
+                  if (isCurrentProjectActivation() &&
+                      accessReason instanceof GatewayError &&
+                      (accessReason.status === 403 || accessReason.status === 404)) {
+                    clearPolicyState('denied', false, false, true);
+                  } else if (isCurrentProjectValidation()) {
+                    setDraftError('Project Policy access could not be checked. Try again.');
+                  }
+                  return;
+                }
+                if (!isCurrentProjectValidation() ||
+                    !sameIdentity(access.identity, identity))
+                  return;
+                policyIdentityRef.current = access.identity;
+                setProjects(access.projects);
+                try {
+                  result = await validateProjectPolicyArtifact(
+                    identity.tenantId,
+                    activeProject,
+                    artifact,
+                    controller.signal,
+                  );
+                } catch (retryReason) {
+                  if (retryReason instanceof GatewayError &&
+                      (retryReason.status === 403 || retryReason.status === 404)) {
+                    if (isCurrentProjectActivation())
+                      clearPolicyState('denied', false, false, true);
+                    return;
+                  }
+                  if (!isCurrentProjectValidation()) return;
+                  setDraftError(retryReason instanceof GatewayError && retryReason.status === 401
+                    ? 'Project Policy access expired. Check access, then validate again.'
+                    : retryReason instanceof Error
+                      ? retryReason.message
+                      : 'Project Policy validation could not complete. Try again.');
+                  return;
+                }
+              } else {
+                setDraftError('Project Policy access expired. Check access, then validate again.');
+                return;
+              }
+            } else {
+              setDraftError(reason instanceof Error
+                ? reason.message
+                : 'Project Policy validation could not complete. Try again.');
+              return;
+            }
+          }
+          if (!isCurrentProjectValidation()) return;
+          if (result) setValidation(result);
+        } catch (reason) {
+          if (!isCurrentProjectValidation()) return;
+          if (reason instanceof GatewayError &&
+              (reason.status === 403 || reason.status === 404)) {
+            if (isCurrentProjectActivation())
+              clearPolicyState('denied', false, false, true);
+            return;
+          }
+          setDraftError(reason instanceof Error
+            ? reason.message
+            : 'Project Policy validation could not complete. Try again.');
+        } finally {
+          if (validationControllerRef.current === controller) {
+            validationControllerRef.current = null;
+            setValidationLoading(false);
+          }
+        }
+      })();
+      return;
+    }
 
     void (async () => {
       try {
@@ -607,8 +959,10 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     draftManifest,
     expectPolicyRefreshChange,
     isCurrentRecovery,
+    establishProjectPolicyAccess,
     refreshPlatformPolicySession,
     setPageStatus,
+    validateProjectPolicyArtifact,
     validatePlatformPolicyArtifact,
   ]);
 
@@ -619,7 +973,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const viewRevision = useCallback((revision: PlatformPolicyRevisionSummary) => {
     const currentPage = historyRef.current;
     const identity = policyIdentityRef.current;
-    if (!authorizedRef.current ||
+    if (scopeRef.current !== 'platform' ||
+        !authorizedRef.current ||
         statusRef.current !== 'ready' ||
         !currentPage?.policyId ||
         currentPage.snapshotRevision === null ||
@@ -699,7 +1054,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const loadMore = useCallback(() => {
     const currentPage = historyRef.current;
     const identity = policyIdentityRef.current;
-    if (!authorizedRef.current ||
+    if (scopeRef.current !== 'platform' ||
+        !authorizedRef.current ||
         statusRef.current !== 'ready' ||
         !currentPage?.nextCursor ||
         !currentPage.policyId ||
@@ -784,6 +1140,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   ]);
 
   const authSignature = JSON.stringify([
+    auth.authSessionEpoch,
     auth.authSessionGeneration,
     auth.unboundSessionGeneration,
     Boolean(auth.session),
@@ -844,6 +1201,10 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     const previousPolicyIdentity = draftIdentityRef.current;
     const preserveDraft = !!auth.session &&
       !!previousPolicyIdentity &&
+      draftScopeRef.current === scopeRef.current &&
+      (scopeRef.current !== 'project' || draftProjectRef.current === projectRef.current) &&
+      (scopeRef.current !== 'project' ||
+        draftAuthSessionEpochRef.current === auth.authSessionEpoch) &&
       previousPolicyIdentity.tenantId === selectedTenant &&
       (!auth.authorizationContext ||
         (previousPolicyIdentity.issuer === auth.authorizationContext.issuer &&
@@ -853,6 +1214,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       void runCheck(selectedTenant, preserveDraft ? previousPolicyIdentity : null);
   }, [
     auth.authSessionGeneration,
+    auth.authSessionEpoch,
     auth.authorizationContext,
     auth.authorizationContext?.actorId,
     auth.authorizationContext?.issuer,
@@ -910,10 +1272,16 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   }, [authorized, status]);
 
   const value = useMemo<PlatformPoliciesControllerValue>(() => ({
+    scope,
+    setScope,
     tenantId,
     setTenantId,
+    projectId,
+    setProjectId,
+    projects,
     status,
     authorized,
+    platformNavigationAuthorized,
     history,
     historyLoading,
     historyError,
@@ -932,12 +1300,14 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     removeDraftFile,
     setDraftFilePath,
     setDraftFileContent,
+    importDraft,
     loadDraftFromSavedSource,
     validateDraft,
     loadMore,
   }), [
     addDraftFile,
     authorized,
+    platformNavigationAuthorized,
     detail,
     detailError,
     detailLoading,
@@ -956,11 +1326,17 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     setTenantId,
     status,
     tenantId,
+    importDraft,
     loadDraftFromSavedSource,
     validateDraft,
     validation,
     validationLoading,
     viewRevision,
+    scope,
+    setScope,
+    projectId,
+    setProjectId,
+    projects,
   ]);
 
   return (
