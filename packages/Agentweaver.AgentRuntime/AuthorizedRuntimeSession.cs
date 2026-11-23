@@ -377,6 +377,13 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         return new Guid(System.Security.Cryptography.SHA256.HashData(material).AsSpan(0, 16));
     }
 
+    private static Guid CreateA2AActionEventId(Guid messageId)
+    {
+        var material = System.Text.Encoding.UTF8.GetBytes(
+            $"agentweaver:a2a:action:{messageId:N}");
+        return new Guid(System.Security.Cryptography.SHA256.HashData(material).AsSpan(0, 16));
+    }
+
     private sealed record RuntimeNumericLimitSourceSnapshot(
         Guid GrantId, long GrantRevision, string RegistrationHash, string SourceHash, string SdkSessionIdHash);
 
@@ -629,7 +636,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             await _actions.RequireAsync(
                 Registration,
                 "model.turn",
-                message.MessageId,
+                CreateA2AActionEventId(message.MessageId),
                 System.Text.Encoding.UTF8.GetBytes(prompt),
                 RequireCurrentAsync,
                 cancellationToken,
