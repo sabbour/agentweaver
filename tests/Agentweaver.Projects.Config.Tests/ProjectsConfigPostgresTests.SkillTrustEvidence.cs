@@ -7,6 +7,7 @@ using Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -183,6 +184,265 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task EvaluatorErrorsPersistPendingEvidenceAndReuseItOnReplay()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        const string keyPrefix = "trust-evaluator-error-";
+        var key = keyPrefix + setup.Project.Suffix;
+        PromptDefenseReport EvaluateWithError(string input) => new()
+        {
+            PromptHash = Hash(Encoding.UTF8.GetBytes(input)),
+            Grade = "F",
+        };
+
+        var first = await setup.Evidence.CreateAsync(
+            setup.Project.Owner,
+            setup.Project.Project.ProjectId,
+            setup.Imported.SkillId,
+            setup.Imported.Revision,
+            key,
+            EvaluateWithError,
+            CancellationToken.None);
+        var replay = await setup.Evidence.CreateAsync(
+            setup.Project.Owner,
+            setup.Project.Project.ProjectId,
+            setup.Imported.SkillId,
+            setup.Imported.Revision,
+            key,
+            EvaluateWithError,
+            CancellationToken.None);
+
+        Assert.All(first.Reports, report =>
+        {
+            Assert.Equal(PromptContentScanStatus.EvaluatorError, report.Status);
+            Assert.Equal("unsupported_vector_set", report.ErrorCode);
+        });
+        Assert.Equal(first.ReportSetSha256, replay.ReportSetSha256);
+        Assert.Equal(first.Decision.DecisionId, replay.Decision.DecisionId);
+        var decision = await db.GovernanceDecisions.AsNoTracking()
+            .SingleAsync(item => item.DecisionId == first.Decision.DecisionId);
+        Assert.True(ProjectGovernanceDecisionCanonicalJson.TryDeserializeRecord(
+            decision.CanonicalRecord, out var canonical));
+        Assert.Equal(ProjectGovernanceOutcome.Pending, canonical!.Decision.Outcome);
+        Assert.True(replay.Replayed);
+        Assert.True(replay.Decision.Replayed);
+    }
+
+    [Fact]
+    public async Task DecisionAppendFailureReusesCommittedEvidenceOnExactRetry()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        var suffix = setup.Project.Suffix[..12];
+        var sequence = "seq_trust_decision_" + suffix;
+        var triggerFunction = "tf_trust_decision_" + suffix;
+        var trigger = "tr_trust_decision_" + suffix;
+        var key = "trust-decision-retry-" + setup.Project.Suffix;
+        await ExecuteOwnerSqlAsync($"""
+            CREATE SEQUENCE projects_config.{sequence} START 1;
+            CREATE FUNCTION projects_config.{triggerFunction}() RETURNS trigger
+            LANGUAGE plpgsql AS $body$
+            BEGIN
+                IF NEW.scope_id = '{setup.Project.Project.ProjectId}' AND
+                   nextval('projects_config.{sequence}') = 1 THEN
+                    RAISE EXCEPTION 'injected trust decision append failure';
+                END IF;
+                RETURN NEW;
+            END;
+            $body$;
+            CREATE TRIGGER {trigger}
+            BEFORE INSERT ON projects_config.project_governance_decisions
+            FOR EACH ROW EXECUTE FUNCTION projects_config.{triggerFunction}();
+            """);
+
+        try
+        {
+            var failure = await Assert.ThrowsAsync<PostgresException>(() =>
+                setup.Evidence.CreateAsync(
+                    setup.Project.Owner,
+                    setup.Project.Project.ProjectId,
+                    setup.Imported.SkillId,
+                    setup.Imported.Revision,
+                    key,
+                    CancellationToken.None));
+            Assert.Equal("injected trust decision append failure", failure.MessageText);
+
+            var committedEvidence = await db.SkillTrustEvidence.AsNoTracking()
+                .SingleAsync(item =>
+                    item.ProjectId == setup.Project.Project.ProjectId &&
+                    item.IdempotencyKey == key);
+            Assert.Equal(0, await db.GovernanceDecisions.AsNoTracking()
+                .CountAsync(item =>
+                    item.ScopeId == setup.Project.Project.ProjectId &&
+                    item.ResourceType == "skill" &&
+                    item.ResourceId == setup.Imported.SkillId));
+
+            var retry = await setup.Evidence.CreateAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                setup.Imported.SkillId,
+                setup.Imported.Revision,
+                key,
+                CancellationToken.None);
+
+            Assert.True(retry.Replayed);
+            Assert.Equal(committedEvidence.EvidenceId, retry.EvidenceId);
+            Assert.Equal(1, await db.SkillTrustEvidence.AsNoTracking()
+                .CountAsync(item =>
+                    item.ProjectId == setup.Project.Project.ProjectId &&
+                    item.IdempotencyKey == key));
+            var decision = await db.GovernanceDecisions.AsNoTracking()
+                .SingleAsync(item =>
+                    item.ScopeId == setup.Project.Project.ProjectId &&
+                    item.ResourceType == "skill" &&
+                    item.ResourceId == setup.Imported.SkillId);
+            Assert.Equal(retry.Decision.DecisionId, decision.DecisionId);
+            Assert.True(ProjectGovernanceDecisionCanonicalJson.TryDeserializeRecord(
+                decision.CanonicalRecord, out var canonical));
+            Assert.Equal(ProjectGovernanceOutcome.Pending, canonical!.Decision.Outcome);
+        }
+        finally
+        {
+            await ExecuteOwnerSqlAsync(
+                $"DROP TRIGGER IF EXISTS {trigger} ON projects_config.project_governance_decisions; " +
+                $"DROP FUNCTION IF EXISTS projects_config.{triggerFunction}(); " +
+                $"DROP SEQUENCE IF EXISTS projects_config.{sequence};");
+        }
+    }
+
+    [Fact]
+    public async Task TrustEvidenceReplayRechecksProjectOwnerRevocationDuringScan()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        var tenantAdmin = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == setup.Project.Owner.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            item.ResourceId == setup.Project.TenantId &&
+            item.Role == ProjectAuthorityRole.TenantAdmin &&
+            item.State == ProjectAuthorityRecordState.Active);
+        await authorityStore.RevokeRoleAssignmentAsync(
+            tenantAdmin.AssignmentId, tenantAdmin.Revision, "trust-owner-revocation-test");
+        var owner = await ResolveCallerAsync(
+            db,
+            setup.Project.Owner.ActorId,
+            setup.Project.TenantId,
+            ["api.read", "projects.admin"]);
+        var ownerAssignment = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == owner.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Project &&
+            item.ResourceId == setup.Project.Project.ProjectId &&
+            item.Role == ProjectAuthorityRole.Owner &&
+            item.State == ProjectAuthorityRecordState.Active);
+        _ = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "trust-backup-owner-" + setup.Project.Suffix,
+            setup.Project.TenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project,
+            setup.Project.Project.ProjectId,
+            ProjectAuthorityRole.Owner);
+        var evaluator = new PromptDefenseEvaluator();
+        var key = "trust-owner-race-" + setup.Project.Suffix;
+        _ = await setup.Evidence.CreateAsync(
+            owner,
+            setup.Project.Project.ProjectId,
+            setup.Imported.SkillId,
+            setup.Imported.Revision,
+            key,
+            evaluator.Evaluate,
+            CancellationToken.None);
+        var revoked = false;
+        PromptDefenseReport EvaluateThenRevokeOwner(string input)
+        {
+            if (!revoked)
+            {
+                authorityStore.RevokeRoleAssignmentAsync(
+                    ownerAssignment.AssignmentId,
+                    ownerAssignment.Revision,
+                    "trust-owner-revocation-during-scan").GetAwaiter().GetResult();
+                revoked = true;
+            }
+            return evaluator.Evaluate(input);
+        }
+
+        var failure = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            setup.Evidence.CreateAsync(
+                owner,
+                setup.Project.Project.ProjectId,
+                setup.Imported.SkillId,
+                setup.Imported.Revision,
+                key,
+                EvaluateThenRevokeOwner,
+                CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status403Forbidden, failure.StatusCode);
+        Assert.Equal(1, await db.SkillTrustEvidence.AsNoTracking()
+            .CountAsync(item => item.ProjectId == setup.Project.Project.ProjectId));
+        Assert.Equal(1, await db.GovernanceDecisions.AsNoTracking()
+            .CountAsync(item => item.ScopeId == setup.Project.Project.ProjectId));
+    }
+
+    [Fact]
+    public async Task TrustEvidenceReplayRechecksRevisionRevocationDuringScan()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        var evaluator = new PromptDefenseEvaluator();
+        var key = "trust-revision-race-" + setup.Project.Suffix;
+        _ = await setup.Evidence.CreateAsync(
+            setup.Project.Owner,
+            setup.Project.Project.ProjectId,
+            setup.Imported.SkillId,
+            setup.Imported.Revision,
+            key,
+            evaluator.Evaluate,
+            CancellationToken.None);
+        var revoked = false;
+        PromptDefenseReport EvaluateThenRevokeRevision(string input)
+        {
+            if (!revoked)
+            {
+                setup.Skills.RevokeAsync(
+                    setup.Project.Owner,
+                    setup.Project.Project.ProjectId,
+                    setup.Imported.SkillId,
+                    setup.Imported.Revision,
+                    "Revoked during the trust-evidence scan.",
+                    CancellationToken.None).GetAwaiter().GetResult();
+                revoked = true;
+            }
+            return evaluator.Evaluate(input);
+        }
+
+        var failure = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            setup.Evidence.CreateAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                setup.Imported.SkillId,
+                setup.Imported.Revision,
+                key,
+                EvaluateThenRevokeRevision,
+                CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status409Conflict, failure.StatusCode);
+        Assert.Equal(1, await db.SkillTrustEvidence.AsNoTracking()
+            .CountAsync(item => item.ProjectId == setup.Project.Project.ProjectId));
+        Assert.Equal(1, await db.GovernanceDecisions.AsNoTracking()
+            .CountAsync(item => item.ScopeId == setup.Project.Project.ProjectId));
+    }
+
+    [Fact]
     public async Task TrustEvidenceRequiresCurrentProjectOwnerAndUnrevokedRevision()
     {
         await using var db = CreateDbContext();
@@ -198,6 +458,22 @@ public sealed partial class ProjectsConfigPostgresTests
                 "trust-missing-" + setup.Project.Suffix,
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, missingRevision.StatusCode);
+
+        var project = await db.Projects.SingleAsync(item =>
+            item.ProjectId == setup.Project.Project.ProjectId);
+        project.State = ProjectLifecycleState.Archived;
+        await db.SaveChangesAsync();
+        var archivedProject = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            setup.Evidence.CreateAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                setup.Imported.SkillId,
+                setup.Imported.Revision,
+                "trust-archived-" + setup.Project.Suffix,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, archivedProject.StatusCode);
+        project.State = ProjectLifecycleState.Active;
+        await db.SaveChangesAsync();
 
         await setup.Skills.RevokeAsync(
             setup.Project.Owner,
@@ -260,36 +536,78 @@ public sealed partial class ProjectsConfigPostgresTests
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
             CreateDbContextOptions(), TimeProvider.System);
         var first = await CreateTrustEvidenceSetupAsync(db, authorityStore);
-        var second = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        var configurations = new ProjectsConfigService(
+            db, CreateProviderCatalog(), TimeProvider.System);
+        var secondProject = await configurations.CreateProjectAsync(
+            first.Project.Owner,
+            "Second trust project " + first.Project.Suffix,
+            CancellationToken.None);
+        var secondPreview = first.Skills.Preview(first.Candidate);
+        var secondImported = await first.Skills.ImportAsync(
+            first.Project.Owner,
+            secondProject.ProjectId,
+            new SkillContentImportRequest(
+                "trust-import-second-" + first.Project.Suffix,
+                secondPreview.ContentDigest,
+                "skill-alpha",
+                null,
+                new SkillContentSourceSelection(
+                    "source-beta",
+                    "source-revision-1",
+                    "main",
+                    new string('b', 40),
+                    "skills/beta"),
+                first.Candidate),
+            CancellationToken.None);
+        var second = new SkillTrustEvidenceTestSetup(
+            first.Project with { Project = secondProject },
+            first.Skills,
+            first.Evidence,
+            secondImported,
+            first.Candidate);
+        const string key = "trust-shared-project-actor-key";
 
+        var originals = new Dictionary<string, ProjectSkillTrustEvidenceReceipt>(StringComparer.Ordinal);
         foreach (var setup in new[] { second, first })
         {
-            _ = await setup.Evidence.CreateAsync(
+            originals[setup.Project.Project.ProjectId] = await setup.Evidence.CreateAsync(
                 setup.Project.Owner,
                 setup.Project.Project.ProjectId,
                 setup.Imported.SkillId,
                 setup.Imported.Revision,
-                "trust-order-" + setup.Project.Suffix,
+                key,
                 CancellationToken.None);
         }
 
         foreach (var setup in new[] { first, second })
         {
+            var replay = await setup.Evidence.CreateAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                setup.Imported.SkillId,
+                setup.Imported.Revision,
+                key,
+                CancellationToken.None);
+            var original = originals[setup.Project.Project.ProjectId];
+            Assert.True(replay.Replayed);
+            Assert.Equal(original.EvidenceId, replay.EvidenceId);
+            Assert.Equal(original.Decision.DecisionId, replay.Decision.DecisionId);
+
             var evidence = await db.SkillTrustEvidence.AsNoTracking()
                 .Where(item =>
                     item.ProjectId == setup.Project.Project.ProjectId &&
                     item.ActorIssuer == setup.Project.Owner.Issuer &&
                     item.ActorId == setup.Project.Owner.ActorId &&
-                    item.IdempotencyKey == "trust-order-" + setup.Project.Suffix)
+                    item.IdempotencyKey == key)
                 .ToArrayAsync();
-            Assert.Single(evidence);
+            Assert.Equal(original.EvidenceId, Assert.Single(evidence).EvidenceId);
             var decisions = await db.GovernanceDecisions.AsNoTracking()
                 .Where(item =>
                     item.ScopeId == setup.Project.Project.ProjectId &&
                     item.ResourceType == "skill" &&
                     item.ResourceId == setup.Imported.SkillId)
                 .ToArrayAsync();
-            Assert.Single(decisions);
+            Assert.Equal(original.Decision.DecisionId, Assert.Single(decisions).DecisionId);
         }
     }
 

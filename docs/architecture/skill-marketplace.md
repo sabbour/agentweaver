@@ -289,7 +289,11 @@ return the original report set. A changed report with the same key returns
 
 A new report set appends a pending `skill.trust.evidence.v1`
 project-governance decision whose owner receipt is the report-set SHA-256.
-Exact retries reuse that decision. The record supplies evidence; it does not
+Evaluator errors remain evidence with a pending decision. If the evidence write
+commits and the decision append fails, an exact retry rescans and reuses the
+saved evidence, then retries the decision append. The retry must produce the
+same report fingerprint; a changed report returns `409`. Exact retries return
+the saved report set and decision. The record supplies evidence; it does not
 admit a Skill or a run. The service has no public HTTP route.
 
 ## Validation

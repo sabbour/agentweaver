@@ -127,8 +127,12 @@ reports in an append-only evidence table. It checks current project write
 authority and binds retries to the content digest, stored source fields, and
 complete report, except `EvaluatedAt`. Source metadata is copied as stored; it
 does not verify Git origin. A new report set appends a pending governance
-decision. The evidence does not assign a Skill or admit a run, and the service
-has no public route. See the [Skill marketplace architecture](skill-marketplace.md#skill-trust-evidence)
+decision, including when the evaluator returns an error report. A committed
+evidence row is reused if a later decision append fails and an exact request
+retries with the same report fingerprint. A changed report conflicts with
+`409`. The evidence does not assign a Skill or admit a run, and the service has
+no public route. See the
+[Skill marketplace architecture](skill-marketplace.md#skill-trust-evidence)
 for the scan and replay contract.
 
 ## BYOK credential publication
