@@ -10,9 +10,12 @@ public sealed record CoordinationExecutionPlanSnapshot(
     long ExecutionFence,
     long DecisionStateVersion,
     WorkPlanSnapshot WorkPlan,
+    CoordinationSavedPlanFingerprint SavedPlanFingerprint,
     CoordinationExecutionCheckpointSnapshot? Checkpoint,
     ImmutableArray<CoordinationExecutionChildSnapshot> Children,
     CoordinationExecutionRecoverySnapshot? Recovery);
+
+public sealed record CoordinationSavedPlanFingerprint(int Version, string Sha256);
 
 public sealed record CoordinationExecutionCheckpointSnapshot(
     string CheckpointId,

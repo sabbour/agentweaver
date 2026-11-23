@@ -456,6 +456,13 @@ internal static partial class GatewayOpenApi
             responses["502"] = CoordinationReadErrorResponse("Projects authority or selection is unavailable.");
             responses["503"] = CoordinationReadErrorResponse("The retained recovery events are unavailable or invalid.");
         }
+        if (route.OperationId == "readExecutionPlan")
+        {
+            responses["404"] = CoordinationReadErrorResponse(
+                "The coordinator, accepted plan, or selected session was not found.");
+            responses["409"] = CoordinationReadErrorResponse(
+                "The accepted selection is stale or the saved plan, checkpoint, or recovery projection is unavailable.");
+        }
         if (route.OperationId == "readRunEgress")
         {
             responses["400"] = ProblemResponse("The run ID, limit, or cursor is invalid.");
@@ -2923,13 +2930,18 @@ else if (route.OperationId is
             ("maximumWorkItems", Int()), ("steps", Arr(Ref("WorkflowStepDefinition")))),
         ["CoordinationExecutionPlanSnapshot"] = Obj(
             ["session", "acceptedSelectionHash", "executionFence", "decisionStateVersion",
-                "workPlan", "checkpoint", "children", "recovery"],
+                "workPlan", "savedPlanFingerprint", "checkpoint", "children", "recovery"],
             ("session", Ref("SessionIdentity")), ("acceptedSelectionHash", Str()),
             ("executionFence", Int()), ("decisionStateVersion", Int()),
             ("workPlan", Ref("WorkPlanSnapshot")),
+            ("savedPlanFingerprint", Ref("CoordinationSavedPlanFingerprint")),
             ("checkpoint", NullableRef("CoordinationExecutionCheckpointSnapshot")),
             ("children", BoundedArray(Ref("CoordinationExecutionChildSnapshot"), 0, 512)),
             ("recovery", NullableRef("CoordinationExecutionRecoverySnapshot"))),
+        ["CoordinationSavedPlanFingerprint"] = StrictObj(
+            ["version", "sha256"],
+            ("version", new { type = "integer", minimum = 1, maximum = 1 }),
+            ("sha256", new { type = "string", pattern = "^[0-9a-f]{64}$" })),
         ["CheckpointRecoveryEventPage"] = StrictObj(
             ["session", "operationId", "watermark", "events", "nextCursor", "hasMore"],
             ("session", Ref("SessionIdentity")), ("operationId", Uuid()), ("watermark", Int()),

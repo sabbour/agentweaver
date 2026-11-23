@@ -12,6 +12,7 @@ import {
   compareStatusApiAndRest,
   parseArgs,
   resolveCliPath,
+  runCommand,
   validateAfterObservation,
   validateInput,
   validateJournalPages,
@@ -107,8 +108,25 @@ function snapshot({ fence = rootFenceBefore, recovery = null, choices = gate.all
   return { context: {}, runStatus, sessionStatus, decisions, tree, events };
 }
 
-function beforeCaptureRecords(capture) {
-  const commands = buildCommands(input);
+function executionPlan(snapshot, fingerprint = 'f'.repeat(64)) {
+  return {
+    session: snapshot.sessionStatus.identity,
+    acceptedSelectionHash: snapshot.sessionStatus.runtimeStartup.acceptedSelectionHash,
+    executionFence: snapshot.runStatus.executionFence,
+    decisionStateVersion: snapshot.decisions.stateVersion,
+    workPlan: { plan: { id: snapshot.sessionStatus.executionRecovery.workPlanId } },
+    savedPlanFingerprint: { version: 1, sha256: fingerprint },
+    checkpoint: {
+      checkpointId: snapshot.sessionStatus.executionRecovery.checkpointId,
+      revision: snapshot.sessionStatus.executionRecovery.checkpointRevision,
+      workPlanId: snapshot.sessionStatus.executionRecovery.workPlanId,
+      decisionStateVersion: snapshot.decisions.stateVersion,
+    },
+  };
+}
+
+function beforeCaptureRecords(capture, commandInput = input) {
+  const commands = buildCommands(commandInput);
   const { outputs } = capture;
   const api = value => JSON.stringify({ status: 200, body: value });
   const rest = value => JSON.stringify({ status: 200, body: value });
@@ -116,6 +134,7 @@ function beforeCaptureRecords(capture) {
     'auth-status': JSON.stringify({ isSignedIn: true, tenantId: input.target.tenantId }),
     'api-operations': JSON.stringify([
       'readRunStatus', 'readSessionStatus', 'readDecisions', 'readSessionTree', 'replayRunEvents',
+      ...(commandInput.caseKind === 'pending-gate' ? [] : ['readExecutionPlan']),
     ]),
     'rest-authorization-context': rest(outputs.context),
     'run-status': api(outputs.runStatus),
@@ -124,6 +143,7 @@ function beforeCaptureRecords(capture) {
     'session-status-rest': rest(outputs.sessionStatus),
     decisions: api(outputs.decisions),
     'session-tree': api(outputs.tree),
+    'execution-plan': api(outputs.executionPlan),
   };
   for (const command of commands) {
     if (command.id.startsWith('api-describe-')) stdoutById[command.id] = '{}';
@@ -143,10 +163,12 @@ function beforeCaptureRecords(capture) {
     timedOut: false,
     error: null,
   });
+
   const records = commands.map((command, index) => {
-    const commandId = index < 8
+    const commandId = index < 3 + (commandInput.caseKind === 'pending-gate' ? 5 : 6)
       ? command.id
-      : `initial-${command.id === 'rest-authorization-context'
+      : `initial-${command.id === 'execution-plan' ? 'execution-plan-before-journal'
+        : command.id === 'rest-authorization-context'
         ? 'authorization-context'
         : command.id}`;
     return record(commandId, command.args, stdoutById[command.id] ?? '');
@@ -165,6 +187,13 @@ function beforeCaptureRecords(capture) {
     replayArgs,
     api(outputs.events[0]),
   ));
+  if (commandInput.caseKind !== 'pending-gate') {
+    records.push(record(
+      'initial-execution-plan-after-journal',
+      commands.find(command => command.id === 'execution-plan').args,
+      api(outputs.executionPlan),
+    ));
+  }
   records.push(
     record('initial-final-run-status', commands.find(command => command.id === 'run-status').args,
       api(outputs.runStatus)),
@@ -179,6 +208,18 @@ function beforeCaptureRecords(capture) {
   );
   return records;
 }
+
+test('execution-plan subprocess reads allow the full plan response plus CLI wrapper', () => {
+  const record = runCommand(process.execPath, [
+    '-e',
+    `process.stdout.write(JSON.stringify({status:200,body:{session:{sessionId:${JSON.stringify(input.target.sessionId)}},workPlan:{plan:{content:'x'.repeat(5*1024*1024)}},savedPlanFingerprint:{version:1,sha256:'${'f'.repeat(64)}'}}}));`,
+    'api',
+    'invoke',
+    'readExecutionPlan',
+  ], process.env);
+  assert.equal(record.exitCode, 0, record.error ?? record.stderr);
+  assert.equal(JSON.parse(record.stdout).body.workPlan.plan.content.length, 5 * 1024 * 1024);
+});
 
 function beforeCapture() {
   const before = snapshot();
@@ -392,6 +433,18 @@ test('before-capture evidence must match the captured decision and status surfac
     commandRecords,
     capture.commandsSha256,
   ), capture);
+  const historical = { ...capture,
+    scriptSha256: '6e331de2b8a46b954060819c6da4e991994eb2fc3be4ccefbbefca0e789602f9' };
+  assert.throws(() => verifyBeforeCapture(
+    historical,
+    inputAfter,
+    inputAfter.beforeCaptureSha256,
+    capture.scriptSha256,
+    capture.apphostSha256,
+    capture.input.sha256,
+    commandRecords,
+    capture.commandsSha256,
+  ), /bound to another case/);
   assert.throws(() => verifyBeforeCapture(
     { ...capture, status: 'passed' },
     inputAfter,
@@ -424,6 +477,16 @@ test('before-capture evidence must match the captured decision and status surfac
     commandRecords,
     capture.commandsSha256,
   ), /journal summary/);
+  assert.throws(() => verifyBeforeCapture(
+    { ...capture, scriptSha256: 'e'.repeat(64) },
+    inputAfter,
+    inputAfter.beforeCaptureSha256,
+    capture.scriptSha256,
+    capture.apphostSha256,
+    capture.input.sha256,
+    commandRecords,
+    capture.commandsSha256,
+  ), /bound to another case/);
 });
 
 test('standalone fabricated before summaries are blocked without retained input and commands', () => {
@@ -789,12 +852,14 @@ function childSnapshot({ after = false, effect = false, fixed = false } = {}) {
     data.runStatus.checkpointRecovery = recovery;
     data.sessionStatus.checkpointRecovery = structuredClone(recovery);
   }
+  data.executionPlan = executionPlan(data);
   return data;
 }
 
-function childRecords(initial, final = initial) {
-  const records = beforeCaptureRecords({ outputs: initial });
-  const commands = buildCommands(input);
+function childRecords(initial, final = initial, kind = 'child-join') {
+  const commandInput = { ...input, caseKind: kind };
+  const records = beforeCaptureRecords({ outputs: initial }, commandInput);
+  const commands = buildCommands(commandInput);
   if (initial.events.length > 1) {
     const first = records.findIndex(record => record.id === 'initial-journal-page-1');
     for (let index = 1; index < initial.events.length; index += 1) {
@@ -809,6 +874,11 @@ function childRecords(initial, final = initial) {
     ['initial-final-session-status', final.sessionStatus], ['initial-final-session-status-rest', final.sessionStatus],
     ['initial-final-decisions', final.decisions],
   ]) records.find(record => record.id === id).stdout = JSON.stringify({ status: 200, body: value });
+  for (const id of ['initial-execution-plan-before-journal', 'initial-execution-plan-after-journal']) {
+    records.find(record => record.id === id).stdout = JSON.stringify({
+      status: 200, body: initial.executionPlan,
+    });
+  }
   const template = records.at(-1);
   records.push(
     { ...template, id: 'initial-final-authorization-context',
@@ -840,7 +910,7 @@ test('child and effect observations use retained commands and stable source-boun
       const inputPath = path.join(scratch, `input-${n}.json`);
       const outputPath = path.join(scratch, `output-${n}`);
       await writeFile(inputPath, JSON.stringify(value));
-      const records = childRecords(fixture, final);
+      const records = childRecords(fixture, final, kind);
       mutateRecords(records);
       let index = 0;
       const result = await runCase({ inputPath, outputPath, beforeEvidencePath: beforeResult?.capturePath },
@@ -870,9 +940,52 @@ test('child and effect observations use retained commands and stable source-boun
     assert.equal(passed.status, 'passed', passed.reason);
     assert.equal(passed.members[0].messageId, childMessage);
     assert.equal(passed.members[0].outcome, 'pending');
-    assert.equal(passed.fullPlanContentProof.status, 'blocked');
-    assert.equal(passed.dependencyGraphProof.status, 'blocked');
+    assert.equal(passed.fullPlanContentProof.status, 'passed');
+    assert.equal(passed.dependencyGraphProof.status, 'passed');
     assert.equal(passed.committedRecoveryEventProof.status, 'blocked');
+    assert.equal(passed.completedChildProof.status, 'blocked');
+    const changedPlan = structuredClone(after);
+    changedPlan.executionPlan.savedPlanFingerprint.sha256 = 'e'.repeat(64);
+    const changedPlanResult = await run('child-join', 'after-observation', changedPlan, before);
+    assert.equal(changedPlanResult.status, 'failed');
+    assert.match(changedPlanResult.reason, /saved plan changed/i);
+    const changedRecoveryAndPlan = structuredClone(changedPlan);
+    changedRecoveryAndPlan.runStatus.checkpointRecovery.operationId =
+      '00000000-0000-4000-8000-000000000099';
+    const changedRecoveryResult =
+      await run('child-join', 'after-observation', changedRecoveryAndPlan, before);
+    assert.equal(changedRecoveryResult.status, 'blocked');
+    assert.doesNotMatch(changedRecoveryResult.reason, /saved plan changed/i);
+    for (const [label, mutate] of [
+      ['missing read', records => {
+        records.splice(records.findIndex(record => record.id === 'initial-execution-plan-before-journal'), 1);
+      }],
+      ['unsupported fingerprint', records => {
+        for (const id of ['initial-execution-plan-before-journal', 'initial-execution-plan-after-journal']) {
+          const record = records.find(item => item.id === id);
+          const envelope = JSON.parse(record.stdout);
+          envelope.body.savedPlanFingerprint.version = 2;
+          record.stdout = JSON.stringify(envelope);
+        }
+      }],
+      ['drifting read', records => {
+        const record = records.find(item => item.id === 'initial-execution-plan-after-journal');
+        const envelope = JSON.parse(record.stdout);
+        envelope.body.savedPlanFingerprint.sha256 = 'e'.repeat(64);
+        record.stdout = JSON.stringify(envelope);
+      }],
+      ['wrong owner', records => {
+        for (const id of ['initial-execution-plan-before-journal', 'initial-execution-plan-after-journal']) {
+          const record = records.find(item => item.id === id);
+          const envelope = JSON.parse(record.stdout);
+          envelope.body.session.sessionId = 'other-root';
+          record.stdout = JSON.stringify(envelope);
+        }
+      }],
+    ]) {
+      const blocked = await run('child-join', 'after-observation', after, before, after, {}, mutate);
+      assert.equal(blocked.status, 'blocked', `${label}: ${blocked.reason}`);
+    }
     const pagedSource = childSnapshot();
     pagedSource.events[0].hasMore = true;
     pagedSource.events[0].nextCursor = 'cursor-1';
@@ -891,10 +1004,12 @@ test('child and effect observations use retained commands and stable source-boun
     Object.assign(joined.sessionStatus.executionRecovery.steps[0],
       { checkpointStatus: 'succeeded', effectRecoveryState: 'checkpointResultRecorded' });
     joined.tree.nodes[1].lifecycle = 'completed';
+    joined.executionPlan = executionPlan(joined);
     const joinResult = await run('child-join', 'after-observation', joined, before);
     assert.equal(joinResult.status, 'passed', joinResult.reason);
     assert.equal(joinResult.members[0].outcome, 'checkpointResultRecorded');
     assert.equal(joinResult.members[0].checkpointId, 'later-checkpoint');
+    assert.equal(joinResult.completedChildProof.status, 'blocked');
 
     const reordered = structuredClone(after);
     reordered.tree.nodes.reverse();
@@ -915,6 +1030,7 @@ test('child and effect observations use retained commands and stable source-boun
     assert.equal(receipt.effect.operationId, effectId);
     assert.equal(receipt.effect.evidenceState, 'terminalReceiptRecorded');
     assert.equal(receipt.physicalNoDuplicateProof.status, 'blocked');
+    assert.equal(receipt.checkpointRestartDuplicateFence.status, 'blocked');
     await t.test('unrelated terminal BuildTest and selected operation identity', async () => {
       const addBuild = data => {
         data.sessionStatus.executionRecovery.steps.push({
@@ -936,10 +1052,10 @@ test('child and effect observations use retained commands and stable source-boun
       assert.equal(result.status, 'passed', result.reason);
       assert.equal(result.effect.operationId, effectId);
       assert.equal(result.effect.evidenceState, 'terminalReceiptRecorded');
-      for (const proof of ['fullPlanContentProof', 'dependencyGraphProof',
-        'committedRecoveryEventProof', 'physicalNoDuplicateProof']) {
-        assert.equal(result[proof].status, 'blocked', proof);
-      }
+      assert.equal(result.fullPlanContentProof.status, 'passed');
+      assert.equal(result.dependencyGraphProof.status, 'passed');
+      assert.equal(result.committedRecoveryEventProof.status, 'blocked');
+      assert.equal(result.physicalNoDuplicateProof.status, 'blocked');
       for (const duplicate of [
         { ...current.sessionStatus.executionRecovery.platformGateOperations[1] },
         { ...current.sessionStatus.executionRecovery.platformGateOperations[0], operationId: effectId.toUpperCase() },
@@ -1150,12 +1266,12 @@ test('child and effect observations use retained commands and stable source-boun
       assert.equal(sourceUnbound.status, 'blocked', sourceUnbound.reason);
       assert.match(sourceUnbound.reason, /source, plan, versions, or checkpoint lineage/);
     });
-    await t.test('settled previous fence fails but unbound evidence blocks', async () => {
+    await t.test('unbound recovery fence and source evidence block', async () => {
       const current = structuredClone(after);
       current.runStatus.checkpointRecovery.previousExecutionFence = 8;
       current.sessionStatus.checkpointRecovery.previousExecutionFence = 8;
       const result = await run('child-join', 'after-observation', current, before);
-      assert.equal(result.status, 'failed', result.reason);
+      assert.equal(result.status, 'blocked', result.reason);
       current.runStatus.checkpointRecovery.sourceCheckpointId = 'other';
       current.sessionStatus.checkpointRecovery.sourceCheckpointId = 'other';
       const unbound = await run('child-join', 'after-observation', current, before);
@@ -1195,7 +1311,7 @@ test('child and effect observations use retained commands and stable source-boun
       ['empty material', x => { x.runStatus.checkpointRecovery.recoveryMaterialMode = ''; }, 'blocked'],
       ['unsupported material', x => { x.runStatus.checkpointRecovery.recoveryMaterialMode = 'other'; }, 'failed'],
       ['held', x => { x.runStatus.checkpointRecovery.dispatchHeld = true; }, 'failed'],
-      ['fence', x => { x.runStatus.checkpointRecovery.executionFence = 11; }, 'failed'],
+      ['fence', x => { x.runStatus.checkpointRecovery.executionFence = 11; }, 'blocked'],
       ['runtime', x => { x.runStatus.checkpointRecovery.runtimeInstanceId = x.runStatus.checkpointRecovery.previousRuntimeInstanceId; }, 'failed'],
       ['message', x => { x.sessionStatus.executionRecovery.pendingChildDispatches[0].messageId = randomUUID(); }, 'failed'],
       ['child identity', x => { x.sessionStatus.executionRecovery.pendingChildDispatches[0].childSessionId = 'different-child'; }, 'failed'],
@@ -1260,6 +1376,7 @@ test('child and effect observations use retained commands and stable source-boun
     ]) {
       const source = childSnapshot();
       change(source);
+      source.executionPlan = executionPlan(source);
       const capture = await run('child-join', 'before-capture', source);
       assert.equal(capture.status, 'captured', `${label}: ${capture.reason}`);
       const result = await run('child-join', 'after-observation', after, capture);
@@ -1302,6 +1419,20 @@ test('child and effect observations use retained commands and stable source-boun
         record.stdout = JSON.stringify(body);
       }],
       ['missing final tree', records => { records.pop(); }],
+      ['missing pre-plan read', records => {
+        records.splice(records.findIndex(item => item.id === 'initial-execution-plan-before-journal'), 1);
+      }],
+      ['reordered plan reads', records => {
+        const beforeIndex = records.findIndex(item => item.id === 'initial-execution-plan-before-journal');
+        const afterIndex = records.findIndex(item => item.id === 'initial-execution-plan-after-journal');
+        [records[beforeIndex], records[afterIndex]] = [records[afterIndex], records[beforeIndex]];
+      }],
+      ['mismatched retained plan read', records => {
+        const record = records.find(item => item.id === 'initial-execution-plan-after-journal');
+        const envelope = JSON.parse(record.stdout);
+        envelope.body.savedPlanFingerprint.sha256 = 'e'.repeat(64);
+        record.stdout = JSON.stringify(envelope);
+      }],
       ['changed command', records => {
         records.find(item => item.id === 'initial-session-status').args[2] = 'answerGate';
       }],
@@ -1329,7 +1460,7 @@ test('child and effect observations use retained commands and stable source-boun
       const changedBefore = { ...before, captureSha256: createHash('sha256').update(captureText).digest('hex') };
       const tampered = await run('child-join', 'after-observation', after, changedBefore);
       assert.equal(tampered.status, 'blocked', label);
-      assert.match(tampered.reason, /retained|final-session-tree/i, label);
+      assert.match(tampered.reason, /retained|final-session-tree|execution-plan/i, label);
     }
   } finally {
     await rm(scratch, { recursive: true, force: true });

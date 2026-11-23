@@ -21,6 +21,10 @@ public sealed class CoordinationExecutionPlanEndpointTests
         Assert.Equal(
             snapshot.WorkPlan.Plan.Id,
             document.RootElement.GetProperty("workPlan").GetProperty("plan").GetProperty("id").GetString());
+        Assert.Equal(snapshot.SavedPlanFingerprint.Version,
+            document.RootElement.GetProperty("savedPlanFingerprint").GetProperty("version").GetInt32());
+        Assert.Equal(snapshot.SavedPlanFingerprint.Sha256,
+            document.RootElement.GetProperty("savedPlanFingerprint").GetProperty("sha256").GetString());
         Assert.Equal(
             JsonValueKind.Null,
             document.RootElement.GetProperty("workPlan").GetProperty("workflow")
@@ -80,6 +84,7 @@ public sealed class CoordinationExecutionPlanEndpointTests
             1,
             1,
             plan.Value!,
+            CoordinationOwnerStore.ComputeSavedPlanFingerprint(plan.Value!),
             null,
             ImmutableArray<CoordinationExecutionChildSnapshot>.Empty,
             null);
@@ -118,6 +123,96 @@ public sealed class CoordinationExecutionPlanEndpointTests
 
         Assert.Equal("execution_plan_unavailable", error.Code);
         Assert.Equal(409, error.StatusCode);
+    }
+
+    [Fact]
+    public void SavedPlanFingerprintIsStableAndCapabilitySetOrderIndependent()
+    {
+        var first = ValidPlan(
+            WorkflowTestData.PinnedSandboxBinding(
+                "sandbox.test", "sandbox.workspace.write", "sandbox.capability.z"));
+        var reordered = ValidPlan(
+            WorkflowTestData.PinnedSandboxBinding(
+                "sandbox.test", "sandbox.capability.z", "sandbox.workspace.write"));
+
+        var fingerprint = CoordinationOwnerStore.ComputeSavedPlanFingerprint(first);
+        Assert.Equal(fingerprint, CoordinationOwnerStore.ComputeSavedPlanFingerprint(first));
+        Assert.Equal(fingerprint, CoordinationOwnerStore.ComputeSavedPlanFingerprint(reordered));
+        Assert.Equal(1, fingerprint.Version);
+        Assert.Matches("^[0-9a-f]{64}$", fingerprint.Sha256);
+    }
+
+    [Fact]
+    public void SavedPlanFingerprintChangesForPlanMutations()
+    {
+        var baseline = ValidPlan(WorkflowTestData.PinnedSandboxBinding());
+        var expected = CoordinationOwnerStore.ComputeSavedPlanFingerprint(baseline).Sha256;
+        var workflowEdge = baseline.Workflow.Definition with
+        {
+            Steps = baseline.Workflow.Definition.Steps.SetItem(
+                2,
+                baseline.Workflow.Definition.Steps[2] with { DependsOn = ["setup"] })
+        };
+        var workItemEdge = baseline.Plan with
+        {
+            Items = baseline.Plan.Items.SetItem(
+                1, baseline.Plan.Items[1] with { DependsOn = ["item-a"] })
+        };
+        var changedProvider = ValidPlan(
+            WorkflowTestData.PinnedSandboxBindingAtGeneration(2));
+        var changedUrl = baseline.Plan.Items[1] with
+        {
+            Task = "Read https://service.example/resource?revision=1#details."
+        };
+        var urlBaseline = ValidPlan(
+            baseline.Workflow.Definition,
+            baseline.Plan with { Items = baseline.Plan.Items.SetItem(1, changedUrl) },
+            baseline.IsolationProviderBinding!);
+        var urlHash = CoordinationOwnerStore.ComputeSavedPlanFingerprint(urlBaseline).Sha256;
+        foreach (var task in new[]
+        {
+            "Read https://service.example/resource?revision=2#details.",
+            "Read https://service.example/resource?revision=1#summary.",
+        })
+        {
+            var changed = ValidPlan(
+                baseline.Workflow.Definition,
+                urlBaseline.Plan with
+                {
+                    Items = urlBaseline.Plan.Items.SetItem(
+                        1, urlBaseline.Plan.Items[1] with { Task = task })
+                },
+                baseline.IsolationProviderBinding!);
+            Assert.NotEqual(urlHash, CoordinationOwnerStore.ComputeSavedPlanFingerprint(changed).Sha256);
+        }
+        var mutations = new[]
+        {
+            ValidPlan(workflowEdge, baseline.Plan, baseline.IsolationProviderBinding!),
+            ValidPlan(baseline.Workflow.Definition, workItemEdge, baseline.IsolationProviderBinding!),
+            changedProvider,
+            urlBaseline,
+        };
+
+        Assert.All(mutations, plan =>
+            Assert.NotEqual(expected, CoordinationOwnerStore.ComputeSavedPlanFingerprint(plan).Sha256));
+    }
+
+    private static WorkPlanSnapshot ValidPlan(PinnedProviderBinding binding)
+        => ValidPlan(WorkflowTestData.Definition(), WorkflowTestData.Plan(
+                WorkflowTestData.Item("item-a"),
+                WorkflowTestData.Item("item-b")), binding);
+
+    private static WorkPlanSnapshot ValidPlan(
+        WorkflowDefinition definition,
+        WorkPlan workPlan,
+        PinnedProviderBinding binding)
+    {
+        var result = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(definition),
+            workPlan,
+            WorkflowTestData.SelectionContext(binding));
+        Assert.True(result.IsValid, string.Join("; ", result.Issues.Select(issue => issue.Message)));
+        return result.Value!;
     }
 
     private static CoordinationExecutionPlanSnapshot CreateSnapshot(bool overflow)
@@ -161,6 +256,7 @@ public sealed class CoordinationExecutionPlanEndpointTests
             1,
             1,
             validated.Value!,
+            CoordinationOwnerStore.ComputeSavedPlanFingerprint(validated.Value!),
             null,
             ImmutableArray<CoordinationExecutionChildSnapshot>.Empty,
             null);

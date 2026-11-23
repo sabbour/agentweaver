@@ -69,7 +69,12 @@ script, and input hashes; actor and target; status and decision reads; and all
 pages from the run's session journal. The gate case records the request, actor,
 choices, and freeform setting. The child cases record visible pending
 association, child-session, and message identities from the checkpoint
-projection and the original session tree.
+projection and the original session tree. They also call `readExecutionPlan`
+immediately before and after journal paging. Both reads must carry version-1
+saved-plan fingerprints and bind to the same actor, project, run, root,
+accepted selection hash, fence, decision version, plan, and checkpoint. New
+child and effect captures use format version 2. Historical captures retain
+their original format and exact script hash.
 
 The result reports `capturePath` and `captureSha256`. Keep `capture.json`,
 `case-input.json`, and `commands.jsonl` together in the before-capture
@@ -92,10 +97,12 @@ node scripts\acceptance\api\checkpoint-recovery-observation.mjs --input $caseInp
 
 The script uses `auth status`, `api operations`, `api describe`, authorization
 context through `rest`, `readRunStatus`, `readSessionStatus`, `readDecisions`,
-`readSessionTree`, and paged `replayRunEvents`. It compares run and root-session
-status through `api invoke` and `rest`. It reads status and decision bindings
-again after the journal pages. The script does not use caller-selected
-operation status or an Orchestrator outbox event.
+`readSessionTree`, paged `replayRunEvents`, and, for child and effect cases,
+`readExecutionPlan`. It brackets the journal pages with the execution-plan
+reads. It compares run and root-session status through `api invoke` and `rest`.
+It reads status and decision bindings again after the journal pages. The
+script does not use caller-selected operation status or an Orchestrator outbox
+event.
 
 The selected operation must be `ready`, use a different runtime and the next
 source fence, and report `nativeCache` or `journalRebuild` material. The gate
@@ -116,10 +123,16 @@ until reconciliation records its receipt. A matching
 observation. `intentOnly` / `mayRepeat` does not establish a Source Control
 commit, so that after state is `blocked`.
 
-The child and receipt results leave full plan content and dependency graph
-proof `blocked`. The receipt result also leaves physical no-duplicate proof
-`blocked`. The public reads do not expose those inventories. Missing runtime
-identity blocks; equal old and new runtime IDs fail.
+When both version-1 fingerprints are stable, bound, and equal across recovery,
+the child and receipt results mark full-plan content and dependency-graph
+proof as `passed`. A different stable fingerprint after recovery fails with
+`The saved plan changed during recovery.` A missing, malformed, unsupported,
+unbound, or changing plan read blocks the observation. The completed-child
+receipt-to-message link remains `blocked`. The receipt result also leaves
+physical no-duplicate proof and the `checkpoint-restart-duplicate-fence` P1
+slot `blocked` because native-send and external-effect evidence is not in the
+public reads. Missing runtime identity blocks; equal old and new runtime IDs
+fail.
 
 ## Validate and read the result
 

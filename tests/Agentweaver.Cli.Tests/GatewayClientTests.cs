@@ -345,6 +345,49 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
+    public async Task ExecutionPlanOutputPreservesFingerprintAndRedactsUrlDetails()
+    {
+        var handler = new TestGatewayHandler
+        {
+            ResponseBody = $$"""
+                {
+                  "savedPlanFingerprint": { "version": 1, "sha256": "{{new string('a', 64)}}" },
+                  "workPlan": {
+                    "workflow": {
+                      "definition": {
+                        "steps": [{ "purpose": "https://service.example/resource?token=secret#fragment" }]
+                      }
+                    }
+                  }
+                }
+                """,
+        };
+        using var http = new HttpClient(handler);
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var result = await CliApplication.RunAsync(
+        [
+            "api", "invoke", "readExecutionPlan",
+            "--path", "projectId=project-1", "--path", "runId=run-1", "--path", "sessionId=root",
+            "--scope", "projects.orchestrator",
+            "--gateway-url", "https://gateway.example/",
+            "--broker-issuer", "https://identity.example/",
+            "--client-id", "agentweaver-cli",
+            "--api-audience", "https://gateway.example/",
+            "--tenant-id", "tenant-1",
+            "--project-id", "project-1", "--run-id", "run-1",
+        ],
+        new CliRuntimeOptions(
+            HttpClient: http, Authentication: new TestAuthentication(), Output: output, Error: error));
+
+        Assert.Equal(0, result);
+        Assert.Contains(new string('a', 64), output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("https://service.example/resource", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("?token=", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("#fragment", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UnadvertisedParametersAreRejectedBeforeAnyProtectedRequest()
     {
         var handler = new TestGatewayHandler();
@@ -962,6 +1005,8 @@ public sealed class GatewayClientTests
                 return new HttpResponseMessage(HttpStatusCode.Created) { Content = ResponseContent };
             if (request.RequestUri.AbsolutePath.EndsWith("/cancel", StringComparison.Ordinal))
                 return Json(HttpStatusCode.OK, ResponseBody);
+            if (request.RequestUri.AbsolutePath.EndsWith("/execution-plan", StringComparison.Ordinal))
+                return Json(HttpStatusCode.OK, ResponseBody);
             return Json(HttpStatusCode.Created, ResponseBody);
         }
 
@@ -1131,6 +1176,19 @@ public sealed class GatewayClientTests
                   {"name":"limit","in":"query","required":false,"schema":{"type":"integer","minimum":1,"maximum":100,"default":25}},
                   {"name":"cursor","in":"query","required":false,"schema":{"type":"string","maxLength":1024}},
                   {"name":"X-Agentweaver-Tenant","in":"header","required":false,"schema":{"type":"string"}}
+                ],
+                "responses":{"200":{"content":{"application/json":{"schema":{"type":"object"}}}}}
+              }
+            },
+            "/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/execution-plan":{
+              "get":{
+                "operationId":"readExecutionPlan",
+                "security":[{"Bearer":[]}],
+                "parameters":[
+                  {"name":"projectId","in":"path","required":true,"schema":{"type":"string"}},
+                  {"name":"runId","in":"path","required":true,"schema":{"type":"string"}},
+                  {"name":"sessionId","in":"path","required":true,"schema":{"type":"string"}},
+                  {"name":"X-Agentweaver-Tenant","in":"header","required":true,"schema":{"type":"string"}}
                 ],
                 "responses":{"200":{"content":{"application/json":{"schema":{"type":"object"}}}}}
               }

@@ -109,6 +109,14 @@ public sealed class GatewayOpenApiParityTests
         JsonObject executionPlanRoute = Assert.IsType<JsonObject>(executionPlanPathItem["get"]);
         JsonObject executionPlan = FindOperation(discovered, "readExecutionPlan");
         Assert.True(JsonNode.DeepEquals(executionPlanRoute, executionPlan));
+        JsonObject executionPlanResponses = Assert.IsType<JsonObject>(executionPlan["responses"]);
+        Assert.Contains("404", executionPlanResponses);
+        Assert.Contains("409", executionPlanResponses);
+        foreach (string status in new[] { "404", "409" })
+        {
+            Assert.NotNull(executionPlanResponses[status]?["content"]?["application/json"]?
+                ["schema"]?["properties"]?["error"]);
+        }
         Assert.Equal("#/components/schemas/CoordinationExecutionPlanSnapshot",
             executionPlan["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?.GetValue<string>());
         JsonObject executionPlanHeaders = Assert.IsType<JsonObject>(executionPlan["responses"]?["200"]?["headers"]);
@@ -121,6 +129,16 @@ public sealed class GatewayOpenApiParityTests
         Assert.Equal(
             "#/components/schemas/WorkPlanSnapshot",
             executionPlanSchema["properties"]?["workPlan"]?["$ref"]?.GetValue<string>());
+        Assert.Equal(
+            "#/components/schemas/CoordinationSavedPlanFingerprint",
+            executionPlanSchema["properties"]?["savedPlanFingerprint"]?["$ref"]?.GetValue<string>());
+        Assert.Contains("savedPlanFingerprint",
+            executionPlanSchema["required"]!.AsArray().Select(value => value!.GetValue<string>()));
+        JsonObject fingerprintSchema =
+            Assert.IsType<JsonObject>(schemas["CoordinationSavedPlanFingerprint"]);
+        Assert.Equal(1, fingerprintSchema["properties"]?["version"]?["maximum"]?.GetValue<int>());
+        Assert.Equal("^[0-9a-f]{64}$",
+            fingerprintSchema["properties"]?["sha256"]?["pattern"]?.GetValue<string>());
         Assert.Equal(
             "#/components/schemas/CoordinationExecutionCheckpointSnapshot",
             executionPlanSchema["properties"]?["checkpoint"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());

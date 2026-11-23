@@ -219,4 +219,7 @@ from cache compatibility, startup readiness, a changed Pod UID alone, a missing
 event, or a caller-supplied cache/receipt. No source-owned reader currently
 produces the complete invocation-owned gate/join and no-duplicate receipt, so
 the check remains blocked even when the replacement Host recovery receipt is
-available.
+available. The separate checkpoint recovery observation case compares stable,
+bound `readExecutionPlan` fingerprints across recovery. That observation proves
+saved-plan and dependency-graph equality only. It does not move the
+`checkpoint-restart-duplicate-fence` slot from `blocked`.
