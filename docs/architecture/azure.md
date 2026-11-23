@@ -217,11 +217,11 @@ ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 49 Core migration versions (1 through 16, 18
 through 33, and 35-51), with version 17 excluded and reserved version 34
-skipped, 13 Events versions, and 16 Environment versions. Roll out compatible
+skipped, 13 Events versions, and 17 Environment versions. Roll out compatible
 Events & Sessions runtime and migration catalog versions together. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`4e527bfd2e2d3fc9d30f7728b47fa903db8eb07419a316c4c62ddb6886d670f4`.
+`9a7f1e166b2b20c8fe050e946c8b2d6f21e89f9b061385cf13c1118067be02a5`.
 It contains 150 tables, 14 row-lock columns, and 61 exact function signatures.
 The Projects & Config plan grants `SELECT, INSERT` and column-scoped
 `UPDATE (sequence, fence_generation, head_hash, updated_at)` on
@@ -279,8 +279,9 @@ rows. This slice does not collect source flow logs or define automatic expiry.
 The migration and grant-plan hash change are source-only; they do not apply
 the migration or grants to a live database.
 Environment schema version 15 adds policy proof holds and receipts. Version 16
-adds reservation and hold fences. The initializer checks the installed fence
-triggers and their functions before committing grants.
+adds reservation and hold fences. Version 17 adds immutable Remote MCP catalog
+scan evidence and accepted-catalog review state. The initializer checks the
+installed fence triggers and their functions before committing grants.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,

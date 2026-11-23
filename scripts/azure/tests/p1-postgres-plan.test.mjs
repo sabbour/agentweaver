@@ -541,7 +541,7 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
 
   assert.deepEqual(catalog, migrationIds);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
-  assert.match(source, /private const int CurrentSchemaVersion = 16;/);
+  assert.match(source, /private const int CurrentSchemaVersion = 17;/);
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 

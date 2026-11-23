@@ -1028,7 +1028,7 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 051 adds immutable native-child rebind receipts; 052 indexes accepted_runs(tenant_id, run_id, project_id).
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52],
     // Bind each owner migration catalog into the reviewed plan hash.
-    environmentVersions: Array.from({ length: 16 }, (_, index) => index + 1),
+    environmentVersions: Array.from({ length: 17 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 13 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
