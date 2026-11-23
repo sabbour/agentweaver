@@ -248,7 +248,8 @@ public sealed class ProjectsRunSelectionSkillContentTests
     [InlineData(403, 403)]
     [InlineData(404, 409)]
     [InlineData(409, 409)]
-    [InlineData(503, 502)]
+    [InlineData(422, 422)]
+    [InlineData(503, 503)]
     public async Task OwnerFailuresCannotReturnContent(int ownerStatus, int expectedStatus)
     {
         var skill = Skill("skill-a");

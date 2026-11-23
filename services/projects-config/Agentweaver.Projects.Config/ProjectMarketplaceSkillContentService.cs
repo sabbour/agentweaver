@@ -9,7 +9,7 @@ namespace Agentweaver.Projects.Config;
 public sealed class ProjectMarketplaceSkillContentService(
     ProjectMarketplaceSourceService sources,
     SkillMarketplaceBrowseService marketplace,
-    ISkillContentService skills)
+    SkillContentService skills)
 {
     /// <summary>Reads the exact selected commit/path and delegates byte validation to the Skills owner.</summary>
     public async Task<SkillContentPreview> PreviewAsync(
@@ -75,7 +75,7 @@ public sealed class ProjectMarketplaceSkillContentService(
             throw MarketplaceSourceException.RevisionConflict();
         await verifyCurrentWriteAuthorityAsync(cancellationToken).ConfigureAwait(false);
 
-        return await skills.ImportAsync(
+        return await skills.ImportOwnerVerifiedAsync(
                 caller,
                 projectId,
                 new SkillContentImportRequest(
@@ -90,6 +90,11 @@ public sealed class ProjectMarketplaceSkillContentService(
                         request.ResolvedCommitSha.ToLowerInvariant(),
                         request.SelectedPath),
                     candidate),
+                new SkillContentOwnerProvenance(
+                    source,
+                    request.ResolvedCommitSha.ToLowerInvariant(),
+                    request.SelectedPath,
+                    verifyCurrentWriteAuthorityAsync),
                 cancellationToken)
             .ConfigureAwait(false);
     }

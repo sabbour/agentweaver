@@ -72,11 +72,12 @@ sequenceDiagram
         P-->>G: Preview
         G-->>C: Owner response unchanged
     else Import
-        P->>S: Import bytes with expected digest, idempotency key, and source provenance
-        S->>V: Scan before writing the immutable revision
+        P->>S: Import bytes with expected digest, idempotency key, and source binding
+        S->>V: Scan the server-assigned prospective revision before commit
         V-->>S: Current reports bound to bytes and owner revision
-        S->>O: Store immutable content revision
+        S->>O: Store the immutable revision
         O-->>S: Stored digest
+        S->>DB: Commit revision, evidence, admission, and replay receipt
         S-->>P: Import receipt
         P-->>G: Receipt
         G-->>C: Owner response unchanged
@@ -211,9 +212,49 @@ assignment. The source-selected preview/import adapter is implemented in this
 Projects owner candidate. It uses the existing content services and does not add
 a second loader or catalog. A moving branch/tag or later source removal must
 not replace already accepted bytes. After you remove a source, browse, preview,
-and import return `404` with `marketplace_source_not_found`. Skills that you
-already imported keep their stored revisions, assignments, and runtime
-delivery. Assignment still uses the existing Skills assignment service.
+and import return `404` with `marketplace_source_not_found`. Imported revisions
+remain immutable. After the Skill admission cutover, runtime delivery of an
+owner-verified marketplace revision also requires its applicable source
+authority to remain current. Generic inline source coordinates remain
+caller-supplied metadata and do not create this source authority binding.
+Assignment still uses the existing Skills assignment service.
+
+## Admission cutover and trust evidence
+
+Projects & Config starts with one database-backed admission fence in `Open`
+state. During cutover, the owner changes it to `Draining`, then waits for
+in-flight writers. The database trigger also blocks older service replicas
+from inserting revisions while the fence drains. Activation requires an
+owner-verified built-in release inventory and an explicit canonical platform
+Skills policy. After activation, writes reopen only through the admission path.
+Existing third-party revisions without this admission binding stay frozen from
+runtime delivery.
+
+The marketplace bridge supplies owner-verified source coordinates: source ID,
+source revision, repository ref, exact commit, selected path, and fetched
+content digest. Inline import coordinates are caller metadata claims. Only an
+exact match in the release inventory can classify a revision as
+`Built-in — exempt`. A signature bonus requires the same exact artifact digest
+and a trusted publisher binding from that inventory.
+
+The owner assigns the prospective Skill revision before the scan. It scans the
+canonical `SKILL.md` and exact resource bytes with the K1 report contract, then
+commits the immutable revision, report bytes and report hash, score, source
+binding, current platform and project policy heads, admission decision, and
+idempotent import receipt in one database transaction. The heuristic starts at
+500, adds 100 for a verified signature and 50 for a valid capability
+declaration, and subtracts 50 when the description has fewer than 20
+characters. Failed or absent scoring remains `Unavailable`; it does not map to
+a tier. The tier ranges are `revoked` 0–299, `probationary` 300–499,
+`standard` 500–699, `trusted` 700–899, and `verified` 900–1000. Capability
+declarations request capabilities. They do not grant permissions.
+
+The canonical ACS Skills domain evaluates the platform and project policy
+heads. The project threshold cannot be lower than the platform threshold, and
+either scope can require complete evidence. At import and runtime projection,
+the owner binds the decision to exact revision bytes, evidence, source
+authority, and current policy heads. It rechecks these bindings after all
+assigned Skills are projected, including checkpoint recovery.
 
 The Skills content service scans every project candidate with the local pinned
 AGT evaluator. It scans canonical `SKILL.md` bytes rebuilt from the validated
@@ -226,10 +267,12 @@ of those Skills, and accepted-run delivery. The owner scans
 stored content again when it assigns a revision and before it returns runtime
 bytes. Existing bundled Skills remain outside these project content routes.
 
-A non-passing scan returns `422 skill_scan_blocked`. A missing, stale,
-malformed, or error report returns `503 skill_scan_unavailable`. The owner
-returns no preview or runtime bytes and writes no imported object or
-configuration before a scan passes.
+A non-passing scan returns `422 skill_scan_blocked`. Admission denial returns
+`422 skill_admission_denied`. A missing, stale, malformed, corrupt, or errored
+required report returns `503 skill_scan_unavailable` or
+`503 skill_admission_unavailable`. Policy, source, or authority changes return
+`409` so the caller can retry against current state. The owner returns no
+runtime bytes and commits no denied revision.
 
 Preview requires current project read authority. Import also requires
 `projects.admin` and current project write authority. Both routes re-resolve the

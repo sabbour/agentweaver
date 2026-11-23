@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Text;
+using Agentweaver.Abstractions;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -54,6 +56,32 @@ public sealed class SkillContentValidatorTests
         Assert.Equal(
             new[] { "docs/a.md", "docs/b.md" },
             forward.Resources.Select(resource => resource.RelativePath));
+    }
+
+    [Fact]
+    public void Validate_NonemptyCapabilitiesRoundTripThroughRuntimeDigest()
+    {
+        var markdown = Encoding.UTF8.GetBytes(
+            """
+            ---
+            name: capability-round-trip
+            description: A Skill with a declared runtime capability.
+            capabilities:
+              - files.read
+            ---
+            Read the approved file.
+            """);
+
+        var validated = SkillContentValidator.Validate(markdown);
+        var runtimeDigest = SkillRuntimeContentContract.ComputeContentDigest(
+            validated.Name,
+            validated.Description,
+            validated.Instructions,
+            validated.Resources.Select(resource => new SkillRuntimeContentResourceV1(
+                resource.RelativePath, resource.Content, resource.Sha256)).ToImmutableArray());
+
+        Assert.Single(validated.CapabilityRequests);
+        Assert.Equal(validated.ContentDigest, runtimeDigest);
     }
 
     [Theory]

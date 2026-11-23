@@ -621,6 +621,18 @@ The Projects runtime principal receives `SELECT` and `INSERT` on
 `DELETE` grant, and database triggers reject updates, deletes, and truncates.
 The table stores immutable scan reports and source metadata, not Skill text.
 
+The same principal receives `SELECT` and `INSERT` on
+`project_skill_admissions`. A refresh appends a new binding for the same
+immutable Skill revision with current evidence and policy heads. The principal
+receives `SELECT`, `INSERT`, and `UPDATE` on the cutover
+fence. It receives only `SELECT` on the built-in release inventory. The
+verified release-management function loads signed inventory bindings after the
+service verifies the manifest with a pinned publisher key.
+Configure each key under
+`ProjectsConfig:SkillReleasePublisherKeys` with `publisherId` and
+`publicKeyPem`. Only a current PlatformAdmin can call
+`POST /api/platform/skills/admission/cutover`.
+
 ### Runtime authority writes
 
 The runtime database principal can write project role assignments only

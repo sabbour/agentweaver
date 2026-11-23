@@ -12,7 +12,8 @@ public enum NativeAcsDomainId
     PlatformNetwork,
     ModelUse,
     Guardrails,
-    ToolPermissions
+    ToolPermissions,
+    Skills
 }
 
 public static class NativeAcsComposableDomainsProfile

@@ -147,6 +147,7 @@ public sealed partial class ProjectsConfigService
     private readonly IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory;
     private readonly ModelBindingCapabilities modelBindings;
     private readonly SkillContentObjectStore? skillContentObjects;
+    private readonly Agentweaver.Policy.Acs.NativeAcsPolicyEvaluator? skillPolicyEvaluator;
 
     /// <summary>
     /// Creates the service over the request context, provider catalog, clock, optional transaction factory, and
@@ -158,7 +159,8 @@ public sealed partial class ProjectsConfigService
         TimeProvider timeProvider,
         IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null,
         ModelBindingCapabilities? modelBindings = null,
-        SkillContentObjectStore? skillContentObjects = null)
+        SkillContentObjectStore? skillContentObjects = null,
+        Agentweaver.Policy.Acs.NativeAcsPolicyEvaluator? skillPolicyEvaluator = null)
     {
         this.db = db;
         this.providerCatalog = providerCatalog;
@@ -166,6 +168,7 @@ public sealed partial class ProjectsConfigService
         this.dbContextFactory = dbContextFactory;
         this.modelBindings = modelBindings ?? ModelBindingCapabilities.Unavailable;
         this.skillContentObjects = skillContentObjects;
+        this.skillPolicyEvaluator = skillPolicyEvaluator;
     }
 
     /// <summary>
@@ -678,6 +681,7 @@ public sealed partial class ProjectsConfigService
             configuration,
             skillContentObjects,
             timeProvider,
+            skillPolicyEvaluator,
             cancellationToken).ConfigureAwait(false);
         if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
             reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
@@ -983,6 +987,7 @@ public sealed partial class ProjectsConfigService
             projectConfiguration,
             skillContentObjects,
             timeProvider,
+            skillPolicyEvaluator,
             cancellationToken)
             .ConfigureAwait(false);
 

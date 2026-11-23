@@ -68,7 +68,9 @@ entrypoints keep accepting only the finite network profile.
 `composable-domains-v2.1` adds six reviewed files for model, Guardrails, and
 tool permissions. It keeps the actions and network modules unchanged. The
 validator also accepts historical pinned `composable-domains-v2` artifacts with
-the exact legacy `tool-permissions.rego` module and its scan-less data shape:
+the exact legacy `tool-permissions.rego` module and its scan-less data shape.
+`composable-domains-v3` adds the Skills domain and keeps the existing domain
+files unchanged:
 
 | Domain or component | Policy ID or path | Rule |
 | --- | --- | --- |
@@ -78,7 +80,9 @@ the exact legacy `tool-permissions.rego` module and its scan-less data shape:
 | Guardrails data | `policy/guardrails/data.json` | Contains exact ordered provider, adapter, schema, and options revisions plus hard blocked and bounded escalation tuples. |
 | Tool permissions | `agentweaver_tool_permissions`, `policy/tool-permissions.rego` | Matches the exact SDK or reviewed remote tool, owner action, callback phase, permission kind, capabilities, and required Remote MCP scan results. |
 | Tool-permission data | `policy/tool_permissions/data.json` | Contains the closed set of tool permission rules and the Remote MCP required-check and risk-threshold list. |
-| Selector | `agentweaver_domains_v2`, `policy/domains.rego` | Selects one of the five domains at `pre_model_call`. |
+| Skills | `agentweaver_skills`, `policy/skills.rego` | Allows an owner-verified built-in exemption or an exact server-owned score at or above the policy threshold when required evidence is complete. |
+| Skills data | `policy/skills/data.json` | Contains only `schemaVersion`, `minimumScore`, and `requireCompletedEvidence`. |
+| Selector | `agentweaver_domains_v2`, `policy/domains.rego` | Selects one of the domains at `pre_model_call`. |
 
 The tool-permission data keeps `create` and `edit` as separate names:
 
@@ -129,7 +133,12 @@ lower-case SHA-256 `arguments_digest`. It never adds prompt bytes. The
 `ApprovalResolver` must bind the retained input and native approval handle.
 Changed turn or digest values reject resolution. `require_approval`,
 auto-approval, and `on_timeout: allow` are invalid profile data. The profile
-accepts no unattended approval mode.
+accepts no unattended approval mode. It accepts an empty Guardrails check list.
+The Orchestrator treats that list as inactive. Projects & Config uses the
+greater Platform and Project Skills
+score threshold. A completed-evidence requirement in either scope remains in
+force. Capability declarations stay as Skill requests; they do not become ACS
+permissions.
 
 The runtime source boundary reads accepted and current Policy snapshots. Tool
 callbacks use the current Platform and Project revisions as the retained

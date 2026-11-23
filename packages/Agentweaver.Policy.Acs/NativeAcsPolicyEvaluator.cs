@@ -83,7 +83,7 @@ public sealed class NativeAcsPolicyEvaluator
              interventionPoint != InterventionPoint.PreModelCall ||
              !NativeAcsUnifiedPolicyProfile.IsCandidate(artifact) &&
                  selectedDomain is NativeAcsDomainId.ModelUse or NativeAcsDomainId.Guardrails
-                     or NativeAcsDomainId.ToolPermissions))
+                     or NativeAcsDomainId.ToolPermissions or NativeAcsDomainId.Skills))
             return Error("unavailable", "domain_intervention_point_unsupported");
 
         var validation = domain is null
@@ -123,6 +123,9 @@ public sealed class NativeAcsPolicyEvaluator
             return Error(artifactHash, "snapshot_invalid");
         if (snapshot.Approval is { } approval &&
             !IsValidApprovalFacts(approval))
+            return Error(artifactHash, "snapshot_invalid");
+        if (domain == NativeAcsDomainId.Skills &&
+            snapshot.Skills is not { TrustScore: >= 0 and <= 1000 })
             return Error(artifactHash, "snapshot_invalid");
 
         if (!Enum.IsDefined(interventionPoint))
@@ -435,6 +438,12 @@ public sealed class NativeAcsPolicyEvaluator
                 snapshot.Approval is { } approval
                     ? new NativeAcsApprovalFacts(approval.TurnId, approval.ArgumentsDigest)
                     : null,
+                snapshot.Skills is { } skills
+                    ? new NativeAcsSkillsFacts(
+                        skills.TrustScore,
+                        skills.EvidenceComplete,
+                        skills.BuiltInExempt)
+                    : null,
                 domain is { } selectedDomain
                     ? NativeAcsUnifiedPolicyProfile.IsCandidate(artifact)
                         ? NativeAcsUnifiedPolicyProfile.GetPolicyId(selectedDomain)
@@ -516,6 +525,8 @@ public sealed class NativeAcsPolicyEvaluator
         NativeAcsToolFacts? Tool,
         [property: JsonPropertyName("approval"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         NativeAcsApprovalFacts? Approval,
+        [property: JsonPropertyName("skills"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        NativeAcsSkillsFacts? Skills,
         [property: JsonPropertyName("domain_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? DomainId);
 
@@ -592,4 +603,9 @@ public sealed class NativeAcsPolicyEvaluator
         [property: JsonPropertyName("check_id")] string CheckId,
         [property: JsonPropertyName("code")] string Code,
         [property: JsonPropertyName("severity")] string Severity);
+
+    private sealed record NativeAcsSkillsFacts(
+        [property: JsonPropertyName("trust_score")] int TrustScore,
+        [property: JsonPropertyName("evidence_complete")] bool EvidenceComplete,
+        [property: JsonPropertyName("built_in_exempt")] bool BuiltInExempt);
 }

@@ -39,16 +39,19 @@ internal static class SkillContentScanAdmission
     internal static ImmutableArray<PromptContentScanInput> CreateInputs(
         ValidatedSkillContent content,
         string ownerId,
-        long ownerRevision)
+        long ownerRevision,
+        PromptContentScanProvenance provenance = PromptContentScanProvenance.Authored,
+        string? sourceRevision = null,
+        string? resolvedCommitSha = null)
     {
         var source = new PromptContentScanSourceV1(
             PromptContentScanOwnerKind.SkillContent,
             ownerId,
             ownerRevision,
             "SKILL.md",
-            PromptContentScanProvenance.Authored,
-            null,
-            null);
+            provenance,
+            sourceRevision,
+            resolvedCommitSha);
         var inputs = ImmutableArray.CreateBuilder<PromptContentScanInput>(content.Resources.Length + 1);
         inputs.Add(new PromptContentScanInput(
             PromptContentScanInputKind.SkillMarkdown,
@@ -69,8 +72,19 @@ internal static class SkillContentScanAdmission
         string ownerId,
         long ownerRevision,
         TimeProvider timeProvider)
+        => ScanReports(content, ownerId, ownerRevision, timeProvider);
+
+    internal static ImmutableArray<PromptContentScanReportV1> ScanReports(
+        ValidatedSkillContent content,
+        string ownerId,
+        long ownerRevision,
+        TimeProvider timeProvider,
+        PromptContentScanProvenance provenance = PromptContentScanProvenance.Authored,
+        string? sourceRevision = null,
+        string? resolvedCommitSha = null)
     {
-        var inputs = CreateInputs(content, ownerId, ownerRevision);
+        var inputs = CreateInputs(
+            content, ownerId, ownerRevision, provenance, sourceRevision, resolvedCommitSha);
         var scanStartedAt = timeProvider.GetUtcNow();
         ImmutableArray<PromptContentScanReportV1> reports;
         try
@@ -83,6 +97,7 @@ internal static class SkillContentScanAdmission
         }
 
         RequirePassingReports(inputs, reports, scanStartedAt, timeProvider.GetUtcNow());
+        return reports;
     }
 
     internal static void RequirePassingReports(

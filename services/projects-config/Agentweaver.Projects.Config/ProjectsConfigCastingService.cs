@@ -462,6 +462,7 @@ public sealed partial class ProjectsConfigService
                 proposedConfiguration,
                 skillContentObjects,
                 timeProvider,
+                skillPolicyEvaluator,
                 token).ConfigureAwait(false);
             await EnsureCastingProjectNarrowingAsync(context, configuration, token).ConfigureAwait(false);
             var now = timeProvider.GetUtcNow();

@@ -137,6 +137,10 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("character varying(16)")
                         .HasColumnName("operation_kind");
 
+                    b.Property<long?>("OriginalCredentialRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("original_credential_revision");
+
                     b.Property<Guid>("OriginalMembershipId")
                         .HasColumnType("uuid")
                         .HasColumnName("original_membership_id");
@@ -144,10 +148,6 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.Property<long>("OriginalMembershipRevision")
                         .HasColumnType("bigint")
                         .HasColumnName("original_membership_revision");
-
-                    b.Property<long?>("OriginalCredentialRevision")
-                        .HasColumnType("bigint")
-                        .HasColumnName("original_credential_revision");
 
                     b.Property<long?>("OriginalProviderRevision")
                         .HasColumnType("bigint")
@@ -2209,6 +2209,239 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillAdmissionFenceRecord", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    b.Property<long>("Generation")
+                        .HasColumnType("bigint")
+                        .HasColumnName("generation");
+
+                    b.Property<string>("PlatformSkillsPolicySha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("platform_skills_policy_sha256");
+
+                    b.Property<string>("ReleaseInventoryRevision")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("release_inventory_revision");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("project_skill_admission_fence", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_skill_admission_fence_generation", "generation > 0");
+
+                            t.HasCheckConstraint("ck_skill_admission_fence_id", "id = 1");
+
+                            t.HasCheckConstraint("ck_skill_admission_fence_state", "state IN ('Open', 'Draining', 'Active')");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillAdmissionRecord", b =>
+                {
+                    b.Property<Guid>("AdmissionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("admission_id");
+
+                    b.Property<string>("Classification")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("classification");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("CutoverGeneration")
+                        .HasColumnType("bigint")
+                        .HasColumnName("cutover_generation");
+
+                    b.Property<Guid>("EvidenceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("evidence_id");
+
+                    b.Property<string>("PlatformPolicyId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("platform_policy_id");
+
+                    b.Property<long?>("PlatformPolicyRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("platform_policy_revision");
+
+                    b.Property<string>("PlatformPolicySha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("platform_policy_sha256");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProjectPolicyId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("project_policy_id");
+
+                    b.Property<long?>("ProjectPolicyRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("project_policy_revision");
+
+                    b.Property<string>("ProjectPolicySha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("project_policy_sha256");
+
+                    b.Property<Guid?>("ReleaseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("release_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("SignatureSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("signature_sha256");
+
+                    b.Property<string>("SkillId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("skill_id");
+
+                    b.Property<string>("SourceAuthorityKind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("source_authority_kind");
+
+                    b.Property<string>("TrustedPublisherId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("trusted_publisher_id");
+
+                    b.Property<string>("VerifiedRequestedRef")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("verified_requested_ref");
+
+                    b.Property<string>("VerifiedResolvedCommitSha")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("verified_resolved_commit_sha");
+
+                    b.Property<string>("VerifiedSelectedPath")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("verified_selected_path");
+
+                    b.Property<string>("VerifiedSourceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("verified_source_id");
+
+                    b.Property<string>("VerifiedSourceRevision")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("verified_source_revision");
+
+                    b.HasKey("AdmissionId");
+
+                    b.HasIndex("EvidenceId");
+
+                    b.HasIndex("ProjectId", "SkillId", "Revision");
+
+                    b.ToTable("project_skill_admissions", "projects_config");
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillBuiltInReleaseRecord", b =>
+                {
+                    b.Property<Guid>("ReleaseId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("release_id");
+
+                    b.Property<string>("ContentDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_digest");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("InventoryRevision")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("inventory_revision");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("Repository")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("repository");
+
+                    b.Property<string>("ResolvedCommitSha")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("resolved_commit_sha");
+
+                    b.Property<string>("SelectedPath")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("selected_path");
+
+                    b.Property<string>("SignatureSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("signature_sha256");
+
+                    b.Property<string>("TrustedPublisherId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("trusted_publisher_id");
+
+                    b.HasKey("ReleaseId");
+
+                    b.HasIndex("InventoryRevision", "Repository", "ResolvedCommitSha", "SelectedPath", "ContentDigest")
+                        .IsUnique()
+                        .HasDatabaseName("ux_project_skill_builtin_release_artifact");
+
+                    b.ToTable("project_skill_builtin_releases", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_skill_builtin_release_hashes", "content_digest ~ '^[0-9a-f]{64}$' AND resolved_commit_sha ~ '^[0-9a-f]{40,64}$' AND (signature_sha256 IS NULL OR signature_sha256 ~ '^[0-9a-f]{64}$')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", b =>
                 {
                     b.Property<string>("ProjectId")
@@ -2224,6 +2457,14 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.Property<long>("Revision")
                         .HasColumnType("bigint")
                         .HasColumnName("revision");
+
+                    b.Property<string>("AdmissionClassification")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("LegacyThirdParty")
+                        .HasColumnName("admission_classification");
 
                     b.Property<string>("ContentDigest")
                         .IsRequired()
@@ -2277,6 +2518,14 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasMaxLength(1024)
                         .HasColumnType("character varying(1024)")
                         .HasColumnName("selected_path");
+
+                    b.Property<string>("SourceAuthorityKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("CallerClaimed")
+                        .HasColumnName("source_authority_kind");
 
                     b.Property<string>("SourceId")
                         .HasMaxLength(256)
@@ -2415,6 +2664,10 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("character varying(512)")
                         .HasColumnName("actor_issuer");
 
+                    b.Property<bool>("CapabilityDeclarationValid")
+                        .HasColumnType("boolean")
+                        .HasColumnName("capability_declaration_valid");
+
                     b.Property<string>("ContentDigest")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -2424,6 +2677,10 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
+
+                    b.Property<int?>("HeuristicScore")
+                        .HasColumnType("integer")
+                        .HasColumnName("heuristic_score");
 
                     b.Property<string>("IdempotencyKey")
                         .IsRequired()
@@ -2468,10 +2725,24 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("revision");
 
+                    b.Property<string>("ScoreStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("score_status");
+
                     b.Property<string>("SelectedPath")
                         .HasMaxLength(1024)
                         .HasColumnType("character varying(1024)")
                         .HasColumnName("selected_path");
+
+                    b.Property<bool>("ShortDescription")
+                        .HasColumnType("boolean")
+                        .HasColumnName("short_description");
+
+                    b.Property<bool>("SignatureVerified")
+                        .HasColumnType("boolean")
+                        .HasColumnName("signature_verified");
 
                     b.Property<string>("SkillId")
                         .IsRequired()
@@ -2488,6 +2759,11 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)")
                         .HasColumnName("source_revision");
+
+                    b.Property<string>("TrustTier")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("trust_tier");
 
                     b.HasKey("EvidenceId");
 
@@ -2747,6 +3023,21 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillAdmissionRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillTrustEvidenceRecord", null)
+                        .WithMany()
+                        .HasForeignKey("EvidenceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId", "SkillId", "Revision")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

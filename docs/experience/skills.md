@@ -80,9 +80,19 @@ Projects & Config scans project Skill content before it returns preview or
 package results and before it imports content. The owner scans again when you
 enable an imported skill, save configuration with enabled imported skills,
 accept a run that uses them, and deliver skill bytes to an agent. Caller scan
-reports and source labels do not grant admission. A non-passing scan returns
-`422 skill_scan_blocked`. Missing, stale, malformed, or evaluator-error reports
-return `503 skill_scan_unavailable`.
+reports and source labels do not grant admission. After the admission cutover,
+the import transaction also requires exact evidence and the current canonical
+Skills policy. Marketplace source coordinates verified by the owner are
+distinct from coordinates in an inline request. A `built-in` label in an
+inline request does not create the built-in exemption.
+
+A non-passing scan returns `422 skill_scan_blocked`. A policy denial returns
+`422 skill_admission_denied`. Missing, stale, malformed, or unavailable
+admission evidence returns `503 skill_admission_unavailable`. Policy or source
+changes return `409`; read the current state and retry the operation.
+Projects & Config accepts admission evidence for 30 days. A refresh evaluates
+the same immutable Skill revision against the current Platform and Project
+Skills policy heads and replaces the runtime admission binding.
 
 To prepare candidates from local content, send one of these inputs to
 `POST /api/v1/skills/package`:
@@ -157,6 +167,8 @@ skill.
   preview.
 - Assignment is disabled while configuration is saving, another assignment is
   in progress, or the JSON editor has unsaved changes.
+- An admitted assignment can become unavailable when a policy changes, a
+  verified source is removed, or required evidence is missing or invalid.
 - Validation failures and owner error codes remain visible. A failed import is
   not displayed as a saved skill.
 - Import retries use the same operation's idempotency key.

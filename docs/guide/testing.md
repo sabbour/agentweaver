@@ -388,6 +388,19 @@ revocation, source metadata, and project-scoped reads. The order test uses one
 actor and one idempotency key in two projects, then replays them in the
 opposite order.
 
+Run the focused Skill admission cutover and runtime checks:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~SkillAdmission"
+dotnet test tests\Agentweaver.Policy.Acs.Tests\Agentweaver.Policy.Acs.Tests.csproj --configuration Release --filter "FullyQualifiedName~SkillsDomainUsesClosedScoreAndEvidencePolicy"
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~ProjectsRunSelectionSkillContentTests"
+```
+
+The Projects tests cover cutover draining, forged built-in labels, score
+boundaries, denied writes without revision records, and exact replay. The ACS
+test checks the closed Skills domain schema. The Orchestrator tests preserve
+stable denial and retryable-unavailable runtime outcomes.
+
 ## Test the native ACS profile
 
 The shared ACS library validates a complete manifest and its relative Rego and

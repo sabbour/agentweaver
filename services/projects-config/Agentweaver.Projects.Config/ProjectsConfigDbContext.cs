@@ -39,6 +39,11 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<ProjectSkillContentRevocationRecord> SkillContentRevocations =>
         Set<ProjectSkillContentRevocationRecord>();
     public DbSet<ProjectSkillTrustEvidenceRecord> SkillTrustEvidence => Set<ProjectSkillTrustEvidenceRecord>();
+    public DbSet<ProjectSkillAdmissionRecord> SkillAdmissions => Set<ProjectSkillAdmissionRecord>();
+    public DbSet<ProjectSkillAdmissionFenceRecord> SkillAdmissionFences =>
+        Set<ProjectSkillAdmissionFenceRecord>();
+    public DbSet<ProjectSkillBuiltInReleaseRecord> SkillBuiltInReleases =>
+        Set<ProjectSkillBuiltInReleaseRecord>();
     public DbSet<HostedModelReasoningCatalogRecord> HostedModelReasoningCatalog =>
         Set<HostedModelReasoningCatalogRecord>();
     public DbSet<NativeAcsPolicyHeadRecord> NativeAcsPolicyHeads => Set<NativeAcsPolicyHeadRecord>();
@@ -828,6 +833,12 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(revision => revision.RequestedRef).HasColumnName("requested_ref").HasMaxLength(256);
             entity.Property(revision => revision.ResolvedCommitSha).HasColumnName("resolved_commit_sha").HasMaxLength(64);
             entity.Property(revision => revision.SelectedPath).HasColumnName("selected_path").HasMaxLength(1024);
+            entity.Property(revision => revision.AdmissionClassification)
+                .HasColumnName("admission_classification").HasConversion<string>().HasMaxLength(32)
+                .HasDefaultValue(ProjectSkillAdmissionClassification.LegacyThirdParty);
+            entity.Property(revision => revision.SourceAuthorityKind)
+                .HasColumnName("source_authority_kind").HasConversion<string>().HasMaxLength(32)
+                .HasDefaultValue(ProjectSkillSourceAuthorityKind.CallerClaimed);
             entity.HasOne<ProjectRecord>()
                 .WithMany()
                 .HasForeignKey(revision => revision.ProjectId)
@@ -910,6 +921,15 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(record => record.SelectedPath).HasColumnName("selected_path").HasMaxLength(1024);
             entity.Property(record => record.ReportSetJson).HasColumnName("report_set").HasColumnType("bytea");
             entity.Property(record => record.ReportSetSha256).HasColumnName("report_set_sha256").HasMaxLength(64);
+            entity.Property(record => record.ScoreStatus).HasColumnName("score_status")
+                .HasConversion<string>().HasMaxLength(32);
+            entity.Property(record => record.HeuristicScore).HasColumnName("heuristic_score");
+            entity.Property(record => record.TrustTier).HasColumnName("trust_tier")
+                .HasConversion<string>().HasMaxLength(32);
+            entity.Property(record => record.SignatureVerified).HasColumnName("signature_verified");
+            entity.Property(record => record.CapabilityDeclarationValid)
+                .HasColumnName("capability_declaration_valid");
+            entity.Property(record => record.ShortDescription).HasColumnName("short_description");
             entity.Property(record => record.CreatedAt).HasColumnName("created_at");
             entity.HasIndex(record => new
                 {
@@ -923,6 +943,102 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.HasOne<ProjectSkillContentRevisionRecord>()
                 .WithMany()
                 .HasForeignKey(record => new { record.ProjectId, record.SkillId, record.Revision })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ProjectSkillAdmissionFenceRecord>(entity =>
+        {
+            entity.ToTable("project_skill_admission_fence", table =>
+            {
+                table.HasCheckConstraint("ck_skill_admission_fence_id", "id = 1");
+                table.HasCheckConstraint("ck_skill_admission_fence_generation", "generation > 0");
+                table.HasCheckConstraint(
+                    "ck_skill_admission_fence_state", "state IN ('Open', 'Draining', 'Active')");
+            });
+            entity.HasKey(fence => fence.Id);
+            entity.Property(fence => fence.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(fence => fence.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(fence => fence.Generation).HasColumnName("generation");
+            entity.Property(fence => fence.ReleaseInventoryRevision).HasColumnName("release_inventory_revision")
+                .HasMaxLength(128);
+            entity.Property(fence => fence.PlatformSkillsPolicySha256).HasColumnName("platform_skills_policy_sha256")
+                .HasMaxLength(64);
+            entity.Property(fence => fence.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<ProjectSkillBuiltInReleaseRecord>(entity =>
+        {
+            entity.ToTable("project_skill_builtin_releases", table =>
+                table.HasCheckConstraint(
+                    "ck_skill_builtin_release_hashes",
+                    "content_digest ~ '^[0-9a-f]{64}$' AND resolved_commit_sha ~ '^[0-9a-f]{40,64}$' " +
+                    "AND (signature_sha256 IS NULL OR signature_sha256 ~ '^[0-9a-f]{64}$')"));
+            entity.HasKey(release => release.ReleaseId);
+            entity.Property(release => release.ReleaseId).HasColumnName("release_id");
+            entity.Property(release => release.InventoryRevision).HasColumnName("inventory_revision").HasMaxLength(128);
+            entity.Property(release => release.Repository).HasColumnName("repository").HasMaxLength(256);
+            entity.Property(release => release.ResolvedCommitSha).HasColumnName("resolved_commit_sha").HasMaxLength(64);
+            entity.Property(release => release.SelectedPath).HasColumnName("selected_path").HasMaxLength(1024);
+            entity.Property(release => release.ContentDigest).HasColumnName("content_digest").HasMaxLength(64);
+            entity.Property(release => release.TrustedPublisherId).HasColumnName("trusted_publisher_id").HasMaxLength(256);
+            entity.Property(release => release.SignatureSha256).HasColumnName("signature_sha256").HasMaxLength(64);
+            entity.Property(release => release.IsActive).HasColumnName("is_active");
+            entity.Property(release => release.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(release => new
+                {
+                    release.InventoryRevision,
+                    release.Repository,
+                    release.ResolvedCommitSha,
+                    release.SelectedPath,
+                    release.ContentDigest,
+                })
+                .IsUnique()
+                .HasDatabaseName("ux_project_skill_builtin_release_artifact");
+        });
+
+        modelBuilder.Entity<ProjectSkillAdmissionRecord>(entity =>
+        {
+            entity.ToTable("project_skill_admissions");
+            entity.HasKey(admission => admission.AdmissionId);
+            entity.Property(admission => admission.AdmissionId).HasColumnName("admission_id");
+            entity.Property(admission => admission.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(admission => admission.SkillId).HasColumnName("skill_id").HasMaxLength(256);
+            entity.Property(admission => admission.Revision).HasColumnName("revision");
+            entity.Property(admission => admission.EvidenceId).HasColumnName("evidence_id");
+            entity.Property(admission => admission.CutoverGeneration).HasColumnName("cutover_generation");
+            entity.Property(admission => admission.Classification).HasColumnName("classification")
+                .HasConversion<string>().HasMaxLength(32);
+            entity.Property(admission => admission.SourceAuthorityKind).HasColumnName("source_authority_kind")
+                .HasConversion<string>().HasMaxLength(32);
+            entity.Property(admission => admission.VerifiedSourceId).HasColumnName("verified_source_id").HasMaxLength(256);
+            entity.Property(admission => admission.VerifiedSourceRevision).HasColumnName("verified_source_revision")
+                .HasMaxLength(256);
+            entity.Property(admission => admission.VerifiedRequestedRef).HasColumnName("verified_requested_ref")
+                .HasMaxLength(256);
+            entity.Property(admission => admission.VerifiedResolvedCommitSha)
+                .HasColumnName("verified_resolved_commit_sha").HasMaxLength(64);
+            entity.Property(admission => admission.VerifiedSelectedPath).HasColumnName("verified_selected_path")
+                .HasMaxLength(1024);
+            entity.Property(admission => admission.ReleaseId).HasColumnName("release_id");
+            entity.Property(admission => admission.TrustedPublisherId).HasColumnName("trusted_publisher_id")
+                .HasMaxLength(256);
+            entity.Property(admission => admission.SignatureSha256).HasColumnName("signature_sha256").HasMaxLength(64);
+            entity.Property(admission => admission.PlatformPolicyId).HasColumnName("platform_policy_id").HasMaxLength(256);
+            entity.Property(admission => admission.PlatformPolicyRevision).HasColumnName("platform_policy_revision");
+            entity.Property(admission => admission.PlatformPolicySha256).HasColumnName("platform_policy_sha256")
+                .HasMaxLength(64);
+            entity.Property(admission => admission.ProjectPolicyId).HasColumnName("project_policy_id").HasMaxLength(256);
+            entity.Property(admission => admission.ProjectPolicyRevision).HasColumnName("project_policy_revision");
+            entity.Property(admission => admission.ProjectPolicySha256).HasColumnName("project_policy_sha256")
+                .HasMaxLength(64);
+            entity.Property(admission => admission.CreatedAt).HasColumnName("created_at");
+            entity.HasOne<ProjectSkillContentRevisionRecord>()
+                .WithMany()
+                .HasForeignKey(admission => new { admission.ProjectId, admission.SkillId, admission.Revision })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectSkillTrustEvidenceRecord>()
+                .WithMany()
+                .HasForeignKey(admission => admission.EvidenceId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
