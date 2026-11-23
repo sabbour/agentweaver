@@ -579,6 +579,44 @@ public sealed class ByokImportTests : IDisposable
         Assert.Empty(gateway.Receipts);
     }
 
+    [Theory]
+    [InlineData("rate_card_id")]
+    [InlineData("rate_card_version")]
+    public async Task DiscoveryPinsOptionalRateCardRequestPairBeforeAnyPost(string field)
+    {
+        var path = await WriteOverlayAsync();
+        var context = await WriteContextAsync();
+        using var gateway = new ImportGatewayFixture();
+        var schema = gateway.Document["components"]!["schemas"]!
+            ["ModelProviderDraftPlatformCreateRequest"]!.AsObject();
+        schema["properties"]![field] = new JsonObject { ["type"] = "boolean" };
+
+        var result = await RunImportAsync(gateway, path, context);
+
+        Assert.Equal(1, result.Code);
+        Assert.Equal("import_target_unavailable",
+            JsonNode.Parse(result.Output)!["stop"]!["code"]!.GetValue<string>());
+        Assert.Empty(gateway.PostBodies);
+    }
+
+    [Fact]
+    public async Task DiscoveryRequiresRateCardCreateFieldsToBeSuppliedTogether()
+    {
+        var path = await WriteOverlayAsync();
+        var context = await WriteContextAsync();
+        using var gateway = new ImportGatewayFixture();
+        var dependencies = gateway.Document["components"]!["schemas"]!
+            ["ModelProviderDraftPlatformCreateRequest"]!["dependentRequired"]!.AsObject();
+        dependencies.Remove("rate_card_id");
+
+        var result = await RunImportAsync(gateway, path, context);
+
+        Assert.Equal(1, result.Code);
+        Assert.Equal("import_target_unavailable",
+            JsonNode.Parse(result.Output)!["stop"]!["code"]!.GetValue<string>());
+        Assert.Empty(gateway.PostBodies);
+    }
+
     [Fact]
     public async Task ImportDoesNotRetainRepeatedGatewayEvidence()
     {

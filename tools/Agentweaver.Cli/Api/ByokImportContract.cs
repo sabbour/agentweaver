@@ -25,6 +25,7 @@ internal static class ByokImportContract
     [
         "operationId", "expectedRevision", "targetInstallationId", "reference", "name", "type",
         "base_url", "model", "wire_api", "azure_api_version", "reasoning_efforts", "prompt_capacity_tokens",
+        "rate_card_id", "rate_card_version",
     ];
     private static readonly HashSet<string> UnderstoodKeywords = new(StringComparer.Ordinal)
     {
@@ -82,6 +83,12 @@ internal static class ByokImportContract
             create.Document["requestBody"]?["content"]?["application/json"]?["schema"]);
         RequireShape(requestSchema, RequestFields,
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"], exactRequired: false);
+        RequirePair(requestSchema, "rate_card_id", "rate_card_version");
+        RequirePair(requestSchema, "reference", "targetInstallationId");
+        var requestProperties = (JsonObject)requestSchema["properties"]!;
+        if (!ReceiptTypes(document, requestProperties["rate_card_id"], "string", true) ||
+            !ReceiptTypes(document, requestProperties["rate_card_version"], "string", true))
+            throw Invalid();
         foreach (var item in prepared)
             if (!Allows(document, requestSchema, item.Body)) throw Invalid();
         var receiptSchema = Resolve(document, ResponseSchema(create));
@@ -181,6 +188,22 @@ internal static class ByokImportContract
             actual.Distinct(StringComparer.Ordinal).Count() != actual.Length ||
             required.Any(name => !actual.Contains(name, StringComparer.Ordinal)) ||
             exactRequired && actual.Length != required.Length)
+            throw Invalid();
+    }
+
+    private static void RequirePair(JsonObject schema, string field, string requiredField)
+    {
+        if (schema["dependentRequired"] is not JsonObject dependencies ||
+            dependencies[field] is not JsonArray fieldRequirements ||
+            fieldRequirements.Count != 1 ||
+            fieldRequirements[0] is not JsonValue fieldValue ||
+            !fieldValue.TryGetValue<string>(out var fieldName) ||
+            fieldName != requiredField ||
+            dependencies[requiredField] is not JsonArray reverseRequirements ||
+            reverseRequirements.Count != 1 ||
+            reverseRequirements[0] is not JsonValue reverseValue ||
+            !reverseValue.TryGetValue<string>(out var reverseName) ||
+            reverseName != field)
             throw Invalid();
     }
 
