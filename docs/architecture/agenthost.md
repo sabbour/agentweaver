@@ -728,6 +728,12 @@ It must match the complete call proof, event, runtime binding, byte length, and 
 Only the result content class can come from the recorded result rather than the read template.
 Missing material permits a new guarded dispatch; invalid or changed material does not.
 New results also require durable Events acknowledgment and a final current-authority check.
+Before that dispatch, the Orchestrator requires current catalog-scan evidence
+and reads the Environment gateway descriptor again. A restart does not promote
+an unaccepted discovery into the accepted baseline. Stale scanner evidence,
+a changed reviewed revision, or a revoked gateway causes a new review and
+authorization; the old result remains historical.
+The same saved result never bypasses current Policy, gateway, or journal checks.
 
 The trusted private result client belongs to Orchestrator, not AgentHost.
 The ordinary runtime material client remains disabled for remote results.

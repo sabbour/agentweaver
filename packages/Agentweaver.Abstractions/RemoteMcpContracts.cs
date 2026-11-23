@@ -299,7 +299,7 @@ public sealed record RemoteMcpConnectionConfiguration
 
 /// <summary>
 /// Current owner row for a connection, with row and configuration revisions used to reject
-/// stale writes and snapshots. Discovery revision identifies the currently admitted catalog.
+/// stale writes and snapshots. Discovery revision identifies the current review candidate.
 /// </summary>
 public sealed record RemoteMcpConnectionHead
 {
@@ -310,17 +310,24 @@ public sealed record RemoteMcpConnectionHead
         long rowRevision,
         long currentConfigurationRevision,
         RemoteMcpConnectionState state,
-        long? currentDiscoveryRevision = null)
+        long? currentDiscoveryRevision = null,
+        long? acceptedDiscoveryRevision = null,
+        long? acceptedConfigurationRevision = null)
     {
         Connection = connection ?? throw new ArgumentNullException(nameof(connection));
         if (rowRevision < 1 || currentConfigurationRevision < 1 ||
-            currentDiscoveryRevision is < 1 || !Enum.IsDefined(state))
+            currentDiscoveryRevision is < 1 || acceptedDiscoveryRevision is < 1 ||
+            acceptedConfigurationRevision is < 1 ||
+            (acceptedDiscoveryRevision is null) != (acceptedConfigurationRevision is null) ||
+            !Enum.IsDefined(state))
             throw new ArgumentOutOfRangeException(nameof(rowRevision));
 
         RowRevision = rowRevision;
         CurrentConfigurationRevision = currentConfigurationRevision;
         State = state;
         CurrentDiscoveryRevision = currentDiscoveryRevision;
+        AcceptedDiscoveryRevision = acceptedDiscoveryRevision;
+        AcceptedConfigurationRevision = acceptedConfigurationRevision;
     }
 
     public RemoteMcpConnectionReference Connection { get; }
@@ -328,6 +335,10 @@ public sealed record RemoteMcpConnectionHead
     public long CurrentConfigurationRevision { get; }
     public RemoteMcpConnectionState State { get; }
     public long? CurrentDiscoveryRevision { get; }
+    /// <summary>Owner-accepted immutable discovery revision used as the drift baseline.</summary>
+    public long? AcceptedDiscoveryRevision { get; }
+    /// <summary>Configuration revision paired with the accepted discovery revision.</summary>
+    public long? AcceptedConfigurationRevision { get; }
 }
 
 /// <summary>
@@ -427,7 +438,8 @@ public sealed record RemoteMcpDiscoveryCatalogPin
         string catalogSha256,
         string? registryMetadataSha256,
         ImmutableArray<RemoteMcpToolSchemaPin> tools,
-        RemoteMcpAppliedNetworkPolicyReference? appliedNetworkPolicy = null)
+        RemoteMcpAppliedNetworkPolicyReference? appliedNetworkPolicy = null,
+        RemoteMcpCatalogScanEvidence? scanEvidence = null)
     {
         Connection = connection ?? throw new ArgumentNullException(nameof(connection));
         if (configurationRevision < 1 || discoveryRevision < 1)
@@ -451,6 +463,12 @@ public sealed record RemoteMcpDiscoveryCatalogPin
             : RemoteMcpDigest.ValidateSha256(registryMetadataSha256, nameof(registryMetadataSha256));
         Tools = tools;
         AppliedNetworkPolicy = appliedNetworkPolicy;
+        ScanEvidence = scanEvidence;
+        if (scanEvidence is not null &&
+            (scanEvidence.ConfigurationRevision != configurationRevision ||
+             scanEvidence.DiscoveryRevision != discoveryRevision ||
+             scanEvidence.CatalogSha256 != CatalogSha256))
+            throw new ArgumentException("The scan evidence does not match its catalog.", nameof(scanEvidence));
     }
 
     public RemoteMcpConnectionReference Connection { get; }
@@ -461,13 +479,17 @@ public sealed record RemoteMcpDiscoveryCatalogPin
     public ImmutableArray<RemoteMcpToolSchemaPin> Tools { get; }
     /// <summary>Network Policy application required for discovery when egress enforcement is pinned.</summary>
     public RemoteMcpAppliedNetworkPolicyReference? AppliedNetworkPolicy { get; }
+    /// <summary>Owner-issued evidence for the complete catalog candidate.</summary>
+    public RemoteMcpCatalogScanEvidence? ScanEvidence { get; }
 }
 
 /// <summary>Read model combining the current connection head, immutable configuration, and optional discovery catalog.</summary>
 public sealed record RemoteMcpConnectionSnapshot(
     RemoteMcpConnectionHead Head,
     RemoteMcpConnectionConfiguration Configuration,
-    RemoteMcpDiscoveryCatalogPin? Catalog);
+    RemoteMcpDiscoveryCatalogPin? Catalog,
+    RemoteMcpDiscoveryCatalogPin? AcceptedCatalog = null,
+    RemoteMcpConnectionConfiguration? AcceptedConfiguration = null);
 
 /// <summary>Canonicalizes endpoint and OAuth resource URIs to absolute HTTPS DNS URIs.</summary>
 public static class RemoteMcpUri

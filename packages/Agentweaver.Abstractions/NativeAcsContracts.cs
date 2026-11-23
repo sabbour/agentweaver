@@ -110,7 +110,27 @@ public sealed record NativeAcsToolEvaluationFacts(
     bool WriteAccess,
     bool ShellAccess,
     string? PermissionKind,
-    string? InvocationArgumentDigest);
+    string? InvocationArgumentDigest,
+    NativeAcsRemoteMcpEvaluationFacts? RemoteMcp = null);
+
+/// <summary>Exact reviewed snapshot, gateway, transport, and owner scan facts for a Remote MCP call.</summary>
+public sealed record NativeAcsRemoteMcpEvaluationFacts(
+    string AgentId,
+    string NodeId,
+    string SnapshotId,
+    string SnapshotDigest,
+    string ConnectionId,
+    long ConnectionConfigurationRevision,
+    long ConnectionDiscoveryRevision,
+    string ConfigurationSha256,
+    string CatalogDigest,
+    string ToolRevision,
+    string ToolDigest,
+    string TransportProfile,
+    string TransportOptionsSha256,
+    string GatewayDescriptorSha256,
+    long GatewayEnforcementGeneration,
+    RemoteMcpCatalogScanEvidence ScanEvidence);
 
 /// <summary>
 /// Bounded runtime facts for native ACS evaluation. A null human identity means that verified

@@ -9,6 +9,11 @@ This page explains the implemented Model Context Protocol (MCP) connection
 contracts and their execution limits. It does not establish a deployed remote
 call or a supported inbound product MCP server.
 
+![Remote MCP catalog scans and reviewed send admission](../diagrams/flagship/v1-remote-mcp-scan-admission.png)
+
+[Full-size diagram](../diagrams/flagship/v1-remote-mcp-scan-admission.png) |
+[editable source](https://github.com/sabbour/agentweaver/blob/v1/docs/diagrams/src/flagship/v1-remote-mcp-scan-admission.json)
+
 ## Source boundary
 
 `Agentweaver.Environment` owns remote MCP connection configuration and catalog
@@ -16,6 +21,16 @@ pin records. The presence of these source contracts does not establish live
 credential delivery or protected remote execution.
 
 The Environment API stores connection state in PostgreSQL. Each create or update writes an immutable configuration revision. The connection head points to the current revision. Row revisions support compare-and-swap. Each mutation also requires an idempotency key.
+
+### Source map
+
+| Source | Responsibility |
+| --- | --- |
+| `RemoteMcpConnectionStore` | Stores immutable configurations, discovery candidates, owner-accepted baselines, and idempotent review admission. |
+| `RemoteMcpDiscoveryService` | Reads bounded Registry and `tools/list` data, then saves a complete candidate. |
+| `RemoteMcpCatalogScanner` | Produces owner-issued catalog evidence for metadata, Unicode, look-alike, collision, and drift checks. |
+| `RuntimeNativePolicyGate` | Evaluates canonical Tool Permissions facts for native and reviewed remote tools. |
+| `ReviewedRemoteToolAgent` | Resolves the reviewed snapshot, waits for durable admission, rechecks gateway state, and controls the send boundary. |
 
 The initial migration adds four remote MCP tables to the existing Environment schema without
 recreating existing tables. A later EF migration adds the typed transport-adapter pin to immutable
@@ -126,6 +141,35 @@ old catalog.
 
 Discovery calls `IRemoteMcpDiscoverySource`. The default `UnavailableRemoteMcpDiscoverySource` returns 503 `remote_mcp_discovery_transport_unavailable` and sends no network request. A trusted transport source replaces it when one is registered. Discovery output is a candidate for review. It does not accept a tool for use.
 
+Every saved candidate includes a complete-catalog scan report. The local scan
+checks poisoned descriptions, hidden instructions and Unicode controls,
+look-alike names, normalized tool-name collisions across current server
+catalogs, and schema or description drift from the owner's accepted catalog.
+The report stores check outcomes and reason codes, not tool text. Its exact
+configuration revision, discovery revision, and catalog digest bind it to the
+immutable candidate.
+
+The connection head keeps `accepted_configuration_revision` and
+`accepted_discovery_revision` separately from the discovery head. Saving a
+candidate never changes these accepted references. Owner review advances the
+accepted reference only after the candidate's scan evidence meets the current
+Tool Permissions requirements. Failed, missing, errored, stale, or required
+unknown checks deny that review. A restart or replay reads the same accepted
+reference and cannot promote an unreviewed discovery.
+
+```mermaid
+flowchart LR
+  A["Discover complete candidate"] --> B["Scan catalog and peer names"]
+  B --> C["Save immutable candidate and scan evidence"]
+  C --> D{"Owner review with current ACS requirements"}
+  D -- "required checks pass" --> E["Advance accepted baseline"]
+  D -- "missing, stale, unknown, error, or threshold failure" --> F["Keep prior accepted baseline"]
+  E --> G["Bind reviewed tool snapshot"]
+  G --> H["Canonical permission and Environment-state recheck"]
+  H -- "allow and durable journal acknowledgment" --> I["Send boundary"]
+  H -- "deny, revocation, or changed revision" --> F
+```
+
 Trusted L7 mediation and enforced network policy are deferred. The default source remains unavailable until a trusted transport is registered. Connection and catalog records do not prove live discovery or authorize a remote tool call.
 
 A repeated discovery request with the same idempotency key returns the first result. Discovery reuses the existing `SaveDiscovery` idempotency operation, so it needs no new migration or grant.
@@ -143,6 +187,32 @@ Configuration revisions and saved catalog rows are immutable. Disable, removal, 
 - A changed configuration, catalog, or tool returns `reviewRequired: true`. The caller needs a new review. Environment never accepts a changed connection on its own.
 - A delegated OAuth connection returns `credentialValidityRequired: true` and the Identity binding reference. The caller must also get a current Identity credential decision before it sends a request.
 - `RemoteMcpConnectionDirectoryEntry` and `RemoteMcpConnectionDirectoryPage` carry the safe directory fields. They never contain credentials, tokens, or tool schemas.
+- `RemoteMcpCatalogScanEvidence` binds owner-issued scanner identity, scanner
+  version, configuration revision, discovery revision, catalog digest, accepted
+  baseline, check outcomes, and evaluation time.
+- `AcceptDiscoveryAsync` advances the accepted baseline only after the exact
+  candidate passes the current ACS check requirements. A replay of an older
+  candidate cannot advance the baseline.
+
+## Reviewed call authorization and send boundary
+
+The reviewed snapshot carries the catalog scan evidence with the exact tool.
+Orchestrator resolves the snapshot, checks the agent, node, active turn,
+registration, call ID, argument digest, connection and configuration revision,
+catalog and tool revision, transport options, and gateway descriptor and
+enforcement generation. It evaluates these facts through the Tool Permissions
+ACS domain.
+
+Identity still owns audience, purpose, and delegated-credential consent checks.
+Environment still owns transport authorization and current gateway state.
+Orchestrator rechecks registration, selection, snapshot, policy, gateway state,
+and action authority after owner waits. The runtime sends nothing when policy
+denies, a binding changes, gateway enforcement is revoked, or the durable
+action journal does not acknowledge the admission.
+
+These records and checks keep outbound dispatch closed on v1.1. A gateway
+enforcement proof and a trusted transport are separate activation
+requirements.
 
 Environment rejects run-bound callers on these routes. These routes don't send requests to the remote server. The trusted transport admits and sends run-time calls.
 

@@ -31,6 +31,14 @@ public sealed record RemoteMcpManagedGatewayPolicyReceipt(
     Guid HandlerInstanceId,
     RemoteMcpManagedGatewayGateState State);
 
+public sealed record RemoteMcpGatewayEnvironmentStateRequest(
+    EnvironmentGenerationFence EnvironmentFence,
+    RemoteToolResultSnapshotBinding SnapshotBinding);
+
+public sealed record RemoteMcpGatewayEnvironmentState(
+    string GatewayDescriptorSha256,
+    long EnforcementGeneration);
+
 /// <summary>Owner interface for applying, verifying, and revoking a managed gateway policy.</summary>
 public interface IRemoteMcpManagedGatewayPolicy
 {

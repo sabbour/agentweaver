@@ -850,13 +850,45 @@ public sealed class NativeAcsPolicyTests
     }
 
     [Fact]
+    public void UnifiedProfileValidatesLegacyPinnedAndCurrentToolPermissionModules()
+    {
+        var current = CreateUnifiedArtifact();
+        var currentData = current.Files.Single(
+            file => file.RelativePath == NativeAcsUnifiedPolicyProfile.ToolPermissionsDataPath);
+        using var document = JsonDocument.Parse(currentData.Bytes.ToArray());
+        var legacyData = JsonSerializer.Serialize(new
+        {
+            rules = document.RootElement.GetProperty("rules")
+        });
+        using var legacyModule = typeof(NativeAcsUnifiedPolicyProfile).Assembly
+            .GetManifestResourceStream(
+                "Agentweaver.Policy.Acs.ComposableDomainsV2Legacy.policy.tool-permissions.rego")!;
+        var legacyModuleBytes = new byte[legacyModule.Length];
+        legacyModule.ReadExactly(legacyModuleBytes);
+        var legacy = ReplaceComposedFile(
+            Rehash(current with
+            {
+                Files = current.Files.Select(file =>
+                    file.RelativePath == NativeAcsUnifiedPolicyProfile.ToolPermissionsModulePath
+                        ? file with { Bytes = legacyModuleBytes.ToImmutableArray() }
+                        : file).ToImmutableArray()
+            }),
+            NativeAcsUnifiedPolicyProfile.ToolPermissionsDataPath,
+            legacyData);
+
+        Assert.True(NativeAcsUnifiedPolicyProfile.Inspect(legacy).IsValid);
+        Assert.True(NativeAcsUnifiedPolicyProfile.Inspect(current).IsValid);
+        Assert.NotEqual(current.ContentSha256, legacy.ContentSha256);
+    }
+
+    [Fact]
     public void UnifiedProfileRejectsInvalidToolPermissionFacts()
     {
         var original = CreateUnifiedArtifact();
         var invalid = ReplaceComposedFile(
             original,
             NativeAcsUnifiedPolicyProfile.ToolPermissionsDataPath,
-            """{"rules":[{"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false}]}""");
+            """{"remote_mcp_scan_requirements":[{"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}],"rules":[{"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false}]}""");
 
         Assert.Contains(
             NativeAcsUnifiedPolicyProfile.Inspect(invalid).Diagnostics,

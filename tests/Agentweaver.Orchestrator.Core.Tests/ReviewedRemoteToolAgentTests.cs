@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -78,6 +79,22 @@ public sealed class ReviewedRemoteToolAgentTests
     }
 
     [Fact]
+    public async Task ActiveTurnMismatchIsRejectedBeforeAuthorization()
+    {
+        var rig = CreateRig();
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(
+                new DefaultHttpContext(),
+                Invocation() with { TurnId = "turn-other" },
+                CancellationToken.None));
+
+        Assert.Null(rig.Authority.AuthorizedRequest);
+        Assert.Equal(0, rig.Transport.SerializeCount);
+        Assert.Equal(0, rig.Transport.SendCount);
+    }
+
+    [Fact]
     public async Task ResultIsNotReturnedUntilMatchingDurableMaterialAcknowledgmentArrives()
     {
         var rig = CreateRig();
@@ -120,6 +137,12 @@ public sealed class ReviewedRemoteToolAgentTests
         Assert.True(MemoryMarshal.TryGetArray(rig.Transport.SentBytes, out var sent));
         Assert.NotSame(rig.Transport.SerializedCall, sent.Array);
         Assert.Equal("native-call-7", rig.Transport.Proof!.NativeCallId);
+        Assert.Equal("turn-1", rig.Transport.Proof.TurnId);
+        Assert.Equal(new string('e', 64), rig.Transport.Proof.GatewayDescriptorSha256);
+        Assert.Equal(1, rig.Transport.Proof.GatewayEnforcementGeneration);
+        Assert.Equal(rig.Transport.Snapshot!.TransportOptionsSha256,
+            rig.Transport.Proof.SnapshotBinding.TransportOptionsSha256);
+        Assert.Same(rig.Transport.Snapshot.ScanEvidence, rig.Transport.Proof.SnapshotBinding.ScanEvidence);
         Assert.Equal("actor-1", rig.Transport.Proof.ActorId);
         Assert.Equal("""{"query":"x"}""", rig.Transport.Proof.CanonicalArgumentsJson);
 
@@ -140,6 +163,21 @@ public sealed class ReviewedRemoteToolAgentTests
         Assert.Equal(1, rig.Transport.SerializeCount);
         Assert.Equal(0, rig.Transport.SendCount);
         Assert.Null(rig.Transport.Proof);
+        Assert.Equal(0, rig.Results.WriteCount);
+    }
+
+    [Fact]
+    public async Task GatewayRevocationAfterAuthorizationSendsNothing()
+    {
+        var rig = CreateRig();
+        rig.Transport.OnSerialize = () => rig.Environment.State =
+            rig.Environment.State with { EnforcementGeneration = 2 };
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal("runtime_remote_tool_gateway_changed", failure.Code);
+        Assert.Equal(0, rig.Transport.SendCount);
         Assert.Equal(0, rig.Results.WriteCount);
     }
 
@@ -178,6 +216,24 @@ public sealed class ReviewedRemoteToolAgentTests
         Assert.Equal(1, rig.Transport.SendCount);
         Assert.Equal(0, rig.Results.WriteCount);
         Assert.False(rig.Results.WriteStarted.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task GatewayRevocationAfterApprovalPreventsSend()
+    {
+        var rig = CreateRig();
+        rig.Authority.OnVerify = () =>
+        {
+            if (rig.Authority.VerifyCount == 2)
+                rig.Environment.State = new(new string('f', 64), 2);
+        };
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal("runtime_remote_tool_gateway_changed", failure.Code);
+        Assert.Equal(0, rig.Transport.SendCount);
+        Assert.Equal(0, rig.Results.WriteCount);
     }
 
     [Fact]
@@ -356,9 +412,58 @@ public sealed class ReviewedRemoteToolAgentTests
         Assert.Equal(expectedWrites, rig.Results.WriteCount);
     }
 
-    private static Rig CreateRig()
+    [Fact]
+    public async Task GatewayStateChangeAfterPolicyApprovalPreventsDispatch()
     {
-        var snapshot = CreateSnapshot();
+        var rig = CreateRig();
+        rig.Environment.OnRead = count =>
+            count == 2 ? new(new string('f', 64), 2) : null;
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal("runtime_remote_tool_gateway_changed", failure.Code);
+        Assert.Equal(0, rig.Transport.SendCount);
+        Assert.True(rig.Environment.ReadCount >= 2);
+    }
+
+    [Fact]
+    public async Task IndependentlyDeserializedScanEvidencePassesResultProofBinding()
+    {
+        var evidence = JsonSerializer.Deserialize<RemoteMcpCatalogScanEvidence>(
+            JsonSerializer.Serialize(CreateSnapshot().ScanEvidence))!;
+        var rig = CreateRig(CreateSnapshot(evidence));
+
+        var invoke = rig.Agent.InvokeAsync(
+            new DefaultHttpContext(), Invocation(), CancellationToken.None);
+        var write = await rig.Results.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        rig.Results.Acknowledgment.TrySetResult(CreateAcknowledgment(write.Proof, write.Bytes));
+        var result = await invoke.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotEqual(Guid.Empty, result.ResultEventId);
+        Assert.Equal(evidence, rig.Transport.Proof!.SnapshotBinding.ScanEvidence);
+        Assert.Equal(evidence, write.Proof.SnapshotBinding.ScanEvidence);
+    }
+
+    [Fact]
+    public async Task LegacyScanlessSnapshotKeepsItsHistoricalDigestFormat()
+    {
+        var snapshot = CreateSnapshot(null);
+
+        Assert.Equal(
+            "d86e49c6bd8f27554fbe6a08ab5a548603df9c5ac4ba5a062edb35d158869a09",
+            snapshot.SnapshotDigest);
+        Assert.Null(snapshot.ScanEvidence);
+        Assert.NotEqual(snapshot.SnapshotDigest, CreateSnapshot().SnapshotDigest);
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            CreateRig(snapshot).Agent.InvokeAsync(
+                new DefaultHttpContext(), Invocation(), CancellationToken.None));
+        Assert.Equal("runtime_remote_tool_scan_stale", failure.Code);
+    }
+
+    private static Rig CreateRig(ReviewedRemoteToolSnapshot? selectedSnapshot = null)
+    {
+        var snapshot = selectedSnapshot ?? CreateSnapshot();
         var selectionJson = JsonSerializer.Serialize(new
         {
             projectConfiguration = new
@@ -405,12 +510,14 @@ public sealed class ReviewedRemoteToolAgentTests
             new AuthorizedRunSelection(selection, null!));
         var transport = new TestTransport();
         var results = new TestResultWriter();
+        var environment = new TestEnvironment();
         var agent = new ReviewedRemoteToolAgent(
             authority,
             new TestSnapshotResolver(snapshot),
             transport,
-            results);
-        return new(agent, authority, transport, results);
+            results,
+            environment);
+        return new(agent, authority, transport, results, environment);
     }
 
     private static ReviewedRemoteToolInvocation Invocation() =>
@@ -419,10 +526,35 @@ public sealed class ReviewedRemoteToolAgentTests
             "agent-1",
             "node-1",
             "native-call-7",
+            "turn-1",
             "remote.lookup",
             """{"query":"x"}""");
 
-    private static ReviewedRemoteToolSnapshot CreateSnapshot() =>
+    private static ReviewedRemoteToolSnapshot CreateSnapshot() => CreateSnapshot(
+        new RemoteMcpCatalogScanEvidence(
+            1,
+            RemoteMcpCatalogScanEvidence.CurrentScannerId,
+            RemoteMcpCatalogScanEvidence.CurrentScannerVersion,
+            4,
+            8,
+            new string('b', 64),
+            null,
+            null,
+            DateTimeOffset.Parse("2026-11-23T00:00:00Z"),
+            RemoteMcpScanState.Completed,
+            RemoteMcpCatalogScanEvidence.CheckIds.Select(checkId =>
+                new RemoteMcpScanCheckEvidence(
+                    checkId,
+                    checkId == RemoteMcpCatalogScanEvidence.BaselineDriftCheck
+                        ? RemoteMcpScanOutcome.Unknown
+                        : RemoteMcpScanOutcome.Pass,
+                    null,
+                    checkId == RemoteMcpCatalogScanEvidence.BaselineDriftCheck
+                        ? "remote_mcp_accepted_baseline_absent"
+                        : null)).ToImmutableArray()));
+
+    private static ReviewedRemoteToolSnapshot CreateSnapshot(
+        RemoteMcpCatalogScanEvidence? scanEvidence) =>
         new(
             Guid.Parse("11111111-1111-1111-1111-111111111111"),
             "project-1",
@@ -452,7 +584,8 @@ public sealed class ReviewedRemoteToolAgentTests
             new ReviewedRemoteToolPermissionMetadata(
                 "tool.read",
                 "runtime.execution",
-                """{"source":"explicit-review","version":1}"""));
+                """{"source":"explicit-review","version":1}"""),
+            scanEvidence);
 
     private static SessionMaterialAcknowledgment CreateAcknowledgment(
         RemoteToolResultProof proof, byte[] bytes)
@@ -542,6 +675,27 @@ public sealed class ReviewedRemoteToolAgentTests
             Task.FromResult<ReviewedRemoteToolSnapshot?>(snapshot);
     }
 
+    private sealed class TestEnvironment : IReviewedRemoteToolEnvironmentReader
+    {
+        public int ReadCount { get; private set; }
+        public Func<int, ReviewedRemoteToolEnvironmentState?>? OnRead { get; set; }
+        public ReviewedRemoteToolEnvironmentState State { get; set; } =
+            new(new string('e', 64), 1);
+
+        public Task<ReviewedRemoteToolEnvironmentState> ReadAsync(
+            HttpContext context,
+            RuntimeRegistration registration,
+            ReviewedRemoteToolSnapshot snapshot,
+            ReviewedRemoteToolCall call,
+            CancellationToken cancellationToken)
+        {
+            var count = ++ReadCount;
+            if (OnRead?.Invoke(count) is { } changed)
+                State = changed;
+            return Task.FromResult(State);
+        }
+    }
+
     private sealed class TestTransport : IReviewedRemoteToolTransport
     {
         public byte[] SerializedCall { get; set; } =
@@ -616,5 +770,6 @@ public sealed class ReviewedRemoteToolAgentTests
         ReviewedRemoteToolAgent Agent,
         TestAuthority Authority,
         TestTransport Transport,
-        TestResultWriter Results);
+        TestResultWriter Results,
+        TestEnvironment Environment);
 }

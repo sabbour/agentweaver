@@ -8,7 +8,8 @@ namespace Agentweaver.Policy.Acs;
 
 public static class NativeAcsUnifiedPolicyProfile
 {
-    public const string ProfileId = "composable-domains-v2";
+    public const string LegacyProfileId = "composable-domains-v2";
+    public const string ProfileId = "composable-domains-v2.1";
     public const string ModelUsePolicyId = "agentweaver_model_use";
     public const string GuardrailsPolicyId = "agentweaver_guardrails";
     public const string ToolPermissionsPolicyId = "agentweaver_tool_permissions";
@@ -27,6 +28,8 @@ public static class NativeAcsUnifiedPolicyProfile
     private const string ModelUseModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.model-use.rego";
     private const string GuardrailsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.guardrails.rego";
     private const string ToolPermissionsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV2.policy.tool-permissions.rego";
+    private const string LegacyToolPermissionsModuleResource =
+        "Agentweaver.Policy.Acs.ComposableDomainsV2Legacy.policy.tool-permissions.rego";
     private const string ActionsModuleResource = "Agentweaver.Policy.Acs.ComposableDomainsV1.policy.actions.rego";
     private const string NetworkModuleResource = "Agentweaver.Policy.Acs.FiniteNetworkV1.policy.network.rego";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -37,6 +40,8 @@ public static class NativeAcsUnifiedPolicyProfile
     private static readonly byte[] ModelUseModuleBytes = ReadAsset(ModelUseModuleResource);
     private static readonly byte[] GuardrailsModuleBytes = ReadAsset(GuardrailsModuleResource);
     private static readonly byte[] ToolPermissionsModuleBytes = ReadAsset(ToolPermissionsModuleResource);
+    private static readonly byte[] LegacyToolPermissionsModuleBytes =
+        ReadAsset(LegacyToolPermissionsModuleResource);
 
     public static bool IsCandidate(NativeAcsArtifact artifact)
     {
@@ -110,12 +115,15 @@ public static class NativeAcsUnifiedPolicyProfile
             return Invalid(diagnostics, "unified_file_closure",
                 "The unified ACS artifact must contain only the reviewed domain files.");
 
+        var legacyToolPermissions = Matches(
+            files[ToolPermissionsModulePath], LegacyToolPermissionsModuleBytes);
         if (!Matches(files[NativeAcsComposableDomainsProfile.ActionsModulePath], ActionsModuleBytes) ||
             !Matches(files[NativeAcsComposableDomainsProfile.NetworkModulePath], NetworkModuleBytes) ||
             !Matches(files[SelectorModulePath], SelectorModuleBytes) ||
             !Matches(files[ModelUseModulePath], ModelUseModuleBytes) ||
             !Matches(files[GuardrailsModulePath], GuardrailsModuleBytes) ||
-            !Matches(files[ToolPermissionsModulePath], ToolPermissionsModuleBytes))
+            (!Matches(files[ToolPermissionsModulePath], ToolPermissionsModuleBytes) &&
+                !legacyToolPermissions))
             return Invalid(diagnostics, "unified_module",
                 "Unified ACS Rego modules must match the reviewed templates.");
 
@@ -171,7 +179,8 @@ public static class NativeAcsUnifiedPolicyProfile
             return Invalid(diagnostics, guardrailsCode,
                 "The Guardrails domain data does not match its closed schema.",
                 GuardrailsDataPath);
-        if (!ValidateToolPermissionsData(files[ToolPermissionsDataPath].Bytes, out var toolCode))
+        if (!ValidateToolPermissionsData(
+                files[ToolPermissionsDataPath].Bytes, legacyToolPermissions, out var toolCode))
             return Invalid(diagnostics, toolCode,
                 "The tool-permissions domain data does not match its closed schema.",
                 ToolPermissionsDataPath);
@@ -210,6 +219,22 @@ public static class NativeAcsUnifiedPolicyProfile
         string? toolPermissionsDataJson = null) =>
         CreateArtifactCore(actionsDataJson, null, modelUseDataJson, guardrailsDataJson,
             toolPermissionsDataJson);
+
+    public static ImmutableArray<RemoteMcpScanRequirement> ReadRemoteMcpScanRequirements(
+        NativeAcsArtifact artifact)
+    {
+        var inspection = Inspect(artifact);
+        var data = artifact.Files.SingleOrDefault(file =>
+            file.RelativePath == ToolPermissionsDataPath);
+        if (!inspection.IsValid || data is null)
+            throw new ArgumentException("The unified ACS artifact is invalid.", nameof(artifact));
+        using var document = JsonDocument.Parse(data.Bytes.ToArray());
+        if (!TryReadRemoteMcpScanRequirements(document.RootElement, out var requirements))
+            throw new ArgumentException(
+                "The current Tool Permissions policy does not define Remote MCP scan requirements.",
+                nameof(artifact));
+        return requirements;
+    }
 
     private static NativeAcsArtifact CreateArtifactCore(
         string actionsDataJson,
@@ -310,7 +335,7 @@ public static class NativeAcsUnifiedPolicyProfile
     };
 
     private static bool ValidateToolPermissionsData(
-        ImmutableArray<byte> bytes, out string failureCode)
+        ImmutableArray<byte> bytes, bool legacy, out string failureCode)
     {
         failureCode = "tool_permissions_data_json";
         try
@@ -318,9 +343,16 @@ public static class NativeAcsUnifiedPolicyProfile
             using var document = JsonDocument.Parse(bytes.ToArray(),
                 new JsonDocumentOptions { MaxDepth = 16 });
             var root = document.RootElement;
+            var hasScanRequirements = root.TryGetProperty("remote_mcp_scan_requirements", out _);
+            var scanRequirements = ImmutableArray<RemoteMcpScanRequirement>.Empty;
             if (HasDuplicateProperties(root) ||
-                !HasProperties(root, "rules") ||
+                !(legacy && HasProperties(root, "rules") ||
+                  !legacy && HasProperties(root, "rules", "remote_mcp_scan_requirements")) ||
                 !root.TryGetProperty("rules", out var rules) ||
+                hasScanRequirements &&
+                    !TryReadRemoteMcpScanRequirements(root, out scanRequirements) ||
+                scanRequirements.Select(item => item.CheckId).Distinct(StringComparer.Ordinal).Count() !=
+                    scanRequirements.Length ||
                 rules.ValueKind != JsonValueKind.Array ||
                 rules.GetArrayLength() > 64)
             {
@@ -343,7 +375,7 @@ public static class NativeAcsUnifiedPolicyProfile
                     read.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
                     write.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
                     shell.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
-                    !IsIdentifier(toolName) ||
+                    !(toolName == "*" || IsIdentifier(toolName)) ||
                     actionId is not ("tool.read" or "tool.write" or
                         "exec.shell" or "exec.read" or "exec.write" or "exec.stop") ||
                     phase is not ("invocation" or "permission") ||
@@ -368,7 +400,13 @@ public static class NativeAcsUnifiedPolicyProfile
     }
 
     private const string DefaultToolPermissionsData = """
-        {"rules":[
+        {"remote_mcp_scan_requirements":[
+          {"check_id":"mcp.poisoned-description","required":true,"maximum_risk_score":0},
+          {"check_id":"mcp.hidden-instructions-unicode","required":true,"maximum_risk_score":0},
+          {"check_id":"mcp.lookalike-name","required":true,"maximum_risk_score":0},
+          {"check_id":"mcp.cross-server-collision","required":true,"maximum_risk_score":0},
+          {"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}
+        ],"rules":[
           {"tool_name":"view","action_id":"tool.read","phase":"invocation","permission_kind":null,"read_access":true,"write_access":false,"shell_access":false},
           {"tool_name":"view","action_id":"tool.read","phase":"permission","permission_kind":"read","read_access":true,"write_access":false,"shell_access":false},
           {"tool_name":"create","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false},
@@ -382,7 +420,9 @@ public static class NativeAcsUnifiedPolicyProfile
           {"tool_name":"write_bash","action_id":"exec.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":false,"shell_access":true},
           {"tool_name":"write_bash","action_id":"exec.write","phase":"permission","permission_kind":"shell","read_access":false,"write_access":false,"shell_access":true},
           {"tool_name":"stop_bash","action_id":"exec.stop","phase":"invocation","permission_kind":null,"read_access":false,"write_access":false,"shell_access":true},
-          {"tool_name":"stop_bash","action_id":"exec.stop","phase":"permission","permission_kind":"shell","read_access":false,"write_access":false,"shell_access":true}
+          {"tool_name":"stop_bash","action_id":"exec.stop","phase":"permission","permission_kind":"shell","read_access":false,"write_access":false,"shell_access":true},
+          {"tool_name":"*","action_id":"tool.read","phase":"invocation","permission_kind":null,"read_access":true,"write_access":false,"shell_access":false},
+          {"tool_name":"*","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false}
         ]}
         """;
 
@@ -396,6 +436,7 @@ public static class NativeAcsUnifiedPolicyProfile
     {
         var expectedAction = toolName switch
         {
+            "*" => actionId is "tool.read" or "tool.write" ? actionId : null,
             "view" => "tool.read",
             "create" or "edit" => "tool.write",
             "bash" => "exec.shell",
@@ -417,6 +458,33 @@ public static class NativeAcsUnifiedPolicyProfile
             readAccess == (actionId == "tool.read") &&
             writeAccess == (actionId == "tool.write") &&
             shellAccess == actionId.StartsWith("exec.", StringComparison.Ordinal);
+    }
+
+    private static bool TryReadRemoteMcpScanRequirements(
+        JsonElement root,
+        out ImmutableArray<RemoteMcpScanRequirement> requirements)
+    {
+        var builder = ImmutableArray.CreateBuilder<RemoteMcpScanRequirement>();
+        requirements = [];
+        if (!root.TryGetProperty("remote_mcp_scan_requirements", out var element) ||
+            element.ValueKind != JsonValueKind.Array ||
+            element.GetArrayLength() > 16)
+            return false;
+        foreach (var item in element.EnumerateArray())
+        {
+            if (!HasProperties(item, "check_id", "required", "maximum_risk_score") ||
+                !TryString(item, "check_id", out var checkId) ||
+                !RemoteMcpCatalogScanEvidence.CheckIds.Contains(checkId) ||
+                !item.TryGetProperty("required", out var requiredElement) ||
+                requiredElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                !item.TryGetProperty("maximum_risk_score", out var scoreElement) ||
+                !scoreElement.TryGetInt32(out var maximumRiskScore) ||
+                maximumRiskScore is < 0 or > 100)
+                return false;
+            builder.Add(new(checkId, requiredElement.GetBoolean(), maximumRiskScore));
+        }
+        requirements = builder.ToImmutable();
+        return requirements.Length >= 1;
     }
 
     private static bool TryReadModelUse(

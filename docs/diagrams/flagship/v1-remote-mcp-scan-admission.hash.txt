@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "v1-remote-mcp-scan-admission.json",
+    "sha256": "762bb868d1e1ab4c6f5872d3ae43d7501f060b9598ece8fc107506e2c3e347a2"
+  },
+  "drawio": {
+    "file": "v1-remote-mcp-scan-admission.drawio",
+    "sha256": "e33c4ce307fe32f4a9bfd480ae2395918f57efe8fc16c0f1e839b06c8648d80a"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "format": "png",
+    "border": 16,
+    "scale": 2,
+    "rendererVersion": "32.7.4"
+  },
+  "png": {
+    "file": "v1-remote-mcp-scan-admission.png",
+    "sha256": "79794b3fca121be45f69fc803df258529dc6ee12d97e053bb789cbc620558dbe"
+  }
+}

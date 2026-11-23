@@ -11,7 +11,7 @@ namespace Agentweaver.Orchestrator;
 /// <summary>
 /// Resolves an immutable reviewed remote-tool snapshot by its accepted reference.
 /// </summary>
-internal interface IReviewedRemoteToolSnapshotResolver
+public interface IReviewedRemoteToolSnapshotResolver
 {
     /// <summary>
     /// Reads a snapshot only when the persisted snapshot matches the complete reference.
@@ -204,7 +204,8 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
         string ToolSchemaJson,
         string PermissionActionId,
         string PermissionPurpose,
-        string PermissionMetadataJson)
+        string PermissionMetadataJson,
+        RemoteMcpCatalogScanEvidence? ScanEvidence = null)
     {
         /// <summary>
         /// Copies the canonical snapshot fields into their persistence representation.
@@ -238,7 +239,8 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
                 snapshot.CanonicalToolSchemaJson,
                 snapshot.Permission.ActionId,
                 snapshot.Permission.Purpose,
-                snapshot.Permission.CanonicalMetadataJson);
+                snapshot.Permission.CanonicalMetadataJson,
+                snapshot.ScanEvidence);
 
         /// <summary>
         /// Reconstructs the domain snapshot from its persisted fields.
@@ -271,6 +273,7 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
                 ToolMetadataJson,
                 ToolSchemaJson,
                 new ReviewedRemoteToolPermissionMetadata(
-                    PermissionActionId, PermissionPurpose, PermissionMetadataJson));
+                    PermissionActionId, PermissionPurpose, PermissionMetadataJson),
+                ScanEvidence);
     }
 }

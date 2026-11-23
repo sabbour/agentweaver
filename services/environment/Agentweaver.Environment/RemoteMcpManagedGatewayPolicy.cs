@@ -131,6 +131,36 @@ public sealed class RemoteMcpManagedGatewayPolicy :
         return new(active.Descriptor, receipt);
     }
 
+    public async Task<RemoteMcpGatewayEnvironmentState> ReadEnvironmentStateAsync(
+        EnvironmentGenerationFence fence,
+        RemoteToolResultSnapshotBinding snapshotBinding,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        ArgumentNullException.ThrowIfNull(snapshotBinding);
+        ActiveState active;
+        lock (_sync)
+        {
+            var matches = _active.Values
+                .Where(item =>
+                    item.Descriptor.SnapshotBinding == snapshotBinding &&
+                    item.Descriptor.GatewayPolicy.AppliedPolicy.EnvironmentFence == fence)
+                .Take(2)
+                .ToArray();
+            if (matches.Length == 0)
+                throw new RuntimeAuthorizationException("remote_mcp_managed_handler_unavailable");
+            if (matches.Length != 1)
+                throw new RuntimeAuthorizationException("remote_mcp_managed_handler_ambiguous");
+            active = matches[0];
+        }
+        var receipt = await VerifyAsync(active.Descriptor, cancellationToken).ConfigureAwait(false);
+        if (receipt.Operation != RemoteMcpManagedGatewayOperation.Verify)
+            throw new RuntimeAuthorizationException("remote_mcp_managed_handler_changed");
+        return new(
+            RemoteMcpManagedGatewayContract.DescriptorHash(active.Descriptor),
+            active.Descriptor.GatewayPolicy.AppliedPolicy.AppliedGeneration);
+    }
+
     /// <summary>Creates a receipt tied to this handler instance and the supplied descriptor digest.</summary>
     private RemoteMcpManagedGatewayPolicyReceipt Receipt(
         RemoteMcpManagedGatewayOperation operation,

@@ -29,7 +29,34 @@ public sealed record RuntimeActionRequest(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeActionToolOwnerProjection? ToolOwner { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeActionRemoteToolOwnerProjection? RemoteToolOwner { get; init; }
 }
+
+/// <summary>Owner-resolved facts for one reviewed Remote MCP invocation.</summary>
+public sealed record RuntimeActionRemoteToolOwnerProjection(
+    int ContractVersion,
+    string AgentId,
+    string NodeId,
+    string CallId,
+    string ArgumentDigest,
+    string TurnId,
+    string SnapshotId,
+    string SnapshotDigest,
+    string ConnectionId,
+    long ConnectionConfigurationRevision,
+    long ConnectionDiscoveryRevision,
+    string ConfigurationSha256,
+    string CatalogDigest,
+    string ToolId,
+    string ToolRevision,
+    string ToolDigest,
+    string TransportProfile,
+    string TransportOptionsSha256,
+    string GatewayDescriptorSha256,
+    long GatewayEnforcementGeneration,
+    RemoteMcpCatalogScanEvidence ScanEvidence);
 
 /// <summary>Bounded SDK tool facts that the owner evaluates for one native callback.</summary>
 public sealed record RuntimeActionToolOwnerProjection(
@@ -95,8 +122,13 @@ public static class RuntimeActionContract
             throw new RuntimeAuthorizationException("runtime_action_tool_owner_required");
         if (!request.IsNativeToolCallback && request.ToolOwner is not null)
             throw new RuntimeAuthorizationException("runtime_action_tool_owner_invalid");
+        if (request.IsToolInvocation && request.ToolOwner is null && request.RemoteToolOwner is null ||
+            (!request.IsToolInvocation || request.ToolOwner is not null) && request.RemoteToolOwner is not null)
+            throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
         if (request.ToolOwner is { } owner)
             ValidateToolOwner(request, owner);
+        if (request.RemoteToolOwner is { } remote)
+            ValidateRemoteToolOwner(remote);
     }
 
     private static void ValidateToolOwner(
@@ -140,6 +172,33 @@ public static class RuntimeActionContract
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 256 &&
         !value.Any(char.IsControl);
+
+    private static void ValidateRemoteToolOwner(RuntimeActionRemoteToolOwnerProjection owner)
+    {
+        if (owner.ContractVersion != 1 ||
+            !IsBoundedIdentifier(owner.AgentId) ||
+            !IsBoundedIdentifier(owner.NodeId) ||
+            !IsBoundedIdentifier(owner.CallId) ||
+            !IsBoundedIdentifier(owner.TurnId) ||
+            !IsBoundedIdentifier(owner.SnapshotId) ||
+            !IsBoundedIdentifier(owner.ConnectionId) ||
+            !IsBoundedIdentifier(owner.ToolId) ||
+            !IsBoundedIdentifier(owner.TransportProfile) ||
+            owner.ConnectionConfigurationRevision <= 0 ||
+            owner.ConnectionDiscoveryRevision <= 0 ||
+            owner.GatewayEnforcementGeneration <= 0 ||
+            owner.ScanEvidence is null)
+            throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
+        RuntimeContractValidation.ValidateHash(owner.ArgumentDigest);
+        RuntimeContractValidation.ValidateHash(owner.SnapshotDigest);
+        RuntimeContractValidation.ValidateHash(owner.ConfigurationSha256);
+        RuntimeContractValidation.ValidateHash(owner.CatalogDigest);
+        if (!IsBoundedIdentifier(owner.ToolRevision))
+            throw new RuntimeAuthorizationException("runtime_action_remote_tool_owner_invalid");
+        RuntimeContractValidation.ValidateHash(owner.ToolDigest);
+        RuntimeContractValidation.ValidateHash(owner.TransportOptionsSha256);
+        RuntimeContractValidation.ValidateHash(owner.GatewayDescriptorSha256);
+    }
 
     /// <summary>Requires an owner dispatch ID for bounded or hard-credit-limited native model turns.</summary>
     public static void RequireNativeDispatchAdmission(RuntimeBinding binding, RuntimeActionRequest request)

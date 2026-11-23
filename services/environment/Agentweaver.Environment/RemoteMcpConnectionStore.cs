@@ -258,6 +258,173 @@ public sealed class RemoteMcpConnectionStore(
         return snapshot ?? throw NotFound();
     }
 
+    /// <summary>Returns accepted and discovery-head peer tool catalogs for cross-server scan checks.</summary>
+    internal async Task<ImmutableArray<(Guid ConnectionId, ImmutableArray<RemoteMcpToolSchemaPin> Tools)>>
+        GetPeerCatalogsForDiscoveryAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            Guid connectionId,
+            CancellationToken cancellationToken)
+    {
+        ValidateProjectId(projectId);
+        var initial = await AuthorizeAsync(
+            caller, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            .ConfigureAwait(false);
+        var peers = ImmutableArray.CreateBuilder<(Guid, ImmutableArray<RemoteMcpToolSchemaPin>)>();
+        await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await using var command = new NpgsqlCommand($"""
+                SELECT connection_id, current_configuration_revision, current_discovery_revision
+                FROM {Connections}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND connection_id <> @connection_id
+                  AND state = 'Enabled' AND current_discovery_revision IS NOT NULL
+                """, connection);
+            AddOwner(command, initial.TenantId, projectId);
+            command.Parameters.AddWithValue("connection_id", NpgsqlDbType.Uuid, connectionId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var coordinates = new List<(Guid, long, long)>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                coordinates.Add((reader.GetGuid(0), reader.GetInt64(1), reader.GetInt64(2)));
+            await reader.DisposeAsync().ConfigureAwait(false);
+            foreach (var (peerId, configurationRevision, discoveryRevision) in coordinates)
+            {
+                var catalog = await ReadCatalogAsync(
+                    connection, null, initial.TenantId, projectId, peerId,
+                    configurationRevision, discoveryRevision, cancellationToken)
+                    .ConfigureAwait(false);
+                if (catalog is null)
+                    throw new InvalidOperationException("A remote MCP peer head points to a missing catalog.");
+                peers.Add((peerId, catalog.Tools));
+            }
+        }
+        await EnsureCurrentAuthorityAsync(
+            caller, initial, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            .ConfigureAwait(false);
+        return peers.ToImmutable();
+    }
+
+    /// <summary>
+    /// Records the exact candidate catalog as the owner's drift baseline only after current Policy
+    /// requirements admit its owner-issued scan evidence.
+    /// </summary>
+    internal Task<RemoteMcpConnectionMutationResult> AcceptDiscoveryAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        Guid connectionId,
+        long expectedRowRevision,
+        long configurationRevision,
+        long discoveryRevision,
+        string catalogSha256,
+        ImmutableArray<RemoteMcpScanRequirement> requirements,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        ValidateProjectId(projectId);
+        ValidateIdempotencyKey(idempotencyKey);
+        if (expectedRowRevision < 1 || configurationRevision < 1 || discoveryRevision < 1)
+            throw new ArgumentOutOfRangeException(nameof(expectedRowRevision));
+        RemoteMcpDigest.ValidateSha256(catalogSha256, nameof(catalogSha256));
+        var fingerprint = Fingerprint(
+            "AcceptDiscovery",
+            connectionId.ToString("D"),
+            expectedRowRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            configurationRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            discoveryRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            catalogSha256,
+            JsonSerializer.Serialize(requirements, JsonOptions));
+        return MutateAsync(
+            caller,
+            projectId,
+            idempotencyKey,
+            fingerprint,
+            connectionId,
+            "AcceptDiscovery",
+            ProjectAuthorizationPermission.WriteProjects,
+            async (connection, transaction, tenantId, token) =>
+            {
+                await AcquireLockAsync(
+                    connection,
+                    transaction,
+                    $"remote-mcp-project:{tenantId}:{projectId}:accept",
+                    token).ConfigureAwait(false);
+                var current = await ReadSnapshotAsync(
+                    connection, transaction, tenantId, projectId, connectionId, token).ConfigureAwait(false)
+                    ?? throw NotFound();
+                RequireExpectedRevision(current.Head, expectedRowRevision);
+                var catalog = current.Catalog;
+                if (current.Head.State != RemoteMcpConnectionState.Enabled ||
+                    catalog is null ||
+                    catalog.ConfigurationRevision != configurationRevision ||
+                    catalog.DiscoveryRevision != discoveryRevision ||
+                    catalog.CatalogSha256 != catalogSha256)
+                    throw Conflict("discovery_revision_stale",
+                        "The discovered catalog changed before owner review completed.");
+                var admission = RemoteMcpScanAdmission.Evaluate(catalog.ScanEvidence, catalog, requirements);
+                if (!admission.Allowed)
+                    throw Conflict(admission.ReasonCode!, "Required Remote MCP scan evidence is not current.");
+                var peers = new List<(Guid, ImmutableArray<RemoteMcpToolSchemaPin>)>();
+                await using (var peerCommand = new NpgsqlCommand($"""
+                    SELECT connection_id, accepted_configuration_revision, accepted_discovery_revision
+                    FROM {Connections}
+                    WHERE tenant_id = @tenant_id AND project_id = @project_id
+                      AND connection_id <> @connection_id AND state = 'Enabled'
+                      AND accepted_configuration_revision IS NOT NULL
+                      AND accepted_discovery_revision IS NOT NULL
+                    """, connection, transaction))
+                {
+                    AddOwner(peerCommand, tenantId, projectId);
+                    peerCommand.Parameters.AddWithValue("connection_id", NpgsqlDbType.Uuid, connectionId);
+                    await using var reader = await peerCommand.ExecuteReaderAsync(token).ConfigureAwait(false);
+                    var coordinates = new List<(Guid, long, long)>();
+                    while (await reader.ReadAsync(token).ConfigureAwait(false))
+                        coordinates.Add((reader.GetGuid(0), reader.GetInt64(1), reader.GetInt64(2)));
+                    await reader.DisposeAsync().ConfigureAwait(false);
+                    foreach (var (peerId, configurationRevision, peerDiscoveryRevision) in coordinates)
+                    {
+                        var peer = await ReadCatalogAsync(
+                            connection, transaction, tenantId, projectId, peerId,
+                            configurationRevision, peerDiscoveryRevision, token).ConfigureAwait(false);
+                        if (peer is null)
+                            throw Conflict(
+                                "accepted_catalog_missing",
+                                "A peer connection points to a missing accepted catalog.");
+                        peers.Add((peerId, peer.Tools));
+                    }
+                }
+                if (RemoteMcpCatalogScanner.HasCrossServerCollision(catalog.Tools, peers))
+                    throw Conflict(
+                        "remote_mcp_cross_server_tool_collision",
+                        "Another accepted connection in the project already owns a colliding tool name.");
+
+                var now = timeProvider.GetUtcNow();
+                await using (var update = new NpgsqlCommand($"""
+                    UPDATE {Connections}
+                    SET row_revision = row_revision + 1,
+                        accepted_configuration_revision = @configuration_revision,
+                        accepted_discovery_revision = @discovery_revision,
+                        updated_at = @updated_at
+                    WHERE tenant_id = @tenant_id AND project_id = @project_id
+                      AND connection_id = @connection_id AND row_revision = @expected_row_revision
+                    """, connection, transaction))
+                {
+                    AddOwner(update, tenantId, projectId);
+                    update.Parameters.AddWithValue("connection_id", NpgsqlDbType.Uuid, connectionId);
+                    update.Parameters.AddWithValue("expected_row_revision", NpgsqlDbType.Bigint, expectedRowRevision);
+                    update.Parameters.AddWithValue("configuration_revision", NpgsqlDbType.Bigint, configurationRevision);
+                    update.Parameters.AddWithValue("discovery_revision", NpgsqlDbType.Bigint, discoveryRevision);
+                    update.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, now);
+                    if (await update.ExecuteNonQueryAsync(token).ConfigureAwait(false) != 1)
+                        throw Conflict("connection_revision_stale", "The connection changed before review completed.");
+                }
+                return await ReadSnapshotAsync(
+                    connection, transaction, tenantId, projectId, connectionId, token)
+                    .ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("The accepted catalog reference was not persisted.");
+            },
+            cancellationToken);
+    }
+
     /// <summary>
     /// Returns the saved result when this idempotency key already pinned discovery for the same connection
     /// and expected row revision. A key used for any other request fails with <c>idempotency_conflict</c>.
@@ -624,11 +791,37 @@ public sealed class RemoteMcpConnectionStore(
         string? registryMetadataSha256,
         RemoteMcpAppliedNetworkPolicyReference appliedNetworkPolicy,
         string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        SaveDiscoveryAsync(
+            caller,
+            projectId,
+            connectionId,
+            expectedRowRevision,
+            parsedCatalog,
+            [],
+            registryMetadataSha256,
+            appliedNetworkPolicy,
+            idempotencyKey,
+            cancellationToken);
+
+    /// <summary>Saves a discovery catalog and complete peer-aware scan evidence.</summary>
+    internal Task<RemoteMcpConnectionMutationResult> SaveDiscoveryAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        Guid connectionId,
+        long expectedRowRevision,
+        RemoteMcpParsedToolCatalog parsedCatalog,
+        ImmutableArray<(Guid ConnectionId, ImmutableArray<RemoteMcpToolSchemaPin> Tools)> peerCatalogs,
+        string? registryMetadataSha256,
+        RemoteMcpAppliedNetworkPolicyReference appliedNetworkPolicy,
+        string idempotencyKey,
         CancellationToken cancellationToken)
     {
         ValidateProjectId(projectId);
         ValidateIdempotencyKey(idempotencyKey);
         ArgumentNullException.ThrowIfNull(parsedCatalog);
+        if (peerCatalogs.IsDefault)
+            throw new ArgumentException("Peer catalogs must be initialized.", nameof(peerCatalogs));
         ArgumentNullException.ThrowIfNull(appliedNetworkPolicy);
         if (registryMetadataSha256 is not null)
             RemoteMcpDigest.ValidateSha256(registryMetadataSha256, nameof(registryMetadataSha256));
@@ -677,6 +870,38 @@ public sealed class RemoteMcpConnectionStore(
                     projectId,
                     connectionId,
                     cancellationToken).ConfigureAwait(false) + 1);
+                RemoteMcpCatalogScanEvidence scanEvidence;
+                try
+                {
+                    scanEvidence = RemoteMcpCatalogScanner.Scan(
+                        parsedCatalog,
+                        current.Configuration.ConfigurationRevision,
+                        discoveryRevision,
+                        current.AcceptedCatalog,
+                        peerCatalogs,
+                        timeProvider);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException and
+                          not OutOfMemoryException)
+                {
+                    scanEvidence = new(
+                        RemoteMcpCatalogScanEvidence.CurrentVersion,
+                        RemoteMcpCatalogScanEvidence.CurrentScannerId,
+                        RemoteMcpCatalogScanEvidence.CurrentScannerVersion,
+                        current.Configuration.ConfigurationRevision,
+                        discoveryRevision,
+                        parsedCatalog.CatalogSha256,
+                        current.AcceptedCatalog?.DiscoveryRevision,
+                        current.AcceptedCatalog?.CatalogSha256,
+                        timeProvider.GetUtcNow(),
+                        RemoteMcpScanState.Error,
+                        RemoteMcpCatalogScanEvidence.CheckIds
+                            .Select(checkId => new RemoteMcpScanCheckEvidence(
+                                checkId, RemoteMcpScanOutcome.Error, 100,
+                                "remote_mcp_scan_error"))
+                            .ToImmutableArray(),
+                        "remote_mcp_scan_error");
+                }
                 var catalog = new RemoteMcpDiscoveryCatalogPin(
                     current.Head.Connection,
                     current.Head.CurrentConfigurationRevision,
@@ -684,7 +909,8 @@ public sealed class RemoteMcpConnectionStore(
                     parsedCatalog.CatalogSha256,
                     registryMetadataSha256,
                     parsedCatalog.Tools,
-                    appliedNetworkPolicy);
+                    appliedNetworkPolicy,
+                    scanEvidence);
                 var now = timeProvider.GetUtcNow();
                 await InsertCatalogAsync(
                     connection, transaction, tenantId, projectId, connectionId, catalog, now, cancellationToken)
@@ -955,12 +1181,12 @@ public sealed class RemoteMcpConnectionStore(
         await using var command = new NpgsqlCommand($"""
             INSERT INTO {CatalogSnapshots}
                 (tenant_id, project_id, connection_id, configuration_revision, discovery_revision,
-                 catalog_sha256, registry_metadata_sha256, tools_json, applied_policy_reference,
+                 catalog_sha256, registry_metadata_sha256, tools_json, scan_evidence_json, applied_policy_reference,
                  environment_tenant_id, environment_project_id, environment_run_id, environment_id,
                  environment_lifecycle_generation, applied_policy_generation, egress_intent_sha256, created_at)
             VALUES
                 (@tenant_id, @project_id, @connection_id, @configuration_revision, @discovery_revision,
-                 @catalog_sha256, @registry_metadata_sha256, @tools_json, @applied_policy_reference,
+                 @catalog_sha256, @registry_metadata_sha256, @tools_json, @scan_evidence_json, @applied_policy_reference,
                  @environment_tenant_id, @environment_project_id, @environment_run_id, @environment_id,
                  @environment_lifecycle_generation, @applied_policy_generation, @egress_intent_sha256, @created_at)
             """, connection, transaction);
@@ -974,6 +1200,7 @@ public sealed class RemoteMcpConnectionStore(
             "tools_json",
             NpgsqlDbType.Jsonb,
             JsonSerializer.Serialize(catalog.Tools, JsonOptions));
+        AddNullableJson(command, "scan_evidence_json", catalog.ScanEvidence);
         command.Parameters.AddWithValue("applied_policy_reference", NpgsqlDbType.Text, policy.Reference);
         command.Parameters.AddWithValue("environment_tenant_id", NpgsqlDbType.Text, policy.EnvironmentFence.Owner.TenantId);
         command.Parameters.AddWithValue("environment_project_id", NpgsqlDbType.Text, policy.EnvironmentFence.Owner.ProjectId);
@@ -1019,7 +1246,32 @@ public sealed class RemoteMcpConnectionStore(
                 cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("A remote MCP head points to a missing discovery catalog.")
             : null;
-        return new(head, configuration, catalog);
+        var acceptedCatalog = head.AcceptedConfigurationRevision is { } acceptedConfigurationRevision &&
+                              head.AcceptedDiscoveryRevision is { } acceptedDiscoveryRevision
+            ? await ReadCatalogAsync(
+                connection,
+                transaction,
+                tenantId,
+                projectId,
+                connectionId,
+                acceptedConfigurationRevision,
+                acceptedDiscoveryRevision,
+                cancellationToken).ConfigureAwait(false)
+            : null;
+        var acceptedConfiguration = head.AcceptedConfigurationRevision is { } acceptedRevision &&
+                                    acceptedRevision != head.CurrentConfigurationRevision
+            ? await ReadConfigurationAsync(
+                connection,
+                transaction,
+                tenantId,
+                projectId,
+                connectionId,
+                acceptedRevision,
+                cancellationToken).ConfigureAwait(false)
+            : head.AcceptedConfigurationRevision is { } ? configuration : null;
+        if ((acceptedCatalog is null) != (acceptedConfiguration is null))
+            throw new InvalidOperationException("A remote MCP head points to an incomplete accepted catalog.");
+        return new(head, configuration, catalog, acceptedCatalog, acceptedConfiguration);
     }
 
     private static async Task<RemoteMcpConnectionHead?> ReadHeadAsync(
@@ -1031,7 +1283,8 @@ public sealed class RemoteMcpConnectionStore(
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT row_revision, current_configuration_revision, current_discovery_revision, state
+            SELECT row_revision, current_configuration_revision, current_discovery_revision, state,
+                   accepted_configuration_revision, accepted_discovery_revision
             FROM {Connections}
             WHERE tenant_id = @tenant_id AND project_id = @project_id AND connection_id = @connection_id
             """, connection, transaction);
@@ -1044,7 +1297,19 @@ public sealed class RemoteMcpConnectionStore(
         var configurationRevision = reader.GetInt64(1);
         long? discoveryRevision = reader.IsDBNull(2) ? null : reader.GetInt64(2);
         var state = Enum.Parse<RemoteMcpConnectionState>(reader.GetString(3), ignoreCase: false);
-        return new(new(projectId, connectionId), rowRevision, configurationRevision, state, discoveryRevision);
+        var acceptedConfigurationRevision = reader.IsDBNull(4) ? (long?)null : reader.GetInt64(4);
+        var acceptedDiscoveryRevision = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5);
+        if ((acceptedConfigurationRevision is null) != (acceptedDiscoveryRevision is null) ||
+            acceptedConfigurationRevision is > 0 && acceptedDiscoveryRevision is not > 0)
+            throw new InvalidOperationException("A remote MCP head has an incomplete accepted catalog reference.");
+        return new(
+            new(projectId, connectionId),
+            rowRevision,
+            configurationRevision,
+            state,
+            discoveryRevision,
+            acceptedDiscoveryRevision,
+            acceptedConfigurationRevision);
     }
 
     private static async Task<RemoteMcpConnectionConfiguration?> ReadConfigurationAsync(
@@ -1122,7 +1387,8 @@ public sealed class RemoteMcpConnectionStore(
         await using var command = new NpgsqlCommand($"""
             SELECT catalog_sha256, registry_metadata_sha256, tools_json, applied_policy_reference,
                    environment_tenant_id, environment_project_id, environment_run_id, environment_id,
-                   environment_lifecycle_generation, applied_policy_generation, egress_intent_sha256
+                   environment_lifecycle_generation, applied_policy_generation, egress_intent_sha256,
+                   scan_evidence_json
             FROM {CatalogSnapshots}
             WHERE tenant_id = @tenant_id AND project_id = @project_id AND connection_id = @connection_id
               AND configuration_revision = @configuration_revision AND discovery_revision = @discovery_revision
@@ -1148,6 +1414,10 @@ public sealed class RemoteMcpConnectionStore(
             new(environmentOwner, reader.GetInt64(8)),
             reader.GetInt64(9),
             reader.GetString(10));
+        var evidence = reader.IsDBNull(11)
+            ? null
+            : JsonSerializer.Deserialize<RemoteMcpCatalogScanEvidence>(reader.GetString(11), JsonOptions)
+                ?? throw new InvalidOperationException("The stored remote MCP scan evidence is invalid.");
         return new(
             new(projectId, connectionId),
             configurationRevision,
@@ -1155,7 +1425,8 @@ public sealed class RemoteMcpConnectionStore(
             reader.GetString(0),
             reader.IsDBNull(1) ? null : reader.GetString(1),
             tools,
-            appliedPolicy);
+            appliedPolicy,
+            evidence);
     }
 
     private static async Task UpdateHeadAsync(
@@ -1292,6 +1563,13 @@ public sealed class RemoteMcpConnectionStore(
 
     private static void AddNullable(NpgsqlCommand command, string name, NpgsqlDbType type, string? value) =>
         command.Parameters.AddWithValue(name, type, (object?)value ?? DBNull.Value);
+
+    private static void AddNullableJson(
+        NpgsqlCommand command, string name, RemoteMcpCatalogScanEvidence? value) =>
+        command.Parameters.AddWithValue(
+            name,
+            NpgsqlDbType.Jsonb,
+            value is null ? DBNull.Value : JsonSerializer.Serialize(value, JsonOptions));
 
     private static void RequireExpectedRevision(RemoteMcpConnectionHead head, long expectedRowRevision)
     {

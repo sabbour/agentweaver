@@ -42,6 +42,32 @@ public sealed class RemoteMcpToolProviderBindingTests
     }
 
     [Fact]
+    public void UnacceptedCatalogCannotBindTools()
+    {
+        var accepted = Snapshot(Configuration(), Catalog("forecast"));
+        var unaccepted = accepted with
+        {
+            Head = new(
+                accepted.Head.Connection,
+                accepted.Head.RowRevision + 1,
+                accepted.Head.CurrentConfigurationRevision,
+                accepted.Head.State,
+                2,
+                accepted.Head.AcceptedDiscoveryRevision,
+                accepted.Head.AcceptedConfigurationRevision),
+            Catalog = Catalog("forecast") with { },
+            AcceptedCatalog = accepted.Catalog,
+            AcceptedConfiguration = accepted.Configuration
+        };
+
+        var result = RemoteMcpToolProviderBinding.Evaluate(
+            Requirement(Tool("forecast")), unaccepted);
+
+        Assert.False(result.Bound);
+        Assert.Equal(RemoteMcpToolProviderBindingDenial.CatalogStale, result.Denial);
+    }
+
+    [Fact]
     public void DisabledMissingAndStaleCatalogsAreDenied()
     {
         var requirement = Requirement(Tool("forecast"));
@@ -128,9 +154,13 @@ public sealed class RemoteMcpToolProviderBindingTests
                 rowRevision: 3,
                 configuration.ConfigurationRevision,
                 state,
-                catalog?.DiscoveryRevision),
+                catalog?.DiscoveryRevision,
+                catalog?.DiscoveryRevision,
+                catalog?.ConfigurationRevision),
             configuration,
-            catalog);
+            catalog,
+            catalog,
+            catalog is null ? null : configuration);
 
     private static RemoteMcpConnectionConfiguration Configuration(long revision = 1, bool oauth = false) =>
         new(
@@ -148,6 +178,20 @@ public sealed class RemoteMcpToolProviderBindingTests
         var tools = string.Join(',', toolNames.Select(name => $$$"""{"name":"{{{name}}}","inputSchema":{"type":"object"}}"""));
         var parsed = RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(
             $$$"""{"result":{"tools":[{{{tools}}}]}}"""));
-        return new(Connection, 1, 1, parsed.CatalogSha256, null, parsed.Tools);
+        var evidence = new RemoteMcpCatalogScanEvidence(
+            1,
+            RemoteMcpCatalogScanEvidence.CurrentScannerId,
+            RemoteMcpCatalogScanEvidence.CurrentScannerVersion,
+            1,
+            1,
+            parsed.CatalogSha256,
+            null,
+            null,
+            DateTimeOffset.Parse("2026-11-23T00:00:00Z"),
+            RemoteMcpScanState.Completed,
+            RemoteMcpCatalogScanEvidence.CheckIds.Select(checkId =>
+                new RemoteMcpScanCheckEvidence(checkId, RemoteMcpScanOutcome.Pass, null, null))
+                .ToImmutableArray());
+        return new(Connection, 1, 1, parsed.CatalogSha256, null, parsed.Tools, scanEvidence: evidence);
     }
 }

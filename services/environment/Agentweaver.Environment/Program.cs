@@ -112,6 +112,9 @@ builder.Services.AddScoped<
     EnvironmentRuntimeBootstrapProfileReplacementStore>();
 builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
 builder.Services.AddScoped<RemoteMcpConnectionStore>();
+builder.Services.AddScoped<IRemoteMcpScanRequirementSource>(services =>
+    new RemoteMcpScanRequirementSource(
+        services.GetService<PlatformPolicySourceHttpClient>()));
 // The trusted transport registers the production discovery source; without it discovery fails with 503.
 Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions
     .TryAddSingleton<IRemoteMcpDiscoverySource, UnavailableRemoteMcpDiscoverySource>(builder.Services);
@@ -302,7 +305,10 @@ app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
         ct));
 app.MapRemoteMcpConnectionEndpoints();
 if (remoteMcpCurrentCallVerificationEnabled)
+{
+    app.MapRemoteMcpEnvironmentState();
     app.MapRemoteMcpCurrentCallVerification();
+}
 if (remoteMcpNativeCallDispatchEnabled)
     app.MapRemoteMcpNativeCallDispatch();
 app.MapProviderLifecycleReportEndpoints();

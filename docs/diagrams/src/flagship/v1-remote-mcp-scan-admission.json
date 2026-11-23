@@ -1,0 +1,148 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Remote MCP catalog scan and send admission",
+  "alt": "Environment saves each discovered remote MCP catalog as an immutable candidate with complete scan evidence while keeping the owner-accepted baseline unchanged. Owner review advances the baseline only for the exact passing candidate. Orchestrator binds the reviewed snapshot, current ACS requirements, active turn, gateway descriptor, and enforcement generation. A current permission and durable action journal acknowledgment are required before the send boundary.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "environment",
+      "label": "Environment",
+      "subLabel": "Connection and discovery owner",
+      "icon": "server",
+      "fluentIcon": "mcp",
+      "badge": { "text": "owner", "tone": "teal" }
+    },
+    {
+      "id": "catalog",
+      "label": "Remote MCP catalog",
+      "subLabel": "Immutable candidate and accepted baseline",
+      "icon": "database",
+      "fluentIcon": "state",
+      "badge": { "text": "durable", "tone": "green" }
+    },
+    {
+      "id": "acs",
+      "label": "Tool Permissions ACS",
+      "subLabel": "Required checks and thresholds",
+      "icon": "security",
+      "fluentIcon": "security",
+      "badge": { "text": "policy", "tone": "lavender" }
+    },
+    {
+      "id": "orchestrator",
+      "label": "Orchestrator",
+      "subLabel": "Reviewed call and journal owner",
+      "icon": "server",
+      "fluentIcon": "workflow",
+      "badge": { "text": "owner", "tone": "teal" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "catalog",
+      "label": "Save complete candidate, scanner registration, and evidence",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["environment", "catalog"],
+      "label": "Discovery never advances the accepted baseline. Each scan records its compared baseline."
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "acs",
+      "label": "Owner review reads current required checks",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Scan admission",
+      "sections": [
+        {
+          "label": "all required checks current and admitted",
+          "steps": [
+            {
+              "type": "message",
+              "from": "acs",
+              "to": "catalog",
+              "label": "Advance exact accepted baseline",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "missing, stale, error, unknown, or threshold failure",
+          "steps": [
+            {
+              "type": "message",
+              "from": "acs",
+              "to": "catalog",
+              "label": "Keep prior accepted baseline and deny review",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "catalog",
+      "label": "Resolve exact reviewed snapshot, connection, catalog, and tool",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "acs",
+      "label": "Evaluate agent, node, turn, call digest, scan, transport, and gateway facts",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "acs",
+      "to": "orchestrator",
+      "label": "Allow exact binding or deny",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "orchestrator",
+      "label": "Current non-authorizing gateway descriptor and enforcement generation",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Require durable journal acknowledgment and recheck after waits",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["environment", "orchestrator"],
+      "label": "A denial, changed binding, revoked gateway, or missing journal acknowledgment sends zero bytes. v1.1 dispatch stays closed."
+    }
+  ],
+  "links": [
+    {
+      "label": "Remote MCP connection architecture",
+      "url": "../../../architecture/remote-mcp-connections.md"
+    }
+  ]
+}

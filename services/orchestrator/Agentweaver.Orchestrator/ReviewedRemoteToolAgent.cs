@@ -15,6 +15,7 @@ internal sealed record ReviewedRemoteToolInvocation(
     string AgentId,
     string NodeId,
     string NativeCallId,
+    string TurnId,
     string ToolName,
     string ArgumentsJson);
 
@@ -56,6 +57,22 @@ internal interface IReviewedRemoteToolTransport
         RemoteToolResultProof proof,
         ReviewedRemoteToolSnapshot snapshot,
         ReadOnlyMemory<byte> serializedCall,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>Current non-authorizing Environment observation for a reviewed Remote MCP call.</summary>
+internal sealed record ReviewedRemoteToolEnvironmentState(
+    string GatewayDescriptorSha256,
+    long EnforcementGeneration);
+
+/// <summary>Reads the current gateway descriptor generation without authorizing a remote send.</summary>
+internal interface IReviewedRemoteToolEnvironmentReader
+{
+    Task<ReviewedRemoteToolEnvironmentState> ReadAsync(
+        HttpContext context,
+        RuntimeRegistration registration,
+        ReviewedRemoteToolSnapshot snapshot,
+        ReviewedRemoteToolCall call,
         CancellationToken cancellationToken);
 }
 
@@ -156,7 +173,8 @@ internal sealed class ReviewedRemoteToolAgent(
     IReviewedRemoteToolExecutionAuthority authority,
     IReviewedRemoteToolSnapshotResolver snapshots,
     IReviewedRemoteToolTransport transport,
-    IReviewedRemoteToolResultWriter results)
+    IReviewedRemoteToolResultWriter results,
+    IReviewedRemoteToolEnvironmentReader environment)
 {
     private static readonly JsonSerializerOptions SnapshotReferenceJsonOptions =
         new(JsonSerializerDefaults.Web)
@@ -213,6 +231,14 @@ internal sealed class ReviewedRemoteToolAgent(
             invocation.NodeId,
             invocation.ToolName,
             invocation.ArgumentsJson);
+        RequireDispatchableScan(snapshot, call);
+        var environmentState = await environment.ReadAsync(
+            context, registration, snapshot, call, cancellationToken).ConfigureAwait(false);
+        var gatewayDigest = RemoteMcpDigest.ValidateSha256(
+            environmentState.GatewayDescriptorSha256, nameof(environmentState));
+        var gatewayGeneration = environmentState.EnforcementGeneration > 0
+            ? environmentState.EnforcementGeneration
+            : throw new RuntimeAuthorizationException("runtime_remote_tool_gateway_invalid");
         if (Encoding.UTF8.GetByteCount(call.CanonicalArgumentsJson) >
             SessionMaterialValidation.MaximumRemoteToolArgumentsBytes)
             throw new RuntimeAuthorizationException("runtime_remote_tool_arguments_size_invalid");
@@ -225,7 +251,29 @@ internal sealed class ReviewedRemoteToolAgent(
             call.ActionId,
             call.InputHash)
         {
-            IsToolInvocation = true
+            IsToolInvocation = true,
+            RemoteToolOwner = new(
+                1,
+                invocation.AgentId,
+                invocation.NodeId,
+                invocation.NativeCallId,
+                call.ArgumentsDigest,
+                invocation.TurnId,
+                snapshot.SnapshotId.ToString("D"),
+                snapshot.SnapshotDigest,
+                snapshot.ConnectionId,
+                snapshot.ConnectionConfigurationRevision,
+                snapshot.ConnectionDiscoveryRevision!.Value,
+                snapshot.ConfigurationSha256,
+                snapshot.CatalogDigest,
+                snapshot.ToolId,
+                snapshot.ToolRevision,
+                snapshot.ToolDigest,
+                snapshot.TransportProfile,
+                snapshot.TransportOptionsSha256,
+                gatewayDigest,
+                gatewayGeneration,
+                snapshot.ScanEvidence!)
         };
         RuntimeActionContract.Validate(request);
 
@@ -236,7 +284,8 @@ internal sealed class ReviewedRemoteToolAgent(
             context, admission, cancellationToken).ConfigureAwait(false);
         RequireAdmission(verifiedAdmission, request);
         var proofTemplate = CreateProof(
-            call, snapshot, admission, SessionMaterialResultContentClass.TextOnly);
+            call, snapshot, admission, SessionMaterialResultContentClass.TextOnly,
+            request.RemoteToolOwner!);
         SessionMaterialValidation.ValidateRemoteToolResultProof(proofTemplate);
 
         var saved = await results.ReadOptionalAsync(context, proofTemplate, cancellationToken).ConfigureAwait(false);
@@ -280,7 +329,8 @@ internal sealed class ReviewedRemoteToolAgent(
             context, registration, snapshot, invocation, admission, request, cancellationToken)
             .ConfigureAwait(false);
 
-        var proof = CreateProof(call, snapshot, admission, transportResult.ContentClass);
+        var proof = CreateProof(
+            call, snapshot, admission, transportResult.ContentClass, request.RemoteToolOwner!);
         SessionMaterialValidation.ValidateRemoteToolResultProof(proof);
         var acknowledgment = await results.WriteAndAcknowledgeAsync(
             context, proof, resultBytes, cancellationToken).ConfigureAwait(false);
@@ -326,6 +376,28 @@ internal sealed class ReviewedRemoteToolAgent(
             throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_changed");
         var currentAdmission = await authority.VerifyAsync(context, admission, cancellationToken).ConfigureAwait(false);
         RequireAdmission(currentAdmission, request);
+        var currentEnvironment = await environment.ReadAsync(
+                context, currentRegistration, expectedSnapshot, ReviewedRemoteToolCall.Create(
+                    expectedSnapshot, CreateExecutionBinding(currentRegistration),
+                    invocation.NativeCallId, invocation.AgentId, invocation.NodeId,
+                    invocation.ToolName, invocation.ArgumentsJson), cancellationToken).ConfigureAwait(false);
+        var expectedEnvironment = new ReviewedRemoteToolEnvironmentState(
+            request.RemoteToolOwner!.GatewayDescriptorSha256,
+            request.RemoteToolOwner.GatewayEnforcementGeneration);
+        if (currentEnvironment != expectedEnvironment)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_gateway_changed");
+    }
+
+    private static RemoteToolCallExecutionBinding CreateExecutionBinding(RuntimeRegistration registration)
+    {
+        var binding = registration.Binding;
+        return new(
+            registration.RuntimeInstanceId, registration.Revision,
+            binding.ActorIssuer, binding.ActorId, binding.TenantId,
+            binding.ProjectId, binding.RunId, binding.SessionId, binding.WorkflowStepId!,
+            binding.ProjectRevision, binding.ProjectConfigurationRevision,
+            binding.PlatformRuntimeRevision, binding.ContextRevision,
+            binding.AcceptedSelectionHash, binding.ExecutionFence);
     }
 
     /// <summary>
@@ -393,6 +465,7 @@ internal sealed class ReviewedRemoteToolAgent(
         if (registration.State != RuntimeRegistrationState.Active ||
             binding.WorkflowStepId is not { Length: > 0 } ||
             binding.AgentId != invocation.AgentId ||
+            binding.TurnId != invocation.TurnId ||
             registration.RuntimeInstanceId != invocation.RuntimeInstanceId)
             throw new RuntimeAuthorizationException("runtime_remote_tool_binding_invalid");
     }
@@ -427,6 +500,22 @@ internal sealed class ReviewedRemoteToolAgent(
             throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_not_dispatchable");
     }
 
+    private static void RequireDispatchableScan(
+        ReviewedRemoteToolSnapshot snapshot, ReviewedRemoteToolCall call)
+    {
+        var evidence = snapshot.ScanEvidence;
+        if (evidence is null ||
+            evidence.ContractVersion != RemoteMcpCatalogScanEvidence.CurrentVersion ||
+            evidence.ScannerId != RemoteMcpCatalogScanEvidence.CurrentScannerId ||
+            evidence.ScannerVersion != RemoteMcpCatalogScanEvidence.CurrentScannerVersion ||
+            evidence.State != RemoteMcpScanState.Completed ||
+            evidence.ConfigurationRevision != snapshot.ConnectionConfigurationRevision ||
+            evidence.DiscoveryRevision != snapshot.ConnectionDiscoveryRevision ||
+            evidence.CatalogSha256 != snapshot.CatalogDigest ||
+            call.Snapshot.SnapshotDigest != snapshot.SnapshotDigest)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_scan_stale");
+    }
+
     /// <summary>
     /// Checks that an endpoint is an absolute HTTPS URI without user information or a fragment.
     /// </summary>
@@ -459,7 +548,8 @@ internal sealed class ReviewedRemoteToolAgent(
         ReviewedRemoteToolCall call,
         ReviewedRemoteToolSnapshot snapshot,
         RuntimeActionAdmission admission,
-        SessionMaterialResultContentClass contentClass)
+        SessionMaterialResultContentClass contentClass,
+        RuntimeActionRemoteToolOwnerProjection remoteOwner)
     {
         var binding = call.ExecutionBinding;
         return new(
@@ -496,7 +586,12 @@ internal sealed class ReviewedRemoteToolAgent(
             admission.PolicyReceiptId,
             admission.Outcome,
             admission.ReasonCode,
-            contentClass);
+            contentClass)
+        {
+            TurnId = remoteOwner.TurnId,
+            GatewayDescriptorSha256 = remoteOwner.GatewayDescriptorSha256,
+            GatewayEnforcementGeneration = remoteOwner.GatewayEnforcementGeneration
+        };
     }
 
     /// <summary>
@@ -529,7 +624,11 @@ internal sealed class ReviewedRemoteToolAgent(
             snapshot.ToolSchemaDigest,
             snapshot.Permission.ActionId,
             snapshot.Permission.Purpose,
-            snapshot.Permission.Digest);
+            snapshot.Permission.Digest)
+        {
+            TransportOptionsSha256 = snapshot.TransportOptionsSha256,
+            ScanEvidence = snapshot.ScanEvidence
+        };
     }
 
     /// <summary>
