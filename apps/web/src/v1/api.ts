@@ -91,6 +91,7 @@ import type {
   KnowledgeRecordWriteResult,
   MarketplaceBrowsePage,
   MarketplaceBrowseRequest,
+  MarketplaceSkillContentPreview,
   MarketplaceSkillContentImportRequest,
   MarketplaceSkillContentPreviewRequest,
   MarketplaceSource,
@@ -122,6 +123,7 @@ import type {
   SkillContentPreview,
   SkillMarketplaceDefinition,
   SkillPackageRequest,
+  SkillTrustProjection,
   ProjectSummary,
   RemoteMcpConnectionDirectoryPage,
   RemoteMcpOAuthCallbackRequest,
@@ -981,7 +983,7 @@ export class AgentweaverGatewayClient {
     sourceId: string,
     request: MarketplaceSkillContentPreviewRequest,
     tenantSelector?: string | null,
-  ): Promise<SkillContentPreview> {
+  ): Promise<MarketplaceSkillContentPreview> {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources', sourceId, 'preview')}`,
@@ -1096,6 +1098,23 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'skills')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads the current trust projection for one exact stored Skill revision. */
+  readProjectSkillTrust(
+    token: string,
+    projectId: string,
+    skillId: string,
+    revision: number,
+    tenantSelector?: string | null,
+  ): Promise<SkillTrustProjection> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skills', skillId, 'revisions', String(revision), 'trust')}`,
       {},
       this.baseUrl,
       tenantSelector,

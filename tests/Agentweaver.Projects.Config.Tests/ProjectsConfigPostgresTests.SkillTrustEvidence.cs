@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Data;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using AgentGovernance.Security;
@@ -258,6 +259,7 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(1, await db.SkillImportIdempotency.CountAsync(
             item => item.ProjectId == setup.Project.Project.ProjectId &&
                 item.IdempotencyKey == request.IdempotencyKey));
+
         }
         finally
         {
@@ -274,6 +276,679 @@ public sealed partial class ProjectsConfigPostgresTests
                 string.IsNullOrWhiteSpace(opaPath) ||
                 !File.Exists(opaPath))
                 Skip = "The Skill admission native evaluation requires the pinned Linux ACS and OPA assets.";
+        }
+    }
+
+    [Fact]
+    public async Task ActiveFenceWithoutAdmissionProjectsDenialAfterCutover()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+        try
+        {
+            var before = await setup.Skills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                setup.Imported.SkillId,
+                setup.Imported.Revision,
+                CancellationToken.None);
+            Assert.Equal("unknown", before.State);
+
+            var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+            fence.State = ProjectSkillAdmissionFenceState.Active;
+            await db.SaveChangesAsync();
+
+            var after = await setup.Skills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                setup.Imported.SkillId,
+                setup.Imported.Revision,
+                CancellationToken.None);
+            Assert.Equal("denied", after.State);
+            Assert.Equal("skill_admission_denied", after.ErrorCode);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task TrustProjectionRechecksRevocationWhilePolicyEvaluationIsPaused()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            await SeedSkillsPolicyAsync(
+                db,
+                setup.Project.Owner,
+                """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+            setup.Skills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+            var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+            fence.State = ProjectSkillAdmissionFenceState.Active;
+            await db.SaveChangesAsync();
+
+            var candidate = SkillCandidate(
+                "A sufficiently long instruction for the trust projection race.",
+                "# Projection\n");
+            var preview = setup.Skills.Preview(candidate);
+            var receipt = await setup.Skills.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                new SkillContentImportRequest(
+                    "projection-race-import-" + setup.Project.Suffix,
+                    preview.ContentDigest,
+                    "projection-race-skill",
+                    null,
+                    null,
+                    candidate),
+                CancellationToken.None);
+
+            var evaluated = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var resume = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var evaluations = 0;
+            setup.Skills.EvaluateSkillsPolicyOverride =
+                async (_, _, _, _, _, cancellationToken) =>
+                {
+                    if (Interlocked.Increment(ref evaluations) == 2 &&
+                        evaluated.TrySetResult())
+                        await resume.Task.WaitAsync(cancellationToken);
+                };
+            var pendingProjection = setup.Skills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                receipt.SkillId,
+                receipt.Revision,
+                CancellationToken.None);
+            await evaluated.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await using var revokerDb = CreateDbContext();
+            revokerDb.SkillContentRevocations.Add(new ProjectSkillContentRevocationRecord
+            {
+                ProjectId = setup.Project.Project.ProjectId,
+                SkillId = receipt.SkillId,
+                Revision = receipt.Revision,
+                RevokedByActorId = "projection-race",
+                Reason = "Revoked while trust evaluation was paused.",
+                RevokedAt = TimeProvider.System.GetUtcNow(),
+            });
+            await revokerDb.SaveChangesAsync();
+            resume.TrySetResult();
+
+            var projection = await pendingProjection;
+            Assert.Equal("revoked", projection.State);
+            Assert.True(projection.IsRevoked);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task TrustProjectionRejectsEvidenceThatExpiresDuringFinalPolicyEvaluation()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            await SeedSkillsPolicyAsync(
+                db,
+                setup.Project.Owner,
+                """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+            var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+            fence.State = ProjectSkillAdmissionFenceState.Active;
+            await db.SaveChangesAsync();
+            setup.Skills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+            var candidate = SkillCandidate(
+                "A sufficiently long approved instruction for the evidence deadline test.",
+                "# Deadline\n");
+            var preview = setup.Skills.Preview(candidate);
+            var receipt = await setup.Skills.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                new SkillContentImportRequest(
+                    "projection-deadline-import-" + setup.Project.Suffix,
+                    preview.ContentDigest,
+                    "projection-deadline-skill",
+                    null,
+                    null,
+                    candidate),
+                CancellationToken.None);
+            var evidence = await db.SkillTrustEvidence.AsNoTracking().SingleAsync(item =>
+                item.ProjectId == setup.Project.Project.ProjectId &&
+                item.SkillId == receipt.SkillId &&
+                item.Revision == receipt.Revision);
+            var clock = new ManualTimeProvider(
+                evidence.CreatedAt.AddDays(30).AddSeconds(-1));
+            var objectStore = new SkillContentObjectStore(setup.Objects);
+            var skills = new SkillContentService(
+                db,
+                objectStore,
+                new ProjectsConfigService(
+                    db,
+                    CreateProviderCatalog(),
+                    clock,
+                    skillContentObjects: objectStore),
+                clock);
+            var evaluations = 0;
+            skills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) =>
+                {
+                    if (Interlocked.Increment(ref evaluations) == 2)
+                        clock.Advance(TimeSpan.FromSeconds(2));
+                    return Task.CompletedTask;
+                };
+
+            var projection = await skills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                receipt.SkillId,
+                receipt.Revision,
+                CancellationToken.None);
+
+            Assert.Equal("error", projection.State);
+            Assert.Equal("skill_admission_unavailable", projection.ErrorCode);
+            Assert.Contains("stale", projection.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task TrustProjectionUsesDeployedRuntimeGrantsForAdmittedAndRevoked()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            await SeedSkillsPolicyAsync(
+                db,
+                setup.Project.Owner,
+                """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+            var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+            fence.State = ProjectSkillAdmissionFenceState.Active;
+            await db.SaveChangesAsync();
+            setup.Skills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+            var candidate = SkillCandidate(
+                "A sufficiently long approved instruction for runtime trust reads.",
+                "# Runtime trust\n");
+            var preview = setup.Skills.Preview(candidate);
+            var receipt = await setup.Skills.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                new SkillContentImportRequest(
+                    "runtime-trust-" + setup.Project.Suffix,
+                    preview.ContentDigest,
+                    "runtime-trust-skill",
+                    null,
+                    null,
+                    candidate),
+                CancellationToken.None);
+            await RestoreRuntimeGrantsAsync();
+
+            await using var runtimeData = CreateRuntimeDataSource("trust-runtime-grants");
+            await using var runtimeDb = CreateRuntimeDbContext(runtimeData);
+            var runtimeSkills = CreateSkillService(runtimeDb, setup.Objects);
+            runtimeSkills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+
+            var admitted = await runtimeSkills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                receipt.SkillId,
+                receipt.Revision,
+                CancellationToken.None);
+            Assert.Equal("admitted", admitted.State);
+
+            var evaluated = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var resume = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            runtimeSkills.EvaluateSkillsPolicyOverride =
+                async (_, _, _, _, _, cancellationToken) =>
+                {
+                    if (evaluated.TrySetResult())
+                        await resume.Task.WaitAsync(cancellationToken);
+                };
+            var pendingRead = runtimeSkills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                receipt.SkillId,
+                receipt.Revision,
+                CancellationToken.None);
+            await evaluated.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await using var revokerData = CreateRuntimeDataSource("trust-revocation-writer");
+            await using var revokerDb = CreateRuntimeDbContext(revokerData);
+            var revokerSkills = CreateSkillService(revokerDb, setup.Objects);
+            await revokerSkills.RevokeAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                receipt.SkillId,
+                receipt.Revision,
+                "Revoked while the runtime trust read was evaluating.",
+                CancellationToken.None);
+            resume.TrySetResult();
+
+            var revoked = await pendingRead;
+            Assert.Equal("revoked", revoked.State);
+            Assert.True(revoked.IsRevoked);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RuntimeTrustProjectionReadsBuiltInReleaseWithDeployedGrants()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            await SeedSkillsPolicyAsync(
+                db,
+                setup.Project.Owner,
+                """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+            var source = new ProjectMarketplaceSourceRecord
+            {
+                ProjectId = setup.Project.Project.ProjectId,
+                SourceId = Guid.NewGuid(),
+                Name = "Built-in skills",
+                NormalizedName = "BUILT-IN SKILLS",
+                Repository = "agentweaver/release-skills",
+                RequestedRef = "main",
+                Revision = 1,
+                State = ProjectMarketplaceSourceState.Active,
+                CreatedByActorId = setup.Project.Owner.ActorId,
+                UpdatedByActorId = setup.Project.Owner.ActorId,
+                CreatedAt = TimeProvider.System.GetUtcNow(),
+                UpdatedAt = TimeProvider.System.GetUtcNow(),
+            };
+            db.MarketplaceSources.Add(source);
+            await db.SaveChangesAsync();
+            setup.Skills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+            const string commitSha = "cccccccccccccccccccccccccccccccccccccccc";
+            const string selectedPath = "skills/runtime-built-in";
+            var candidate = SkillCandidate(
+                "A sufficiently long approved instruction for the runtime built-in lock test.",
+                "# Runtime built-in\n");
+            var preview = setup.Skills.Preview(candidate);
+            using var publisher = RSA.Create(2048);
+            var admission = new SkillAdmissionService(
+                db,
+                TimeProvider.System,
+                PublisherKeys(publisher, "agentweaver-owner"));
+            var inventoryRevision = "runtime-built-in-" + setup.Project.Suffix;
+            await admission.BeginCutoverAsync(inventoryRevision, CancellationToken.None);
+            _ = await admission.RegisterVerifiedInventoryAsync(
+                SignedInventory(
+                    publisher,
+                    inventoryRevision,
+                    "agentweaver-owner",
+                    source.Repository,
+                    commitSha,
+                    selectedPath,
+                    preview.ContentDigest),
+                CancellationToken.None);
+            await admission.ActivateCutoverAsync(CancellationToken.None);
+
+            var receipt = await setup.Skills.ImportOwnerVerifiedAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                new SkillContentImportRequest(
+                    "runtime-built-in-import-" + setup.Project.Suffix,
+                    preview.ContentDigest,
+                    "runtime-built-in-skill",
+                    null,
+                    new SkillContentSourceSelection(
+                        source.SourceId.ToString("D"),
+                        source.Revision.ToString(),
+                        source.RequestedRef,
+                        commitSha,
+                        selectedPath),
+                    candidate),
+                new SkillContentOwnerProvenance(
+                    source,
+                    commitSha,
+                    selectedPath,
+                    _ => Task.CompletedTask),
+                CancellationToken.None);
+            await RestoreRuntimeGrantsAsync();
+
+            await using var runtimeData = CreateRuntimeDataSource("trust-runtime-built-in");
+            await using var runtimeDb = CreateRuntimeDbContext(runtimeData);
+            var runtimeSkills = CreateSkillService(runtimeDb, setup.Objects);
+            runtimeSkills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+
+            var projection = await runtimeSkills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                receipt.SkillId,
+                receipt.Revision,
+                CancellationToken.None);
+
+            Assert.Equal("builtInExempt", projection.State);
+            Assert.Equal("BuiltInExempt", projection.Classification);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task MarketplaceImportUsesDeployedRuntimeGrantsForBuiltInAndNoMatch()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            await SeedSkillsPolicyAsync(
+                db,
+                setup.Project.Owner,
+                """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+            var source = new ProjectMarketplaceSourceRecord
+            {
+                ProjectId = setup.Project.Project.ProjectId,
+                SourceId = Guid.NewGuid(),
+                Name = "Runtime marketplace",
+                NormalizedName = "RUNTIME MARKETPLACE",
+                Repository = "agentweaver/runtime-skills",
+                RequestedRef = "main",
+                Revision = 1,
+                State = ProjectMarketplaceSourceState.Active,
+                CreatedByActorId = setup.Project.Owner.ActorId,
+                UpdatedByActorId = setup.Project.Owner.ActorId,
+                CreatedAt = TimeProvider.System.GetUtcNow(),
+                UpdatedAt = TimeProvider.System.GetUtcNow(),
+            };
+            db.MarketplaceSources.Add(source);
+            var builtIn = SkillCandidate(
+                "A sufficiently long approved built-in instruction for runtime import.",
+                "# Runtime built-in\n");
+            var noMatch = SkillCandidate(
+                "A sufficiently long approved third-party instruction for runtime import.",
+                "# Runtime third party\n");
+            var builtInPreview = setup.Skills.Preview(builtIn);
+            var noMatchPreview = setup.Skills.Preview(noMatch);
+            const string commitSha = "dddddddddddddddddddddddddddddddddddddddd";
+            using var publisher = RSA.Create(2048);
+            var admission = new SkillAdmissionService(
+                db,
+                TimeProvider.System,
+                PublisherKeys(publisher, "agentweaver-owner"));
+            var inventoryRevision = "runtime-marketplace-" + setup.Project.Suffix;
+            await admission.BeginCutoverAsync(inventoryRevision, CancellationToken.None);
+            _ = await admission.RegisterVerifiedInventoryAsync(
+                SignedInventory(
+                    publisher,
+                    inventoryRevision,
+                    "agentweaver-owner",
+                    source.Repository,
+                    commitSha,
+                    "skills/built-in",
+                    builtInPreview.ContentDigest),
+                CancellationToken.None);
+            await db.SaveChangesAsync();
+            await admission.ActivateCutoverAsync(CancellationToken.None);
+            await RestoreRuntimeGrantsAsync();
+
+            await using var runtimeData = CreateRuntimeDataSource("marketplace-runtime-import");
+            await using var runtimeDb = CreateRuntimeDbContext(runtimeData);
+            var runtimeSkills = CreateSkillService(runtimeDb, setup.Objects);
+            runtimeSkills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+            var runtimeStore = new MarketplaceSourceStore(runtimeDb);
+            var runtimeProjects = new ProjectsConfigService(
+                runtimeDb,
+                CreateProviderCatalog(),
+                TimeProvider.System,
+                skillContentObjects: new SkillContentObjectStore(setup.Objects));
+            var marketplace = new ProjectMarketplaceSkillContentService(
+                new ProjectMarketplaceSourceService(runtimeStore, runtimeProjects, TimeProvider.System),
+                new SkillMarketplaceBrowseService(
+                    new HttpClient(new RuntimeMarketplaceHandler(new Dictionary<string, SkillContentCandidate>
+                    {
+                        ["skills/built-in"] = builtIn,
+                        ["skills/third-party"] = noMatch,
+                    })),
+                    runtimeStore),
+                runtimeSkills,
+                new SkillTrustProjectionService(runtimeDb, TimeProvider.System));
+
+            var builtInReceipt = await marketplace.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                source.SourceId,
+                new MarketplaceSkillImportRequest
+                {
+                    ExpectedSourceRevision = source.Revision,
+                    ResolvedCommitSha = commitSha,
+                    SelectedPath = "skills/built-in",
+                    IdempotencyKey = "runtime-built-in-marketplace-" + setup.Project.Suffix,
+                    ExpectedContentDigest = builtInPreview.ContentDigest,
+                    SkillId = "runtime-marketplace-built-in",
+                },
+                _ => Task.CompletedTask,
+                CancellationToken.None);
+            var noMatchReceipt = await marketplace.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                source.SourceId,
+                new MarketplaceSkillImportRequest
+                {
+                    ExpectedSourceRevision = source.Revision,
+                    ResolvedCommitSha = commitSha,
+                    SelectedPath = "skills/third-party",
+                    IdempotencyKey = "runtime-third-party-marketplace-" + setup.Project.Suffix,
+                    ExpectedContentDigest = noMatchPreview.ContentDigest,
+                    SkillId = "runtime-marketplace-third-party",
+                },
+                _ => Task.CompletedTask,
+                CancellationToken.None);
+            var runtimeEvidence = new ProjectSkillTrustEvidenceService(
+                runtimeSkills,
+                new ProjectGovernanceDecisionStore(
+                    new PooledDbContextFactory<ProjectsConfigDbContext>(
+                        CreateRuntimeDbContextOptions(runtimeData)),
+                    TimeProvider.System));
+            _ = await runtimeEvidence.CreateAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                builtInReceipt.SkillId,
+                builtInReceipt.Revision,
+                "runtime-built-in-refresh-" + setup.Project.Suffix,
+                cancellationToken: CancellationToken.None);
+            _ = await runtimeEvidence.CreateAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                noMatchReceipt.SkillId,
+                noMatchReceipt.Revision,
+                "runtime-third-party-refresh-" + setup.Project.Suffix,
+                cancellationToken: CancellationToken.None);
+
+            Assert.Equal(
+                ProjectSkillAdmissionClassification.BuiltInExempt,
+                (await db.SkillContentRevisions.AsNoTracking().SingleAsync(item =>
+                    item.ProjectId == setup.Project.Project.ProjectId &&
+                    item.SkillId == builtInReceipt.SkillId)).AdmissionClassification);
+            Assert.Equal(
+                ProjectSkillAdmissionClassification.ThirdParty,
+                (await db.SkillContentRevisions.AsNoTracking().SingleAsync(item =>
+                    item.ProjectId == setup.Project.Project.ProjectId &&
+                    item.SkillId == noMatchReceipt.SkillId)).AdmissionClassification);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentEvidenceRefreshAndRuntimeTrustReadDoNotDeadlock()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            await SeedSkillsPolicyAsync(
+                db,
+                setup.Project.Owner,
+                """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+            var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+            fence.State = ProjectSkillAdmissionFenceState.Active;
+            await db.SaveChangesAsync();
+            setup.Skills.EvaluateSkillsPolicyOverride =
+                (_, _, _, _, _, _) => Task.CompletedTask;
+            var candidate = SkillCandidate(
+                "A sufficiently long approved instruction for concurrent evidence refresh.",
+                "# Concurrent refresh\n");
+            var preview = setup.Skills.Preview(candidate);
+            var receipt = await setup.Skills.ImportAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                new SkillContentImportRequest(
+                    "concurrent-refresh-import-" + setup.Project.Suffix,
+                    preview.ContentDigest,
+                    "concurrent-refresh-skill",
+                    null,
+                    null,
+                    candidate),
+                CancellationToken.None);
+            await RestoreRuntimeGrantsAsync();
+
+            var lockKey = RandomNumberGenerator.GetInt32(int.MaxValue);
+            const string trigger = "test_pause_skill_trust_evidence";
+            const string function = "pause_skill_trust_evidence_test";
+            await using var blocker = await fixture.DataSource.OpenConnectionAsync();
+            await using (var command = new NpgsqlCommand($"""
+                CREATE FUNCTION projects_config.{function}() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    PERFORM pg_catalog.pg_advisory_xact_lock({lockKey});
+                    RETURN NEW;
+                END;
+                $$;
+                CREATE TRIGGER {trigger}
+                BEFORE INSERT ON projects_config.project_skill_trust_evidence
+                FOR EACH ROW EXECUTE FUNCTION projects_config.{function}();
+                SELECT pg_catalog.pg_advisory_lock({lockKey});
+                """, blocker))
+                await command.ExecuteNonQueryAsync();
+
+            Task<ProjectSkillTrustEvidenceReceipt>? refresh = null;
+            Task<SkillTrustProjection>? read = null;
+            try
+            {
+                await using var refreshData = CreateRuntimeDataSource("trust-evidence-refresh");
+                await using var refreshDb = CreateRuntimeDbContext(refreshData);
+                var refreshSkills = CreateSkillService(refreshDb, setup.Objects);
+                refreshSkills.EvaluateSkillsPolicyOverride =
+                    (_, _, _, _, _, _) => Task.CompletedTask;
+                var evidence = new ProjectSkillTrustEvidenceService(
+                    refreshSkills,
+                    new ProjectGovernanceDecisionStore(
+                        new PooledDbContextFactory<ProjectsConfigDbContext>(
+                            CreateRuntimeDbContextOptions(refreshData)),
+                        TimeProvider.System));
+                refresh = evidence.CreateAsync(
+                    setup.Project.Owner,
+                    setup.Project.Project.ProjectId,
+                    receipt.SkillId,
+                    receipt.Revision,
+                    "concurrent-refresh-" + setup.Project.Suffix,
+                    CancellationToken.None);
+                await WaitForApplicationLockAsync("trust-evidence-refresh");
+
+                await using var readData = CreateRuntimeDataSource("trust-projection-read");
+                await using var readDb = CreateRuntimeDbContext(readData);
+                var readSkills = CreateSkillService(readDb, setup.Objects);
+                readSkills.EvaluateSkillsPolicyOverride =
+                    (_, _, _, _, _, _) => Task.CompletedTask;
+                read = readSkills.ReadTrustProjectionAsync(
+                    setup.Project.Owner,
+                    setup.Project.Project.ProjectId,
+                    receipt.SkillId,
+                    receipt.Revision,
+                    CancellationToken.None);
+                await WaitForApplicationLockAsync("trust-projection-read");
+
+                await using (var unlock = new NpgsqlCommand(
+                    $"SELECT pg_catalog.pg_advisory_unlock({lockKey})", blocker))
+                    await unlock.ExecuteScalarAsync();
+
+                var refreshed = await refresh.WaitAsync(TimeSpan.FromSeconds(20));
+                var projected = await read.WaitAsync(TimeSpan.FromSeconds(20));
+                Assert.False(refreshed.Replayed);
+                Assert.Equal("admitted", projected.State);
+            }
+            finally
+            {
+                await using var cleanup = new NpgsqlCommand($"""
+                    SELECT pg_catalog.pg_advisory_unlock({lockKey});
+                    DROP TRIGGER IF EXISTS {trigger}
+                        ON projects_config.project_skill_trust_evidence;
+                    DROP FUNCTION IF EXISTS projects_config.{function}();
+                    """, blocker);
+                await cleanup.ExecuteNonQueryAsync();
+                if (refresh is not null)
+                {
+                    try
+                    {
+                        await refresh;
+                    }
+                    catch
+                    {
+                    }
+                }
+                if (read is not null)
+                {
+                    try
+                    {
+                        await read;
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
         }
     }
 
@@ -825,7 +1500,8 @@ public sealed partial class ProjectsConfigPostgresTests
             first.Skills,
             first.Evidence,
             secondImported,
-            first.Candidate);
+            first.Candidate,
+            first.Objects);
         const string key = "trust-shared-project-actor-key";
 
         var originals = new Dictionary<string, ProjectSkillTrustEvidenceReceipt>(StringComparer.Ordinal);
@@ -872,6 +1548,62 @@ public sealed partial class ProjectsConfigPostgresTests
         }
     }
 
+    private SkillContentService CreateSkillService(
+        ProjectsConfigDbContext db,
+        SkillTestObjectStore objects)
+    {
+        var objectStore = new SkillContentObjectStore(objects);
+        return new SkillContentService(
+            db,
+            objectStore,
+            new ProjectsConfigService(
+                db,
+                CreateProviderCatalog(),
+                TimeProvider.System,
+                skillContentObjects: objectStore),
+            TimeProvider.System);
+    }
+
+    private NpgsqlDataSource CreateRuntimeDataSource(string applicationName) =>
+        NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            ApplicationName = applicationName,
+            Options = "-c role=agentweaver-id-projects-config",
+            Pooling = false,
+        }.ConnectionString);
+
+    private static DbContextOptions<ProjectsConfigDbContext> CreateRuntimeDbContextOptions(
+        NpgsqlDataSource dataSource) =>
+        new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+
+    private static ProjectsConfigDbContext CreateRuntimeDbContext(NpgsqlDataSource dataSource) =>
+        new(CreateRuntimeDbContextOptions(dataSource));
+
+    private async Task WaitForApplicationLockAsync(string applicationName)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_stat_activity
+                    WHERE application_name = @application_name
+                      AND wait_event_type = 'Lock'
+                )
+                """, connection);
+            command.Parameters.AddWithValue("application_name", applicationName);
+            if (await command.ExecuteScalarAsync() is true)
+                return;
+            await Task.Delay(20);
+        }
+        throw new TimeoutException($"The {applicationName} operation did not reach the expected database lock.");
+    }
+
     private async Task<SkillTrustEvidenceTestSetup> CreateTrustEvidenceSetupAsync(
         ProjectsConfigDbContext db,
         ProjectsConfigPrivilegedAuthorityStore authorityStore)
@@ -910,7 +1642,73 @@ public sealed partial class ProjectsConfigPostgresTests
             new ProjectGovernanceDecisionStore(
                 new PooledDbContextFactory<ProjectsConfigDbContext>(CreateDbContextOptions()),
                 TimeProvider.System));
-        return new SkillTrustEvidenceTestSetup(project, skills, evidence, imported, candidate);
+        return new SkillTrustEvidenceTestSetup(project, skills, evidence, imported, candidate, objects);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration) => _utcNow = _utcNow.Add(duration);
+    }
+
+    private sealed class RuntimeMarketplaceHandler(
+        IReadOnlyDictionary<string, SkillContentCandidate> candidates) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.Contains("/git/trees/", StringComparison.Ordinal))
+            {
+                var tree = candidates.SelectMany(pair =>
+                {
+                    var resource = pair.Value.Resources.Single();
+                    return new[]
+                    {
+                        new
+                        {
+                            path = $"{pair.Key}/SKILL.md",
+                            type = "blob",
+                            mode = "100644",
+                            size = pair.Value.SkillMarkdown.Length,
+                        },
+                        new
+                        {
+                            path = $"{pair.Key}/{resource.RelativePath}",
+                            type = "blob",
+                            mode = "100644",
+                            size = resource.Content.Length,
+                        },
+                    };
+                });
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        JsonSerializer.Serialize(new { truncated = false, tree }),
+                        Encoding.UTF8,
+                        "application/json"),
+                });
+            }
+            foreach (var pair in candidates)
+            {
+                if (path.EndsWith($"/{pair.Key}/SKILL.md", StringComparison.Ordinal))
+                    return Bytes(pair.Value.SkillMarkdown.ToArray());
+                var resource = pair.Value.Resources.Single();
+                if (path.EndsWith($"/{pair.Key}/{resource.RelativePath}", StringComparison.Ordinal))
+                    return Bytes(resource.Content.ToArray());
+            }
+            throw new InvalidOperationException($"Unexpected marketplace request: {request.RequestUri}");
+        }
+
+        private static Task<HttpResponseMessage> Bytes(byte[] bytes) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(bytes),
+            });
     }
 
     private static async Task SeedSkillsPolicyAsync(
@@ -1031,5 +1829,6 @@ public sealed partial class ProjectsConfigPostgresTests
         SkillContentService Skills,
         ProjectSkillTrustEvidenceService Evidence,
         SkillContentImportReceipt Imported,
-        SkillContentCandidate Candidate);
+        SkillContentCandidate Candidate,
+        SkillTestObjectStore Objects);
 }

@@ -271,6 +271,36 @@ public static class SkillContentEndpoints
         .WithMetadata(new RequestSizeLimitAttribute(MaxContentRequestBytes))
         .WithName("ImportSkillContent");
 
+        projects.MapGet("/{skillId}/revisions/{revision:long}/trust", async (
+            string projectId,
+            string skillId,
+            long revision,
+            HttpContext context,
+            ProjectAuthorizationOwner authorizationOwner,
+            ISkillContentService service,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                RejectQuery(context);
+                var caller = await ResolveCallerAsync(
+                        context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.ReadTrustProjectionAsync(
+                    caller, projectId, skillId, revision, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
+        })
+        .WithName("ReadProjectSkillTrust");
+
         projects.MapPut("/{skillId}/assignment", async (
             string projectId,
             string skillId,

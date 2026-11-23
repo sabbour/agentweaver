@@ -933,6 +933,29 @@ export interface SkillContentPreview {
   totalBytes: number;
 }
 
+/** Read-only projection of the current decision for one exact Skill revision. */
+export interface SkillTrustProjection {
+  projectId: string;
+  skillId: string | null;
+  revision: number | null;
+  contentDigest: string;
+  sourceRevision: string | null;
+  resolvedCommitSha: string | null;
+  selectedPath: string | null;
+  state: 'admitted' | 'denied' | 'unknown' | 'error' | 'revoked' | 'builtInExempt';
+  classification: string | null;
+  evidenceCreatedAt: string | null;
+  evidenceAgeSeconds: number | null;
+  isRevoked: boolean;
+  errorCode: string | null;
+  error: string | null;
+}
+
+/** Marketplace content preview with a trust projection that writes no evidence. */
+export interface MarketplaceSkillContentPreview extends SkillContentPreview {
+  trust: SkillTrustProjection;
+}
+
 /** One uploaded file for `POST /skills/package`. `content` is base64 of the raw bytes. */
 export interface SkillPackageFileRequest {
   relativePath: string;

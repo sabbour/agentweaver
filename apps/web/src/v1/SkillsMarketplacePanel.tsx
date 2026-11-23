@@ -12,6 +12,7 @@ import type {
   MarketplaceBrowsePage,
   MarketplaceBrowseRequest,
   MarketplaceSkillCandidate,
+  MarketplaceSkillContentPreview,
   MarketplaceSkillContentImportRequest,
   MarketplaceSkillContentPreviewRequest,
   MarketplaceSource,
@@ -30,6 +31,7 @@ import type {
   SkillContentRevisionSummary,
   SkillMarketplaceDefinition,
   SkillPackageRequest,
+  SkillTrustProjection,
   VersionedProjectConfiguration,
 } from './contracts';
 
@@ -68,7 +70,7 @@ export interface SkillsMarketplaceActions {
     projectId: string,
     sourceId: string,
     request: MarketplaceSkillContentPreviewRequest,
-  ): Promise<SkillContentPreview>;
+  ): Promise<MarketplaceSkillContentPreview>;
   importMarketplaceSkill(
     projectId: string,
     sourceId: string,
@@ -83,6 +85,11 @@ export interface SkillsMarketplaceActions {
     projectId: string,
     request: SkillContentInventoryQuery,
   ): Promise<SkillContentInventoryPage>;
+  readSkillTrust(
+    projectId: string,
+    skillId: string,
+    revision: number,
+  ): Promise<SkillTrustProjection>;
   updateSkillAssignment(
     projectId: string,
     skillId: string,
@@ -129,6 +136,7 @@ type SkillInventoryView = {
   cursors: Array<string | null>;
   loading: boolean;
   error: string | null;
+  trust: Record<string, { report: SkillTrustProjection | null; error: string | null; loading: boolean }>;
 };
 
 /**
@@ -209,6 +217,83 @@ function validateSkillPreview(result: SkillContentPreview): void {
       !Number.isSafeInteger(result.totalBytes) || result.totalBytes < 0) {
     throw new Error('The server returned an invalid skill preview.');
   }
+}
+
+function validateTrustProjection(result: SkillTrustProjection, projectId: string): void {
+  if (!result ||
+      result.projectId !== projectId ||
+      (result.skillId !== null && (typeof result.skillId !== 'string' || !result.skillId)) ||
+      (result.revision !== null &&
+        (!Number.isSafeInteger(result.revision) || result.revision < 1)) ||
+      typeof result.contentDigest !== 'string' || !result.contentDigest ||
+      !['admitted', 'denied', 'unknown', 'error', 'revoked', 'builtInExempt'].includes(result.state) ||
+      (result.evidenceCreatedAt !== null &&
+        (typeof result.evidenceCreatedAt !== 'string' ||
+          !Number.isFinite(Date.parse(result.evidenceCreatedAt)))) ||
+      (result.evidenceAgeSeconds !== null &&
+        (!Number.isSafeInteger(result.evidenceAgeSeconds) || result.evidenceAgeSeconds < 0)) ||
+      typeof result.isRevoked !== 'boolean') {
+    throw new Error('The server returned an invalid Skill trust projection.');
+  }
+}
+
+function interruptedTrust(): SkillInventoryView['trust'] {
+  return {};
+}
+
+function TrustProjectionDetails({
+  projectId,
+  report,
+  error,
+}: {
+  projectId: string;
+  report: SkillTrustProjection | null;
+  error?: string | null;
+}) {
+  if (!report)
+    return <p className="v1-warning">Trust status: error — {error || 'The trust projection is unavailable.'}</p>;
+  if (report.projectId !== projectId)
+    return <p className="v1-warning">Trust status: error — The trust projection belongs to another project.</p>;
+
+  const label = report.state === 'builtInExempt'
+    ? report.revision === null
+      ? 'Built-in inventory match'
+      : 'Built-in — exempt'
+    : report.state === 'revoked'
+      ? 'Revoked'
+      : report.state === 'admitted'
+        ? 'Admitted'
+        : report.state === 'denied'
+          ? 'Denied'
+          : report.state === 'unknown'
+            ? 'Unknown'
+            : 'Error';
+  const age = report.evidenceAgeSeconds === null
+    ? 'not available'
+    : `${report.evidenceAgeSeconds} second(s)`;
+
+  return (
+    <section className="v1-stack" aria-label="Skill trust status">
+      <strong>Trust status: {label}</strong>
+      <p className="v1-muted">
+        Exact project revision: {report.revision ?? 'not imported'} ·
+        content digest <code>{report.contentDigest}</code>
+      </p>
+      <p className="v1-muted">
+        Evidence age: {age}
+        {report.evidenceCreatedAt && <>
+          {' · observed '}
+          <time dateTime={report.evidenceCreatedAt}>{report.evidenceCreatedAt}</time>
+        </>}
+      </p>
+      {report.error && <p className={report.state === 'denied' || report.state === 'error' ? 'v1-warning' : 'v1-muted'}>{report.error}</p>}
+      <p className="v1-muted">
+        <a href="/policies">Open Skills policies</a>
+        {' · '}
+        <a href={`/projects/${encodeURIComponent(projectId)}/settings?section=history`}>Open project audit history</a>
+      </p>
+    </section>
+  );
 }
 
 /** Confirms the import receipt matches the exact content preview the user approved. */
@@ -428,7 +513,7 @@ export function SkillsMarketplacePanel({
   const [browsing, setBrowsing] = useState(false);
   const [skillInventory, setSkillInventory] = useState<SkillInventoryView | null>(null);
   const [marketplaceSelection, setMarketplaceSelection] = useState<MarketplaceSkillSelection | null>(null);
-  const [marketplacePreview, setMarketplacePreview] = useState<SkillContentPreview | null>(null);
+  const [marketplacePreview, setMarketplacePreview] = useState<MarketplaceSkillContentPreview | null>(null);
   const [marketplaceBusy, setMarketplaceBusy] = useState<'preview' | 'import' | null>(null);
   const [marketplaceError, setMarketplaceError] = useState<string | null>(null);
   const [marketplaceNotice, setMarketplaceNotice] = useState<string | null>(null);
@@ -730,8 +815,8 @@ export function SkillsMarketplacePanel({
     const requestId = ++inventoryRequest.current;
     // Keep the current page on screen while loading, unless it came from another project or actions.
     setSkillInventory((current) => current?.projectId === scope && current.actions === actions
-      ? { ...current, loading: true, error: null }
-      : { projectId: scope, actions, page: null, cursors: [null], loading: true, error: null });
+      ? { ...current, loading: true, error: null, trust: interruptedTrust() }
+      : { projectId: scope, actions, page: null, cursors: [null], loading: true, error: null, trust: {} });
     try {
       const result = await actions.listSkillInventory(scope, {
         cursor: cursor ?? undefined,
@@ -746,6 +831,7 @@ export function SkillsMarketplacePanel({
         cursors,
         loading: false,
         error: null,
+        trust: {},
       });
     } catch (reason) {
       if (activeProjectId.current !== scope || inventoryRequest.current !== requestId) return;
@@ -757,7 +843,62 @@ export function SkillsMarketplacePanel({
         cursors: current?.projectId === scope && current.actions === actions ? current.cursors : [null],
         loading: false,
         error: messageForError(reason),
+        trust: current?.projectId === scope && current.actions === actions
+          ? interruptedTrust()
+          : {},
       }));
+    }
+  };
+
+  const loadSkillTrust = async (revision: SkillContentRevisionSummary) => {
+    if (!actions) return;
+    const scope = projectId;
+    const requestId = inventoryRequest.current;
+    const key = `${revision.skillId}/${revision.revision}`;
+    setSkillInventory((current) => current?.projectId === scope &&
+      current.actions === actions && current.page?.revisions.some((item) =>
+        item.skillId === revision.skillId && item.revision === revision.revision)
+      ? {
+          ...current,
+          trust: {
+            ...current.trust,
+            [key]: { report: null, error: null, loading: true },
+          },
+        }
+      : current);
+    try {
+      const report = await actions.readSkillTrust(scope, revision.skillId, revision.revision);
+      if (report.projectId !== scope)
+        throw new Error('The trust projection belongs to another project.');
+      if (report.skillId !== revision.skillId ||
+          report.revision !== revision.revision ||
+          report.contentDigest !== revision.contentDigest)
+        throw new Error('The server returned a trust projection for a different Skill revision.');
+      validateTrustProjection(report, scope);
+      if (activeProjectId.current !== scope || inventoryRequest.current !== requestId) return;
+      setSkillInventory((current) => current?.projectId === scope &&
+        current.actions === actions && current.page?.revisions.some((item) =>
+          item.skillId === revision.skillId && item.revision === revision.revision)
+        ? {
+            ...current,
+            trust: {
+              ...current.trust,
+              [key]: { report, error: null, loading: false },
+            },
+          }
+        : current);
+    } catch (trustError) {
+      if (activeProjectId.current !== scope || inventoryRequest.current !== requestId) return;
+      setSkillInventory((current) => current?.projectId === scope &&
+        current.actions === actions
+        ? {
+            ...current,
+            trust: {
+              ...current.trust,
+              [key]: { report: null, error: messageForError(trustError), loading: false },
+            },
+          }
+        : current);
     }
   };
 
@@ -927,8 +1068,24 @@ export function SkillsMarketplacePanel({
       });
       if (activeProjectId.current !== scope || marketplaceRequest.current !== requestId) return;
       validateSkillPreview(result);
+      validateTrustProjection(result.trust, scope);
+      if (result.trust.contentDigest !== result.contentDigest ||
+          result.trust.sourceRevision !== String(page.sourceRevision) ||
+          result.trust.resolvedCommitSha !== page.resolvedCommitSha ||
+          result.trust.selectedPath !== item.location)
+        throw new Error('The server returned a trust projection for a different Marketplace selection.');
       setMarketplacePreview(result);
-      setMarketplaceNotice('This skill is valid at the selected commit and ready to import. Nothing is saved yet.');
+      if (['denied', 'revoked', 'error'].includes(result.trust.state)) {
+        setMarketplaceError(result.trust.error || 'The current admission policy does not allow this import.');
+      } else {
+        setMarketplaceNotice(
+          result.trust.state === 'builtInExempt'
+            ? 'The skill matches the built-in release inventory. Import will check the current admission policy. Nothing is saved yet.'
+            : result.trust.state === 'admitted'
+              ? 'The preview endpoint returned an admission result. Import will check the current admission policy again. Nothing is saved yet.'
+              : 'Content validation passed. Import will check the current admission policy. Nothing is saved yet.',
+        );
+      }
     } catch (reason) {
       if (activeProjectId.current === scope && marketplaceRequest.current === requestId)
         setMarketplaceError(messageForError(reason));
@@ -1016,7 +1173,7 @@ export function SkillsMarketplacePanel({
       validateSkillPreview(result);
       setCandidate(nextCandidate);
       setPreview(result);
-      setSkillNotice(`${result.name} is valid and ready to import. Nothing is saved yet.`);
+      setSkillNotice(`${result.name} is valid. Import will check the current admission policy. Nothing is saved yet.`);
     } catch (reason) {
       if (activeProjectId.current === scope && skillRequest.current === requestId)
         setSkillError(messageForError(reason));
@@ -1449,6 +1606,25 @@ export function SkillsMarketplacePanel({
                       <p className="v1-muted">
                         Created <time dateTime={revision.createdAt}>{revision.createdAt}</time>
                       </p>
+                      {currentSkillInventory?.trust[`${revision.skillId}/${revision.revision}`]?.loading ? (
+                        <Spinner label={`Loading trust status for ${revision.name}…`} />
+                      ) : currentSkillInventory?.trust[`${revision.skillId}/${revision.revision}`] ? (
+                        <TrustProjectionDetails
+                          projectId={projectId}
+                          report={currentSkillInventory.trust[`${revision.skillId}/${revision.revision}`].report}
+                          error={currentSkillInventory.trust[`${revision.skillId}/${revision.revision}`].error}
+                        />
+                      ) : (
+                        <div className="v1-actions">
+                          <Button
+                            appearance="secondary"
+                            type="button"
+                            onClick={() => void loadSkillTrust(revision)}
+                          >
+                            Load trust status for {revision.name}
+                          </Button>
+                        </div>
+                      )}
                       {removable && (
                         <div className="v1-actions">
                           <Button
@@ -1809,11 +1985,16 @@ export function SkillsMarketplacePanel({
                       <div><dt>Content digest</dt><dd><code>{currentMarketplacePreview.contentDigest}</code></dd></div>
                       <div><dt>Total bytes</dt><dd>{currentMarketplacePreview.totalBytes}</dd></div>
                     </div>
+                    <TrustProjectionDetails
+                      projectId={projectId}
+                      report={currentMarketplacePreview.trust}
+                    />
                     <Button
                       appearance="primary"
                       type="button"
                       disabled={!actions || skillBusy !== null || marketplaceBusy !== null ||
-                        marketplaceImportComplete}
+                        marketplaceImportComplete ||
+                        ['denied', 'revoked', 'error'].includes(currentMarketplacePreview.trust.state)}
                       onClick={() => void importMarketplaceSkill()}
                     >
                       {marketplaceBusy === 'import' ? 'Importing…' :

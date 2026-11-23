@@ -255,7 +255,7 @@ public static class GatewayRouteCatalog
             ["expectedSourceRevision", "query", "page", "pageSize"], forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, marketplaceSources + "/{sourceId}/preview",
             "/api" + marketplaceSources + "/{sourceId}/preview",
-            "previewMarketplaceSkill", "Preview selected skill content from a marketplace source",
+            "previewMarketplaceSkill", "Preview selected skill content and read-only trust status from a marketplace source",
             body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
             forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, marketplaceSources + "/{sourceId}/import",
@@ -275,6 +275,10 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke",
             "revokeProjectSkillRevision", "Revoke one project skill revision",
             body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/skills/{skillId}/revisions/{revision}/trust",
+            "/api/projects/{projectId}/skills/{skillId}/revisions/{revision}/trust",
+            "readProjectSkillTrust", "Read the current trust projection for one exact skill revision",
+            forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/projects/{projectId}/skills/import",
             "/api/projects/{projectId}/skills/import",
             "importProjectSkill", "Import validated skill content to a project",

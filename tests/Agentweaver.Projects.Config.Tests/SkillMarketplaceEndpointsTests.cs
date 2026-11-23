@@ -225,6 +225,20 @@ public sealed class SkillContentEndpointValidationTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Trust_projection_rejects_query_parameters_before_owner_access()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-1/skills/skill-1/revisions/1/trust?score=true");
+        request.Headers.Add(SkillMarketplaceEndpointHost.SubjectHeader, "subject-1");
+
+        using var response = await _client.SendAsync(request);
+
+        await SkillMarketplaceEndpointHost.AssertProblemAsync(
+            response, HttpStatusCode.Forbidden, "forbidden");
+    }
+
 }
 
 /// <summary>
@@ -365,6 +379,16 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         Assert.Equal("pinned-skill", preview.GetProperty("name").GetString());
         Assert.Equal("A controlled endpoint test skill.", preview.GetProperty("description").GetString());
         Assert.Equal(1, preview.GetProperty("resourceCount").GetInt32());
+        var trust = preview.GetProperty("trust");
+        Assert.Equal("unknown", trust.GetProperty("state").GetString());
+        Assert.Equal(
+            "Content validation passed. Preview does not establish admission readiness.",
+            trust.GetProperty("error").GetString());
+        Assert.Equal(owner.ProjectId, trust.GetProperty("projectId").GetString());
+        Assert.Equal(JsonValueKind.Null, trust.GetProperty("revision").ValueKind);
+        Assert.Equal(JsonValueKind.Null, trust.GetProperty("evidenceCreatedAt").ValueKind);
+        Assert.Equal("1", trust.GetProperty("sourceRevision").GetString());
+        Assert.Equal(CommitSha, trust.GetProperty("resolvedCommitSha").GetString());
         // totalBytes counts semantic content (name, description, instructions, resources), not raw SKILL.md bytes.
         Assert.Equal(
             Encoding.UTF8.GetByteCount(
@@ -386,6 +410,19 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         Assert.Equal("pinned-skill", receipt.GetProperty("name").GetString());
         Assert.Equal(1, receipt.GetProperty("revision").GetInt64());
 
+        using var trustResponse = await SendAsync(
+            owner,
+            HttpMethod.Get,
+            $"/api/projects/{owner.ProjectId}/skills/{receipt.GetProperty("skillId").GetString()}/revisions/1/trust");
+        Assert.Equal(HttpStatusCode.OK, trustResponse.StatusCode);
+        AssertNoStore(trustResponse);
+        var storedTrust = await ReadJsonAsync(trustResponse);
+        Assert.Equal(owner.ProjectId, storedTrust.GetProperty("projectId").GetString());
+        Assert.Equal(1, storedTrust.GetProperty("revision").GetInt64());
+        Assert.Equal(digest, storedTrust.GetProperty("contentDigest").GetString());
+        Assert.Equal("unknown", storedTrust.GetProperty("state").GetString());
+        Assert.False(storedTrust.GetProperty("isRevoked").GetBoolean());
+
         using var wrongDigest = await SendAsync(
             owner,
             HttpMethod.Post,
@@ -405,6 +442,21 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         using var staleBrowse = await SendAsync(owner, HttpMethod.Get, sourcePath + "/browse?expectedSourceRevision=2");
         await SkillMarketplaceEndpointHost.AssertProblemAsync(
             staleBrowse, HttpStatusCode.Conflict, "marketplace_source_revision_conflict");
+
+        var skillId = receipt.GetProperty("skillId").GetString();
+        using var revoked = await SendAsync(
+            owner,
+            HttpMethod.Post,
+            $"/api/projects/{owner.ProjectId}/skills/{skillId}/revisions/1/revoke",
+            new { reason = "Endpoint trust test." });
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        using var revokedTrustResponse = await SendAsync(
+            owner,
+            HttpMethod.Get,
+            $"/api/projects/{owner.ProjectId}/skills/{skillId}/revisions/1/trust");
+        var revokedTrust = await ReadJsonAsync(revokedTrustResponse);
+        Assert.Equal("revoked", revokedTrust.GetProperty("state").GetString());
+        Assert.True(revokedTrust.GetProperty("isRevoked").GetBoolean());
 
         Assert.All(_gitHubRequests.Where(uri => !uri.Contains("/commits/", StringComparison.Ordinal)),
             uri => Assert.Contains(CommitSha, uri, StringComparison.Ordinal));
@@ -680,6 +732,7 @@ internal static class SkillMarketplaceEndpointHost
                     services.AddScoped<IProjectMarketplaceSourceStore>(
                         provider => provider.GetRequiredService<MarketplaceSourceStore>());
                     services.AddScoped<ProjectMarketplaceSourceService>();
+                    services.AddScoped<SkillTrustProjectionService>();
                     services.AddSingleton(new SkillMarketplaceCatalog(SkillMarketplaceCatalog.DefaultDefinitions));
                     services.AddScoped<ProjectMarketplaceSkillContentService>();
                     services.AddScoped(provider => new SkillMarketplaceBrowseService(

@@ -2684,6 +2684,22 @@ describe('v1 web project scoping', () => {
       contentDigest: 'sha256:source',
       resourceCount: 0,
       totalBytes: 14,
+      trust: {
+        projectId: 'p1',
+        skillId: null,
+        revision: null,
+        contentDigest: 'sha256:source',
+        sourceRevision: '7',
+        resolvedCommitSha: '0123456789abcdef',
+        selectedPath: 'skills/sample',
+        state: 'unknown',
+        classification: null,
+        evidenceCreatedAt: null,
+        evidenceAgeSeconds: null,
+        isRevoked: false,
+        errorCode: null,
+        error: 'Content validation passed. Preview does not establish admission readiness.',
+      },
     });
     mocks.importMarketplaceSkillContent.mockResolvedValue({
       skillId: 'skill-source',

@@ -1361,7 +1361,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             objectStore,
             configurations,
             TimeProvider.System);
-        var marketplace = new ProjectMarketplaceSkillContentService(sources, browse, content);
+        var marketplace = new ProjectMarketplaceSkillContentService(
+            sources, browse, content, new SkillTrustProjectionService(db, TimeProvider.System));
         async Task VerifyReadAsync(CancellationToken cancellationToken) =>
             _ = await sources.GetForBrowseAsync(
                 owner, project.ProjectId, source.SourceId, source.Revision, cancellationToken);
@@ -1532,6 +1533,34 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             $"/{rootCommitSha}/SKILL.md", StringComparison.Ordinal));
         Assert.Contains(requests, request => request.EndsWith(
             $"/{rootCommitSha}/docs/reference.md", StringComparison.Ordinal));
+
+        var previewAuthorityChecks = 0;
+        async Task VerifyPreviewStillAuthorizedAsync(CancellationToken cancellationToken)
+        {
+            previewAuthorityChecks++;
+            if (previewAuthorityChecks == 4)
+                throw MarketplaceSourceException.RevisionConflict();
+            _ = await sources.GetForBrowseAsync(
+                owner,
+                project.ProjectId,
+                rootSource.SourceId,
+                rootSource.Revision,
+                cancellationToken);
+        }
+
+        await Assert.ThrowsAsync<MarketplaceSourceException>(() => marketplace.PreviewAsync(
+            owner,
+            project.ProjectId,
+            rootSource.SourceId,
+            new MarketplaceSkillPreviewRequest
+            {
+                ExpectedSourceRevision = rootSource.Revision,
+                ResolvedCommitSha = rootCommitSha,
+                SelectedPath = string.Empty,
+            },
+            VerifyPreviewStillAuthorizedAsync,
+            CancellationToken.None));
+        Assert.Equal(4, previewAuthorityChecks);
     }
 
     [Fact]
@@ -1616,7 +1645,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             configurations,
             TimeProvider.System);
         var marketplace = new ProjectMarketplaceSkillContentService(
-            sources, new SkillMarketplaceBrowseService(httpClient, new MarketplaceSourceStore(db)), content);
+            sources,
+            new SkillMarketplaceBrowseService(httpClient, new MarketplaceSourceStore(db)),
+            content,
+            new SkillTrustProjectionService(db, TimeProvider.System));
         // The endpoints pass these callbacks to recheck read or write authority and the source revision
         // just before content is read. The test passes the same checks directly.
         async Task VerifyReadAsync(CancellationToken cancellationToken) =>
@@ -1625,7 +1657,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         async Task VerifyWriteAsync(CancellationToken cancellationToken) =>
             _ = await sources.GetForImportAsync(
                 owner, project.ProjectId, source.SourceId, source.Revision, cancellationToken);
-        Task<SkillContentPreview> PreviewAsync(string selectedPath) => marketplace.PreviewAsync(
+        Task<MarketplaceSkillContentPreview> PreviewAsync(string selectedPath) => marketplace.PreviewAsync(
             owner,
             project.ProjectId,
             source.SourceId,

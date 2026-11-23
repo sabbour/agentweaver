@@ -188,6 +188,7 @@ builder.Services.AddDataProtection()
 builder.Services.AddScoped<NativeAcsPolicyStore>();
 builder.Services.AddSingleton(SkillReleasePublisherKeys.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<SkillAdmissionService>();
+builder.Services.AddScoped<SkillTrustProjectionService>();
 builder.Services.AddMemoryCache();
 // Missing OPA must not stop unrelated service functions. Policy validation then reports that OPA is unavailable.
 if (builder.Configuration["ACS_OPA_PATH"] is { } acsOpaPath &&

@@ -33,6 +33,32 @@ public sealed record SkillContentPreview(
     int ResourceCount,
     long TotalBytes);
 
+/// <summary>Read-only admission projection for a candidate or stored Skill revision.</summary>
+public sealed record SkillTrustProjection(
+    string ProjectId,
+    string? SkillId,
+    long? Revision,
+    string ContentDigest,
+    string? SourceRevision,
+    string? ResolvedCommitSha,
+    string? SelectedPath,
+    string State,
+    string? Classification,
+    DateTimeOffset? EvidenceCreatedAt,
+    long? EvidenceAgeSeconds,
+    bool IsRevoked,
+    string? ErrorCode,
+    string? Error);
+
+/// <summary>Marketplace preview plus its non-persisted trust projection.</summary>
+public sealed record MarketplaceSkillContentPreview(
+    string Name,
+    string Description,
+    string ContentDigest,
+    int ResourceCount,
+    long TotalBytes,
+    SkillTrustProjection Trust);
+
 /// <summary>Import input containing idempotency, content, optional revision-fence, and source-provenance data.</summary>
 public sealed record SkillContentImportRequest(
     string IdempotencyKey,
@@ -101,6 +127,14 @@ public interface ISkillContentService
         string projectId,
         string? cursor,
         int pageSize,
+        CancellationToken cancellationToken);
+
+    /// <summary>Reads the current admission projection for one exact stored revision.</summary>
+    Task<SkillTrustProjection> ReadTrustProjectionAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string skillId,
+        long revision,
         CancellationToken cancellationToken);
 
     /// <summary>Stores an immutable content revision and idempotency receipt after digest and authority checks.</summary>
