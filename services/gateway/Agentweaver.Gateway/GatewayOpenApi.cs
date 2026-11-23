@@ -2421,7 +2421,7 @@ else if (route.OperationId is
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
             ("revision", Int()), ("contentSha256", Str()), ("auditId", Uuid()), ("outboxId", Uuid()),
             ("replayed", Bool())),
-        ["ModelProviderDraftSaveRequest"] = StrictObj(
+        ["ModelProviderDraftSaveRequest"] = WithRateCardPair(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64",
                 minimum = 1L, maximum = long.MaxValue - 1 }), ("name", Str()),
@@ -2431,7 +2431,7 @@ else if (route.OperationId is
             ("reasoning_efforts", BoundedArray(
                 Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
             ("prompt_capacity_tokens", NullableInt()),
-            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr())),
+            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr()))),
         ["ModelProviderCredentialPutRequest"] = StrictObj(
             ["operationId", "expectedProviderRevision"],
             ("operationId", Uuid()),
@@ -2458,7 +2458,7 @@ else if (route.OperationId is
             ("credentialVersion", NullableStr()),
             ("configurationHash", NullableStr()),
             ("providerState", Nullable(Enum("Draft", "Available")))),
-        ["ModelProviderDraftPlatformCreateRequest"] = WithReferencePin(StrictObj(
+        ["ModelProviderDraftPlatformCreateRequest"] = WithRateCardPair(WithReferencePin(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64", @const = 0 }),
             ("name", Str()),
@@ -2472,8 +2472,8 @@ else if (route.OperationId is
             ("reference", new { type = "string", minLength = 1, maxLength = 256,
                 pattern = "^(?!.*__)[A-Za-z0-9.-](?:[A-Za-z0-9._-]{0,254}[A-Za-z0-9.-])?(?![\\s\\S])" }),
             ("targetInstallationId", new { type = "string", format = "uuid",
-                pattern = "^(?!00000000-0000-0000-0000-000000000000(?![\\s\\S]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])" }))),
-        ["ModelProviderDraftProjectCreateRequest"] = StrictObj(
+                pattern = "^(?!00000000-0000-0000-0000-000000000000(?![\\s\\S]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])" })))),
+        ["ModelProviderDraftProjectCreateRequest"] = WithRateCardPair(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64", @const = 0 }),
             ("name", Str()), ("type", Enum("openai", "azure", "anthropic")),
@@ -2483,7 +2483,7 @@ else if (route.OperationId is
             ("reasoning_efforts", BoundedArray(
                 Enum("none", "minimal", "low", "medium", "high", "xhigh"), 0, 6)),
             ("prompt_capacity_tokens", NullableInt()),
-            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr())),
+            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr()))),
         ["ModelProviderDraft"] = StrictObj(
             ["id", "name", "type", "base_url", "model", "wire_api", "azure_api_version",
                 "reasoning_efforts", "prompt_capacity_tokens", "scope", "projectId", "state",
@@ -4048,6 +4048,19 @@ else if (route.OperationId is
             ["reference"] = ["targetInstallationId"],
             ["targetInstallationId"] = ["reference"],
         };
+        return schema;
+    }
+
+    private static object WithRateCardPair(object schema)
+    {
+        var dictionary = (Dictionary<string, object>)schema;
+        var dependencies = dictionary.TryGetValue("dependentRequired", out var existing)
+            ? new Dictionary<string, string[]>(
+                (Dictionary<string, string[]>)existing, StringComparer.Ordinal)
+            : new Dictionary<string, string[]>(StringComparer.Ordinal);
+        dependencies["rate_card_id"] = ["rate_card_version"];
+        dependencies["rate_card_version"] = ["rate_card_id"];
+        dictionary["dependentRequired"] = dependencies;
         return schema;
     }
 
