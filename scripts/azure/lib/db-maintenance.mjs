@@ -39,7 +39,7 @@ export function dbMaintenanceTarget(name = 'agentweaver') {
     postgresHost: `${name}-pg.postgres.database.azure.com` });
 }
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = '9a7f1e166b2b20c8fe050e946c8b2d6f21e89f9b061385cf13c1118067be02a5';
+export const REVIEWED_PLAN_SHA256 = 'cfe1cd63c19b3c07206dcf1a00755fbd96e3d57a9ddcbb5a1570e71db2326165';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';

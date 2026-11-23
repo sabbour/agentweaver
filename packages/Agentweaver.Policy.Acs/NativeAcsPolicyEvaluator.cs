@@ -141,25 +141,7 @@ public sealed class NativeAcsPolicyEvaluator
             WriteArtifact(workDirectory, artifact);
 
             var manifestPath = Path.Combine(workDirectory, "manifest.yaml");
-            ApprovalResolver? resolver = retainApproval
-                ? (_, result, _) => ValueTask.FromResult(
-                    ApprovalResolution.Suspend(result.Verdict.Approval, result.ActionIdentity))
-                : approvalBinding is { } binding
-                    ? (_, result, _) =>
-                    {
-                        var matches = result.PolicyInput is { } policyInput &&
-                            !string.IsNullOrWhiteSpace(result.ActionIdentity) &&
-                            JsonElement.DeepEquals(policyInput, binding.PolicyInput) &&
-                            NullableJsonEquals(result.Verdict.Approval, binding.Approval);
-                        binding.Matched = matches;
-                        return ValueTask.FromResult(matches
-                            ? binding.Approve
-                                ? ApprovalResolution.Allow(result.ActionIdentity!)
-                                : ApprovalResolution.Deny()
-                            : ApprovalResolution.Suspend(result.Verdict.Approval, result.ActionIdentity));
-                    }
-            : null;
-            var control = AgentControl.FromPath(manifestPath, approvalResolver: resolver);
+            var control = AgentControl.FromPath(manifestPath);
             using var snapshotDocument = JsonDocument.Parse(
                 JsonSerializer.SerializeToUtf8Bytes(CreateSnapshot(snapshot, domain, artifact)));
             var result = await control.EvaluateInterventionPointAsync(
@@ -170,7 +152,26 @@ public sealed class NativeAcsPolicyEvaluator
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (result.Verdict.Decision == Decision.Allow)
+            if (approvalBinding is { } binding)
+            {
+                var matches = result.PolicyInput is { } policyInput &&
+                    !string.IsNullOrWhiteSpace(result.ActionIdentity) &&
+                    JsonElement.DeepEquals(policyInput, binding.PolicyInput) &&
+                    NullableJsonEquals(result.Verdict.Approval, binding.Approval) &&
+                    result.ActionIdentity == AgentControl.ActionIdentity(binding.PolicyInput);
+                evaluation = !matches
+                    ? Error(artifactHash, "approval_binding_changed")
+                    : binding.Approve
+                        ? new(
+                            PolicyEvaluationOutcome.Allow,
+                            PolicyEvaluationReasonCode.Allowed,
+                            artifactHash)
+                        : new(
+                            PolicyEvaluationOutcome.Deny,
+                            PolicyEvaluationReasonCode.DefaultDeny,
+                            artifactHash);
+            }
+            else if (result.Verdict.Decision == Decision.Allow)
                 evaluation = new NativeAcsEvaluationResult(
                     PolicyEvaluationOutcome.Allow,
                     PolicyEvaluationReasonCode.Allowed,
@@ -195,8 +196,6 @@ public sealed class NativeAcsPolicyEvaluator
                             PolicyEvaluationOutcome.Deny,
                             PolicyEvaluationReasonCode.DefaultDeny,
                             artifactHash);
-            else if (approvalBinding is { Matched: false })
-                evaluation = Error(artifactHash, "approval_binding_changed");
             else
                 evaluation = Error(artifactHash, "unsupported_verdict");
         }
@@ -490,7 +489,6 @@ public sealed class NativeAcsPolicyEvaluator
         public JsonElement PolicyInput { get; } = policyInput.Clone();
         public JsonElement? Approval { get; } = approval?.Clone();
         public bool Approve { get; } = approve;
-        public bool Matched { get; set; }
     }
 
     private sealed record NativeAcsSnapshotDocument(

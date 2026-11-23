@@ -79,7 +79,7 @@ spec:
             - name: EventsAndSessions__Migration__RuntimeRole
               value: "agentweaver-id-events-and-sessions"
             - name: EventsAndSessions__Migration__PlanSha256
-              value: "9a7f1e166b2b20c8fe050e946c8b2d6f21e89f9b061385cf13c1118067be02a5"
+              value: "cfe1cd63c19b3c07206dcf1a00755fbd96e3d57a9ddcbb5a1570e71db2326165"
           volumeMounts:
             - name: tmp
               mountPath: /tmp
