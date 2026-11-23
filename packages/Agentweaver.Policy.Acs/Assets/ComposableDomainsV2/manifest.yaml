@@ -16,6 +16,10 @@ policies:
     type: rego
     bundle: policy
     query: data.agent_control_specification.agentweaver_guardrails.pre_model_call_verdict
+  agentweaver_tool_permissions:
+    type: rego
+    bundle: policy
+    query: data.agent_control_specification.agentweaver_tool_permissions.pre_model_call_verdict
   agentweaver_domains_v2:
     type: rego
     bundle: policy

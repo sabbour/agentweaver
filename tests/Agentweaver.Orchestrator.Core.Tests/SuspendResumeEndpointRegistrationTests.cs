@@ -265,7 +265,11 @@ public sealed class SuspendResumeEndpointRegistrationTests
         ConfigureTestOwnerHttpClient(services, nameof(RuntimeEnvironmentContextClient));
         Assert.Contains(services, descriptor => descriptor.ServiceType == typeof(RuntimeActionOwner));
         Assert.DoesNotContain(services, descriptor => descriptor.ServiceType == typeof(RuntimeUsageSourceStore));
-        Assert.DoesNotContain(services, descriptor => descriptor.ServiceType == typeof(RuntimeNativePolicyGate));
+        Assert.Contains(services, descriptor => descriptor.ServiceType == typeof(RuntimeNativePolicyGate));
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IRuntimeNativePolicySource));
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IRuntimeNativePolicyAdmissionStore));
         using var serviceProvider = services.BuildServiceProvider();
         using var scope = serviceProvider.CreateScope();
         var owner = scope.ServiceProvider.GetRequiredService<RuntimeActionOwner>();

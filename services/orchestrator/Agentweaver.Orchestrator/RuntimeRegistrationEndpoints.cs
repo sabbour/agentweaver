@@ -1,4 +1,5 @@
 using Agentweaver.Identity;
+using Agentweaver.Policy.Acs;
 
 namespace Agentweaver.Orchestrator;
 
@@ -50,6 +51,20 @@ public static class RuntimeRegistrationEndpoints
         services.AddScoped(serviceProvider => new RunEgressEnvironmentClient(
             serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
             serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));
+        var acsOpaPath = configuration["ACS_OPA_PATH"];
+        if (!string.IsNullOrWhiteSpace(acsOpaPath) && Path.IsPathFullyQualified(acsOpaPath))
+        {
+            services.AddSingleton(new NativeAcsArtifactValidator(acsOpaPath));
+            services.AddSingleton(serviceProvider => new NativeAcsPolicyEvaluator(
+                serviceProvider.GetRequiredService<NativeAcsArtifactValidator>(),
+                Path.Combine(AppContext.BaseDirectory, "runtime-native-policy-work")));
+        }
+        services.AddScoped<IRuntimeNativePolicySource, RuntimeNativePolicySource>();
+        services.AddSingleton<IRuntimeNativePolicyAdmissionStore, RuntimeNativePolicyAdmissionStore>();
+        services.AddScoped(serviceProvider => new RuntimeNativePolicyGate(
+            serviceProvider.GetRequiredService<IRuntimeNativePolicySource>(),
+            serviceProvider.GetRequiredService<IRuntimeNativePolicyAdmissionStore>(),
+            serviceProvider.GetService<NativeAcsPolicyEvaluator>()));
         services.AddScoped<RuntimeRegistrationOwner>();
         services.AddScoped<RuntimeSkillContentOwner>();
         services.AddScoped<RuntimeActionOwner>();

@@ -64,8 +64,8 @@ entrypoints keep accepting only the finite network profile.
 
 ## Opt-in model-use and Guardrails profile
 
-`composable-domains-v2` adds four more reviewed files and keeps the actions
-and network files unchanged:
+`composable-domains-v2` adds six reviewed files for model, Guardrails, and tool
+permissions. It keeps the actions and network modules unchanged:
 
 | Domain or component | Policy ID or path | Rule |
 | --- | --- | --- |
@@ -73,19 +73,38 @@ and network files unchanged:
 | Model-use data | `policy/model_use/data.json` | Contains a closed list of exact `allow` or `deny` rules. Missing provider fields are represented as `null`; they are not wildcards. |
 | Guardrails | `agentweaver_guardrails`, `policy/guardrails.rego` | Requires the ordered `UserInput`/`Text` checks and denies blocked normalized findings. |
 | Guardrails data | `policy/guardrails/data.json` | Contains exact ordered provider, adapter, schema, and options revisions plus blocked finding code and severity tuples. |
-| Selector | `agentweaver_domains_v2`, `policy/domains.rego` | Selects one of the four domains at `pre_model_call`. |
+| Tool permissions | `agentweaver_tool_permissions`, `policy/tool-permissions.rego` | Matches the exact SDK tool, owner action, callback phase, permission kind, and read, write, or shell capability. |
+| Tool-permission data | `policy/tool_permissions/data.json` | Contains the closed set of exact tool and callback permission rules. |
+| Selector | `agentweaver_domains_v2`, `policy/domains.rego` | Selects one of the five domains at `pre_model_call`. |
+
+The tool-permission data keeps `create` and `edit` as separate names:
+
+```json
+{"rules":[
+  {"tool_name":"view","action_id":"tool.read","phase":"invocation","permission_kind":null,"read_access":true,"write_access":false,"shell_access":false},
+  {"tool_name":"view","action_id":"tool.read","phase":"permission","permission_kind":"read","read_access":true,"write_access":false,"shell_access":false},
+  {"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false}
+]}
+```
+
+Tool permission facts do not carry command text, file contents, credentials,
+or display diffs. The runtime supplies exact bounded identity and digest fields.
+Workspace containment is a separate local check and always runs for SDK file
+and shell callbacks.
 
 The unified profile rejects unknown fields, duplicate keys and rules, additional
 files, changed templates, unsupported stages, approval settings, and budget
 facts. It accepts an empty Guardrails check list. The Orchestrator treats that
 list as inactive.
 
-The opt-in runtime source boundary receives an accepted Policy snapshot and a
-current snapshot. It independently validates and evaluates every applicable
-revision. Its admission binding records each scope, Policy ID, revision, and
-complete artifact hash with the exact request and registration hashes.
-Verification fails when that binding changes. The gate does not substitute a
-different model or provider.
+The runtime source boundary reads accepted and current Policy snapshots. Tool
+callbacks use the current Platform and Project revisions as the retained
+invocation snapshot. The gate independently validates and evaluates every
+applicable revision. Its admission binding records each scope, Policy ID,
+revision, and complete artifact hash with the exact request and registration
+hashes. Verification fails when that binding changes or when a secondary
+permission does not match its retained invocation. The gate does not substitute
+a different model or provider.
 
 The existing Guardrails resolver still owns provider registration, adapter and
 options matching, resource pins, and classifier execution. The native result narrows the existing AGT and classifier result. A denied, unavailable, stale,
@@ -106,8 +125,8 @@ The conservative owner defaults are:
 
 1. Use fixed reviewed rule patterns. Do not accept authored rules or share
    data between domains.
-2. Register the runtime source and admission store only through a later
-   activation decision. Source support does not grant runtime authority.
+2. Register the runtime source and admission store with the runtime owner.
+   A missing evaluator, source, or binding denies native tool callbacks.
 
 The owner can override these defaults before later domain additions.
 
@@ -122,7 +141,7 @@ The owner can override these defaults before later domain additions.
 | Invalid selected-domain facts | The selected policy follows its existing deny or validation behavior. |
 | Cleanup fails after evaluation | The evaluator returns an error, including after an allow or deny. |
 | Invalid data-only update | Classification rejects the artifact; no candidate is produced. |
-| Native Policy denies, errors, changes revision, or no longer matches the model pin | Runtime admission or verification fails before the model send. |
+| Native Policy denies, errors, or changes revision | Runtime admission or verification fails before the model send or native tool effect. |
 
 Correct the artifact or dependency and retry validation. No state changes during
 validation, evaluation, or candidate compilation.
@@ -144,11 +163,10 @@ pass. A Windows skip is not acceptance evidence.
 
 ## Rollout and compatibility
 
-The profile is source support only. No production service registers the
-opt-in runtime composition, no API route accepts a new Policy form, and no
-policy write or runtime activation is enabled. Existing unqualified APIs
-retain their current profile behavior. The change requires no migration,
-image, deployment, or publication.
+Production registers the runtime Policy source and admission store. Native tool
+callbacks use the composed profile before owner approval release. No API route
+accepts a new Policy form, and no Policy write is added. Existing unqualified
+APIs retain their current profile behavior.
 
 ## Open questions and decisions
 

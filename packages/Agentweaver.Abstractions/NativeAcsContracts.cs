@@ -97,6 +97,21 @@ public sealed record NativeAcsGuardrailsEvaluationFacts(
     ImmutableArray<NativeAcsGuardrailsCheckFacts> Checks,
     ImmutableArray<NativeAcsGuardrailsFindingFacts> Findings);
 
+/// <summary>Bounded native SDK invocation and permission facts evaluated by tool Policy.</summary>
+public sealed record NativeAcsToolEvaluationFacts(
+    string ToolName,
+    string CallId,
+    string Phase,
+    string ArgumentDigest,
+    string SdkSessionId,
+    string MessageId,
+    string TurnId,
+    bool ReadAccess,
+    bool WriteAccess,
+    bool ShellAccess,
+    string? PermissionKind,
+    string? InvocationArgumentDigest);
+
 /// <summary>
 /// Bounded runtime facts for native ACS evaluation. A null human identity means that verified
 /// human facts are unavailable; callers must not infer them from Broker subject, actor ID, or UPN.
@@ -109,7 +124,8 @@ public sealed record NativeAcsEvaluationSnapshot(
     NativeAcsVerifiedHumanIdentity? VerifiedHumanIdentity = null,
     NativeAcsNetworkEvaluationFacts? Network = null,
     NativeAcsModelUseEvaluationFacts? ModelUse = null,
-    NativeAcsGuardrailsEvaluationFacts? Guardrails = null);
+    NativeAcsGuardrailsEvaluationFacts? Guardrails = null,
+    NativeAcsToolEvaluationFacts? Tool = null);
 
 /// <summary>A bounded validation diagnostic. It does not include source snippets.</summary>
 public sealed record NativeAcsDiagnostic(

@@ -55,8 +55,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var hookInvocation = CreateHookInvocation(sessionId);
 
         var hook = await authorization.OnPreToolUseAsync(input, hookInvocation);
-        Assert.True(hook?.PermissionDecision == "ask", hook?.PermissionDecisionReason);
-        Assert.False(Assert.Single(calls).IsToolInvocation);
+        Assert.True(hook?.PermissionDecision == "defer-to-hook", hook?.PermissionDecisionReason);
+        Assert.Empty(calls);
         Assert.Equal(0, nativeCalls.Snapshot().ToolEffectSequence);
 
         var request = PermissionRequest(toolName, callId);
@@ -79,12 +79,22 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         Assert.All(invocations, call => Assert.Equal(invocations[0], call));
         var first = invocations[0];
         Assert.Equal(expectedAction, first.ActionId);
+        Assert.True(first.IsNativeToolCallback);
         Assert.NotEqual(Guid.Empty, first.EventId);
         Assert.Equal(RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(request)), first.InputHash);
-        var secondary = calls.Skip(1).Where(call => !call.IsToolInvocation).ToArray();
+        Assert.Equal(toolName, first.ToolOwner!.ToolName);
+        Assert.Equal(callId, first.ToolOwner.CallId);
+        Assert.Equal("invocation", first.ToolOwner.Phase);
+        Assert.Equal(sessionId, first.ToolOwner.SdkSessionId);
+        Assert.Equal(registration.Binding.TurnId, first.ToolOwner.TurnId);
+        var secondary = calls.Where(call => !call.IsToolInvocation).ToArray();
         Assert.Equal(2, secondary.Length);
         Assert.Equal(secondary[0], secondary[1]);
         Assert.NotEqual(first.EventId, secondary[0].EventId);
+        Assert.Equal("permission", secondary[0].ToolOwner!.Phase);
+        Assert.Equal(first.ToolOwner!.ArgumentDigest, secondary[0].ToolOwner!.InvocationArgumentDigest);
+        Assert.Equal(first.EventId, secondary[0].ToolOwner!.InvocationEventId);
+        Assert.Equal(RuntimeActionContract.Hash(first), secondary[0].ToolOwner!.InvocationRequestHash);
         Assert.All(calls, call =>
         {
             Assert.Equal(expectedAction, call.ActionId);
@@ -118,8 +128,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var writeInput = Create<PreToolUseHookInput>(HookInput(sessionId, "write_bash"));
         var hookInvocation = CreateHookInvocation(sessionId);
         var permissionInvocation = CreatePermissionInvocation(sessionId);
-        Assert.Equal("ask", (await authorization.OnPreToolUseAsync(readInput, hookInvocation))?.PermissionDecision);
-        Assert.Equal("ask", (await authorization.OnPreToolUseAsync(writeInput, hookInvocation))?.PermissionDecision);
+        Assert.Equal("defer-to-hook", (await authorization.OnPreToolUseAsync(readInput, hookInvocation))?.PermissionDecision);
+        Assert.Equal("defer-to-hook", (await authorization.OnPreToolUseAsync(writeInput, hookInvocation))?.PermissionDecision);
 
         var readRequest = PermissionRequest("read_bash", "call-read");
         var writeRequest = PermissionRequest("write_bash", "call-write");
@@ -157,7 +167,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var permissionInvocation = CreatePermissionInvocation(sessionId);
         var hook = await authorization.OnPreToolUseAsync(
             Create<PreToolUseHookInput>(HookInput(sessionId, "read_bash")), hookInvocation);
-        Assert.Equal("ask", hook?.PermissionDecision);
+        Assert.Equal("defer-to-hook", hook?.PermissionDecision);
 
         var unregisteredPermission = await authorization.OnPermissionRequestAsync(
             PermissionRequest("unregistered-tool", "different-call"), permissionInvocation);
@@ -173,7 +183,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             PermissionRequest("read_bash", "call-1"), permissionInvocation);
         Assert.Equal(PermissionDecision.Reject("runtime_action_denied").Kind, denied.Kind);
         Assert.Equal(1, calls);
-        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
+        Assert.Equal(0, nativeCalls.Snapshot().ToolEffectSequence);
 
         var unregistered = await authorization.OnPreToolUseAsync(
             Create<PreToolUseHookInput>(HookInput(sessionId, "unregistered-tool")), hookInvocation);
@@ -433,8 +443,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             var preTool = await authorization.OnPreToolUseAsync(
                 Create<PreToolUseHookInput>(HookInput(sessionId, "view", new { path = link })),
                 CreateHookInvocation(sessionId));
-            Assert.Equal("deny", preTool?.PermissionDecision);
-            Assert.Equal(1, ownerCalls);
+            Assert.Equal("defer-to-hook", preTool?.PermissionDecision);
+            Assert.Equal(0, ownerCalls);
 
             File.Delete(link);
             var permission = await authorization.OnPermissionRequestAsync(
@@ -443,7 +453,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             Assert.Equal(
                 PermissionDecision.Reject("runtime_tool_workspace_containment_denied").Kind,
                 permission.Kind);
-            Assert.Equal(2, ownerCalls);
+            Assert.Equal(1, ownerCalls);
         }
         finally
         {
@@ -662,7 +672,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
 
         var viewHook = await authorization.OnPreToolUseAsync(
             Create<PreToolUseHookInput>(HookInput(SessionId(), "view")), hookInvocation);
-        Assert.Equal("ask", viewHook?.PermissionDecision);
+        Assert.Equal("defer-to-hook", viewHook?.PermissionDecision);
         Approved(await authorization.OnPermissionRequestAsync(
             PermissionRequest("view", "read-only-view"), permissionInvocation));
         Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
@@ -677,7 +687,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             PermissionRequest("edit", "read-only-edit"), permissionInvocation);
         Assert.Equal(PermissionDecision.Reject("runtime_tool_read_only").Kind, writePermission.Kind);
         Assert.All(calls, request => Assert.Equal("tool.read", request.ActionId));
-        Assert.Equal(4, calls.Count);
+        Assert.Equal(3, calls.Count);
     }
 
     [Fact]

@@ -45,7 +45,6 @@ public sealed class RuntimeActionHttpClientTests
         Assert.All(requests, item => Assert.Equal(request, item));
         Assert.Equal(2, authorityChecks);
     }
-
     [Fact]
     public async Task NativePermissionAuthorizationIsBoundToTheHookToolCall()
     {
@@ -87,8 +86,8 @@ public sealed class RuntimeActionHttpClientTests
 
                 #pragma warning restore GHCP001
             }, timeout.Token);
-            Assert.Equal("ask", response.GetProperty("output").GetProperty("permissionDecision").GetString());
-            Assert.False(Assert.Single(actions).IsToolInvocation);
+            Assert.Equal("defer-to-hook", response.GetProperty("output").GetProperty("permissionDecision").GetString());
+            Assert.Empty(actions);
             await external.EmitPermissionRequestAsync(new
             {
                 requestId = "read-hook-permission",
@@ -218,7 +217,7 @@ public sealed class RuntimeActionHttpClientTests
     [InlineData("write_bash")]
     [InlineData("stop_bash")]
     [InlineData("unregistered-tool")]
-    public async Task ActualNativePreToolCallbackAsksBeforePermissionAuthorization(string tool)
+    public async Task ActualNativePreToolCallbackDefersToPermissionAuthorization(string tool)
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -255,12 +254,9 @@ public sealed class RuntimeActionHttpClientTests
                 cwd = AppContext.BaseDirectory, toolName = tool, toolArgs
             }
         }, timeout.Token);
-        Assert.Equal(tool == "unregistered-tool" ? "deny" : "ask",
+        Assert.Equal(tool == "unregistered-tool" ? "deny" : "defer-to-hook",
             response.GetProperty("output").GetProperty("permissionDecision").GetString());
-        if (tool == "unregistered-tool")
-            Assert.Empty(actions);
-        else
-            Assert.False(Assert.Single(actions).IsToolInvocation);
+        Assert.Empty(actions);
         release.TrySetResult();
         Assert.Equal(external.AssistantResponse, await turn);
     }

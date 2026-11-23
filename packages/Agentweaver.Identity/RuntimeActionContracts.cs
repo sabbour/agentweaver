@@ -18,12 +18,37 @@ public sealed record RuntimeActionRequest(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool IsToolInvocation { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsNativeToolCallback { get; init; }
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? DispatchId { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? CostTurnId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeActionToolOwnerProjection? ToolOwner { get; init; }
 }
+
+/// <summary>Bounded SDK tool facts that the owner evaluates for one native callback.</summary>
+public sealed record RuntimeActionToolOwnerProjection(
+    int ContractVersion,
+    string SdkSessionId,
+    string ToolName,
+    string CallId,
+    string Phase,
+    string ArgumentDigest,
+    Guid MessageId,
+    string TurnId,
+    string ActionId,
+    bool ReadAccess,
+    bool WriteAccess,
+    bool ShellAccess,
+    string? PermissionKind = null,
+    string? InvocationArgumentDigest = null,
+    Guid? InvocationEventId = null,
+    string? InvocationRequestHash = null);
 
 /// <summary>
 /// Model-turn admission request that carries the exact UTF-8 text whose SHA-256 digest is the request input hash.
@@ -66,7 +91,55 @@ public static class RuntimeActionContract
             (costTurnId == Guid.Empty || request.ActionId != "model.turn"))
             throw new RuntimeAuthorizationException("runtime_action_invalid");
         RuntimeContractValidation.ValidateHash(request.InputHash);
+        if (request.IsNativeToolCallback && request.ToolOwner is null)
+            throw new RuntimeAuthorizationException("runtime_action_tool_owner_required");
+        if (!request.IsNativeToolCallback && request.ToolOwner is not null)
+            throw new RuntimeAuthorizationException("runtime_action_tool_owner_invalid");
+        if (request.ToolOwner is { } owner)
+            ValidateToolOwner(request, owner);
     }
+
+    private static void ValidateToolOwner(
+        RuntimeActionRequest request,
+        RuntimeActionToolOwnerProjection owner)
+    {
+        if (owner.ContractVersion != 1 ||
+            request.ActionId == "model.turn" ||
+            owner.ActionId != request.ActionId ||
+            !IsBoundedIdentifier(owner.SdkSessionId) ||
+            !IsBoundedIdentifier(owner.ToolName) ||
+            !IsBoundedIdentifier(owner.CallId) ||
+            !IsBoundedIdentifier(owner.TurnId) ||
+            owner.MessageId == Guid.Empty ||
+            owner.Phase is not ("invocation" or "permission") ||
+            (owner.Phase == "invocation") != request.IsToolInvocation ||
+            owner.ReadAccess && owner.ActionId != "tool.read" ||
+            owner.WriteAccess && owner.ActionId != "tool.write" ||
+            owner.ShellAccess && !owner.ActionId.StartsWith("exec.", StringComparison.Ordinal) ||
+            (owner.ReadAccess ? 1 : 0) + (owner.WriteAccess ? 1 : 0) +
+                (owner.ShellAccess ? 1 : 0) != 1 ||
+            owner.PermissionKind is not null &&
+                owner.PermissionKind is not ("read" or "write" or "shell") ||
+            owner.Phase == "permission" && owner.PermissionKind is null ||
+            owner.Phase == "permission" && owner.InvocationArgumentDigest is null ||
+            owner.Phase == "permission" && owner.InvocationEventId is null ||
+            owner.Phase == "permission" && owner.InvocationRequestHash is null ||
+            owner.Phase == "invocation" &&
+                (owner.PermissionKind is not null || owner.InvocationArgumentDigest is not null ||
+                 owner.InvocationEventId is not null || owner.InvocationRequestHash is not null) ||
+            owner.InvocationEventId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_action_tool_owner_invalid");
+        RuntimeContractValidation.ValidateHash(owner.ArgumentDigest);
+        if (owner.InvocationArgumentDigest is not null)
+            RuntimeContractValidation.ValidateHash(owner.InvocationArgumentDigest);
+        if (owner.InvocationRequestHash is not null)
+            RuntimeContractValidation.ValidateHash(owner.InvocationRequestHash);
+    }
+
+    private static bool IsBoundedIdentifier(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 256 &&
+        !value.Any(char.IsControl);
 
     /// <summary>Requires an owner dispatch ID for bounded or hard-credit-limited native model turns.</summary>
     public static void RequireNativeDispatchAdmission(RuntimeBinding binding, RuntimeActionRequest request)

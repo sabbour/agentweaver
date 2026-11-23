@@ -132,14 +132,26 @@ this path workflow-specific usage affinity.
 
 Native tools map to named actions such as `tool.read`, `tool.write`, and
 `exec.shell`. Permission checks bind the native session, active message, tool
-call ID, action, and input hash. The runtime rejects unknown tools, unmatched
-permissions, and Sandbox-bypass requests. An approved permission applies once.
+call ID, exact SDK tool name, action, callback phase, argument digest, turn,
+registration revision, and execution fence. `create` and `edit` remain distinct
+SDK tools even though both map to `tool.write`. The runtime rejects unknown
+tools, conflicting callbacks, unmatched secondary permissions, missing facts,
+and Sandbox-bypass requests.
+
+`PreToolUse` is a local preflight. An eligible call returns `defer-to-hook`
+without reserving a tool slot or issuing an owner approval. The permission hook
+performs the owner decision. The owner receives a bounded typed projection,
+evaluates the canonical native tool and sandbox Policy domain, and verifies the
+same action and Policy revision again before release. Policy tightening that
+wins before that final verification prevents approval. Approval resume is not
+enabled in this path.
 
 The pre-tool and permission callbacks check SDK-provided paths and working
-directories against the configured workspace, regardless of owner policy.
+directories against the configured workspace, regardless of owner Policy.
 They reject parent-directory traversal, symbolic links and other reparse points,
 patch edits outside the workspace, and shell paths outside the workspace. The
-runtime repeats each check after an owner authorization wait. The Sandbox still
+runtime performs the first check before owner work and repeats it immediately
+before approval. A Policy `Allow` never replaces these checks. The Sandbox still
 enforces filesystem and command isolation.
 
 Owner admission enforces accepted model-turn and tool-call limits. Hosted

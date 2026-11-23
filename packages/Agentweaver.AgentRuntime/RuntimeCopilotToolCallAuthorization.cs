@@ -27,31 +27,28 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
     private Guid? _messageId;
 
     /// <summary>Checks tool policy before invocation without reserving a native tool-call slot.</summary>
-    internal async Task<PreToolUseHookOutput?> OnPreToolUseAsync(
+    internal Task<PreToolUseHookOutput?> OnPreToolUseAsync(
         PreToolUseHookInput input, HookInvocation invocation)
     {
         if (input.SessionId != sessionId || invocation.SessionId != sessionId ||
             ActionForTool(input.ToolName) is not { } action)
-            return Deny("runtime_tool_not_registered");
+            return Task.FromResult<PreToolUseHookOutput?>(Deny("runtime_tool_not_registered"));
         // Generation may inspect files, but it must not inherit this run's write or shell capabilities.
         if (turns.ReadOnlyToolsOnly && input.ToolName != "view")
-            return Deny("runtime_tool_read_only");
+            return Task.FromResult<PreToolUseHookOutput?>(Deny("runtime_tool_read_only"));
         try
         {
+            _ = ReadContext();
             RuntimeNativeWorkspaceContainment.RequirePreToolUse(workspaceRoot, input);
-            var context = ReadContext();
-            // This callback has no native call ID; it checks policy without reserving a tool slot.
-            var request = CreateRequest(
-                Guid.NewGuid(), action, RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(input)),
-                isInvocation: false);
-            await requireAuthority(request, context.Token).ConfigureAwait(false);
-            RequireContext(context);
-            RuntimeNativeWorkspaceContainment.RequirePreToolUse(workspaceRoot, input);
-            return new PreToolUseHookOutput { PermissionDecision = "ask" };
+            return Task.FromResult<PreToolUseHookOutput?>(new PreToolUseHookOutput
+            {
+                PermissionDecision = "defer-to-hook",
+                PermissionDecisionReason = "runtime_tool_permission_hook_required"
+            });
         }
         catch (RuntimeAuthorizationException failure)
         {
-            return Deny(failure.Code);
+            return Task.FromResult<PreToolUseHookOutput?>(Deny(failure.Code));
         }
     }
 
@@ -77,13 +74,19 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                 if (context.ReadOnlyToolsOnly && hook.ToolName != "view")
                     return PermissionDecision.Reject("runtime_tool_read_only");
                 RuntimeNativeWorkspaceContainment.RequirePermissionRequest(workspaceRoot, request);
+                var argumentDigest = RuntimeContractValidation.Hash(
+                    JsonSerializer.SerializeToUtf8Bytes(hook.ToolArgs));
                 var ownerRequest = CreateRequest(
                     CreateEventId(context.MessageId, hook.ToolCallId!, "invocation"),
                     action,
                     RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(request)),
-                    isInvocation: true);
+                    isInvocation: true,
+                    new RuntimeActionToolOwnerProjection(
+                        1, sessionId, hook.ToolName!, hook.ToolCallId!, "invocation",
+                        argumentDigest, context.MessageId, registration.Binding.TurnId, action,
+                        action == "tool.read", action == "tool.write",
+                        action.StartsWith("exec.", StringComparison.Ordinal)));
                 call = GetOrAdd(context, hook.ToolCallId!, ownerRequest);
-                nativeCalls.RecordToolEffectCall();
             }
             else if (TryReadSecondary(request, out var kind, out var callId) && IsValidCallId(callId))
             {
@@ -138,6 +141,8 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                 RequireCall(context, call);
             }
             RuntimeNativeWorkspaceContainment.RequirePermissionRequest(workspaceRoot, request);
+            if (request is PermissionRequestHook)
+                nativeCalls.RecordToolEffectCall();
             return PermissionDecision.ApproveOnce();
         }
         catch (RuntimeAuthorizationException failure)
@@ -190,9 +195,19 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
 
     private RuntimeActionRequest GetSecondary(NativeToolCall call, string kind, string inputHash)
     {
+        var owner = call.Request.ToolOwner!;
         var request = CreateRequest(
             CreateEventId(call.MessageId, call.CallId, "permission:" + kind),
-            call.Request.ActionId, inputHash, isInvocation: false);
+            call.Request.ActionId, inputHash, isInvocation: false,
+            owner with
+            {
+                Phase = "permission",
+                PermissionKind = kind,
+                ArgumentDigest = inputHash,
+                InvocationArgumentDigest = owner.ArgumentDigest,
+                InvocationEventId = call.Request.EventId,
+                InvocationRequestHash = RuntimeActionContract.Hash(call.Request)
+            });
         lock (_gate)
         {
             if (call.Permissions.TryGetValue(kind, out var existing))
@@ -233,13 +248,17 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
             throw new RuntimeAuthorizationException("runtime_native_turn_unavailable");
     }
 
-    private RuntimeActionRequest CreateRequest(Guid eventId, string action, string inputHash, bool isInvocation)
+    private RuntimeActionRequest CreateRequest(
+        Guid eventId, string action, string inputHash, bool isInvocation,
+        RuntimeActionToolOwnerProjection? toolOwner = null)
     {
         var request = new RuntimeActionRequest(
             1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
             eventId, action, inputHash)
         {
-            IsToolInvocation = isInvocation
+            IsToolInvocation = isInvocation,
+            IsNativeToolCallback = true,
+            ToolOwner = toolOwner
         };
         RuntimeActionContract.Validate(request);
         return request;

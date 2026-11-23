@@ -531,6 +531,21 @@ internal sealed class ProjectsRunSelectionClient(
         ReadSelectionWithAuthorityAsync(
             context, projectId, runId, "acceptRunSelection", cancellationToken, refreshAuthority: true);
 
+    internal async Task<ImmutableArray<RuntimeNativePolicyRevision>> ReadCurrentNativePolicyAsync(
+        HttpContext context,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        CoordinationIdentity.ValidateIdentity(projectId, "project_id");
+        var platform = await ReadNativePolicyRevisionAsync(
+            context, "/api/policies/platform", "Platform", "default",
+            required: true, cancellationToken).ConfigureAwait(false);
+        var project = await ReadNativePolicyRevisionAsync(
+            context, "/api/policies/projects/" + Uri.EscapeDataString(projectId),
+            "Project", projectId, required: false, cancellationToken).ConfigureAwait(false);
+        return project is null ? [platform!] : [platform!, project];
+    }
+
     /// <summary>
     /// Reads a run selection for a read-only operation and refreshes its authorization evidence.
     /// </summary>
@@ -1407,6 +1422,58 @@ internal sealed class ProjectsRunSelectionClient(
         }
     }
 
+    private async Task<RuntimeNativePolicyRevision?> ReadNativePolicyRevisionAsync(
+        HttpContext context,
+        string path,
+        string scopeType,
+        string scopeId,
+        bool required,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, new Uri(RequireOwnerUri(options.ProjectsOwnerBaseAddress), path));
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!required && response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+        if (response.StatusCode != HttpStatusCode.OK ||
+            response.Headers.CacheControl?.NoStore != true)
+            throw new CoordinationException(
+                "runtime_native_policy_unavailable",
+                StatusCodes.Status503ServiceUnavailable);
+        try
+        {
+            await response.Content.LoadIntoBufferAsync(
+                5L * 1024 * 1024, cancellationToken).ConfigureAwait(false);
+            var result = await response.Content.ReadFromJsonAsync<RuntimeNativePolicyReadResult>(
+                JsonOptions, cancellationToken).ConfigureAwait(false);
+            if (result is null ||
+                result.Revision <= 0 ||
+                result.ContentSha256.Length != 64 ||
+                !result.ContentSha256.All(character =>
+                    character is >= '0' and <= '9' or >= 'a' and <= 'f') ||
+                result.Artifact is null)
+                throw new JsonException("The native policy response is invalid.");
+            return new(
+                scopeType,
+                scopeId,
+                result.PolicyId,
+                result.Revision,
+                result.ContentSha256,
+                result.Artifact);
+        }
+        catch (JsonException exception)
+        {
+            throw new CoordinationException(
+                "runtime_native_policy_unavailable",
+                StatusCodes.Status503ServiceUnavailable,
+                exception);
+        }
+    }
+
     /// <summary>
     /// Resolves the configured Projects owner only when it is an absolute HTTPS origin without credentials or extra URI parts.
     /// </summary>
@@ -1428,3 +1495,9 @@ internal sealed class ProjectsRunSelectionClient(
     private static bool HasAudience(System.Security.Claims.ClaimsPrincipal principal, string expected) =>
         principal.FindAll("aud").Any(claim => claim.Value == expected);
 }
+
+internal sealed record RuntimeNativePolicyReadResult(
+    string PolicyId,
+    long Revision,
+    string ContentSha256,
+    NativeAcsArtifact Artifact);

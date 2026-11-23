@@ -12,6 +12,7 @@ using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Policy.Acs;
 using Agentweaver.Providers;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -20,6 +21,188 @@ namespace Agentweaver.Policy.Acs.Tests;
 [Collection("Runtime Native Policy")]
 public sealed class RuntimeNativePolicyGateTests
 {
+    [RuntimeNativePolicyFact]
+    public async Task ProductionRegistrationCompositionAllowsCurrentNativeToolCallback()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var source = new FixtureSource(ToolArtifact(allowEdit: true));
+        var store = new FixtureAdmissionStore();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"] =
+                    "https://environment.test/",
+                ["ACS_OPA_PATH"] = RequirePinnedOpa()
+            }).Build();
+        var services = new ServiceCollection()
+            .AddSingleton(evaluator)
+            .AddSingleton<IRuntimeNativePolicySource>(source)
+            .AddSingleton<IRuntimeNativePolicyAdmissionStore>(store);
+        Assert.True(services.AddRuntimeRegistrationOwner(
+            configuration,
+            new OrchestratorOptions(
+                "https://issuer.test/", "orchestrator",
+                "https://projects.test/", "projects",
+                "https://events.test/", "events")));
+        services.AddSingleton<IRuntimeNativePolicySource>(source);
+        services.AddSingleton<IRuntimeNativePolicyAdmissionStore>(store);
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var gate = scope.ServiceProvider.GetRequiredService<RuntimeNativePolicyGate>();
+        var (registration, accepted) = RunBinding("byok-model");
+        var request = ToolRequest(registration, "invocation");
+
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, request, default);
+        await gate.CommitAsync(preparation, null, default);
+
+        Assert.NotNull(await gate.RequireVerifyAsync(
+            registration, accepted, request, default));
+    }
+
+    [RuntimeNativePolicyFact]
+    public async Task NativeToolPolicyBindsSecondaryPermissionAndRejectsLateTightening()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var source = new FixtureSource(ToolArtifact(allowEdit: true));
+        var store = new FixtureAdmissionStore();
+        var gate = new RuntimeNativePolicyGate(source, store, evaluator);
+        var (registration, accepted) = RunBinding("byok-model");
+        var invocation = ToolRequest(registration, "invocation");
+
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, invocation, default);
+        await gate.CommitAsync(preparation, null, default);
+        Assert.NotNull(await gate.RequireVerifyAsync(
+            registration, accepted, invocation, default));
+
+        var secondary = ToolRequest(registration, "permission") with
+        {
+            ToolOwner = invocation.ToolOwner! with
+            {
+                Phase = "permission",
+                ArgumentDigest = new string('c', 64),
+                PermissionKind = "write",
+                InvocationArgumentDigest = invocation.ToolOwner.ArgumentDigest,
+                InvocationEventId = invocation.EventId,
+                InvocationRequestHash = RuntimeActionContract.Hash(invocation)
+            }
+        };
+        var secondaryPreparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, secondary, default);
+        Assert.NotNull(secondaryPreparation);
+
+        source.SetArtifact(ToolArtifact(allowEdit: false));
+        var effects = 0;
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(async () =>
+        {
+            _ = await gate.RequireVerifyAsync(
+                registration, accepted, invocation, default);
+            effects++;
+        });
+        Assert.Equal(0, effects);
+    }
+
+    [RuntimeNativePolicyFact]
+    public async Task SecondaryPermissionRejectsDifferentInvocationTool()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var source = new FixtureSource(ToolArtifact(allowEdit: true));
+        var store = new FixtureAdmissionStore();
+        var gate = new RuntimeNativePolicyGate(source, store, evaluator);
+        var (registration, accepted) = RunBinding("byok-model");
+        var invocation = ToolRequest(registration, "invocation");
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, invocation, default);
+        await gate.CommitAsync(preparation, null, default);
+        var secondary = ToolRequest(registration, "permission") with
+        {
+            ToolOwner = invocation.ToolOwner! with
+            {
+                ToolName = "create",
+                Phase = "permission",
+                PermissionKind = "write",
+                ArgumentDigest = new string('c', 64),
+                InvocationArgumentDigest = invocation.ToolOwner.ArgumentDigest,
+                InvocationEventId = invocation.EventId,
+                InvocationRequestHash = RuntimeActionContract.Hash(invocation)
+            }
+        };
+
+        var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            gate.PrepareAuthorizeAsync(registration, accepted, secondary, default));
+
+        Assert.Equal(RuntimeNativePolicyGate.StaleCode, error.Code);
+    }
+
+    [RuntimeNativePolicyFact]
+    public async Task SecondaryPermissionRejectsPolicyChangedAfterInvocation()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var source = new FixtureSource(ToolArtifact(allowEdit: true));
+        var store = new FixtureAdmissionStore();
+        var gate = new RuntimeNativePolicyGate(source, store, evaluator);
+        var (registration, accepted) = RunBinding("byok-model");
+        var invocation = ToolRequest(registration, "invocation");
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, invocation, default);
+        await gate.CommitAsync(preparation, null, default);
+        source.SetArtifact(ToolArtifact(allowEdit: false));
+        var secondary = ToolRequest(registration, "permission") with
+        {
+            ToolOwner = invocation.ToolOwner! with
+            {
+                Phase = "permission",
+                PermissionKind = "write",
+                ArgumentDigest = new string('c', 64),
+                InvocationArgumentDigest = invocation.ToolOwner.ArgumentDigest,
+                InvocationEventId = invocation.EventId,
+                InvocationRequestHash = RuntimeActionContract.Hash(invocation)
+            }
+        };
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            gate.PrepareAuthorizeAsync(registration, accepted, secondary, default));
+    }
+
+    [RuntimeNativePolicyFact]
+    public async Task FinalVerificationRejectsPolicyUpdatedWhileVerificationIsInFlight()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var source = new FixtureSource(ToolArtifact(allowEdit: true));
+        var store = new FixtureAdmissionStore();
+        var gate = new RuntimeNativePolicyGate(source, store, evaluator);
+        var owner = new RuntimeActionOwner(
+            null!, null!, null!, null!, null!, null!, null!, null!,
+            new ServiceCollection().AddSingleton(gate).BuildServiceProvider(),
+            new OrchestratorOptions(
+                "https://issuer.test/", "orchestrator",
+                "https://projects.test/", "projects",
+                "https://events.test/", "events"));
+        var (registration, accepted) = RunBinding("byok-model");
+        var request = ToolRequest(registration, "invocation");
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, request, default);
+        await gate.CommitAsync(preparation, null, default);
+        var changed = false;
+        source.AfterRead = () =>
+        {
+            if (changed)
+                return;
+            changed = true;
+            source.SetArtifact(ToolArtifact(allowEdit: false));
+        };
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            owner.RequireNativePolicyReleaseAsync(
+                registration, accepted, request, default));
+    }
+
     [RuntimeNativePolicyFact]
     public async Task NativePolicyBlocksEveryWithheldModelSendAndBindsRevision()
     {
@@ -364,6 +547,69 @@ public sealed class RuntimeNativePolicyGateTests
             }
             """);
 
+    private static NativeAcsArtifact ToolArtifact(bool allowEdit) =>
+        NativeAcsUnifiedPolicyProfile.CreateArtifact(
+            """{"allowed_action_ids":["tool.write"]}""",
+            """
+            {
+              "agentweaver": {
+                "platform_egress": {
+                  "profile": "finite-network-v1",
+                  "mode": "Allowlist",
+                  "approved": [],
+                  "system": {
+                    "catalog": "hosted-copilot-v1",
+                    "destinations": [
+                      { "host": "api.business.githubcopilot.com", "port": 443 },
+                      { "host": "api.enterprise.githubcopilot.com", "port": 443 },
+                      { "host": "api.github.com", "port": 443 },
+                      { "host": "api.githubcopilot.com", "port": 443 },
+                      { "host": "api.individual.githubcopilot.com", "port": 443 }
+                    ]
+                  }
+                }
+              }
+            }
+            """,
+            """{"rules":[]}""",
+            """{"required_checks":[],"blocked_findings":[]}""",
+            allowEdit
+                ? """
+                  {"rules":[{"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false},{"tool_name":"edit","action_id":"tool.write","phase":"permission","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false}]}
+                  """
+                : """{"rules":[]}""");
+
+    private static RuntimeActionRequest ToolRequest(
+        RuntimeRegistration registration, string phase)
+    {
+        var owner = new RuntimeActionToolOwnerProjection(
+            1,
+            RuntimeContractValidation.NativeSessionId(registration.Binding),
+            "edit",
+            "call-edit-1",
+            phase,
+            new string('b', 64),
+            Guid.NewGuid(),
+            registration.Binding.TurnId,
+            "tool.write",
+            false,
+            true,
+            false,
+            phase == "permission" ? "write" : null,
+            phase == "permission" ? new string('a', 64) : null,
+            phase == "permission" ? Guid.NewGuid() : null,
+            phase == "permission" ? new string('e', 64) : null);
+        return new(
+            1, registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence, Guid.NewGuid(), "tool.write",
+            new string('d', 64))
+        {
+            IsToolInvocation = phase == "invocation",
+            IsNativeToolCallback = true,
+            ToolOwner = owner
+        };
+    }
+
     private static (RuntimeRegistration Registration, AuthorizedRunSelection Accepted) RunBinding(
         string reference)
     {
@@ -499,6 +745,7 @@ public sealed class RuntimeNativePolicyGateTests
         public bool Unavailable { get; set; }
         public bool Revoked { get; set; }
         public string? ProjectScopeId { get; set; }
+        public Action? AfterRead { get; set; }
         public string ContentSha256 => _currentArtifact.ContentSha256;
 
         public void SetArtifact(NativeAcsArtifact artifact)
@@ -546,14 +793,16 @@ public sealed class RuntimeNativePolicyGateTests
                 _currentRevision,
                 _currentArtifact.ContentSha256,
                 _currentArtifact);
-            return Task.FromResult(
+            var snapshot =
                 new RuntimeNativePolicySourceSnapshot(
                     ProjectScopeId is null
                         ? [acceptedRevision]
                         : [acceptedRevision, PlatformRevision(acceptedRevision)],
                     ProjectScopeId is null
                         ? [currentRevision]
-                        : [currentRevision, PlatformRevision(currentRevision)]));
+                        : [currentRevision, PlatformRevision(currentRevision)]);
+            AfterRead?.Invoke();
+            return Task.FromResult(snapshot);
 
             static RuntimeNativePolicyRevision PlatformRevision(
                 RuntimeNativePolicyRevision revision) =>
