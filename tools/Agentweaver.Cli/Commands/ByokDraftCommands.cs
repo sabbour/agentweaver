@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -42,7 +43,7 @@ internal static class ByokDraftCommands
         if (!SupportedCommands(projectScope).Contains(command, StringComparer.Ordinal))
             throw new CliUsageException($"Unknown {scopeName} BYOK command: {command}.");
 
-        var hasProviderId = command is "show" or "update" or "recheck-key" or "disable-key" or "activate";
+        var hasProviderId = command is "show" or "update" or "set-key" or "recheck-key" or "disable-key" or "activate";
         var hasRateCardIdAndVersion = command == "save-prices";
         var positionalCount = hasRateCardIdAndVersion ? 2 : hasProviderId ? 1 : 0;
         var optionStart = 2 + positionalCount;
@@ -53,7 +54,7 @@ internal static class ByokDraftCommands
             throw new CliUsageException(Usage(scopeName, command));
         }
 
-        var options = CliOptions.Parse(args[optionStart..], new HashSet<string>(StringComparer.Ordinal));
+        var options = CliOptions.Parse(args[optionStart..], new HashSet<string>(StringComparer.Ordinal) { "from-stdin" });
         var commandOptions = command switch
         {
             "list" or "show" => [],
@@ -61,6 +62,7 @@ internal static class ByokDraftCommands
             "save-prices" => ["source", "input"],
             "add" => SaveOptions,
             "update" => SaveOptions.Concat(["expected-revision"]).ToArray(),
+            "set-key" => ["from-stdin", "expected-revision", "operation-id"],
             "recheck-key" => ["expected-revision", "expected-credential-revision", "operation-id"],
             "disable-key" => ["expected-revision", "expected-credential-revision", "operation-id"],
             "activate" => ["expected-revision", "expected-settings-revision"],
@@ -95,6 +97,13 @@ internal static class ByokDraftCommands
                 projectScope ? "project" : "platform", projectId, scopeName, ct).ConfigureAwait(false);
             await WriteJsonAsync(output, result).ConfigureAwait(false);
             return 0;
+        }
+
+        if (command == "set-key")
+        {
+            return await RunSetKeyAsync(
+                gateway, runtime, output, error, projectScope, projectId, args[2], options, ct)
+                .ConfigureAwait(false);
         }
 
         var invocation = BuildInvocation(command, projectScope, projectId, args, options, out var operationId);
@@ -139,14 +148,17 @@ internal static class ByokDraftCommands
 
     private static string[] SupportedCommands(bool projectScope) =>
         projectScope
-            ? ["list", "show", "add", "update", "prices", "recheck-key", "disable-key"]
-            : ["list", "show", "add", "update", "save-prices", "recheck-key", "disable-key", "activate", "deactivate"];
+            ? ["list", "show", "add", "update", "prices", "set-key", "recheck-key", "disable-key"]
+            : ["list", "show", "add", "update", "save-prices", "set-key", "recheck-key", "disable-key", "activate", "deactivate"];
 
     private static string Usage(string scope, string command) =>
         command switch
         {
             "prices" => $"Usage: agentweaver {scope} byok prices --project-id <projectId> --region <region> --search <meter-text>",
             "save-prices" => $"Usage: agentweaver {scope} byok save-prices <id> <version> --source manual|azure-retail --input <file.json>",
+            "set-key" => scope == "project"
+                ? "Usage: agentweaver project byok set-key <providerId> --project-id <projectId> --from-stdin --expected-revision <providerRevision> --operation-id <uuid>"
+                : "Usage: agentweaver platform byok set-key <providerId> --from-stdin --expected-revision <providerRevision> --operation-id <uuid>",
             "activate" => $"Usage: agentweaver {scope} byok activate <providerId> --expected-revision <providerRevision> --expected-settings-revision <settingsRevision>",
             "deactivate" => $"Usage: agentweaver {scope} byok deactivate --expected-settings-revision <settingsRevision>",
             "recheck-key" => $"Usage: agentweaver {scope} byok recheck-key <providerId> --expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid>",
@@ -193,10 +205,27 @@ internal static class ByokDraftCommands
                     ["200:AzureRetailRuntimeRateCard", "201:AzureRetailRuntimeRateCard"], 256 * 1024, 64 * 1024)],
                 _ => throw new CliUsageException("--source must be manual or azure-retail."),
             },
+            "set-key" =>
+            [
+                Operation($"read{prefix}ByokProviderDraft", "GET", path + "/{providerId}",
+                    null, "ModelProviderDraft", [..ProjectPathParameters(projectScope), "providerId"],
+                    ["200:ModelProviderDraft"], 32 * 1024),
+                Operation($"read{prefix}ByokProviderCredentialOperation", "GET",
+                    path + "/{providerId}/credential/operations/{operationId}", null,
+                    "ModelProviderCredentialOperationStatusResponse",
+                    [..ProjectPathParameters(projectScope), "providerId", "operationId"],
+                    ["200:ModelProviderCredentialOperationStatusResponse"], 16 * 1024),
+                Operation($"set{prefix}ByokProviderCredential", "PUT",
+                    path + "/{providerId}/credential", "ModelProviderCredentialPutRequest",
+                    "ModelProviderCredentialOperationResponse",
+                    [..ProjectPathParameters(projectScope), "providerId", "If-Match", "Idempotency-Key"],
+                    ["200:ModelProviderCredentialOperationResponse"], 16 * 1024, 16 * 1024,
+                    requestMediaTypes: ["application/octet-stream"]),
+            ],
             "recheck-key" => [Operation($"set{prefix}ByokProviderCredential", "PUT",
                 path + "/{providerId}/credential", "ModelProviderCredentialPutRequest",
                 "ModelProviderCredentialOperationResponse",
-                [..ProjectPathParameters(projectScope), "providerId"],
+                [..ProjectPathParameters(projectScope), "providerId", "If-Match", "Idempotency-Key"],
                 ["200:ModelProviderCredentialOperationResponse"], 16 * 1024, 16 * 1024)],
             "disable-key" => [Operation($"disable{prefix}ByokProviderCredential", "DELETE",
                 path + "/{providerId}/credential", "ModelProviderCredentialDeleteRequest",
@@ -235,9 +264,11 @@ internal static class ByokDraftCommands
         string[] responses,
         int maximumResponseBytes,
         int maximumRequestBytes = 1024 * 1024,
-        bool? bodyRequired = null) =>
+        bool? bodyRequired = null,
+        string[]? requestMediaTypes = null) =>
         new(operationId, method, path, requestSchema, responseSchema, parameterNames, responses,
-            maximumRequestBytes, maximumResponseBytes, bodyRequired ?? requestSchema is not null);
+            maximumRequestBytes, maximumResponseBytes, bodyRequired ?? requestSchema is not null,
+            requestMediaTypes);
 
     private static void RequireContract(
         JsonObject document,
@@ -278,6 +309,11 @@ internal static class ByokDraftCommands
             GatewayContract.String(
                 operation.Document["requestBody"]?["content"]?["application/json"]?["schema"] as JsonObject
                     ?? new JsonObject(), "$ref") != "#/components/schemas/" + contract.RequestSchema)
+            throw ContractMismatch();
+        if (contract.RequestMediaTypes is { Length: > 0 } &&
+            contract.RequestMediaTypes.Any(mediaType =>
+                operation.RequestBodyMediaTypes is null ||
+                !operation.RequestBodyMediaTypes.Contains(mediaType, StringComparer.Ordinal)))
             throw ContractMismatch();
 
         var responseObject = operation.Document["responses"] as JsonObject;
@@ -330,7 +366,8 @@ internal static class ByokDraftCommands
     private static void RequireParameterShape(OperationContract contract, GatewayParameter parameter)
     {
         var isPath = contract.Path.Contains("{" + parameter.Name + "}", StringComparison.Ordinal);
-        var expectedLocation = isPath ? "path" : "query";
+        var isHeader = parameter.Name is "If-Match" or "Idempotency-Key";
+        var expectedLocation = isPath ? "path" : isHeader ? "header" : "query";
         var expectedRequired = isPath ||
             contract.OperationId == "searchProjectAzureRetailPrices" &&
             parameter.Name is "region" or "search";
@@ -396,6 +433,9 @@ internal static class ByokDraftCommands
                 ["operationId", "status", "scope", "projectId", "providerId", "providerRevision",
                     "credentialRevision", "credentialVersion", "configurationHash", "providerState"],
                 ["operationId", "status", "scope", "providerId"]),
+            "ModelProviderCredentialOperationStatusResponse" => new(
+                ["operationId", "scope", "projectId", "providerId", "status", "providerRevision", "hasCredential"],
+                ["operationId", "scope", "projectId", "providerId", "status"]),
             "PlatformModelDefaultSwitchResult" => new(
                 ["mode", "activeProviderId", "settingsRevision"],
                 ["mode", "activeProviderId", "settingsRevision"]),
@@ -528,6 +568,15 @@ internal static class ByokDraftCommands
                 RequireNullableType(properties, "credentialVersion", "string");
                 RequireNullableType(properties, "configurationHash", "string");
                 RequireNullableType(properties, "providerState", "string");
+                break;
+            case "ModelProviderCredentialOperationStatusResponse":
+                RequireType(properties, "operationId", "string", "uuid");
+                RequireType(properties, "scope", "string");
+                RequireNullableType(properties, "projectId", "string");
+                RequireType(properties, "providerId", "string");
+                RequireType(properties, "status", "string");
+                RequireNullableType(properties, "providerRevision", "integer");
+                RequireNullableType(properties, "hasCredential", "boolean");
                 break;
             case "ModelProviderDraft":
                 foreach (var field in new[] { "id", "name", "type", "base_url", "model", "scope",
@@ -1486,6 +1535,230 @@ internal static class ByokDraftCommands
     private static InvalidDataException UnexpectedResponse() =>
         new("The Gateway returned an invalid BYOK response.");
 
+    private static async Task<int> RunSetKeyAsync(
+        IGatewayClient gateway,
+        CliRuntimeOptions runtime,
+        TextWriter output,
+        TextWriter error,
+        bool projectScope,
+        string? projectId,
+        string providerId,
+        CliOptions options,
+        CancellationToken ct)
+    {
+        var scopeName = projectScope ? "project" : "platform";
+        var prefix = projectScope ? "Project" : "Platform";
+        if (!options.HasFlag("from-stdin"))
+            throw new CliUsageException(Usage(scopeName, "set-key"));
+        var redirected = runtime.StandardInputRedirected ?? Console.IsInputRedirected;
+        if (!redirected)
+            throw new CliUsageException("Pipe the API key to redirected stdin using --from-stdin.");
+
+        var expectedRevision = ReadPositiveRevision(options.Single("expected-revision"), "--expected-revision");
+        var operationId = RequiredOperationId(options.Single("operation-id"));
+        var pathParams = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["providerId"] = providerId,
+        };
+        if (projectScope)
+            pathParams["projectId"] = projectId!;
+
+        // Verify target provider revision and operation status before reading stdin.
+        var draftResponse = await gateway.InvokeAsync(
+            $"read{prefix}ByokProviderDraft",
+            new GatewayInvocation(pathParams),
+            ct).ConfigureAwait(false);
+        EnsureSuccess(draftResponse, scopeName, "show", operationId, providerId);
+        var draft = ProjectProvider(draftResponse.Body, projectScope ? "project" : "platform", projectId, providerId);
+        var currentRevision = draft["revision"]?.GetValue<long>() ?? 0;
+        if (currentRevision != expectedRevision)
+            throw new InvalidOperationException("BYOK_CONFLICT");
+
+        var statusPathParams = new Dictionary<string, string>(pathParams, StringComparer.Ordinal)
+        {
+            ["operationId"] = operationId.ToString("D"),
+        };
+        var existingStatus = await gateway.InvokeAsync(
+            $"read{prefix}ByokProviderCredentialOperation",
+            new GatewayInvocation(statusPathParams),
+            ct).ConfigureAwait(false);
+        if (existingStatus.Status == 200)
+        {
+            var statusObj = existingStatus.Body as JsonObject ?? throw UnexpectedResponse();
+            var statusText = RequiredString(statusObj, "status");
+            await error.WriteLineAsync(
+                $"Operation {operationId:D} already exists with status '{statusText}'; no key was read or submitted.")
+                .ConfigureAwait(false);
+            return 1;
+        }
+        if (existingStatus.Status != 404)
+        {
+            EnsureSuccess(existingStatus, scopeName, "set-key", operationId, providerId);
+            return 1;
+        }
+
+        byte[]? keyBytes = null;
+        try
+        {
+            var stdin = runtime.StandardInput ?? Console.OpenStandardInput();
+            keyBytes = await ReadUtf8SecretFromStdinAsync(stdin, ct).ConfigureAwait(false);
+
+            var putHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["If-Match"] = expectedRevision.ToString(CultureInfo.InvariantCulture),
+                ["Idempotency-Key"] = operationId.ToString("D"),
+            };
+
+            GatewayResponse? putResponse = null;
+            try
+            {
+                putResponse = await gateway.InvokeOctetStreamAsync(
+                    $"set{prefix}ByokProviderCredential",
+                    new GatewayInvocation(pathParams, Headers: putHeaders),
+                    keyBytes,
+                    ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                await error.WriteLineAsync(UnknownWriteMessage(operationId)).ConfigureAwait(false);
+                return 130;
+            }
+            catch (Exception ex) when (ex is GatewayTransportException or InvalidDataException or JsonException)
+            {
+                return await RecoverSetKeyFromStatusAsync(
+                    gateway, prefix, scopeName, projectId, providerId, operationId, statusPathParams, output, error, ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (putResponse.Status >= 500)
+            {
+                return await RecoverSetKeyFromStatusAsync(
+                    gateway, prefix, scopeName, projectId, providerId, operationId, statusPathParams, output, error, ct)
+                    .ConfigureAwait(false);
+            }
+
+            EnsureSuccess(putResponse, scopeName, "set-key", operationId, providerId);
+            var projected = ProjectCredentialReceipt(
+                putResponse.Body, projectScope ? "project" : "platform", projectId, providerId, operationId, "published");
+            await WriteJsonAsync(output, projected).ConfigureAwait(false);
+            return 0;
+        }
+        finally
+        {
+            if (keyBytes is not null)
+                CryptographicOperations.ZeroMemory(keyBytes);
+        }
+    }
+
+    private static async Task<int> RecoverSetKeyFromStatusAsync(
+        IGatewayClient gateway,
+        string prefix,
+        string scopeName,
+        string? projectId,
+        string providerId,
+        Guid operationId,
+        IReadOnlyDictionary<string, string> statusPathParams,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken ct)
+    {
+        try
+        {
+            var recovery = await gateway.InvokeAsync(
+                $"read{prefix}ByokProviderCredentialOperation",
+                new GatewayInvocation(statusPathParams),
+                ct).ConfigureAwait(false);
+            if (recovery.Status == 200 && recovery.Body is JsonObject statusObj)
+            {
+                var status = RequiredString(statusObj, "status");
+                if (status == "published")
+                {
+                    await WriteJsonAsync(output, new JsonObject
+                    {
+                        ["operationId"] = operationId.ToString("D"),
+                        ["status"] = status,
+                        ["scope"] = scopeName,
+                        ["projectId"] = projectId,
+                        ["providerId"] = providerId,
+                        ["providerRevision"] = OptionalPositiveInt64(statusObj, "providerRevision"),
+                    }).ConfigureAwait(false);
+                    return 0;
+                }
+                await error.WriteLineAsync(
+                    $"Operation {operationId:D} status is '{status}'. Do not resend the key.")
+                    .ConfigureAwait(false);
+                return 1;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await error.WriteLineAsync(UnknownWriteMessage(operationId)).ConfigureAwait(false);
+            return 130;
+        }
+        catch (Exception ex) when (ex is GatewayTransportException or InvalidDataException or JsonException)
+        {
+        }
+
+        await error.WriteLineAsync(
+            $"Operation {operationId:D} result is unknown. Check operation status before retrying; do not resend the key.")
+            .ConfigureAwait(false);
+        return 1;
+    }
+
+    private static async Task<byte[]> ReadUtf8SecretFromStdinAsync(Stream stdin, CancellationToken ct)
+    {
+        const int maxSecretBytes = 8 * 1024;
+        const int maxRawBytes = maxSecretBytes + 2; // Allow one trailing CRLF before trimming.
+        var buffer = new byte[maxRawBytes + 1];
+        var total = 0;
+        try
+        {
+            while (total < buffer.Length)
+            {
+                var read = await stdin.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                    break;
+                total += read;
+            }
+
+            if (total > maxRawBytes)
+                throw new CliUsageException("The API key exceeds the 8192-byte limit.");
+
+            var length = total;
+            if (length >= 2 && buffer[length - 2] == (byte)'\r' && buffer[length - 1] == (byte)'\n')
+                length -= 2;
+            else if (length >= 1 && buffer[length - 1] == (byte)'\n')
+                length -= 1;
+
+            if (length == 0)
+                throw new CliUsageException("An API key is required on stdin.");
+            if (length > maxSecretBytes)
+                throw new CliUsageException("The API key exceeds the 8192-byte limit.");
+
+            var strictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+            string decoded;
+            try
+            {
+                decoded = strictUtf8.GetString(buffer, 0, length);
+            }
+            catch (DecoderFallbackException)
+            {
+                throw new CliUsageException("The API key must be valid UTF-8 text.");
+            }
+            if (string.IsNullOrWhiteSpace(decoded))
+                throw new CliUsageException("The API key cannot be whitespace only.");
+
+            var result = new byte[length];
+            Buffer.BlockCopy(buffer, 0, result, 0, length);
+            return result;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(buffer);
+        }
+    }
+
     private static Task WriteJsonAsync(TextWriter output, JsonObject result) =>
         output.WriteLineAsync(result.ToJsonString(OutputJson));
 
@@ -1511,5 +1784,6 @@ internal static class ByokDraftCommands
         string[] Responses,
         int MaximumRequestBytes,
         int MaximumResponseBytes,
-        bool BodyRequired);
+        bool BodyRequired,
+        string[]? RequestMediaTypes = null);
 }

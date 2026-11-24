@@ -109,6 +109,14 @@ public interface IGatewayClient
         bool outputRequested,
         Func<string, ValueTask>? onEventChunk,
         CancellationToken ct);
+
+    /// <summary>Sends one bounded application/octet-stream request without recording payload evidence.</summary>
+    Task<GatewayResponse> InvokeOctetStreamAsync(
+        string operationId,
+        GatewayInvocation invocation,
+        byte[] body,
+        CancellationToken ct) =>
+        throw new NotSupportedException("Octet-stream invocation is not supported by this Gateway client.");
 }
 
 public interface IGatewayClientFactory

@@ -132,9 +132,24 @@ information, a query string, or a fragment.
 Attach the exact returned ID and version to an `add` or `update` command. On
 an update, omit both options only when you intend to clear the attachment.
 
-## Recheck or disable a saved credential
+## Set, recheck, or disable a credential
 
-Use the current provider and credential revisions:
+To upload or rotate a UTF-8 API key from redirected stdin (up to 8,192 bytes
+after stripping one final LF or CRLF):
+
+```powershell
+$operationId = [guid]::NewGuid().ToString()
+$apiKey | agentweaver platform byok set-key $providerId `
+  --from-stdin `
+  --expected-revision $providerRevision `
+  --operation-id $operationId
+```
+
+The CLI checks the provider revision and confirms the operation ID is unused
+before reading stdin. If the upload response is lost, it checks operation status
+without resending the key.
+
+Use the current provider and credential revisions for keyless maintenance:
 
 ```powershell
 agentweaver platform byok recheck-key $providerId `

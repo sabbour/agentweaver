@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Net;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -18,8 +20,10 @@ namespace Agentweaver.Identity.Broker;
 internal static class ModelProviderCredentialEndpoints
 {
     private const int MaximumPutBodyBytes = 16 * 1024;
+    private const int MaximumOctetCredentialBytes = 8 * 1024;
     private const int MaximumDeleteBodyBytes = 8 * 1024;
     private static readonly TimeSpan ByokCredentialExpiry = TimeSpan.FromDays(3650);
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -360,9 +364,19 @@ internal static class ModelProviderCredentialEndpoints
         if (!IsValidIdentifier(providerId, 128) ||
             (scope == ModelProviderBindingScope.Project && !IsValidIdentifier(projectId, 32)))
             return Error("credential_request_invalid", 400);
-        if (context.Request.Query.Count != 0 ||
-            !string.Equals(context.Request.ContentType?.Split(';', 2)[0], "application/json", StringComparison.OrdinalIgnoreCase))
+        if (context.Request.Query.Count != 0)
             return Error("credential_request_invalid", 400);
+
+        var mediaType = context.Request.ContentType?.Split(';', 2)[0];
+        if (string.Equals(mediaType, "application/octet-stream", StringComparison.OrdinalIgnoreCase))
+        {
+            return await HandleOctetPutAsync(
+                context, scope, projectId, providerId, caller!,
+                store, byokVault, publicationClient, timeProvider, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        if (!string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase))
+            return Error("unsupported_media_type", 415);
 
         var bodyBytes = await ReadBoundedAsync(context.Request, MaximumPutBodyBytes, cancellationToken)
             .ConfigureAwait(false);
@@ -669,6 +683,270 @@ internal static class ModelProviderCredentialEndpoints
         {
             return Results.StatusCode(499);
         }
+    }
+
+    private static async Task<IResult> HandleOctetPutAsync(
+        HttpContext context,
+        ModelProviderBindingScope scope,
+        string? projectId,
+        string providerId,
+        ValidatedCaller caller,
+        ModelProviderCredentialStore store,
+        IModelProviderByokVault byokVault,
+        BrokerModelProviderCredentialPublicationV2Client publicationClient,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseProviderRevision(context.Request.Headers["If-Match"], out var expectedProviderRevision) ||
+            context.Request.Headers["Idempotency-Key"].Count != 1 ||
+            !Guid.TryParseExact(context.Request.Headers["Idempotency-Key"][0], "D", out var operationId) ||
+            operationId == Guid.Empty)
+            return Error("credential_request_invalid", 400);
+
+        var credScope = scope == ModelProviderBindingScope.Platform
+            ? ModelProviderCredentialScope.Platform
+            : ModelProviderCredentialScope.Project;
+        var secretName = $"byok-{scope.ToString().ToLowerInvariant()}-{providerId}";
+        if (secretName.Length > 127 || secretName.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-'))
+            return Error("credential_request_invalid", 400);
+
+        try
+        {
+            var existingClaim = await store.ReadWriteClaimByOperationAsync(operationId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existingClaim is not null)
+            {
+                if (existingClaim.Purpose == "credential-disable" ||
+                    existingClaim.State is ModelProviderCredentialWriteClaimState.DisablePending or ModelProviderCredentialWriteClaimState.Disabled)
+                    return Error("credential_slot_conflict", 409);
+
+                if (existingClaim.ExpectedProviderRevision is null ||
+                    existingClaim.Scope != credScope ||
+                    existingClaim.ProjectId != projectId ||
+                    !StringComparer.Ordinal.Equals(existingClaim.ProviderId, providerId) ||
+                    !StringComparer.Ordinal.Equals(existingClaim.ActorId, caller.ActorId) ||
+                    !StringComparer.Ordinal.Equals(existingClaim.Issuer, caller.Issuer) ||
+                    existingClaim.ExpectedProviderRevision != expectedProviderRevision)
+                    return Error("credential_slot_conflict", 409);
+
+                var authPreflight = await publicationClient.PreflightAsync(
+                    new ModelProviderCredentialPublicationPreflightRequest(
+                        operationId, scope, projectId, providerId,
+                        caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                        caller.BoundProjectId, "authority-only"),
+                    cancellationToken).ConfigureAwait(false);
+                if (!StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
+                    return Error("forbidden", 403);
+
+                var pubClaim = ToPublicationClaim(existingClaim);
+
+                if (existingClaim.State == ModelProviderCredentialWriteClaimState.Cancelled)
+                    return Error("credential_operation_cancelled", 409);
+
+                if (existingClaim.State == ModelProviderCredentialWriteClaimState.Published)
+                {
+                    var replay = await store.ClaimPublicationWriteAsync(pubClaim, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(ToResponse(operationId, "published", scope, projectId, providerId,
+                        replay.PublishedProviderRevision, replay.Credential?.Revision,
+                        replay.Credential?.Reference.Version, replay.PublishedConfigurationHash,
+                        replay.PublishedProviderState));
+                }
+
+                if (existingClaim.State == ModelProviderCredentialWriteClaimState.PublicationPending)
+                {
+                    var replay = await store.ClaimPublicationWriteAsync(pubClaim, cancellationToken)
+                        .ConfigureAwait(false);
+                    return await PublishAndAcknowledgeAsync(
+                        pubClaim, replay.Credential!, caller, store, publicationClient, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (existingClaim.State == ModelProviderCredentialWriteClaimState.Quarantined ||
+                    existingClaim.DispatchedAt is not null)
+                {
+                    if (existingClaim.State == ModelProviderCredentialWriteClaimState.Claimed)
+                        _ = await store.MarkPublicationWriteUncertainAsync(pubClaim, cancellationToken)
+                            .ConfigureAwait(false);
+
+                    return Results.Json(new
+                    {
+                        code = "credential_write_quarantined",
+                        operationId,
+                        status = "quarantined",
+                    }, statusCode: 409);
+                }
+            }
+
+            if (!byokVault.IsConfigured)
+                return Error("credential_vault_unavailable", 503);
+
+            ModelProviderCredentialPublicationPreflightResponse? preflight1 = null;
+            if (existingClaim is null)
+            {
+                if (await store.HasActiveWriteClaimForProviderAsync(providerId, cancellationToken)
+                        .ConfigureAwait(false))
+                    return Error("credential_slot_conflict", 409);
+
+                preflight1 = await publicationClient.PreflightAsync(
+                    new ModelProviderCredentialPublicationPreflightRequest(
+                        operationId, scope, projectId, providerId,
+                        caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                        caller.BoundProjectId, "draft-snapshot"),
+                    cancellationToken).ConfigureAwait(false);
+
+                if (preflight1.IsCancelled)
+                    return Error("credential_operation_cancelled", 409);
+                if (preflight1.ProviderRevision != expectedProviderRevision)
+                    return Error("model_provider_draft_conflict", 409);
+            }
+
+            // Read and validate bounded UTF-8 body before inserting any new Claimed row so 400/413 never wedges the slot.
+            var bodyBytes = await ReadBoundedAsync(context.Request, MaximumOctetCredentialBytes, cancellationToken)
+                .ConfigureAwait(false);
+            if (bodyBytes is null)
+                return Error("request_body_too_large", 413);
+
+            string apiKey;
+            try
+            {
+                if (bodyBytes.Length == 0)
+                    return Error("credential_request_invalid", 400);
+                try
+                {
+                    apiKey = StrictUtf8.GetString(bodyBytes);
+                }
+                catch (DecoderFallbackException)
+                {
+                    return Error("credential_request_invalid", 400);
+                }
+                if (string.IsNullOrWhiteSpace(apiKey))
+                    return Error("credential_request_invalid", 400);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(bodyBytes);
+            }
+
+            Guid slotId;
+            long expectedCredentialRevision;
+            string resolvedTenant;
+            if (existingClaim is not null)
+            {
+                slotId = existingClaim.CredentialSlotId;
+                expectedCredentialRevision = existingClaim.ExpectedRevision;
+                resolvedTenant = existingClaim.Tenant!;
+            }
+            else
+            {
+                var existingHead = await store.ReadHeadByProviderAsync(credScope, projectId, providerId, cancellationToken)
+                    .ConfigureAwait(false);
+                slotId = existingHead?.CredentialSlotId ?? preflight1!.CredentialSlotId ?? Guid.NewGuid();
+                expectedCredentialRevision = existingHead?.Revision ?? 0;
+                resolvedTenant = preflight1!.ResolvedTenant;
+            }
+
+            var pubRequest = new ClaimModelProviderCredentialPublication(
+                new ClaimModelProviderCredentialWrite(
+                    operationId,
+                    expectedCredentialRevision,
+                    slotId,
+                    credScope,
+                    projectId,
+                    providerId,
+                    ModelProviderCredentialVaultSource.Byok,
+                    secretName,
+                    caller.ActorId),
+                expectedProviderRevision,
+                BrokerModelProviderCredentialPublicationClient.Purpose,
+                caller.Issuer,
+                resolvedTenant);
+
+            var claimResult = await store.ClaimPublicationWriteAsync(pubRequest, cancellationToken)
+                .ConfigureAwait(false);
+            if (claimResult.Status == ModelProviderCredentialWriteClaimStatus.Cancelled)
+                return Error("credential_operation_cancelled", 409);
+            if (claimResult.Status is ModelProviderCredentialWriteClaimStatus.Quarantined)
+                return Results.Json(new
+                {
+                    code = "credential_write_quarantined",
+                    operationId,
+                    status = "quarantined",
+                }, statusCode: 409);
+
+            var preflight2 = await publicationClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    operationId, scope, projectId, providerId,
+                    caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                    caller.BoundProjectId, "draft-snapshot"),
+                cancellationToken).ConfigureAwait(false);
+            if (preflight2.IsCancelled)
+                return Error("credential_operation_cancelled", 409);
+            if (!StringComparer.Ordinal.Equals(preflight2.ResolvedTenant, resolvedTenant) ||
+                preflight2.ProviderRevision != expectedProviderRevision)
+                return Error("model_provider_draft_conflict", 409);
+
+            await store.MarkPublicationDispatchedAsync(pubRequest, cancellationToken).ConfigureAwait(false);
+
+            SecretRef writtenRef;
+            var secretCredential = new SecretCredential(
+                apiKey, timeProvider.GetUtcNow().Add(ByokCredentialExpiry), timeProvider);
+            try
+            {
+                writtenRef = await byokVault.WriteVersionAsync(
+                    secretName, secretCredential, operationId, slotId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                _ = await store.MarkPublicationWriteUncertainAsync(pubRequest, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    code = "credential_write_uncertain",
+                    operationId,
+                    status = "quarantined",
+                }, statusCode: 503);
+            }
+            finally
+            {
+                secretCredential.Invalidate();
+            }
+
+            var pending = await store.CompletePublicationWriteAsync(pubRequest, writtenRef, cancellationToken)
+                .ConfigureAwait(false);
+            return await PublishAndAcknowledgeAsync(
+                pubRequest, pending.Credential!, caller, store, publicationClient, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ModelProviderCredentialException ex)
+        {
+            return MapStoreException(ex);
+        }
+        catch (BrokerCredentialPublicationV2Exception ex)
+        {
+            return MapPublicationException(ex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return Results.StatusCode(499);
+        }
+    }
+
+    private static bool TryParseProviderRevision(
+        Microsoft.Extensions.Primitives.StringValues headerValues,
+        out long revision)
+    {
+        revision = 0;
+        if (headerValues.Count != 1)
+            return false;
+        var raw = headerValues[0]?.Trim();
+        if (string.IsNullOrEmpty(raw))
+            return false;
+        if (raw.StartsWith('"') && raw.EndsWith('"') && raw.Length >= 2)
+            raw = raw[1..^1];
+        return long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out revision) &&
+               revision is > 0 and < long.MaxValue;
     }
 
     private static async Task<IResult> HandleDeleteAsync(

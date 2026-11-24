@@ -673,6 +673,8 @@ agentweaver platform byok update <providerId> --expected-revision <revision>
     --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <deployment>
     [metadata options] [--operation-id <guid>] [--rate-card-id <id> --rate-card-version <version>]
 agentweaver platform byok save-prices <id> <version> --source manual|azure-retail --input <file.json>
+agentweaver platform byok set-key <providerId> --from-stdin
+    --expected-revision <providerRevision> --operation-id <guid>
 agentweaver platform byok recheck-key <providerId> --expected-revision <revision>
     --expected-credential-revision <credentialRevision> --operation-id <guid>
 agentweaver platform byok disable-key <providerId> --expected-revision <revision>
@@ -725,6 +727,14 @@ If a `show` request returns
 Use that pair with `update` and supply complete corrected metadata. The API
 does not return the rejected metadata.
 
+`set-key` reads one non-empty, non-whitespace UTF-8 key (up to 8,192 bytes after
+stripping one final LF or CRLF) from redirected stdin and uploads it as
+`application/octet-stream` with `If-Match` and `Idempotency-Key`. Before
+reading stdin, the CLI verifies the target provider revision and checks the
+operation status endpoint (`404` required). On an uncertain or lost `PUT`
+response, the CLI checks the operation status endpoint with the same
+`operationId` and never resends the key.
+
 `recheck-key` verifies the current enabled credential version without uploading
 a key. `disable-key` disables the current credential. Both require exact
 provider and credential revisions and an explicit operation ID. `activate`
@@ -759,6 +769,8 @@ agentweaver project byok update <providerId> --project-id <projectId>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
     [--rate-card-id <id> --rate-card-version <version>]
 agentweaver project byok prices --project-id <projectId> --region <region> --search <meter-text>
+agentweaver project byok set-key <providerId> --project-id <projectId> --from-stdin
+    --expected-revision <providerRevision> --operation-id <guid>
 agentweaver project byok recheck-key <providerId> --project-id <projectId>
     --expected-revision <providerRevision> --expected-credential-revision <credentialRevision>
     --operation-id <guid>

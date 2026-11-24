@@ -39,8 +39,15 @@ public sealed partial class GatewayOwnerClient(
     private static readonly TimeSpan RetailRateCardRequestTimeout = TimeSpan.FromSeconds(40);
     private static readonly TimeSpan RateCardProjectsCheckTimeout = TimeSpan.FromSeconds(5);
 
+    private const long MaximumOctetCredentialBytes = 8 * 1024;
     private static bool IsRateCardWriteRoute(GatewayRoute route) =>
         route.OperationId is "savePlatformManualRuntimeRateCard" or "savePlatformAzureRetailRuntimeRateCard";
+    private static bool IsCredentialPutRoute(GatewayRoute route) =>
+        route.OperationId is "setPlatformByokProviderCredential" or "setProjectByokProviderCredential";
+    private static bool IsOctetStreamRequest(HttpContext context) =>
+        context.Request.ContentType is { } contentType &&
+        MediaTypeHeaderValue.TryParse(contentType, out var parsed) &&
+        string.Equals(parsed.MediaType, "application/octet-stream", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<bool> HasP1SetupBodyAsync(
         HttpRequest request, CancellationToken cancellationToken)
@@ -90,6 +97,7 @@ public sealed partial class GatewayOwnerClient(
             if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" or
                     "readPlatformNativeAcsPolicy" or "readRunEgress" ||
                 IsRateCardWriteRoute(route) ||
+                IsCredentialPutRoute(route) ||
                 IsModelProviderDraftRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
@@ -171,7 +179,12 @@ public sealed partial class GatewayOwnerClient(
                     .ConfigureAwait(false);
                 return;
             }
-            using var boundedBody = await BufferBoundedRequestAsync(context, route, timeout.Token).ConfigureAwait(false);
+            var streamCredentialOctet = IsCredentialPutRoute(route) && IsOctetStreamRequest(context);
+            if (streamCredentialOctet && context.Request.ContentLength > MaximumOctetCredentialBytes)
+                throw RequestBodyTooLarge();
+            using var boundedBody = streamCredentialOctet
+                ? null
+                : await BufferBoundedRequestAsync(context, route, timeout.Token).ConfigureAwait(false);
             WorkflowGenerationRequestIdentity? workflowRequest = null;
             if (IsWorkflowGenerationOperation(route.OperationId) && context.Request.Query.Count != 0)
                 throw WorkflowGenerationRequestFailure("workflow_generation_request_invalid");
@@ -297,16 +310,27 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (GatewayOwnerFailureException exception)
         {
-            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
         }
         catch (JsonException) when (IsWorkflowGenerationOperation(route.OperationId))
         {
-            await WriteProblemAsync(
-                context, "workflow_generation_owner_contract_invalid", StatusCodes.Status502BadGateway)
-                .ConfigureAwait(false);
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteProblemAsync(
+                    context, "workflow_generation_owner_contract_invalid", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            if (context.Response.HasStarted)
+            {
+                context.Abort();
+                return;
+            }
             var status = route.OperationId == "readRunEgress"
                 ? StatusCodes.Status503ServiceUnavailable
                 : StatusCodes.Status504GatewayTimeout;
@@ -318,7 +342,10 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
         {
-            await WriteOwnerFailureAsync(context, RequestBodyTooLarge()).ConfigureAwait(false);
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteOwnerFailureAsync(context, RequestBodyTooLarge()).ConfigureAwait(false);
         }
         catch (HttpRequestException exception) when (!context.Response.HasStarted &&
             FindRequestBodyTooLarge(exception) is { } tooLarge)
@@ -327,6 +354,11 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (HttpRequestException)
         {
+            if (context.Response.HasStarted)
+            {
+                context.Abort();
+                return;
+            }
             var status = route.OperationId == "readRunEgress"
                 ? StatusCodes.Status503ServiceUnavailable
                 : StatusCodes.Status502BadGateway;
@@ -346,6 +378,11 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (IOException)
         {
+            if (context.Response.HasStarted)
+            {
+                context.Abort();
+                return;
+            }
             var status = route.OperationId == "readRunEgress"
                 ? StatusCodes.Status503ServiceUnavailable
                 : StatusCodes.Status502BadGateway;
@@ -2549,22 +2586,35 @@ public sealed partial class GatewayOwnerClient(
         if (route.HasJsonBody && (route.JsonBodyRequired || hasRequestBody))
         {
             var contentType = context.Request.ContentType;
-            if (contentType is not null &&
-                (!MediaTypeHeaderValue.TryParse(contentType, out var parsed) ||
-                    parsed.MediaType is null ||
-                    !(parsed.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
-                      parsed.MediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase))))
+            var isOctetStream = false;
+            if (contentType is not null)
             {
-                request.Dispose();
-                throw new GatewayOwnerFailureException(
-                    StatusCodes.Status415UnsupportedMediaType,
-                    "application/problem+json",
-                    ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
+                if (!MediaTypeHeaderValue.TryParse(contentType, out var parsed) || parsed.MediaType is null)
+                {
+                    request.Dispose();
+                    throw new GatewayOwnerFailureException(
+                        StatusCodes.Status415UnsupportedMediaType,
+                        "application/problem+json",
+                        ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
+                }
+                isOctetStream = IsCredentialPutRoute(route) &&
+                    parsed.MediaType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase);
+                if (!isOctetStream &&
+                    !(parsed.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+                      parsed.MediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
+                {
+                    request.Dispose();
+                    throw new GatewayOwnerFailureException(
+                        StatusCodes.Status415UnsupportedMediaType,
+                        "application/problem+json",
+                        ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
+                }
             }
-            var stream = requestBody ?? (IsRateCardWriteRoute(route) &&
-                route.MaximumRequestBodyBytes is { } streamLimit
-                ? new BoundedRequestStream(context.Request.Body, streamLimit)
-                : context.Request.Body);
+            var stream = requestBody ?? (isOctetStream
+                ? new BoundedRequestStream(context.Request.Body, MaximumOctetCredentialBytes)
+                : IsRateCardWriteRoute(route) && route.MaximumRequestBodyBytes is { } streamLimit
+                    ? new BoundedRequestStream(context.Request.Body, streamLimit)
+                    : context.Request.Body);
             request.Content = new StreamContent(stream);
             if (context.Request.ContentLength is { } contentLength)
                 request.Content.Headers.ContentLength = contentLength;

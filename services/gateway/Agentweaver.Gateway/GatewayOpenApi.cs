@@ -365,6 +365,27 @@ internal static partial class GatewayOpenApi
                 schema = new { type = "string" },
             }).ToArray();
         if (route.OperationId is
+            "setPlatformByokProviderCredential" or "setProjectByokProviderCredential")
+            parameters = parameters.Concat(
+            [
+                new
+                {
+                    name = "If-Match",
+                    @in = "header",
+                    required = false,
+                    description = "Expected provider revision for application/octet-stream credential uploads.",
+                    schema = new { type = "string", pattern = "^\"?[1-9][0-9]{0,18}\"?$" },
+                },
+                new
+                {
+                    name = "Idempotency-Key",
+                    @in = "header",
+                    required = false,
+                    description = "Operation UUID for application/octet-stream credential uploads.",
+                    schema = Uuid(),
+                },
+            ]).ToArray();
+        if (route.OperationId is
             "formulateCastingProposal" or "analyzeCastingProposal" or "generateProjectWorkflow")
             parameters = parameters.Append(new
             {
@@ -1318,15 +1339,7 @@ else if (route.OperationId is
                 ? new
                 {
                     required = route.JsonBodyRequired,
-                    content = new Dictionary<string, object>
-                    {
-                        ["application/json"] = new
-                        {
-                            schema = Ref(contract.RequestSchema
-                                ?? throw new InvalidOperationException(
-                                    $"The OpenAPI request schema for '{route.OperationId}' is missing.")),
-                        },
-                    },
+                    content = CreateRequestBodyContent(route, contract),
                 }
                 : null,
             ["responses"] = responses,
@@ -1338,6 +1351,29 @@ else if (route.OperationId is
             ["x-agentweaver-max-response-bytes"] = route.MaximumResponseBytes,
             ["x-agentweaver-mcp-excluded"] = route.ExcludeFromMcp,
         };
+    }
+
+    private static Dictionary<string, object> CreateRequestBodyContent(
+        GatewayRoute route,
+        OperationContract contract)
+    {
+        var content = new Dictionary<string, object>
+        {
+            ["application/json"] = new
+            {
+                schema = Ref(contract.RequestSchema
+                    ?? throw new InvalidOperationException(
+                        $"The OpenAPI request schema for '{route.OperationId}' is missing.")),
+            },
+        };
+        if (route.OperationId is "setPlatformByokProviderCredential" or "setProjectByokProviderCredential")
+        {
+            content["application/octet-stream"] = new
+            {
+                schema = new { type = "string", format = "binary" },
+            };
+        }
+        return content;
     }
 
     private static object JsonResponse(

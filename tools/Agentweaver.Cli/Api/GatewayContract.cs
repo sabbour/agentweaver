@@ -20,7 +20,8 @@ internal sealed record GatewayOperation(
     IReadOnlyList<string> ResponseMediaTypes,
     IReadOnlyList<string> ResponseHeaders,
     int MaximumRequestBytes,
-    int MaximumResponseBytes);
+    int MaximumResponseBytes,
+    IReadOnlyList<string>? RequestBodyMediaTypes = null);
 
 internal static partial class GatewayContract
 {
@@ -88,7 +89,7 @@ internal static partial class GatewayContract
 
                 var parameters = MergeParameters(pathParameters, ParseParameterArray(operation["parameters"]));
                 ValidatePathParameters(path, parameters);
-                var (hasBody, bodyRequired) = ParseRequestBody(operation["requestBody"]);
+                var (hasBody, bodyRequired, requestMediaTypes) = ParseRequestBody(operation["requestBody"]);
                 var responseMediaTypes = ParseResponseMediaTypes(operation["responses"]);
                 var responseHeaders = ParseResponseHeaders(operation["responses"]);
                 var maximumRequestBytes = Bound(operation["x-agentweaver-max-request-body-bytes"], 1024 * 1024, 64 * 1024 * 1024, "request");
@@ -104,7 +105,8 @@ internal static partial class GatewayContract
                     responseMediaTypes,
                     responseHeaders,
                     maximumRequestBytes,
-                    maximumResponseBytes);
+                    maximumResponseBytes,
+                    requestMediaTypes);
 
                 if (!operations.TryAdd(operationId, normalized))
                     throw new InvalidDataException("The live Gateway contract contains duplicate operation identities.");
@@ -238,24 +240,36 @@ internal static partial class GatewayContract
             throw new InvalidDataException("The live Gateway path parameters do not match its operation contract.");
     }
 
-    private static (bool HasBody, bool Required) ParseRequestBody(JsonNode? node)
+    private static (bool HasBody, bool Required, IReadOnlyList<string> MediaTypes) ParseRequestBody(JsonNode? node)
     {
         if (node is null)
-            return (false, false);
+            return (false, false, []);
         if (node is not JsonObject body ||
             body["required"] is not null && body["required"] is not JsonValue requiredNode ||
             body["required"] is JsonValue requiredValue && !requiredValue.TryGetValue<bool>(out _) ||
             body["content"] is not JsonObject content ||
-            !content.Any(entry => NormalizeMediaType(entry.Key) == "application/json"))
+            content.Count == 0)
         {
             throw new InvalidDataException("The live Gateway operation has an unsupported request-body shape.");
         }
+        var mediaTypes = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var (mediaType, media) in content)
         {
-            if (NormalizeMediaType(mediaType) != "application/json" || media is not JsonObject)
+            var normalized = NormalizeMediaType(mediaType);
+            if (normalized is not ("application/json" or "application/octet-stream") || media is not JsonObject mediaObj)
                 throw new InvalidDataException("The live Gateway operation advertises an unsupported request-body media type.");
+            if (normalized == "application/octet-stream" &&
+                mediaObj["schema"] is JsonObject schema &&
+                String(schema, "format") is { } format &&
+                format != "binary")
+            {
+                throw new InvalidDataException("The live Gateway operation advertises an unsupported binary request-body schema.");
+            }
+            mediaTypes.Add(normalized);
         }
-        return (true, body["required"]?.GetValue<bool>() ?? false);
+        if (!mediaTypes.Contains("application/json") && !mediaTypes.Contains("application/octet-stream"))
+            throw new InvalidDataException("The live Gateway operation has an unsupported request-body shape.");
+        return (true, body["required"]?.GetValue<bool>() ?? false, mediaTypes.ToArray());
     }
 
     private static IReadOnlyList<string> ParseResponseMediaTypes(JsonNode? node)

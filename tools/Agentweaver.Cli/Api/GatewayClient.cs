@@ -290,6 +290,50 @@ public sealed partial class GatewayClient : IGatewayClient
         return response;
     }
 
+    public async Task<GatewayResponse> InvokeOctetStreamAsync(
+        string operationId,
+        GatewayInvocation invocation,
+        byte[] body,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        ArgumentNullException.ThrowIfNull(invocation);
+        ArgumentNullException.ThrowIfNull(body);
+
+        var operations = await EnsureDiscoveredAsync(ct).ConfigureAwait(false);
+        if (!operations.TryGetValue(operationId, out var operation))
+            throw new InvalidOperationException($"Unknown API operation: {operationId}");
+        if (operation.RequestBodyMediaTypes is { Count: > 0 } &&
+            !operation.RequestBodyMediaTypes.Contains("application/octet-stream", StringComparer.Ordinal))
+            throw new InvalidOperationException("This API operation does not accept an application/octet-stream request body.");
+
+        var bearer = await GetBearerAsync(Identity, ct).ConfigureAwait(false);
+        _ = await ReadAuthorizationContextAsync(Identity, bearer, ct, recordEvidence: false).ConfigureAwait(false);
+
+        var (pathAndQuery, _, headers, _) = PrepareRequest(operation, invocation, allowOctetStream: true);
+        if (body.Length > operation.MaximumRequestBytes)
+            throw new InvalidOperationException($"The request body exceeds the advertised {operation.MaximumRequestBytes}-byte limit.");
+
+        return await SendAsync(
+            Identity,
+            operation.Method,
+            pathAndQuery,
+            body,
+            bearer,
+            authenticated: true,
+            operation.MaximumResponseBytes,
+            operation.ResponseMediaTypes,
+            operation.ResponseHeaders,
+            onEventChunk: null,
+            ct,
+            headers,
+            projectBearer: null,
+            operation.MaximumRequestBytes,
+            operation.OperationId,
+            recordEvidence: false,
+            requestContentType: "application/octet-stream").ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Sends a same-origin REST request after checking the selected authorization context, without OpenAPI discovery.
     /// </summary>
@@ -635,7 +679,7 @@ public sealed partial class GatewayClient : IGatewayClient
         string Path,
         IReadOnlyDictionary<string, string> Query,
         IReadOnlyDictionary<string, string> Headers,
-        byte[]? BodyBytes) PrepareRequest(GatewayOperation operation, GatewayInvocation invocation)
+        byte[]? BodyBytes) PrepareRequest(GatewayOperation operation, GatewayInvocation invocation, bool allowOctetStream = false)
     {
         var paths = invocation.PathParameters ?? EmptyParameters;
         var query = invocation.Query ?? EmptyParameters;
@@ -708,8 +752,15 @@ public sealed partial class GatewayClient : IGatewayClient
 
         if (!operation.HasRequestBody && invocation.Body is not null)
             throw new InvalidOperationException("This API operation does not accept a request body.");
-        if (operation.BodyRequired && invocation.Body is null)
-            throw new InvalidOperationException("This API operation requires a JSON request body.");
+        if (!allowOctetStream)
+        {
+            if (operation.RequestBodyMediaTypes is { Count: > 0 } &&
+                invocation.Body is not null &&
+                !operation.RequestBodyMediaTypes.Contains("application/json", StringComparer.Ordinal))
+                throw new InvalidOperationException("This API operation does not accept a JSON request body.");
+            if (operation.BodyRequired && invocation.Body is null)
+                throw new InvalidOperationException("This API operation requires a JSON request body.");
+        }
         if (invocation.Body is JsonObject body)
         {
             if (body["projectId"] is JsonValue projectValue &&
@@ -855,7 +906,8 @@ public sealed partial class GatewayClient : IGatewayClient
         bool acceptAnyMediaType = false,
         bool requireOpaqueResponse = false,
         Action? onDispatch = null,
-        bool recordEvidence = true)
+        bool recordEvidence = true,
+        string requestContentType = "application/json")
     {
         var requestId = Guid.NewGuid();
         var started = Stopwatch.GetTimestamp();
@@ -927,7 +979,7 @@ public sealed partial class GatewayClient : IGatewayClient
             if (body is not null)
             {
                 request.Content = new ByteArrayContent(body);
-                request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue(requestContentType);
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

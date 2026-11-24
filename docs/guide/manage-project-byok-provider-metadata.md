@@ -113,7 +113,19 @@ The Broker verifies the stored, enabled Key Vault version without uploading a
 key or creating a new Vault version, and Projects transitions `providerState`
 to `Available` when the saved rate card verifies against Events.
 
-## Search prices or disable a saved credential
+## Set, search prices, or disable a credential
+
+To upload or rotate a project UTF-8 API key from redirected stdin (up to 8,192
+bytes after stripping one final LF or CRLF):
+
+```powershell
+$operationId = [guid]::NewGuid().ToString()
+$apiKey | agentweaver project byok set-key $providerId `
+  --project-id $projectId `
+  --from-stdin `
+  --expected-revision $expectedProviderRevision `
+  --operation-id $operationId
+```
 
 Search authenticated Azure Retail meters before you create a rate card:
 

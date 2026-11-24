@@ -93,9 +93,10 @@ prices.
 
    Attach the returned `rateCard.id` and `rateCard.version` as
    `--rate-card-id` and `--rate-card-version` on a provider `add` or `update`.
-   After a credential already exists, `platform byok recheck-key` or
-   `project byok recheck-key` verifies that saved credential against the
-   attached card.
+   Upload the provider's UTF-8 API key with `platform byok set-key` or
+   `project byok set-key`. After a credential already exists,
+   `platform byok recheck-key` or `project byok recheck-key` verifies that saved
+   credential against the attached card.
 
 If you have negotiated prices, or the meters are not listed, use manual
 prices instead. You then supply the prices, a source URL, and the date that
