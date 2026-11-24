@@ -2215,13 +2215,13 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("id");
 
-                    b.Property<long>("Generation")
-                        .HasColumnType("bigint")
-                        .HasColumnName("generation");
-
                     b.Property<long>("CutoverGeneration")
                         .HasColumnType("bigint")
                         .HasColumnName("cutover_generation");
+
+                    b.Property<long>("Generation")
+                        .HasColumnType("bigint")
+                        .HasColumnName("generation");
 
                     b.Property<string>("PlatformSkillsPolicySha256")
                         .HasMaxLength(64)
@@ -2247,9 +2247,9 @@ namespace Agentweaver.Projects.Config.Migrations
 
                     b.ToTable("project_skill_admission_fence", "projects_config", t =>
                         {
-                            t.HasCheckConstraint("ck_skill_admission_fence_generation", "generation > 0");
-
                             t.HasCheckConstraint("ck_skill_admission_fence_cutover_generation", "cutover_generation > 0");
+
+                            t.HasCheckConstraint("ck_skill_admission_fence_generation", "generation > 0");
 
                             t.HasCheckConstraint("ck_skill_admission_fence_id", "id = 1");
 

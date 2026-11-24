@@ -683,7 +683,7 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     const duplicates = functions.filter((name, position) => functions.indexOf(name) !== position);
     assert.deepEqual(duplicates,
       owner.startsWith('projects-config/')
-        ? ['check_model_provider_pair()', 'check_model_provider_pair()', 'check_model_provider_pair()', 'check_model_provider_pair()']
+        ? ['check_model_provider_pair()', 'check_model_provider_pair()', 'check_model_provider_pair()', 'check_model_provider_pair()', 'require_skill_admission_writer()', 'require_skill_admission_writer()']
         : owner.startsWith('orchestrator/')
           ? ['close_workflow_generation_jobs_on_cancel()']
           : []);
