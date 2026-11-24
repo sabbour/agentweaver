@@ -120,8 +120,10 @@ internal static partial class GatewayOpenApi
             ["createProjectByokProviderDraft"] = C("ModelProviderDraftProjectCreateRequest", "ModelProviderDraft", "200"),
             ["updateProjectByokProviderDraft"] = C("ModelProviderDraftSaveRequest", "ModelProviderDraft", "200"),
             ["setPlatformByokProviderCredential"] = C("ModelProviderCredentialPutRequest", "ModelProviderCredentialOperationResponse", "200"),
+            ["readPlatformByokProviderCredentialOperation"] = C(null, "ModelProviderCredentialOperationStatusResponse", "200"),
             ["disablePlatformByokProviderCredential"] = C("ModelProviderCredentialDeleteRequest", "ModelProviderCredentialOperationResponse", "200"),
             ["setProjectByokProviderCredential"] = C("ModelProviderCredentialPutRequest", "ModelProviderCredentialOperationResponse", "200"),
+            ["readProjectByokProviderCredentialOperation"] = C(null, "ModelProviderCredentialOperationStatusResponse", "200"),
             ["disableProjectByokProviderCredential"] = C("ModelProviderCredentialDeleteRequest", "ModelProviderCredentialOperationResponse", "200"),
             ["pinSourceControlRepository"] = C("SourceControlRepositoryPinRequest", "SourceControlRepositoryPinView", "200", "202"),
             ["createSourceControlIssue"] = C("SourceControlIssueRequest", "SourceControlIssue", "200"),
@@ -518,7 +520,9 @@ internal static partial class GatewayOpenApi
                         "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                         "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
-                        route.OperationId == "getAuthorizationTargetContext" ||
+                        route.OperationId is "getAuthorizationTargetContext" or
+                            "readPlatformByokProviderCredentialOperation" or
+                            "readProjectByokProviderCredentialOperation" ||
                         IsModelProviderDraftRoute(route.OperationId)) && status == "200") ||
                         ((route.OperationId is "savePlatformManualRuntimeRateCard" or "savePlatformAzureRetailRuntimeRateCard") &&
                          status is "200" or "201")
@@ -815,6 +819,14 @@ else if (route.OperationId is
                 "The owner did not find the capture or file, or withholds captures while the run is failed or indeterminate.");
             responses["409"] = ProblemResponse("The accepted run selection or owner authority changed during the request.");
             responses["503"] = ProblemResponse("The capture store is unavailable or failed an integrity check.");
+        }
+        else if (route.OperationId is "readPlatformByokProviderCredentialOperation" or "readProjectByokProviderCredentialOperation")
+        {
+            responses["400"] = ProblemResponse("The request included query parameters, a body, or invalid identifiers.");
+            responses["403"] = ProblemResponse("The caller lacks current authority or the token does not match the target scope.");
+            responses["404"] = ProblemResponse("No matching credential operation exists for this caller and target.");
+            responses["409"] = ProblemResponse("The operation ID belongs to a different scope, provider, or actor.");
+            responses["503"] = ProblemResponse("Identity Broker or Projects & Config is unavailable.");
         }
         else if (route.OperationId == "listProjectRoleAssignments")
         {
@@ -2474,6 +2486,15 @@ else if (route.OperationId is
             ("credentialVersion", NullableStr()),
             ("configurationHash", NullableStr()),
             ("providerState", Nullable(Enum("Draft", "Available")))),
+        ["ModelProviderCredentialOperationStatusResponse"] = StrictObj(
+            ["operationId", "scope", "projectId", "providerId", "status"],
+            ("operationId", Uuid()),
+            ("scope", Enum("platform", "project")),
+            ("projectId", NullableStr()),
+            ("providerId", Str()),
+            ("status", Enum("pending", "publication_pending", "published", "quarantined", "cancelled", "disable_pending", "disabled")),
+            ("providerRevision", Nullable(new { type = "integer", format = "int64" })),
+            ("hasCredential", Nullable(Bool()))),
         ["ModelProviderDraftPlatformCreateRequest"] = WithRateCardPair(WithReferencePin(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64", @const = 0 }),

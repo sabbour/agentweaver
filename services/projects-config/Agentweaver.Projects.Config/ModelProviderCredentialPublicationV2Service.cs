@@ -44,6 +44,52 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
         MaxDepth = 16,
     };
 
+    internal Task<ModelProviderCredentialOperationReadResponse> ReadOperationAsync(
+        ModelProviderCredentialOperationReadRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!request.IsValid)
+            throw ModelProviderCredentialPublicationV2Exception.InvalidRequest();
+
+        return ExecuteWithRetryAsync(async () =>
+        {
+            var authority = await ResolveAndLockAuthorityAsync(
+                request.Issuer, request.ActorId, request.Scope, request.ProjectId,
+                request.TenantSelector, request.TenantClaim, cancellationToken).ConfigureAwait(false);
+            var operation = await db.ModelProviderCredentialOperations.AsNoTracking()
+                .SingleOrDefaultAsync(op => op.OperationId == request.OperationId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (operation is null ||
+                operation.Scope != request.Scope ||
+                operation.ProjectId != request.ProjectId ||
+                !StringComparer.Ordinal.Equals(operation.ProviderId, request.ProviderId) ||
+                !StringComparer.Ordinal.Equals(operation.OriginalTenant, authority.Membership.TenantId) ||
+                !StringComparer.Ordinal.Equals(operation.Issuer, request.Issuer) ||
+                !StringComparer.Ordinal.Equals(operation.ActorId, request.ActorId))
+            {
+                return new ModelProviderCredentialOperationReadResponse(
+                    request, authority.Membership.TenantId, null, null, null, null);
+            }
+
+            var outcome = operation.OperationKind switch
+            {
+                ModelProviderCredentialOperationKind.Publish => "published",
+                ModelProviderCredentialOperationKind.Cancel => "cancelled",
+                ModelProviderCredentialOperationKind.Disable => "disabled",
+                _ => null,
+            };
+            return new ModelProviderCredentialOperationReadResponse(
+                request,
+                authority.Membership.TenantId,
+                outcome,
+                outcome == "published" ? ToPublicationReceipt(operation) : null,
+                operation.ProviderRevision,
+                outcome == "published" ? true : null);
+        }, cancellationToken);
+    }
+
     internal Task<ModelProviderCredentialPublicationPreflightResponse> PreflightAsync(
         ModelProviderCredentialPublicationPreflightRequest request,
         CancellationToken cancellationToken)

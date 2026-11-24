@@ -711,6 +711,319 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     }
 
     [Fact]
+    public async Task CredentialOperationStatusGetSupportsBothScopesSplitStatePendingZeroMutationsAndRedaction()
+    {
+        using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var projects = _runBindingProjects;
+
+        var fakeVault = new FakeByokVault();
+        await using var broker = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                settings["IdentityBroker__SecretRedemption__ByokVaultUri"] =
+                    "https://agentweaver-byok-kv-v1.vault.azure.net/";
+                settings["IdentityBroker__SecretRedemption__ByokVaultHost"] =
+                    "agentweaver-byok-kv-v1.vault.azure.net";
+                for (var i = 0; i < ProjectScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                services.RemoveAll<IModelProviderByokVault>();
+                services.AddSingleton<IModelProviderByokVault>(fakeVault);
+                services.RemoveAll<ModelProviderCredentialRedemptionBackends>();
+                services.AddSingleton(new ModelProviderCredentialRedemptionBackends(fakeVault));
+            });
+
+        using var brokerClient = broker.CreateClient();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(signingCert),
+            () => new ForwardToClientHandler(projects.Client),
+            async (owner, req, ct) =>
+            {
+                var client = owner == GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker
+                    ? brokerClient
+                    : projects.Client;
+                using var clone = new HttpRequestMessage(req.Method, req.RequestUri!.PathAndQuery);
+                foreach (var header in req.Headers)
+                {
+                    if (!string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase))
+                        clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                if (req.Content is not null)
+                {
+                    var bytes = await req.Content.ReadAsByteArrayAsync(ct);
+                    clone.Content = new ByteArrayContent(bytes);
+                    foreach (var header in req.Content.Headers)
+                        clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                var resp = await client.SendAsync(clone, ct);
+                resp.RequestMessage = req;
+                return resp;
+            });
+
+        var adminToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, null, null, ["platform_admin"]))
+            .GetProperty("access_token").GetString()!;
+        var adminSub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(adminToken).Claims, "sub");
+        var membership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, adminSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, membership.MembershipId,
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+
+        var otherAdminToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, null, null, ["platform_admin"]))
+            .GetProperty("access_token").GetString()!;
+        var otherSub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(otherAdminToken).Claims, "sub");
+        var otherMembership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, otherSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, otherMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+
+        using var createPlatform = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, "/api/v1/platform/byok-providers",
+            adminToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0,
+                name = "Status Get Platform Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-5",
+                wire_api = "responses",
+                reasoning_efforts = new[] { "high" },
+            });
+        Assert.Equal(HttpStatusCode.OK, createPlatform.StatusCode);
+        var platformProviderId = JsonDocument.Parse(await createPlatform.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString()!;
+
+        // 1. Unknown operationId returns 404 without mutating preflights or calling Vault.
+        var preflightCountBefore = await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
+        var vaultCountBefore = fakeVault.WriteCalls;
+        using (var missing = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential/operations/{Guid.NewGuid():D}",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+            Assert.True(missing.Headers.CacheControl?.NoStore);
+        }
+        Assert.Equal(preflightCountBefore, await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
+        Assert.Equal(vaultCountBefore, fakeVault.WriteCalls);
+
+        // 2. Published operation returns 200 published with no secret version, credential revision, or hash.
+        var opPublish = Guid.NewGuid();
+        using (var putResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{platformProviderId}/credential",
+            adminToken, new
+            {
+                operationId = opPublish,
+                expectedProviderRevision = 1,
+                expectedCredentialRevision = 0,
+                apiKey = "sk-status-get-secret-11111",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, putResp.StatusCode);
+        }
+
+        using (var publishedStatus = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential/operations/{opPublish:D}",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, publishedStatus.StatusCode);
+            Assert.True(publishedStatus.Headers.CacheControl?.NoStore);
+            var json = await publishedStatus.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("sk-status-get-secret-11111", json);
+            Assert.DoesNotContain("credentialVersion", json);
+            Assert.DoesNotContain("credentialRevision", json);
+            Assert.DoesNotContain("configurationHash", json);
+            using var doc = JsonDocument.Parse(json);
+            Assert.Equal("published", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal("platform", doc.RootElement.GetProperty("scope").GetString());
+            Assert.Equal(2L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+            Assert.True(doc.RootElement.GetProperty("hasCredential").GetBoolean());
+        }
+
+        // 3. Mismatched actor gets 409; mismatched provider returns 409.
+        using (var wrongActor = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential/operations/{opPublish:D}",
+            otherAdminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, wrongActor.StatusCode);
+        }
+
+        // 4. Split-state pending case 1: Projects committed Publish, but Broker claim remains PublicationPending.
+        // GET MUST remain publication_pending (not published) and perform zero mutations.
+        await using (var revertClaim = _nativeDataSource.CreateCommand(
+            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'PublicationPending' WHERE operation_id = @op"))
+        {
+            revertClaim.Parameters.AddWithValue("op", opPublish);
+            Assert.Equal(1, await revertClaim.ExecuteNonQueryAsync());
+        }
+        var preflightsBeforeSplitPub = await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
+        using (var splitPub = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential/operations/{opPublish:D}",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, splitPub.StatusCode);
+            using var doc = JsonDocument.Parse(await splitPub.Content.ReadAsStringAsync());
+            Assert.Equal("publication_pending", doc.RootElement.GetProperty("status").GetString());
+        }
+        Assert.Equal(preflightsBeforeSplitPub, await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
+        await using (var restoreClaim = _nativeDataSource.CreateCommand(
+            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Published' WHERE operation_id = @op"))
+        {
+            restoreClaim.Parameters.AddWithValue("op", opPublish);
+            Assert.Equal(1, await restoreClaim.ExecuteNonQueryAsync());
+        }
+
+        // 5. Split-state pending case 2: Projects committed Disable, but Broker claim remains DisablePending.
+        // GET MUST remain disable_pending (not disabled) and perform zero mutations.
+        var opDisable = Guid.NewGuid();
+        using (var delResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential?operationId={opDisable:D}",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, delResp.StatusCode);
+        }
+        await using (var revertDisable = _nativeDataSource.CreateCommand(
+            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'DisablePending' WHERE operation_id = @op"))
+        {
+            revertDisable.Parameters.AddWithValue("op", opDisable);
+            Assert.Equal(1, await revertDisable.ExecuteNonQueryAsync());
+        }
+        var preflightsBeforeSplitDisable = await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
+        using (var splitDisable = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential/operations/{opDisable:D}",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, splitDisable.StatusCode);
+            using var doc = JsonDocument.Parse(await splitDisable.Content.ReadAsStringAsync());
+            Assert.Equal("disable_pending", doc.RootElement.GetProperty("status").GetString());
+        }
+        Assert.Equal(preflightsBeforeSplitDisable, await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
+
+        await using (var restoreDisable = _nativeDataSource.CreateCommand(
+            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Disabled' WHERE operation_id = @op"))
+        {
+            restoreDisable.Parameters.AddWithValue("op", opDisable);
+            Assert.Equal(1, await restoreDisable.ExecuteNonQueryAsync());
+        }
+        using (var disabledStatus = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential/operations/{opDisable:D}",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, disabledStatus.StatusCode);
+            using var doc = JsonDocument.Parse(await disabledStatus.Content.ReadAsStringAsync());
+            Assert.Equal("disabled", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal(3L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+        }
+
+        // 6. Project scope GET works with project-bound runless token and rejects revoked authority (403).
+        var projectId = "proj-status-" + Guid.NewGuid().ToString("N")[..8];
+        await using (var insertProject = projects.PrivilegedFixtureDataSource.CreateCommand(
+            "INSERT INTO projects_config.projects (project_id, tenant_id, name, created_at) VALUES (@pid, @tid, 'Status Project', now())"))
+        {
+            insertProject.Parameters.AddWithValue("pid", projectId);
+            insertProject.Parameters.AddWithValue("tid", TenantId);
+            await insertProject.ExecuteNonQueryAsync();
+        }
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, membership.MembershipId,
+            ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner);
+        var projectToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], projectId, null, null, ["project_owner"]))
+            .GetProperty("access_token").GetString()!;
+
+        using var createProjProvider = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, $"/api/v1/projects/{projectId}/byok-providers",
+            projectToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0,
+                name = "Status Get Project Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-5",
+                wire_api = "responses",
+                reasoning_efforts = new[] { "high" },
+            });
+        Assert.Equal(HttpStatusCode.OK, createProjProvider.StatusCode);
+        var projProviderId = JsonDocument.Parse(await createProjProvider.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString()!;
+
+        var opProjPub = Guid.NewGuid();
+        using (var putProj = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put,
+            $"/api/v1/projects/{projectId}/byok-providers/{projProviderId}/credential",
+            projectToken, new
+            {
+                operationId = opProjPub,
+                expectedProviderRevision = 1,
+                expectedCredentialRevision = 0,
+                apiKey = "sk-proj-status-11111",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, putProj.StatusCode);
+        }
+
+        using (var projStatus = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/projects/{projectId}/byok-providers/{projProviderId}/credential/operations/{opProjPub:D}",
+            projectToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, projStatus.StatusCode);
+            using var doc = JsonDocument.Parse(await projStatus.Content.ReadAsStringAsync());
+            Assert.Equal("published", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal("project", doc.RootElement.GetProperty("scope").GetString());
+            Assert.Equal(projectId, doc.RootElement.GetProperty("projectId").GetString());
+        }
+
+        await using (var revoke = projects.PrivilegedFixtureDataSource.CreateCommand(
+            "UPDATE projects_config.tenant_memberships SET state = 'Revoked', revision = revision + 1, revoked_by = 'test', revoked_at = now() WHERE membership_id = @id"))
+        {
+            revoke.Parameters.AddWithValue("id", membership.MembershipId);
+            Assert.Equal(1, await revoke.ExecuteNonQueryAsync());
+        }
+        using (var revokedGet = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/projects/{projectId}/byok-providers/{projProviderId}/credential/operations/{opProjPub:D}",
+            projectToken, null))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, revokedGet.StatusCode);
+        }
+    }
+
+    private static async Task<long> CountRowsAsync(NpgsqlDataSource dataSource, string sql)
+    {
+        await using var cmd = dataSource.CreateCommand(sql);
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task ByokCredentialLifecycleDisableRejectsStaleSlotOrVersionUnderProviderLockAndPreservesReplayAndPins()
     {
         using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(

@@ -78,6 +78,17 @@ internal static class ModelProviderCredentialPublicationV2Endpoints
                 cancellationToken))
             .WithName("DisableBrokerModelProviderCredentialV2");
 
+        group.MapPost("/read-operation", (
+                HttpContext context,
+                ModelProviderCredentialPublicationV2Service service,
+                CancellationToken cancellationToken) =>
+            HandleAsync<ModelProviderCredentialOperationReadRequest, ModelProviderCredentialOperationReadResponse>(
+                context,
+                req => req.IsValid && MatchesToken(context.User, req.OperationId, req.Scope, req.ProjectId, req.ProviderId, req.ActorId, req.Issuer),
+                req => service.ReadOperationAsync(req, cancellationToken),
+                cancellationToken))
+            .WithName("ReadBrokerModelProviderCredentialOperationV2");
+
         return app;
     }
 

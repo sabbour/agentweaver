@@ -117,6 +117,20 @@ receipt fields and uses exit code `1` for conflicts, quarantined credentials,
 and pending publication, and code `130` for cancellation.
 See the [contract details](./contracts.md#customer-provided-model-provider-draft-contract).
 
+To inspect an in-flight or uncertain credential operation without re-sending
+`PUT` or `DELETE`, call
+`GET /api/v1/platform/byok-providers/{providerId}/credential/operations/{operationId}`
+or
+`GET /api/v1/projects/{projectId}/byok-providers/{providerId}/credential/operations/{operationId}`.
+Both routes require current `api.read` and `projects.admin` authority, reject
+query parameters and request bodies, and return `Cache-Control: no-store`. The
+response returns `operationId`, `scope`, `projectId`, `providerId`, and `status`
+(`pending`, `publication_pending`, `published`, `quarantined`, `cancelled`,
+`disable_pending`, or `disabled`), plus `providerRevision` and `hasCredential`
+when completed. Secret versions, credential revisions, and configuration hashes
+are omitted. Terminal `published` and `disabled` statuses are returned only
+after both Identity Broker and Projects & Config complete the operation.
+
 The deployment-binding read takes no query or request body. It returns the
 responding Projects process's startup `revision` and BYOK `bindings`. Each
 binding has a `reference`, `enabled`, and `reasoningEfforts`. A missing

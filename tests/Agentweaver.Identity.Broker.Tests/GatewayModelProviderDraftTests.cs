@@ -40,6 +40,83 @@ public sealed class GatewayModelProviderDraftTests
     ];
 
     [Fact]
+    public async Task CredentialOperationStatusRoutesExposeOpenApiContractsAndReturn503WhenOwnerUnavailable()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new HttpClientHandler(),
+            (owner, _, _) =>
+            {
+                if (owner == GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker)
+                {
+                    var response = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    {
+                        Content = new StringContent("{\"code\":\"credential_publication_unavailable\"}", Encoding.UTF8, "application/json"),
+                    };
+                    return Task.FromResult(response);
+                }
+                throw new InvalidOperationException($"Unexpected owner {owner}.");
+            });
+
+        using var openApiResponse = await gateway.Client.GetAsync("/openapi/v1.json");
+        openApiResponse.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await openApiResponse.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+
+        var statusRoutes = new[]
+        {
+            ("/api/v1/platform/byok-providers/{providerId}/credential/operations/{operationId}",
+                "readPlatformByokProviderCredentialOperation",
+                "/api/platform/byok-providers/{providerId}/credential/operations/{operationId:guid}"),
+            ("/api/v1/projects/{projectId}/byok-providers/{providerId}/credential/operations/{operationId}",
+                "readProjectByokProviderCredentialOperation",
+                "/api/projects/{projectId}/byok-providers/{providerId}/credential/operations/{operationId:guid}"),
+        };
+
+        foreach (var (path, operationId, ownerPath) in statusRoutes)
+        {
+            Assert.True(paths.TryGetProperty(path, out var pathItem), $"Missing {path}");
+            var operation = pathItem.GetProperty("get");
+            Assert.Equal(operationId, operation.GetProperty("operationId").GetString());
+            Assert.Equal("IdentityBroker", operation.GetProperty("x-agentweaver-owner").GetString());
+            Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+            Assert.Equal(ownerPath, operation.GetProperty("x-agentweaver-owner-path").GetString());
+            var responses = operation.GetProperty("responses");
+            Assert.True(responses.GetProperty("200").GetProperty("headers").TryGetProperty("Cache-Control", out _));
+            foreach (var status in new[] { "400", "401", "403", "404", "409", "503" })
+            {
+                var content = responses.GetProperty(status).GetProperty("content");
+                Assert.True(content.TryGetProperty("application/problem+json", out _));
+            }
+        }
+
+        var statusSchema = schemas.GetProperty("ModelProviderCredentialOperationStatusResponse");
+        Assert.False(statusSchema.GetProperty("additionalProperties").GetBoolean());
+        var props = statusSchema.GetProperty("properties");
+        var statuses = props.GetProperty("status").GetProperty("enum")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Equal(
+            new[] { "pending", "publication_pending", "published", "quarantined", "cancelled", "disable_pending", "disabled" },
+            statuses);
+        Assert.False(props.TryGetProperty("credentialVersion", out _));
+        Assert.False(props.TryGetProperty("credentialRevision", out _));
+        Assert.False(props.TryGetProperty("configurationHash", out _));
+
+        var bearer = CreateToken(signingKey);
+        using var outageReq = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/v1/platform/byok-providers/byok-1/credential/operations/{Guid.NewGuid():D}");
+        outageReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        outageReq.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+        using var outageResp = await gateway.Client.SendAsync(outageReq);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, outageResp.StatusCode);
+        Assert.True(outageResp.Headers.CacheControl?.NoStore);
+    }
+
+    [Fact]
     public async Task DraftRoutesExposeTypedOpenApiContractsAndNoLifecycleOperations()
     {
         using var rsa = RSA.Create(2048);

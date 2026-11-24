@@ -109,6 +109,23 @@ internal sealed class BrokerModelProviderCredentialPublicationV2Client(
                        receipt.CredentialSlotId == request.ExpectedCredentialSlotId,
             cancellationToken);
 
+    internal Task<ModelProviderCredentialOperationReadResponse> ReadOperationAsync(
+        ModelProviderCredentialOperationReadRequest request,
+        CancellationToken cancellationToken) =>
+        SendAsync<ModelProviderCredentialOperationReadRequest, ModelProviderCredentialOperationReadResponse>(
+            "/internal/byok/credential-publications/v2/read-operation",
+            request,
+            request.OperationId,
+            request.Scope,
+            request.ProjectId,
+            request.ProviderId,
+            request.ActorId,
+            request.Issuer,
+            response => response.Request == request &&
+                        !string.IsNullOrWhiteSpace(response.ResolvedTenant) &&
+                        response.Outcome is null or "published" or "cancelled" or "disabled",
+            cancellationToken);
+
     private async Task<TResponse> SendAsync<TRequest, TResponse>(
         string path,
         TRequest payload,
