@@ -700,6 +700,18 @@ END;`,
         message: 'records in %.% are immutable', sqlState: '55000',
       },
     ],
+    project_skill_content_revisions: [
+      {
+        trigger: 'project_skill_content_revisions_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'project_skill_content_revisions_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
     project_skill_trust_evidence: [
       {
         trigger: 'project_skill_trust_evidence_immutable',

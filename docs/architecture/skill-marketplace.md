@@ -226,9 +226,12 @@ state. During cutover, the owner changes it to `Draining`, then waits for
 in-flight writers. The database trigger also blocks older service replicas
 from inserting revisions while the fence drains. Activation requires an
 owner-verified built-in release inventory and an explicit canonical platform
-Skills policy. After activation, writes reopen only through the admission path.
-Existing third-party revisions without this admission binding stay frozen from
-runtime delivery.
+Skills policy. After activation, writes reopen only through the admission path,
+and the database trigger blocks post-cutover inserts or updates claiming
+`LegacyThirdParty`. Existing unchanged pre-cutover `LegacyThirdParty` revisions
+without an admission binding continue to pass configuration validation and
+runtime delivery under existing content-integrity, K1 prompt-scan, revocation,
+and authority checks, while new or updated revisions require full admission.
 
 The marketplace bridge supplies owner-verified source coordinates: source ID,
 source revision, repository ref, exact commit, selected path, and fetched

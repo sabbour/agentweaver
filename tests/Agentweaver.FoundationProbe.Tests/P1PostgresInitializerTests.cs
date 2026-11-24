@@ -1314,6 +1314,7 @@ public sealed class P1PostgresInitializerTests
                     ],
                 },
                 GovernanceCheckpointTable(),
+                AppendOnlyTable("project_skill_content_revisions"),
                 AppendOnlyTable("project_skill_trust_evidence"),
                 new TablePlan(
                     "project_skill_admission_fence",

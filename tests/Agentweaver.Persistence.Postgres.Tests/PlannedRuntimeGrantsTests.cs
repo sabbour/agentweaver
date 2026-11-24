@@ -10,7 +10,7 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests of plan validation; no database is needed.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "783f5bf350feb80985cdf01953455bca7d7e108b2b512b4a44a4cd1b8f52a7c3";
+    private const string ReviewedPlanSha256 = "bbde64d991d1d71b415c83b8a55cdf57f2382f7a7b4a95dd5ba73117549cee3e";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 13)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 17)];
@@ -144,7 +144,7 @@ public sealed class PlannedRuntimeGrantsTests
     [Theory]
     [InlineData("")]
     [InlineData("not-a-hash")]
-    [InlineData("FF069555878416F3C4111EB70973C41F0D0EB9E907425CCC72C7270208AA3FBC")]
+    [InlineData("BBDE64D991D1D71B415C83B8A55CDF57F2382F7A7B4A95DD5BA73117549CEE3E")]
     public void RejectsMissingOrMalformedExpectedHash(string expected)
     {
         Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
