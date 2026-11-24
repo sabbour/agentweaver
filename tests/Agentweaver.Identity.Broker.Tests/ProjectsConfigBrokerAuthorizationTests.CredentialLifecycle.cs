@@ -1004,20 +1004,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         // 6. Project scope GET works with project-bound runless token and rejects revoked authority (403).
-        var projectId = "proj-status-" + Guid.NewGuid().ToString("N")[..8];
-        await using (var insertProject = projects.PrivilegedFixtureDataSource.CreateCommand(
-            "INSERT INTO projects_config.projects (project_id, tenant_id, name, created_at) VALUES (@pid, @tid, 'Status Project', now())"))
-        {
-            insertProject.Parameters.AddWithValue("pid", projectId);
-            insertProject.Parameters.AddWithValue("tid", TenantId);
-            await insertProject.ExecuteNonQueryAsync();
-        }
         await AssignRoleAsync(
             projects.PrivilegedFixtureDataSource, membership.MembershipId,
-            ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner);
+            ProjectAuthorityResourceType.Tenant, TenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await CreateProjectsTestProjectAsync(
+            projects.Client, adminToken, TenantId, "Status Project");
+        var projectId = project.ProjectId;
         var projectToken = (await IssueTokensAsync(
-            broker, "projects.admin", [TenantId], projectId, null, null, ["project_owner"]))
+            broker, "projects.admin", [TenantId], null, projectId, null, ["project_owner"]))
             .GetProperty("access_token").GetString()!;
+        var projectSub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(projectToken).Claims, "sub");
+        var projectMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, projectSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, projectMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner);
 
         using var createProjProvider = await SendCredentialJsonAsync(
             gateway.Client, HttpMethod.Post, $"/api/v1/projects/{projectId}/byok-providers",
@@ -1066,7 +1067,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using (var revoke = projects.PrivilegedFixtureDataSource.CreateCommand(
             "UPDATE projects_config.tenant_memberships SET state = 'Revoked', revision = revision + 1, revoked_by = 'test', revoked_at = now() WHERE membership_id = @id"))
         {
-            revoke.Parameters.AddWithValue("id", membership.MembershipId);
+            revoke.Parameters.AddWithValue("id", projectMembership.MembershipId);
             Assert.Equal(1, await revoke.ExecuteNonQueryAsync());
         }
         using (var revokedGet = await SendCredentialJsonAsync(
