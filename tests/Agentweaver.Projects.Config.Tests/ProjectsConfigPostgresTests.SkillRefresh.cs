@@ -313,9 +313,18 @@ public sealed partial class ProjectsConfigPostgresTests
                 }
             }
 
+            var orchestratorActor = await SeedCallerAsync(
+                db,
+                authorityStore,
+                "orchestrator-" + project.Suffix,
+                project.TenantId,
+                ["api.read", "projects.orchestrator"],
+                ProjectAuthorityResourceType.Project,
+                project.Project.ProjectId,
+                ProjectAuthorityRole.Orchestrator);
             var orchestrator = await ResolveCallerAsync(
                 db,
-                project.Owner.ActorId,
+                orchestratorActor.ActorId,
                 project.TenantId,
                 ["api.read", "projects.orchestrator"],
                 project.Project.ProjectId,
@@ -434,16 +443,18 @@ public sealed partial class ProjectsConfigPostgresTests
             }
 
             // Missing admission row reports refreshEligible: false.
-            await db.Database.ExecuteSqlInterpolatedAsync($"""
-                DELETE FROM projects_config.skill_content_revocations
-                WHERE project_id = {setup.Request.ProjectId}
-                  AND skill_id = {setup.Request.SkillId}
-                  AND revision = {setup.Request.Revision};
-                DELETE FROM projects_config.project_skill_admissions
-                WHERE project_id = {setup.Request.ProjectId}
-                  AND skill_id = {setup.Request.SkillId}
-                  AND revision = {setup.Request.Revision};
-                """);
+            await db.SkillContentRevocations
+                .Where(item =>
+                    item.ProjectId == setup.Request.ProjectId &&
+                    item.SkillId == setup.Request.SkillId &&
+                    item.Revision == setup.Request.Revision)
+                .ExecuteDeleteAsync();
+            await db.SkillAdmissions
+                .Where(item =>
+                    item.ProjectId == setup.Request.ProjectId &&
+                    item.SkillId == setup.Request.SkillId &&
+                    item.Revision == setup.Request.Revision)
+                .ExecuteDeleteAsync();
             using (var noAdmissionReq = new HttpRequestMessage(HttpMethod.Get, inputsPath))
             {
                 noAdmissionReq.Headers.Add("X-Test-Sub", setup.Project.Owner.ActorId);
