@@ -403,6 +403,11 @@ public sealed partial class ProjectsConfigPostgresTests
                 initialConfig.Revision,
                 ProjectSettings() with
                 {
+                    AgentCharters =
+                    [
+                        new ProjectAgentCharter(
+                            agentId, "Legacy Agent", "assistant", "Legacy test agent."),
+                    ],
                     Casting = [new ProjectAgentCast(agentId, "assistant", 0)],
                 },
                 CancellationToken.None);
@@ -583,6 +588,11 @@ public sealed partial class ProjectsConfigPostgresTests
             var runId = "run-legacy-scan-" + setup.Project.Suffix;
             var configWithMalicious = ProjectSettings() with
             {
+                AgentCharters =
+                [
+                    new ProjectAgentCharter(
+                        agentId, "Legacy Agent", "assistant", "Legacy test agent."),
+                ],
                 Casting = [new ProjectAgentCast(agentId, "assistant", 0)],
                 Skills =
                 [
