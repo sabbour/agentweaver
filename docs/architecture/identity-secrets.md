@@ -135,7 +135,13 @@ still contain the exact version for redemption.
 The Broker exposes write-only `PUT` and `DELETE` credential endpoints for
 platform and project BYOK providers (`/api/platform/byok-providers/{providerId}/credential`
 and `/api/projects/{projectId}/byok-providers/{providerId}/credential`), proxied
-through Gateway. Raw API keys are never logged, traced, hashed into audit
+through Gateway, plus read-only operation status routes
+(`/api/platform/byok-providers/{providerId}/credential/operations/{operationId}`
+and `/api/projects/{projectId}/byok-providers/{providerId}/credential/operations/{operationId}`).
+Status reads query Projects & Config via `/internal/byok/credential-publications/v2/read-operation`
+without creating preflight rows, calling Key Vault, or mutating state, and keep
+`publication_pending` or `disable_pending` until Broker completes the operation.
+Raw API keys are never logged, traced, hashed into audit
 records, or returned in responses. Existing-vault reference attachment is
 rejected (`400 existing_vault_reference_not_supported`).
 

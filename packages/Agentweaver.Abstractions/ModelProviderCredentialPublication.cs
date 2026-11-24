@@ -307,3 +307,46 @@ public sealed record ModelProviderCredentialDisableReceipt(
     Guid? CredentialSlotId,
     string ConfigurationHash,
     string ResolvedTenant);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ModelProviderCredentialOperationReadRequest(
+    Guid OperationId,
+    [property: JsonConverter(typeof(ModelProviderBindingScopeJsonConverter))]
+    ModelProviderBindingScope Scope,
+    string? ProjectId,
+    string ProviderId,
+    string Issuer,
+    string ActorId,
+    string? TenantSelector,
+    string? TenantClaim,
+    string? BoundProjectId)
+{
+    [JsonIgnore]
+    public bool IsValid =>
+        OperationId != Guid.Empty &&
+        Enum.IsDefined(Scope) &&
+        (Scope == ModelProviderBindingScope.Platform
+            ? ProjectId is null && BoundProjectId is null
+            : IsIdentifier(ProjectId, 32) &&
+              StringComparer.Ordinal.Equals(BoundProjectId, ProjectId)) &&
+        IsIdentifier(ProviderId, 128) &&
+        !string.IsNullOrWhiteSpace(Issuer) && Issuer.Length <= 2048 &&
+        IsIdentifier(ActorId, 256) &&
+        (TenantSelector is null || IsIdentifier(TenantSelector, 256)) &&
+        (TenantClaim is null || IsIdentifier(TenantClaim, 256));
+
+    private static bool IsIdentifier(string? value, int maximumLength) =>
+        value is { Length: > 0 } &&
+        value.Length <= maximumLength &&
+        value.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ModelProviderCredentialOperationReadResponse(
+    ModelProviderCredentialOperationReadRequest Request,
+    string ResolvedTenant,
+    string? Outcome,
+    ModelProviderCredentialPublicationReceipt? PublicationReceipt,
+    long? ProviderRevision,
+    bool? HasCredential);

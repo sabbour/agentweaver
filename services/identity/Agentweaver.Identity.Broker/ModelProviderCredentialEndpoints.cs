@@ -7,6 +7,7 @@ using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -62,6 +63,17 @@ internal static class ModelProviderCredentialEndpoints
         string? ConfigurationHash,
         string? ProviderState = null);
 
+    internal sealed record CredentialOperationStatusResponse(
+        Guid OperationId,
+        string Scope,
+        string? ProjectId,
+        string ProviderId,
+        string Status,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        long? ProviderRevision = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        bool? HasCredential = null);
+
     internal static bool IsCredentialPath(PathString path)
     {
         var value = path.Value?.TrimEnd('/');
@@ -113,6 +125,20 @@ internal static class ModelProviderCredentialEndpoints
             .RequireAuthorization(auth)
             .WithName("BrokerSetPlatformByokProviderCredential");
 
+        app.MapGet("/api/platform/byok-providers/{providerId}/credential/operations/{operationId:guid}", (
+                string providerId,
+                Guid operationId,
+                HttpContext context,
+                IdentityBrokerOptions brokerOptions,
+                ModelProviderCredentialStore store,
+                BrokerModelProviderCredentialPublicationV2Client publicationClient,
+                CancellationToken cancellationToken) =>
+            HandleReadAsync(
+                context, ModelProviderBindingScope.Platform, null, providerId, operationId,
+                brokerOptions, store, publicationClient, cancellationToken))
+            .RequireAuthorization(auth)
+            .WithName("BrokerReadPlatformByokProviderCredentialOperation");
+
         app.MapDelete("/api/platform/byok-providers/{providerId}/credential", (
                 string providerId,
                 HttpContext context,
@@ -142,6 +168,21 @@ internal static class ModelProviderCredentialEndpoints
             .RequireAuthorization(auth)
             .WithName("BrokerSetProjectByokProviderCredential");
 
+        app.MapGet("/api/projects/{projectId}/byok-providers/{providerId}/credential/operations/{operationId:guid}", (
+                string projectId,
+                string providerId,
+                Guid operationId,
+                HttpContext context,
+                IdentityBrokerOptions brokerOptions,
+                ModelProviderCredentialStore store,
+                BrokerModelProviderCredentialPublicationV2Client publicationClient,
+                CancellationToken cancellationToken) =>
+            HandleReadAsync(
+                context, ModelProviderBindingScope.Project, projectId, providerId, operationId,
+                brokerOptions, store, publicationClient, cancellationToken))
+            .RequireAuthorization(auth)
+            .WithName("BrokerReadProjectByokProviderCredentialOperation");
+
         app.MapDelete("/api/projects/{projectId}/byok-providers/{providerId}/credential", (
                 string projectId,
                 string providerId,
@@ -157,6 +198,148 @@ internal static class ModelProviderCredentialEndpoints
             .WithName("BrokerDisableProjectByokProviderCredential");
 
         return app;
+    }
+
+    private static async Task<IResult> HandleReadAsync(
+        HttpContext context,
+        ModelProviderBindingScope scope,
+        string? projectId,
+        string providerId,
+        Guid operationId,
+        IdentityBrokerOptions brokerOptions,
+        ModelProviderCredentialStore store,
+        BrokerModelProviderCredentialPublicationV2Client publicationClient,
+        CancellationToken cancellationToken)
+    {
+        SetNoStore(context);
+        if (!TryValidateCaller(context, brokerOptions, scope, projectId, out var caller, out var authError))
+            return authError!;
+
+        var hasHeaderlessBody =
+            context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true &&
+            await HasBodyAsync(context.Request.Body, cancellationToken).ConfigureAwait(false);
+        if (operationId == Guid.Empty ||
+            context.Request.Query.Count != 0 ||
+            context.Request.ContentLength is > 0 ||
+            context.Request.ContentType is not null ||
+            context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+            hasHeaderlessBody ||
+            !IsValidIdentifier(providerId, 128) ||
+            (scope == ModelProviderBindingScope.Project && !IsValidIdentifier(projectId, 32)))
+            return Error("credential_request_invalid", 400);
+
+        try
+        {
+            var readRequest = new ModelProviderCredentialOperationReadRequest(
+                operationId, scope, projectId, providerId, caller!.Issuer, caller.ActorId,
+                caller.TenantSelector, caller.TenantClaim, caller.BoundProjectId);
+            var receiptRead = await publicationClient.ReadOperationAsync(readRequest, cancellationToken)
+                .ConfigureAwait(false);
+
+            var credScope = scope == ModelProviderBindingScope.Platform
+                ? ModelProviderCredentialScope.Platform
+                : ModelProviderCredentialScope.Project;
+            var claim = await store.ReadWriteClaimByOperationAsync(operationId, cancellationToken)
+                .ConfigureAwait(false);
+            var disable = await store.ReadDisableByOperationAsync(operationId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (claim is not null)
+            {
+                if (claim.Scope != credScope ||
+                    claim.ProjectId != projectId ||
+                    !StringComparer.Ordinal.Equals(claim.ProviderId, providerId) ||
+                    !StringComparer.Ordinal.Equals(claim.ActorId, caller.ActorId) ||
+                    !StringComparer.Ordinal.Equals(claim.Issuer, caller.Issuer))
+                    return Error("credential_slot_conflict", 409);
+
+                if (claim.Tenant is not null &&
+                    !StringComparer.Ordinal.Equals(claim.Tenant, receiptRead.ResolvedTenant))
+                    return Error("forbidden", 403);
+            }
+
+            if (disable is not null &&
+                (disable.Scope != credScope ||
+                 disable.ProjectId != projectId ||
+                 !StringComparer.Ordinal.Equals(disable.ProviderId, providerId) ||
+                 !StringComparer.Ordinal.Equals(disable.ActorId, caller.ActorId)))
+                return Error("credential_slot_conflict", 409);
+
+            var responseScope = scope == ModelProviderBindingScope.Platform ? "platform" : "project";
+
+            if (claim is null)
+            {
+                if (disable is not null && receiptRead.Outcome == "disabled")
+                {
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "disabled",
+                        receiptRead.ProviderRevision));
+                }
+                return Error("credential_operation_not_found", 404);
+            }
+
+            // Require Broker completion before returning terminal published/disabled status.
+            switch (claim.State)
+            {
+                case ModelProviderCredentialWriteClaimState.Published
+                    when receiptRead.Outcome == "published" &&
+                         receiptRead.PublicationReceipt is { } receipt &&
+                         claim.ExpectedProviderRevision == receipt.ProviderRevision - 1 &&
+                         receipt.OperationId == operationId &&
+                         receipt.Scope == scope &&
+                         receipt.ProjectId == projectId &&
+                         StringComparer.Ordinal.Equals(receipt.ProviderId, providerId):
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "published",
+                        receipt.ProviderRevision, true));
+
+                case ModelProviderCredentialWriteClaimState.Published:
+                case ModelProviderCredentialWriteClaimState.PublicationPending:
+                case ModelProviderCredentialWriteClaimState.Completed:
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "publication_pending"));
+
+                case ModelProviderCredentialWriteClaimState.Quarantined:
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "quarantined"));
+
+                case ModelProviderCredentialWriteClaimState.DisablePending:
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "disable_pending"));
+
+                case ModelProviderCredentialWriteClaimState.Disabled
+                    when receiptRead.Outcome == "disabled":
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "disabled",
+                        receiptRead.ProviderRevision));
+
+                case ModelProviderCredentialWriteClaimState.Disabled:
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "disable_pending"));
+
+                case ModelProviderCredentialWriteClaimState.Cancelled:
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "cancelled"));
+
+                default:
+                    return Results.Ok(new CredentialOperationStatusResponse(
+                        operationId, responseScope, projectId, providerId, "pending"));
+            }
+        }
+        catch (BrokerCredentialPublicationV2Exception ex)
+        {
+            return MapPublicationException(ex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return Results.StatusCode(499);
+        }
+    }
+
+    private static async Task<bool> HasBodyAsync(Stream body, CancellationToken cancellationToken)
+    {
+        var probe = new byte[1];
+        return await body.ReadAsync(probe, cancellationToken).ConfigureAwait(false) > 0;
     }
 
     private static async Task<IResult> HandlePutAsync(
