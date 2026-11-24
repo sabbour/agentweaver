@@ -182,3 +182,32 @@ public interface ISkillAssignmentService
         SkillAssignmentUpdateRequest request,
         CancellationToken cancellationToken);
 }
+
+/// <summary>Canonical Policy pin returned for accepted-run Skill refresh operations.</summary>
+public sealed record AcceptedRunSkillRefreshPolicyPin(
+    string PolicyId,
+    long Revision,
+    string ContentSha256);
+
+/// <summary>One accepted-run Skill assignment with its classification and refresh eligibility.</summary>
+public sealed record AcceptedRunSkillRefreshAssignment(
+    string SkillId,
+    long Revision,
+    string ContentDigest,
+    string Classification,
+    bool RefreshEligible);
+
+/// <summary>Current Policy pins and ordered Skill assignments for one accepted run and agent.</summary>
+public sealed record AcceptedRunSkillRefreshInputsResponse(
+    AcceptedRunSkillRefreshPolicyPin PlatformPolicy,
+    AcceptedRunSkillRefreshPolicyPin? ProjectPolicy,
+    ImmutableArray<AcceptedRunSkillRefreshAssignment> Assignments);
+
+/// <summary>Receipt returned after refreshing one accepted-run Skill revision.</summary>
+public sealed record AcceptedRunSkillRefreshReceipt(
+    Guid EvidenceId,
+    Guid AdmissionId,
+    AcceptedRunSkillRefreshPolicyPin PlatformPolicy,
+    AcceptedRunSkillRefreshPolicyPin? ProjectPolicy,
+    DateTimeOffset ObservedAt,
+    bool Replayed);

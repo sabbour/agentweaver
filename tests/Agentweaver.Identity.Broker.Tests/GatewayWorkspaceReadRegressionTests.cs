@@ -12,6 +12,7 @@ using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.SourceControl;
 using GatewayHost::Agentweaver.Gateway;
+using Microsoft.AspNetCore.Http;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
@@ -768,6 +769,87 @@ public sealed class GatewayWorkspaceReadRegressionTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(ownerBody, forwardedBody);
+    }
+
+    [Fact]
+    public async Task SkillRefreshRoutesRejectBareQueryAndForwardNoStoreAndTenant()
+    {
+        var inputsRoute = Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "readAcceptedRunSkillRefreshInputs");
+        Assert.Equal("GET", inputsRoute.Method);
+        Assert.Equal(
+            "/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh-inputs",
+            inputsRoute.PublicPath);
+        Assert.True(inputsRoute.ExcludeFromMcp);
+        Assert.True(inputsRoute.ForwardTenantSelector);
+        Assert.Contains("Cache-Control", inputsRoute.ExposedResponseHeaders);
+
+        var refreshRoute = Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "refreshAcceptedRunSkill");
+        Assert.Equal("POST", refreshRoute.Method);
+        Assert.Equal(
+            "/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh",
+            refreshRoute.PublicPath);
+        Assert.True(refreshRoute.ExcludeFromMcp);
+        Assert.True(refreshRoute.ForwardTenantSelector);
+        Assert.True(refreshRoute.HasJsonBody);
+        Assert.Equal(64 * 1024, refreshRoute.MaximumRequestBodyBytes);
+        Assert.Contains("Cache-Control", refreshRoute.ExposedResponseHeaders);
+
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var bearer = CreateBearer(signingKey);
+        var forwarded = false;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new CallbackHttpMessageHandler((request, _) =>
+            {
+                forwarded = true;
+                Assert.Equal(
+                    "/api/projects/project-1/runs/run-1/agents/agent-1/skills/refresh-inputs",
+                    request.RequestUri!.PathAndQuery);
+                Assert.Equal("tenant-1", Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } },
+                    Content = new StringContent("""{"platformPolicy":{"policyId":"canonical","revision":1,"contentSha256":"abc"},"projectPolicy":null,"assignments":[]}""", Encoding.UTF8, "application/json"),
+                });
+            }),
+            (_, _, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)));
+
+        var bareQueryInputsContext = await gateway.Server.SendAsync(context =>
+        {
+            context.Request.Method = HttpMethods.Get;
+            context.Request.Path = "/api/v1/projects/project-1/runs/run-1/agents/agent-1/skills/refresh-inputs";
+            context.Request.QueryString = new QueryString("?");
+            context.Request.Headers.Authorization = "Bearer " + bearer;
+            context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        });
+        Assert.Equal(StatusCodes.Status400BadRequest, bareQueryInputsContext.Response.StatusCode);
+        Assert.False(forwarded);
+
+        var bareQueryRefreshContext = await gateway.Server.SendAsync(context =>
+        {
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Path = "/api/v1/projects/project-1/runs/run-1/agents/agent-1/skills/refresh";
+            context.Request.QueryString = new QueryString("?");
+            context.Request.Headers.Authorization = "Bearer " + bearer;
+            context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+            context.Request.ContentType = "application/json";
+            var bytes = Encoding.UTF8.GetBytes("{}");
+            context.Request.ContentLength = bytes.Length;
+            context.Request.Body = new MemoryStream(bytes);
+        });
+        Assert.Equal(StatusCodes.Status400BadRequest, bareQueryRefreshContext.Response.StatusCode);
+        Assert.False(forwarded);
+
+        using var validRequest = CreateRequest(
+            bearer,
+            "/api/v1/projects/project-1/runs/run-1/agents/agent-1/skills/refresh-inputs");
+        using var validResponse = await gateway.Client.SendAsync(validRequest);
+        Assert.Equal(HttpStatusCode.OK, validResponse.StatusCode);
+        Assert.True(forwarded);
+        Assert.True(validResponse.Headers.CacheControl?.NoStore);
     }
 
     private static byte[] CreateProviderTree(

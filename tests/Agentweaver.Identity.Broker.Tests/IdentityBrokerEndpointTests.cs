@@ -147,6 +147,90 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, refresh.StatusCode);
         var refreshedTokens = await refresh.Content.ReadFromJsonAsync<JsonElement>();
         AssertProjectOnlyToken(refreshedTokens.GetProperty("access_token").GetString()!, projectId);
+        var refreshedClaims = new JwtSecurityTokenHandler()
+            .ReadJwtToken(refreshedTokens.GetProperty("access_token").GetString()!)
+            .Claims
+            .ToArray();
+        Assert.DoesNotContain(refreshedClaims, claim => claim.Type == "aw_actor_class");
+    }
+
+    [Fact]
+    public async Task UnboundInteractiveTokenEmitsHumanClassAcrossRefresh()
+    {
+        const string requestedScopes = "openid profile email api.read offline_access projects.admin";
+        var (verifier, challenge) = Pkce.Create();
+        var code = await BrokerFlowDriver.AuthorizeWithConsentAsync(
+            _broker,
+            _fakeIdpClient,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            requestedScopes,
+            challenge);
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            code,
+            verifier);
+
+        static void AssertHumanToken(string token)
+        {
+            var claims = new JwtSecurityTokenHandler().ReadJwtToken(token).Claims.ToArray();
+            Assert.Equal("human", Assert.Single(claims, claim => claim.Type == "aw_actor_class").Value);
+            Assert.DoesNotContain(claims, claim => claim.Type == "project_id");
+            Assert.DoesNotContain(claims, claim => claim.Type == "run_id");
+        }
+
+        AssertHumanToken(tokens.GetProperty("access_token").GetString()!);
+        var refresh = await BrokerFlowDriver.RefreshAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            tokens.GetProperty("refresh_token").GetString()!);
+        Assert.Equal(HttpStatusCode.OK, refresh.StatusCode);
+        var refreshedTokens = await refresh.Content.ReadFromJsonAsync<JsonElement>();
+        AssertHumanToken(refreshedTokens.GetProperty("access_token").GetString()!);
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("duplicate")]
+    [InlineData("bound")]
+    public async Task TokenExchangeRejectsInvalidOrBoundActorClassClaims(string mode)
+    {
+        var (code, verifier) = await RunHappyPathAuthorizeAsync();
+        using var scope = _factory.Services.CreateScope();
+        var tokens = scope.ServiceProvider.GetRequiredService<OpenIddict.Abstractions.IOpenIddictTokenManager>();
+        await foreach (var token in tokens.ListAsync())
+        {
+            var payload = await tokens.GetPayloadAsync(token);
+            if (string.IsNullOrEmpty(payload))
+                continue;
+            var doc = System.Text.Json.Nodes.JsonNode.Parse(payload)?.AsObject();
+            if (doc is null || !doc.ContainsKey("claims"))
+                continue;
+            var claims = doc["claims"]!.AsObject();
+            if (mode == "unknown")
+                claims["aw_actor_class"] = "service";
+            else if (mode == "duplicate")
+                claims["aw_actor_class"] = new System.Text.Json.Nodes.JsonArray("human", "human");
+            else if (mode == "bound")
+                claims["project_id"] = "project-1";
+            var descriptor = new OpenIddict.Abstractions.OpenIddictTokenDescriptor();
+            await tokens.PopulateAsync(descriptor, token);
+            descriptor.Payload = doc.ToJsonString();
+            await tokens.UpdateAsync(token, descriptor);
+        }
+
+        var response = await _broker.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "authorization_code",
+            ["client_id"] = IdentityBrokerWebApplicationFactory.TestClientId,
+            ["redirect_uri"] = IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            ["code"] = code,
+            ["code_verifier"] = verifier,
+        }));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.False((await response.Content.ReadFromJsonAsync<JsonElement>()).TryGetProperty("access_token", out _));
     }
 
     [Fact]

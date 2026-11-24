@@ -292,6 +292,20 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills",
             "listProjectSkillInventory", "Read current project skill inventory",
             ["cursor", "pageSize"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh-inputs",
+            "/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh-inputs",
+            "readAcceptedRunSkillRefreshInputs", "Read accepted-run Skill refresh inputs and current Policy pins",
+            forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"],
+            excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh",
+            "/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh",
+            "refreshAcceptedRunSkill", "Refresh trust evidence and admission for one accepted-run Skill revision",
+            body: true,
+            maximumRequestBodyBytes: 64 * 1024,
+            forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"],
+            excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-exports",
             "/api/projects/{projectId}/agentsuite-exports",
             "exportProjectAgentSuite", "Export the current project team as an AgentSuite package",

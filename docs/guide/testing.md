@@ -146,6 +146,25 @@ dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.
 These tests check Projects-only Events authorization, exact card and provenance
 validation and strong ETags. PostgreSQL cases use disposable test containers.
 
+## Test accepted-run Skill recovery
+
+Run the non-Docker owner validation, human-class, Gateway, and OpenAPI parity
+regressions from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~ProjectAuthorizationContextTests|FullyQualifiedName~SkillRefreshEndpointValidationTests"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayWorkspaceReadRegressionTests"
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayOpenApiParityTests"
+```
+
+Run the PostgreSQL-backed `aw_actor_class`, refresh-inputs eligibility, and
+multi-Skill recovery tests with disposable Testcontainers databases:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~UnboundInteractiveTokenEmitsHumanClassAcrossRefresh|FullyQualifiedName~TokenExchangeRejectsInvalidOrBoundActorClassClaims|FullyQualifiedName~NativeCliLoginCompletesPkceConsentAndValidatesBrokerIdentity"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~ReadRefreshInputsRequiresVerifiedHumanAndReportsEligibilityAndConcealsForeignRun|FullyQualifiedName~RefreshAcceptedRunSkillsEndToEndCoversEligibilityDriftAndReplay"
+```
+
 ## Test manual runtime price-card writes
 
 Run the Events, Gateway, and Projects regressions from the repository root:

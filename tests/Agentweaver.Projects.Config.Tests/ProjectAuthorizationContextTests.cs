@@ -138,11 +138,40 @@ public sealed class ProjectAuthorizationContextTests
         Assert.Throws<ProjectConfigException>(() => missingApiRead.ToEffectiveResponse());
     }
 
+    [Fact]
+    public void RequireHumanActorRejectsUnverifiedOrBoundContexts()
+    {
+        var unverified = CreateContext(
+            [Grant(ProjectId, ProjectAuthorityRole.Owner, 2)],
+            ["api.read", "projects.admin"],
+            boundProjectId: null,
+            boundRunId: null,
+            isVerifiedHuman: false);
+        Assert.Throws<ProjectConfigException>(() => unverified.RequireHumanActor());
+
+        var boundProject = CreateContext(
+            [Grant(ProjectId, ProjectAuthorityRole.Owner, 2)],
+            ["api.read", "projects.admin"],
+            boundProjectId: ProjectId,
+            boundRunId: null,
+            isVerifiedHuman: true);
+        Assert.Throws<ProjectConfigException>(() => boundProject.RequireHumanActor());
+
+        var verifiedUnbound = CreateContext(
+            [Grant(ProjectId, ProjectAuthorityRole.Owner, 2)],
+            ["api.read", "projects.admin"],
+            boundProjectId: null,
+            boundRunId: null,
+            isVerifiedHuman: true);
+        verifiedUnbound.RequireHumanActor();
+    }
+
     private static ProjectAuthorizationContext CreateContext(
         IEnumerable<ProjectAuthorizationGrant> grants,
         IEnumerable<string> scopes,
         string? boundProjectId = ProjectId,
-        string? boundRunId = RunId) =>
+        string? boundRunId = RunId,
+        bool isVerifiedHuman = false) =>
         new(
             "https://issuer.test/",
             "actor",
@@ -153,7 +182,8 @@ public sealed class ProjectAuthorizationContextTests
             ImmutableHashSet.CreateRange(StringComparer.Ordinal, scopes),
             boundProjectId,
             boundRunId,
-            null);
+            null,
+            isVerifiedHuman);
 
     private static ProjectAuthorizationGrant Grant(
         string projectId,

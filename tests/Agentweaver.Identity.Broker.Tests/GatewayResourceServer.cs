@@ -29,6 +29,7 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
     }
 
     public HttpClient Client => _client;
+    public TestServer Server => _app.GetTestServer();
 
     public IRequestSizeLimitMetadata? GetRequestSizeLimit(string routePattern) =>
         ((IEndpointRouteBuilder)_app).DataSources

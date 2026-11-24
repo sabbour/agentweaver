@@ -280,7 +280,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
             foreach (var token in new[] { accessToken, idToken })
             {
                 Assert.DoesNotContain(token.Claims, claim =>
-                    claim.Type is "aw:native_repo_app_selection_payload" or "aw:native_repo_app_selection_intent_hash");
+                    claim.Type is "aw:native_repo_app_selection_payload" or "aw:native_repo_app_selection_intent_hash" or "aw_actor_class");
                 Assert.DoesNotContain(token.Claims, claim => claim.Value == deliveredCode);
             }
             Assert.DoesNotContain(deliveredCode, string.Join('|', _factory.LogMessages), StringComparison.Ordinal);
