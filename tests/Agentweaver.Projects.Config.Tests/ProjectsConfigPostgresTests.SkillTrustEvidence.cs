@@ -35,7 +35,7 @@ public sealed partial class ProjectsConfigPostgresTests
             .BeginTransactionAsync(IsolationLevel.Serializable);
         _ = await writerDb.SkillAdmissionFences
             .FromSqlRaw("""
-                SELECT id, state, generation, release_inventory_revision,
+                SELECT id, state, generation, cutover_generation, release_inventory_revision,
                        platform_skills_policy_sha256, updated_at
                 FROM projects_config.project_skill_admission_fence
                 WHERE id = 1
@@ -815,6 +815,1308 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task RefreshReplayRechecksAuthorityAndConcealsOccupiedKeys()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var service = CreateRefreshEvidenceService(
+                CreateSkillService(db, setup.Objects),
+                fixture.DataSource);
+            await service.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var grant = setup.Project.Owner.Grants.Single(item =>
+                item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                item.ResourceId == setup.Project.Owner.TenantId &&
+                item.Role == ProjectAuthorityRole.TenantAdmin);
+            await authority.RevokeRoleAssignmentAsync(
+                grant.AssignmentId,
+                grant.Revision,
+                setup.Project.Owner.ActorId);
+            var revoked = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.RefreshAsync(
+                    setup.Project.Owner,
+                    setup.Request,
+                    _ => throw new InvalidOperationException("A replay must not scan."),
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status403Forbidden, revoked.StatusCode);
+
+            var foreign = await SeedCallerAsync(
+                db,
+                authority,
+                "foreign-refresh-" + setup.Project.Suffix,
+                "foreign-tenant-" + setup.Project.Suffix,
+                ["api.read", "projects.admin"],
+                ProjectAuthorityResourceType.Tenant,
+                "foreign-tenant-" + setup.Project.Suffix,
+                ProjectAuthorityRole.TenantAdmin);
+            var concealed = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.RefreshAsync(
+                    foreign,
+                    setup.Request,
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status404NotFound, concealed.StatusCode);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task OccupiedRefreshKeyReplaysWhileAnotherProjectHoldsSingletonFence()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        TaskCompletionSource? releaseHolder = null;
+        try
+        {
+            var replaySetup = await CreateSkillRefreshSetupAsync(db);
+            var holderSetup = await CreateSkillRefreshSetupAsync(db);
+            var writer = CreateRefreshEvidenceService(
+                CreateSkillService(db, replaySetup.Objects),
+                fixture.DataSource);
+            var original = await writer.RefreshAsync(
+                replaySetup.Project.Owner,
+                replaySetup.Request,
+                CancellationToken.None);
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeAdmissions = await db.SkillAdmissions.CountAsync();
+
+            await using var holderData = CreateRuntimeDataSource("refresh-other-project-fence-holder");
+            await using var holderDb = CreateRuntimeDbContext(holderData);
+            var holderSkills = CreateSkillService(holderDb, holderSetup.Objects);
+            holderSkills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            var holderStaged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockerRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            releaseHolder = blockerRelease;
+            holderSkills.AfterSkillRefreshStagedOverride = async token =>
+            {
+                holderStaged.TrySetResult();
+                await blockerRelease.Task.WaitAsync(token);
+            };
+            var holderRefresh = CreateRefreshEvidenceService(holderSkills, holderData)
+                .RefreshAsync(
+                    holderSetup.Project.Owner,
+                    holderSetup.Request,
+                    CancellationToken.None);
+            await holderStaged.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await using var replayData = CreateRuntimeDataSource("refresh-historical-replay");
+            await using var replayDb = CreateRuntimeDbContext(replayData);
+            var replay = await CreateRefreshEvidenceService(
+                    CreateSkillService(replayDb, replaySetup.Objects),
+                    replayData)
+                .RefreshAsync(
+                    replaySetup.Project.Owner,
+                    replaySetup.Request,
+                    _ => throw new InvalidOperationException("An occupied-key replay must not scan."),
+                    CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(replay.Replayed);
+            Assert.Equal(original.EvidenceId, replay.EvidenceId);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeAdmissions, await db.SkillAdmissions.CountAsync());
+            blockerRelease.TrySetResult();
+            await holderRefresh.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            releaseHolder?.TrySetResult();
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Theory]
+    [InlineData("authority")]
+    [InlineData("project")]
+    public async Task OccupiedRefreshReplayLockReturnsUnavailableWithoutWrites(string heldLock)
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var original = await CreateRefreshEvidenceService(
+                    CreateSkillService(db, setup.Objects),
+                    fixture.DataSource)
+                .RefreshAsync(setup.Project.Owner, setup.Request, CancellationToken.None);
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeReceipts = await db.SkillRefreshReceipts.CountAsync();
+
+            await using var holder = await OpenOwnerConnectionAsync();
+            await using var holderTransaction = await holder.BeginTransactionAsync();
+            await using (var lockCommand = heldLock == "authority"
+                ? new NpgsqlCommand(
+                    """
+                    SELECT membership_id
+                    FROM projects_config.tenant_memberships
+                    WHERE membership_id = @membership_id
+                    FOR UPDATE
+                    """,
+                    holder,
+                    holderTransaction)
+                : new NpgsqlCommand(
+                    """
+                    SELECT project_id
+                    FROM projects_config.projects
+                    WHERE project_id = @project_id
+                    FOR UPDATE
+                    """,
+                    holder,
+                    holderTransaction))
+            {
+                lockCommand.Parameters.AddWithValue(
+                    heldLock == "authority" ? "membership_id" : "project_id",
+                    heldLock == "authority"
+                        ? setup.Project.Owner.MembershipId
+                        : setup.Project.Project.ProjectId);
+                await lockCommand.ExecuteScalarAsync();
+            }
+
+            await using var replayData = CreateRuntimeDataSource("refresh-replay-locked-" + heldLock);
+            await using var replayDb = CreateRuntimeDbContext(replayData);
+            var replay = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                CreateRefreshEvidenceService(
+                        CreateSkillService(replayDb, setup.Objects),
+                        fixture.DataSource)
+                    .RefreshAsync(
+                        setup.Project.Owner,
+                        setup.Request,
+                        _ => throw new InvalidOperationException("A replay must not scan."),
+                        CancellationToken.None));
+
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, replay.StatusCode);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeReceipts, await db.SkillRefreshReceipts.CountAsync());
+            Assert.NotEqual(Guid.Empty, original.EvidenceId);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task PreparationRecoverySingletonLockReturnsUnavailableWithoutWrites()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeReceipts = await db.SkillRefreshReceipts.CountAsync();
+
+            await using var holder = await OpenOwnerConnectionAsync();
+            await using var holderTransaction = await holder.BeginTransactionAsync();
+            await using (var lockCommand = new NpgsqlCommand(
+                """
+                SELECT id
+                FROM projects_config.project_skill_admission_fence
+                WHERE id = 1
+                FOR UPDATE
+                """,
+                holder,
+                holderTransaction))
+                await lockCommand.ExecuteScalarAsync();
+
+            await using var recoveryData = CreateRuntimeDataSource("refresh-preparation-locked");
+            await using var recoveryDb = CreateRuntimeDbContext(recoveryData);
+            var skills = CreateSkillService(recoveryDb, setup.Objects);
+            skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            var evidence = CreateRefreshEvidenceService(skills, recoveryData);
+
+            var failure = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                evidence.RefreshAsync(
+                    setup.Project.Owner,
+                    setup.Request,
+                    _ => throw new InvalidOperationException("injected preparation failure"),
+                    CancellationToken.None));
+
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, failure.StatusCode);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeReceipts, await db.SkillRefreshReceipts.CountAsync());
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RevocationInOneProjectOrdersWaitersWithoutInvalidatingAnotherProject()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var projectA = await CreateSkillRefreshSetupAsync(db);
+            var projectB = await CreateSkillRefreshSetupAsync(db);
+            var baseline = await db.SkillAdmissionFences.AsNoTracking()
+                .SingleAsync(item => item.Id == 1);
+
+            await using var staleData = CreateRuntimeDataSource("stale-revocation-acceptance");
+            await using var staleDb = CreateRuntimeDbContext(staleData);
+            await using var staleTransaction = await staleDb.Database
+                .BeginTransactionAsync(IsolationLevel.Serializable);
+            var admission = new SkillAdmissionService(staleDb, TimeProvider.System);
+            _ = await staleDb.SkillAdmissionFences.AsNoTracking()
+                .SingleAsync(item => item.Id == 1);
+
+            await projectA.Skills.RevokeAsync(
+                projectA.Project.Owner,
+                projectA.Request.ProjectId,
+                projectA.Request.SkillId,
+                projectA.Request.Revision,
+                "Revoke after stale acceptance captured its snapshot.",
+                CancellationToken.None);
+
+            var blocked = await Assert.ThrowsAsync<PostgresException>(() =>
+                admission.LockFenceAsync(CancellationToken.None));
+            Assert.Equal(PostgresErrorCodes.SerializationFailure, blocked.SqlState);
+            var current = await db.SkillAdmissionFences.AsNoTracking()
+                .SingleAsync(item => item.Id == 1);
+            Assert.Equal(baseline.Generation + 1, current.Generation);
+            Assert.Equal(baseline.CutoverGeneration, current.CutoverGeneration);
+
+            var projection = await projectB.Skills.ReadTrustProjectionAsync(
+                projectB.Project.Owner,
+                projectB.Request.ProjectId,
+                projectB.Request.SkillId,
+                projectB.Request.Revision,
+                CancellationToken.None);
+            Assert.Equal("admitted", projection.State);
+
+            await authority.AssignRoleAsync(
+                projectB.Project.Owner.MembershipId,
+                ProjectAuthorityResourceType.Project,
+                projectB.Request.ProjectId,
+                ProjectAuthorityRole.Orchestrator,
+                projectB.Project.Owner.ActorId);
+            var orchestrator = await ResolveCallerAsync(
+                db,
+                projectB.Project.Owner.ActorId,
+                projectB.Project.TenantId,
+                ["api.read", "projects.orchestrator"],
+                projectB.Request.ProjectId,
+                projectB.Request.RunId);
+            var delivered = await projectB.Skills.ReadAcceptedRunSkillsAsync(
+                orchestrator,
+                projectB.Request.ProjectId,
+                projectB.Request.RunId,
+                projectB.Request.AgentId,
+                CancellationToken.None);
+            Assert.Equal(projectB.Request.SkillId, Assert.Single(delivered).SkillId);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshForeignKeysRejectMismatchedEvidenceAndAdmissionTuples()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var service = CreateRefreshEvidenceService(
+                CreateSkillService(db, setup.Objects),
+                fixture.DataSource);
+            var first = await service.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            var second = await service.RefreshAsync(
+                setup.Project.Owner,
+                setup.Request with
+                {
+                    IdempotencyKey = setup.Request.IdempotencyKey + "-second",
+                    CorrelationId = setup.Request.CorrelationId + "-second",
+                },
+                CancellationToken.None);
+            var firstReceipt = await db.SkillRefreshReceipts.AsNoTracking()
+                .SingleAsync(item => item.EvidenceId == first.EvidenceId);
+            var secondReceipt = await db.SkillRefreshReceipts.AsNoTracking()
+                .SingleAsync(item => item.EvidenceId == second.EvidenceId);
+            var originalEvidence = await db.SkillTrustEvidence.AsNoTracking()
+                .SingleAsync(item => item.EvidenceId == first.EvidenceId);
+            var unusedEvidenceId = Guid.NewGuid();
+            db.SkillTrustEvidence.Add(new ProjectSkillTrustEvidenceRecord
+            {
+                EvidenceId = unusedEvidenceId,
+                ProjectId = originalEvidence.ProjectId,
+                SkillId = originalEvidence.SkillId,
+                Revision = originalEvidence.Revision,
+                ActorIssuer = originalEvidence.ActorIssuer,
+                ActorId = originalEvidence.ActorId,
+                IdempotencyKey = "unused-evidence-" + unusedEvidenceId.ToString("N"),
+                RequestFingerprint = originalEvidence.RequestFingerprint,
+                ContentDigest = originalEvidence.ContentDigest,
+                SourceId = originalEvidence.SourceId,
+                SourceRevision = originalEvidence.SourceRevision,
+                RequestedRef = originalEvidence.RequestedRef,
+                ResolvedCommitSha = originalEvidence.ResolvedCommitSha,
+                SelectedPath = originalEvidence.SelectedPath,
+                ReportSetJson = originalEvidence.ReportSetJson,
+                ReportSetSha256 = originalEvidence.ReportSetSha256,
+                ScoreStatus = originalEvidence.ScoreStatus,
+                HeuristicScore = originalEvidence.HeuristicScore,
+                TrustTier = originalEvidence.TrustTier,
+                SignatureVerified = originalEvidence.SignatureVerified,
+                CapabilityDeclarationValid = originalEvidence.CapabilityDeclarationValid,
+                ShortDescription = originalEvidence.ShortDescription,
+                CreatedAt = originalEvidence.CreatedAt,
+            });
+            await db.SaveChangesAsync();
+
+            await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+            await using var receiptInsert = new NpgsqlCommand(
+                """
+                INSERT INTO projects_config.project_skill_refresh_receipts (
+                    receipt_id, project_id, run_id, agent_id, skill_id, revision,
+                    content_digest, actor_issuer, actor_id, idempotency_key,
+                    request_fingerprint, evidence_id, admission_id,
+                    platform_policy_id, platform_policy_revision, platform_policy_sha256,
+                    project_policy_id, project_policy_revision, project_policy_sha256,
+                    observed_at, created_at)
+                VALUES (
+                    @receipt_id, @project_id, @run_id, @agent_id, @skill_id, @revision,
+                    @content_digest, @actor_issuer, @actor_id, @idempotency_key,
+                    @request_fingerprint, @evidence_id, @admission_id,
+                    @policy_id, @policy_revision, @policy_sha,
+                    NULL, NULL, NULL, now(), now())
+                """,
+                connection);
+            receiptInsert.Parameters.AddWithValue("receipt_id", Guid.NewGuid());
+            receiptInsert.Parameters.AddWithValue("project_id", firstReceipt.ProjectId);
+            receiptInsert.Parameters.AddWithValue("run_id", firstReceipt.RunId);
+            receiptInsert.Parameters.AddWithValue("agent_id", firstReceipt.AgentId);
+            receiptInsert.Parameters.AddWithValue("skill_id", firstReceipt.SkillId);
+            receiptInsert.Parameters.AddWithValue("revision", firstReceipt.Revision);
+            receiptInsert.Parameters.AddWithValue("content_digest", firstReceipt.ContentDigest);
+            receiptInsert.Parameters.AddWithValue("actor_issuer", firstReceipt.ActorIssuer);
+            receiptInsert.Parameters.AddWithValue("actor_id", firstReceipt.ActorId);
+            receiptInsert.Parameters.AddWithValue("idempotency_key", "tampered-receipt");
+            receiptInsert.Parameters.AddWithValue("request_fingerprint", firstReceipt.RequestFingerprint);
+            receiptInsert.Parameters.AddWithValue("evidence_id", unusedEvidenceId);
+            receiptInsert.Parameters.AddWithValue("admission_id", secondReceipt.AdmissionId);
+            receiptInsert.Parameters.AddWithValue("policy_id", firstReceipt.PlatformPolicyId);
+            receiptInsert.Parameters.AddWithValue("policy_revision", firstReceipt.PlatformPolicyRevision);
+            receiptInsert.Parameters.AddWithValue("policy_sha", firstReceipt.PlatformPolicySha256);
+            var receiptError = await Assert.ThrowsAsync<PostgresException>(
+                () => receiptInsert.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, receiptError.SqlState);
+            Assert.Equal(
+                "FK_project_skill_refresh_receipts_project_skill_admissions_adm~",
+                receiptError.ConstraintName);
+
+            var unusedReceiptId = Guid.NewGuid();
+            var unusedAuditEvidenceId = Guid.NewGuid();
+            var unusedAuditAdmissionId = Guid.NewGuid();
+            await using var auditInsert = new NpgsqlCommand(
+                """
+                INSERT INTO projects_config.project_skill_refresh_audit_intents (
+                    audit_intent_id, receipt_id, evidence_id, admission_id, project_id,
+                    tenant_id, actor_issuer, actor_id, membership_id,
+                    membership_revision, effective_role_revisions, reason,
+                    correlation_id, created_at)
+                VALUES (
+                    @audit_intent_id, @receipt_id, @evidence_id, @admission_id, @project_id,
+                    @tenant_id, @actor_issuer, @actor_id, @membership_id,
+                    @membership_revision, '[]'::jsonb, 'tamper',
+                    @correlation_id, now())
+                """,
+                connection);
+            auditInsert.Parameters.AddWithValue("audit_intent_id", Guid.NewGuid());
+            auditInsert.Parameters.AddWithValue("receipt_id", unusedReceiptId);
+            auditInsert.Parameters.AddWithValue("evidence_id", unusedAuditEvidenceId);
+            auditInsert.Parameters.AddWithValue("admission_id", unusedAuditAdmissionId);
+            auditInsert.Parameters.AddWithValue("project_id", firstReceipt.ProjectId);
+            auditInsert.Parameters.AddWithValue("tenant_id", setup.Project.TenantId);
+            auditInsert.Parameters.AddWithValue("actor_issuer", firstReceipt.ActorIssuer);
+            auditInsert.Parameters.AddWithValue("actor_id", firstReceipt.ActorId);
+            auditInsert.Parameters.AddWithValue("membership_id", setup.Project.Owner.MembershipId);
+            auditInsert.Parameters.AddWithValue("membership_revision", setup.Project.Owner.MembershipRevision);
+            auditInsert.Parameters.AddWithValue("correlation_id", "tampered-audit");
+            var auditError = await Assert.ThrowsAsync<PostgresException>(
+                () => auditInsert.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, auditError.SqlState);
+            Assert.Equal(
+                "FK_project_skill_refresh_audit_intents_project_skill_refresh_r~",
+                auditError.ConstraintName);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshUsesOneObservedClockForEqualTimeAdmissionOrdering()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var prior = await db.SkillAdmissions.AsNoTracking()
+                .Where(item =>
+                    item.ProjectId == setup.Request.ProjectId &&
+                    item.SkillId == setup.Request.SkillId &&
+                    item.Revision == setup.Request.Revision)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstAsync();
+            var clock = new ManualTimeProvider(prior.CreatedAt);
+            var skills = CreateSkillService(db, setup.Objects, clock);
+            skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            var evaluator = new PromptDefenseEvaluator();
+            var receipt = await CreateRefreshEvidenceService(
+                    skills, fixture.DataSource, clock)
+                .RefreshAsync(
+                    setup.Project.Owner,
+                    setup.Request,
+                    input =>
+                    {
+                        var report = evaluator.Evaluate(input);
+                        return At(report, clock.GetUtcNow().UtcDateTime);
+                    },
+                    CancellationToken.None);
+
+            var latest = await db.SkillAdmissions.AsNoTracking()
+                .Where(item =>
+                    item.ProjectId == setup.Request.ProjectId &&
+                    item.SkillId == setup.Request.SkillId &&
+                    item.Revision == setup.Request.Revision)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstAsync();
+            Assert.Equal(prior.CreatedAt, receipt.ObservedAt);
+            Assert.True(latest.CreatedAt > prior.CreatedAt);
+            var trust = await skills.ReadTrustProjectionAsync(
+                setup.Project.Owner,
+                setup.Request.ProjectId,
+                setup.Request.SkillId,
+                setup.Request.Revision,
+                CancellationToken.None);
+            Assert.Equal("admitted", trust.State);
+
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            await authority.AssignRoleAsync(
+                setup.Project.Owner.MembershipId,
+                ProjectAuthorityResourceType.Project,
+                setup.Request.ProjectId,
+                ProjectAuthorityRole.Orchestrator,
+                setup.Project.Owner.ActorId);
+            var orchestrator = await ResolveCallerAsync(
+                db,
+                setup.Project.Owner.ActorId,
+                setup.Project.TenantId,
+                ["api.read", "projects.orchestrator"],
+                setup.Request.ProjectId,
+                setup.Request.RunId);
+            var delivered = await skills.ReadAcceptedRunSkillsAsync(
+                orchestrator,
+                setup.Request.ProjectId,
+                setup.Request.RunId,
+                setup.Request.AgentId,
+                CancellationToken.None);
+            Assert.Equal(setup.Request.SkillId, Assert.Single(delivered).SkillId);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshRejectsBackwardObservationWithoutWriting()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var prior = await db.SkillAdmissions.AsNoTracking()
+                .Where(item =>
+                    item.ProjectId == setup.Request.ProjectId &&
+                    item.SkillId == setup.Request.SkillId &&
+                    item.Revision == setup.Request.Revision)
+                .OrderByDescending(item => item.CreatedAt)
+                .FirstAsync();
+            var clock = new ManualTimeProvider(prior.CreatedAt.AddTicks(-10));
+            var skills = CreateSkillService(db, setup.Objects, clock);
+            skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            var evaluator = new PromptDefenseEvaluator();
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeAdmissions = await db.SkillAdmissions.CountAsync();
+            var conflict = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                CreateRefreshEvidenceService(skills, fixture.DataSource, clock)
+                    .RefreshAsync(
+                        setup.Project.Owner,
+                        setup.Request,
+                        input =>
+                        {
+                            var report = evaluator.Evaluate(input);
+                            return At(report, clock.GetUtcNow().UtcDateTime);
+                        },
+                        CancellationToken.None));
+
+            Assert.Equal(StatusCodes.Status409Conflict, conflict.StatusCode);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeAdmissions, await db.SkillAdmissions.CountAsync());
+            Assert.Equal(0, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+            Assert.Equal(0, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task ExactConcurrentRefreshReadsWinnerAfterFenceAndCommitsOneAtomicSet()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            await RestoreRuntimeGrantsAsync();
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeAdmissions = await db.SkillAdmissions.CountAsync();
+            var fenceBefore = await db.SkillAdmissionFences.AsNoTracking().SingleAsync(item => item.Id == 1);
+            var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var missedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var missedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stagedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var commitA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            await using var dataA = CreateRuntimeDataSource("refresh-winner-a");
+            await using var dataB = CreateRuntimeDataSource("refresh-winner-b");
+            await using var dbA = CreateRuntimeDbContext(dataA);
+            await using var dbB = CreateRuntimeDbContext(dataB);
+            var skillsA = CreateSkillService(dbA, setup.Objects);
+            var skillsB = CreateSkillService(dbB, setup.Objects);
+            var evaluationsB = 0;
+            skillsA.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            skillsB.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) =>
+            {
+                Interlocked.Increment(ref evaluationsB);
+                return Task.CompletedTask;
+            };
+            var evidenceA = CreateRefreshEvidenceService(skillsA, dataA);
+            var evidenceB = CreateRefreshEvidenceService(skillsB, dataB);
+            evidenceA.AfterRefreshInitialMissOverride = async token =>
+            {
+                missedA.TrySetResult();
+                await releaseA.Task.WaitAsync(token);
+            };
+            evidenceB.AfterRefreshInitialMissOverride = async token =>
+            {
+                missedB.TrySetResult();
+                await releaseB.Task.WaitAsync(token);
+            };
+            skillsA.AfterSkillRefreshStagedOverride = async token =>
+            {
+                stagedA.TrySetResult();
+                await commitA.Task.WaitAsync(token);
+            };
+
+            var refreshA = evidenceA.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            var refreshB = evidenceB.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            await Task.WhenAll(
+                missedA.Task.WaitAsync(TimeSpan.FromSeconds(10)),
+                missedB.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+            releaseA.TrySetResult();
+            var reachedStage = await Task.WhenAny(stagedA.Task, refreshA);
+            if (reachedStage == refreshA)
+                await refreshA;
+            await stagedA.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseB.TrySetResult();
+            await WaitForRefreshFenceBlockAsync("refresh-winner-b", "refresh-winner-a");
+            commitA.TrySetResult();
+
+            var receipts = await Task.WhenAll(refreshA, refreshB);
+            Assert.Single(receipts, receipt => !receipt.Replayed);
+            Assert.Single(receipts, receipt => receipt.Replayed);
+            Assert.Equal(receipts[0].EvidenceId, receipts[1].EvidenceId);
+            Assert.Equal(receipts[0].AdmissionId, receipts[1].AdmissionId);
+            Assert.Equal(receipts[0].ObservedAt, receipts[1].ObservedAt);
+            Assert.Equal(receipts[0].PlatformPolicy, receipts[1].PlatformPolicy);
+            Assert.Equal(receipts[0].ProjectPolicy, receipts[1].ProjectPolicy);
+            Assert.Equal(0, evaluationsB);
+            Assert.Equal(beforeEvidence + 1, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeAdmissions + 1, await db.SkillAdmissions.CountAsync());
+            Assert.Equal(1, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Project.Project.ProjectId));
+            Assert.Equal(1, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Project.Project.ProjectId));
+            var fenceAfter = await db.SkillAdmissionFences.AsNoTracking().SingleAsync(item => item.Id == 1);
+            Assert.Equal(fenceBefore.Generation, fenceAfter.Generation);
+            Assert.Equal(fenceBefore.ReleaseInventoryRevision, fenceAfter.ReleaseInventoryRevision);
+            var historical = await evidenceA.RefreshAsync(
+                setup.Project.Owner,
+                setup.Request,
+                _ => throw new InvalidOperationException("An exact replay must not scan."),
+                CancellationToken.None);
+            Assert.True(historical.Replayed);
+            Assert.Equal(receipts[0].EvidenceId, historical.EvidenceId);
+
+            var changed = setup.Request with
+            {
+                CorrelationId = setup.Request.CorrelationId + "-changed",
+            };
+            var conflict = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                CreateRefreshEvidenceService(CreateSkillService(db, setup.Objects), fixture.DataSource)
+                    .RefreshAsync(setup.Project.Owner, changed, CancellationToken.None));
+            Assert.Equal("skill_trust_evidence_idempotency_conflict", conflict.Code);
+            Assert.Equal(beforeEvidence + 1, await db.SkillTrustEvidence.CountAsync());
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshRejectsLegacyEvidenceKeyCollisionWithoutWriting()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var legacy = CreateRefreshEvidenceService(
+                CreateSkillService(db, setup.Objects), fixture.DataSource);
+            var original = await db.SkillTrustEvidence.AsNoTracking().SingleAsync(item =>
+                item.ProjectId == setup.Request.ProjectId &&
+                item.SkillId == setup.Request.SkillId &&
+                item.Revision == setup.Request.Revision);
+            db.SkillTrustEvidence.Add(new ProjectSkillTrustEvidenceRecord
+            {
+                EvidenceId = Guid.NewGuid(),
+                ProjectId = original.ProjectId,
+                SkillId = original.SkillId,
+                Revision = original.Revision,
+                ActorIssuer = setup.Project.Owner.Issuer,
+                ActorId = setup.Project.Owner.ActorId,
+                IdempotencyKey = setup.Request.IdempotencyKey,
+                RequestFingerprint = new string('b', 64),
+                ContentDigest = original.ContentDigest,
+                SourceId = original.SourceId,
+                SourceRevision = original.SourceRevision,
+                RequestedRef = original.RequestedRef,
+                ResolvedCommitSha = original.ResolvedCommitSha,
+                SelectedPath = original.SelectedPath,
+                ReportSetJson = original.ReportSetJson,
+                ReportSetSha256 = original.ReportSetSha256,
+                ScoreStatus = original.ScoreStatus,
+                HeuristicScore = original.HeuristicScore,
+                TrustTier = original.TrustTier,
+                SignatureVerified = original.SignatureVerified,
+                CapabilityDeclarationValid = original.CapabilityDeclarationValid,
+                ShortDescription = original.ShortDescription,
+                CreatedAt = TimeProvider.System.GetUtcNow(),
+            });
+            await db.SaveChangesAsync();
+
+            var conflict = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                legacy.RefreshAsync(setup.Project.Owner, setup.Request, CancellationToken.None));
+
+            Assert.Equal("skill_trust_evidence_idempotency_conflict", conflict.Code);
+            Assert.Equal(0, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Project.Project.ProjectId));
+            Assert.Equal(0, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Project.Project.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task WinnerReceiptOverridesAWaitingPreparationFailure()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            await RestoreRuntimeGrantsAsync();
+            var missedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var missedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stagedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var commitA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var dataA = CreateRuntimeDataSource("refresh-preparation-winner");
+            await using var dataB = CreateRuntimeDataSource("refresh-preparation-failure");
+            await using var dbA = CreateRuntimeDbContext(dataA);
+            await using var dbB = CreateRuntimeDbContext(dataB);
+            var skillsA = CreateSkillService(dbA, setup.Objects);
+            var skillsB = CreateSkillService(dbB, setup.Objects);
+            skillsA.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            var evidenceA = CreateRefreshEvidenceService(skillsA, dataA);
+            var evidenceB = CreateRefreshEvidenceService(skillsB, dataB);
+            evidenceA.AfterRefreshInitialMissOverride = async token =>
+            {
+                missedA.TrySetResult();
+                await releaseA.Task.WaitAsync(token);
+            };
+            evidenceB.AfterRefreshInitialMissOverride = async token =>
+            {
+                missedB.TrySetResult();
+                await releaseB.Task.WaitAsync(token);
+            };
+            skillsA.AfterSkillRefreshStagedOverride = async token =>
+            {
+                stagedA.TrySetResult();
+                await commitA.Task.WaitAsync(token);
+            };
+            var refreshA = evidenceA.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            var refreshB = evidenceB.RefreshAsync(
+                setup.Project.Owner,
+                setup.Request,
+                _ => throw new InvalidOperationException("Injected preparation failure."),
+                CancellationToken.None);
+            await Task.WhenAll(missedA.Task, missedB.Task);
+            releaseA.TrySetResult();
+            await stagedA.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseB.TrySetResult();
+            await WaitForRefreshFenceBlockAsync(
+                "refresh-preparation-failure", "refresh-preparation-winner");
+            commitA.TrySetResult();
+
+            var winner = await refreshA;
+            var replay = await refreshB;
+            Assert.False(winner.Replayed);
+            Assert.True(replay.Replayed);
+            Assert.Equal(winner.EvidenceId, replay.EvidenceId);
+            Assert.Equal(1, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshDeniesStalePinAndPolicyBeforeAtomicWrites()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var stale = setup.Request with
+            {
+                ExpectedPlatformPolicy = setup.Request.ExpectedPlatformPolicy with
+                {
+                    ContentSha256 = new string('f', 64),
+                },
+                IdempotencyKey = setup.Request.IdempotencyKey + "-stale",
+            };
+            var staleFailure = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                CreateRefreshEvidenceService(
+                    CreateSkillService(db, setup.Objects), fixture.DataSource)
+                    .RefreshAsync(setup.Project.Owner, stale, CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, staleFailure.StatusCode);
+
+            var deniedSkills = CreateSkillService(db, setup.Objects);
+            deniedSkills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) =>
+                throw SkillAdmissionService.AdmissionDenied("The controlled policy denies the refresh.");
+            var denied = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                CreateRefreshEvidenceService(deniedSkills, fixture.DataSource)
+                    .RefreshAsync(
+                        setup.Project.Owner,
+                        setup.Request with
+                        {
+                            IdempotencyKey = setup.Request.IdempotencyKey + "-denied",
+                        },
+                        CancellationToken.None));
+            Assert.Equal("skill_admission_denied", denied.Code);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(0, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+            Assert.Equal(0, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Theory]
+    [InlineData(PostgresErrorCodes.SerializationFailure, false, StatusCodes.Status409Conflict)]
+    [InlineData(PostgresErrorCodes.SerializationFailure, true, StatusCodes.Status409Conflict)]
+    [InlineData(PostgresErrorCodes.DeadlockDetected, false, StatusCodes.Status409Conflict)]
+    [InlineData(PostgresErrorCodes.DeadlockDetected, true, StatusCodes.Status409Conflict)]
+    [InlineData("55P03", false, StatusCodes.Status503ServiceUnavailable)]
+    [InlineData("55P03", true, StatusCodes.Status503ServiceUnavailable)]
+    public async Task RefreshPersistenceMapsPostgresFailuresAndRollsBack(
+        string sqlState,
+        bool wrapInEf,
+        int expectedStatus)
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var skills = CreateSkillService(db, setup.Objects);
+            skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            skills.AfterSkillRefreshStagedOverride = _ =>
+            {
+                var postgres = PostgresFailure(sqlState);
+                throw wrapInEf
+                    ? new DbUpdateException("Injected refresh save failure.", postgres)
+                    : postgres;
+            };
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeAdmissions = await db.SkillAdmissions.CountAsync();
+
+            var failure = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                CreateRefreshEvidenceService(skills, fixture.DataSource)
+                    .RefreshAsync(setup.Project.Owner, setup.Request, CancellationToken.None));
+
+            Assert.Equal(expectedStatus, failure.StatusCode);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeAdmissions, await db.SkillAdmissions.CountAsync());
+            Assert.Equal(0, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+            Assert.Equal(0, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefreshPersistenceTimeoutReturnsUnavailableAndRollsBack(bool wrapInEf)
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var skills = CreateSkillService(db, setup.Objects);
+            skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            skills.AfterSkillRefreshStagedOverride = _ =>
+            {
+                var timeout = new TimeoutException("Injected refresh persistence timeout.");
+                throw wrapInEf
+                    ? new DbUpdateException("Wrapped refresh persistence timeout.", timeout)
+                    : timeout;
+            };
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeAdmissions = await db.SkillAdmissions.CountAsync();
+
+            var failure = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                CreateRefreshEvidenceService(skills, fixture.DataSource)
+                    .RefreshAsync(setup.Project.Owner, setup.Request, CancellationToken.None));
+
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, failure.StatusCode);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeAdmissions, await db.SkillAdmissions.CountAsync());
+            Assert.Equal(0, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+            Assert.Equal(0, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshPersistenceCancellationRemainsCancellationAndRollsBack()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var skills = CreateSkillService(db, setup.Objects);
+            skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            using var cancellation = new CancellationTokenSource();
+            skills.AfterSkillRefreshStagedOverride = _ =>
+            {
+                cancellation.Cancel();
+                throw new OperationCanceledException(cancellation.Token);
+            };
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var beforeAdmissions = await db.SkillAdmissions.CountAsync();
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                CreateRefreshEvidenceService(skills, fixture.DataSource)
+                    .RefreshAsync(setup.Project.Owner, setup.Request, cancellation.Token));
+
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(beforeAdmissions, await db.SkillAdmissions.CountAsync());
+            Assert.Equal(0, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+            Assert.Equal(0, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Request.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshRejectsRevocationCommittedWhilePreparationIsPaused()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var missed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var skills = CreateSkillService(db, setup.Objects);
+            skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            var evidence = CreateRefreshEvidenceService(skills, fixture.DataSource);
+            evidence.AfterRefreshInitialMissOverride = async token =>
+            {
+                missed.TrySetResult();
+                await resume.Task.WaitAsync(token);
+            };
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var refresh = evidence.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            await missed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await setup.Skills.RevokeAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                setup.Request.SkillId,
+                setup.Request.Revision,
+                "Revoke before the refresh final transaction.",
+                CancellationToken.None);
+            resume.TrySetResult();
+
+            var conflict = await Assert.ThrowsAsync<SkillContentServiceException>(
+                () => refresh.WaitAsync(TimeSpan.FromSeconds(20)));
+            Assert.Equal(StatusCodes.Status409Conflict, conflict.StatusCode);
+            Assert.Equal(beforeEvidence, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(0, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Project.Project.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RolledBackRefreshLeavesNoSetAndWaitingRequestCommitsSoleSet()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            await RestoreRuntimeGrantsAsync();
+            var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var missedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var missedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stagedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var dataA = CreateRuntimeDataSource("refresh-rollback-a");
+            await using var dataB = CreateRuntimeDataSource("refresh-success-b");
+            await using var dbA = CreateRuntimeDbContext(dataA);
+            await using var dbB = CreateRuntimeDbContext(dataB);
+            var skillsA = CreateSkillService(dbA, setup.Objects);
+            var skillsB = CreateSkillService(dbB, setup.Objects);
+            skillsA.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            skillsB.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+            var evidenceA = CreateRefreshEvidenceService(skillsA, dataA);
+            var evidenceB = CreateRefreshEvidenceService(skillsB, dataB);
+            evidenceA.AfterRefreshInitialMissOverride = async token =>
+            {
+                missedA.TrySetResult();
+                await releaseA.Task.WaitAsync(token);
+            };
+            evidenceB.AfterRefreshInitialMissOverride = async token =>
+            {
+                missedB.TrySetResult();
+                await releaseB.Task.WaitAsync(token);
+            };
+            skillsA.AfterSkillRefreshStagedOverride = _ =>
+            {
+                stagedA.TrySetResult();
+                throw new InvalidOperationException("Injected refresh commit failure.");
+            };
+            var beforeEvidence = await db.SkillTrustEvidence.CountAsync();
+            var refreshA = evidenceA.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            var refreshB = evidenceB.RefreshAsync(
+                setup.Project.Owner, setup.Request, CancellationToken.None);
+            await Task.WhenAll(missedA.Task, missedB.Task);
+            releaseA.TrySetResult();
+            var reachedStage = await Task.WhenAny(stagedA.Task, refreshA);
+            if (reachedStage == refreshA)
+                await refreshA;
+            await stagedA.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseB.TrySetResult();
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => refreshA.WaitAsync(TimeSpan.FromSeconds(20)));
+            var receipt = await refreshB.WaitAsync(TimeSpan.FromSeconds(20));
+
+            Assert.False(receipt.Replayed);
+            Assert.Equal(beforeEvidence + 1, await db.SkillTrustEvidence.CountAsync());
+            Assert.Equal(1, await db.SkillRefreshReceipts.CountAsync(
+                item => item.ProjectId == setup.Project.Project.ProjectId));
+            Assert.Equal(1, await db.SkillRefreshAuditIntents.CountAsync(
+                item => item.ProjectId == setup.Project.Project.ProjectId));
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshAndCastingConfirmationUseTheSameFenceFirstOrder()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var configuration = await new ProjectsConfigService(
+                    db, CreateProviderCatalog(), TimeProvider.System)
+                .GetProjectConfigurationAsync(
+                    setup.Project.Owner,
+                    setup.Request.ProjectId,
+                    null,
+                    CancellationToken.None);
+            var service = new ProjectsConfigService(
+                db,
+                CreateProviderCatalog(),
+                TimeProvider.System,
+                skillContentObjects: new SkillContentObjectStore(setup.Objects));
+            var proposal = await service.CreateCastingProposalAsync(
+                setup.Project.Owner,
+                setup.Request.ProjectId,
+                configuration.Revision,
+                configuration.Configuration,
+                CancellationToken.None);
+
+            var lockKey = RandomNumberGenerator.GetInt32(int.MaxValue);
+            const string trigger = "test_pause_refresh_casting_confirm";
+            const string function = "pause_refresh_casting_confirm_test";
+            await using var blocker = await fixture.DataSource.OpenConnectionAsync();
+            await using (var install = new NpgsqlCommand($"""
+                CREATE FUNCTION projects_config.{function}() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF NEW.project_id = '{setup.Request.ProjectId}' THEN
+                        PERFORM pg_catalog.pg_advisory_xact_lock({lockKey});
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$;
+                CREATE TRIGGER {trigger}
+                BEFORE INSERT ON projects_config.project_configuration_revisions
+                FOR EACH ROW EXECUTE FUNCTION projects_config.{function}();
+                SELECT pg_catalog.pg_advisory_lock({lockKey});
+                """, blocker))
+                await install.ExecuteNonQueryAsync();
+
+            Task<ProjectCastingProposal>? confirmation = null;
+            Task<ProjectSkillRefreshReceipt>? refresh = null;
+            try
+            {
+                await using var confirmData = CreateRuntimeDataSource("casting-confirm-fence");
+                await using var confirmDb = CreateRuntimeDbContext(confirmData);
+                var confirmService = new ProjectsConfigService(
+                    confirmDb,
+                    CreateProviderCatalog(),
+                    TimeProvider.System,
+                    skillContentObjects: new SkillContentObjectStore(setup.Objects));
+                confirmation = confirmService.ConfirmCastingProposalAsync(
+                    setup.Project.Owner,
+                    setup.Request.ProjectId,
+                    proposal.ProposalId,
+                    proposal.DraftRevision,
+                    CancellationToken.None);
+                await WaitForApplicationLockAsync("casting-confirm-fence");
+
+                await using var refreshData = CreateRuntimeDataSource("refresh-waits-casting-fence");
+                await using var refreshDb = CreateRuntimeDbContext(refreshData);
+                refresh = CreateRefreshEvidenceService(
+                        CreateSkillService(refreshDb, setup.Objects),
+                        refreshData)
+                    .RefreshAsync(
+                        setup.Project.Owner,
+                        setup.Request,
+                        CancellationToken.None);
+                await WaitForRefreshFenceBlockAsync(
+                    "refresh-waits-casting-fence",
+                    "casting-confirm-fence");
+
+                await using (var unlock = new NpgsqlCommand(
+                    $"SELECT pg_catalog.pg_advisory_unlock({lockKey})", blocker))
+                    await unlock.ExecuteScalarAsync();
+                await confirmation.WaitAsync(TimeSpan.FromSeconds(20));
+                await refresh.WaitAsync(TimeSpan.FromSeconds(20));
+            }
+            finally
+            {
+                await using var cleanup = new NpgsqlCommand($"""
+                    SELECT pg_catalog.pg_advisory_unlock({lockKey});
+                    DROP TRIGGER IF EXISTS {trigger}
+                        ON projects_config.project_configuration_revisions;
+                    DROP FUNCTION IF EXISTS projects_config.{function}();
+                    """, blocker);
+                await cleanup.ExecuteNonQueryAsync();
+                if (confirmation is not null)
+                    try { await confirmation; } catch { }
+                if (refresh is not null)
+                    try { await refresh; } catch { }
+            }
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
+    public async Task DirectConfigurationSaveAndRevocationShareOneFenceTransaction()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            await RestoreRuntimeGrantsAsync();
+            var current = await new ProjectsConfigService(
+                    db, CreateProviderCatalog(), TimeProvider.System)
+                .GetProjectConfigurationAsync(
+                    setup.Project.Owner,
+                    setup.Request.ProjectId,
+                    null,
+                    CancellationToken.None);
+            var lockKey = RandomNumberGenerator.GetInt32(int.MaxValue);
+            const string trigger = "test_pause_direct_configuration";
+            const string function = "pause_direct_configuration_test";
+            await using var blocker = await fixture.MigrationDataSource.OpenConnectionAsync();
+            await using (var install = new NpgsqlCommand($"""
+                CREATE FUNCTION projects_config.{function}() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF NEW.project_id = '{setup.Request.ProjectId}' THEN
+                        PERFORM pg_catalog.pg_advisory_xact_lock({lockKey});
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$;
+                CREATE TRIGGER {trigger}
+                BEFORE INSERT ON projects_config.project_configuration_revisions
+                FOR EACH ROW EXECUTE FUNCTION projects_config.{function}();
+                SELECT pg_catalog.pg_advisory_lock({lockKey});
+                """, blocker))
+                await install.ExecuteNonQueryAsync();
+
+            Task<VersionedProjectConfiguration>? save = null;
+            Task? revoke = null;
+            try
+            {
+                await using var saveData = CreateRuntimeDataSource("direct-configuration-save");
+                await using var revokeData = CreateRuntimeDataSource("direct-configuration-revoke");
+                await using var saveDb = CreateRuntimeDbContext(saveData);
+                await using var revokeDb = CreateRuntimeDbContext(revokeData);
+                var saveService = new ProjectsConfigService(
+                    saveDb,
+                    CreateProviderCatalog(),
+                    TimeProvider.System,
+                    skillContentObjects: new SkillContentObjectStore(setup.Objects));
+                var revokeService = CreateSkillService(
+                    revokeDb, setup.Objects);
+                save = saveService.UpdateProjectConfigurationAsync(
+                    setup.Project.Owner,
+                    setup.Request.ProjectId,
+                    current.Revision,
+                    current.Configuration,
+                    CancellationToken.None);
+                await WaitForApplicationLockAsync("direct-configuration-save");
+
+                revoke = revokeService.RevokeAsync(
+                    setup.Project.Owner,
+                    setup.Request.ProjectId,
+                    setup.Request.SkillId,
+                    setup.Request.Revision,
+                    "Revoke after the configuration transaction starts.",
+                    CancellationToken.None);
+                await WaitForRefreshFenceBlockAsync(
+                    "direct-configuration-revoke", "direct-configuration-save");
+                Assert.False(revoke.IsCompleted);
+
+                await using (var unlock = new NpgsqlCommand(
+                    $"SELECT pg_catalog.pg_advisory_unlock({lockKey})", blocker))
+                    await unlock.ExecuteScalarAsync();
+                await save.WaitAsync(TimeSpan.FromSeconds(20));
+                await revoke.WaitAsync(TimeSpan.FromSeconds(20));
+
+                Assert.Equal(
+                    current.Revision + 1,
+                    (await db.Projects.AsNoTracking()
+                        .SingleAsync(item => item.ProjectId == setup.Request.ProjectId))
+                    .ConfigurationRevision);
+                Assert.True(await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
+                    item.ProjectId == setup.Request.ProjectId &&
+                    item.SkillId == setup.Request.SkillId &&
+                    item.Revision == setup.Request.Revision));
+            }
+            finally
+            {
+                await using var cleanup = new NpgsqlCommand($"""
+                    SELECT pg_catalog.pg_advisory_unlock({lockKey});
+                    DROP TRIGGER IF EXISTS {trigger}
+                        ON projects_config.project_configuration_revisions;
+                    DROP FUNCTION IF EXISTS projects_config.{function}();
+                    """, blocker);
+                await cleanup.ExecuteNonQueryAsync();
+                if (save is not null)
+                    try { await save; } catch { }
+                if (revoke is not null)
+                    try { await revoke; } catch { }
+            }
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
     public async Task ConcurrentEvidenceRefreshAndRuntimeTrustReadDoNotDeadlock()
     {
         await using var db = CreateDbContext();
@@ -1550,7 +2852,8 @@ public sealed partial class ProjectsConfigPostgresTests
 
     private SkillContentService CreateSkillService(
         ProjectsConfigDbContext db,
-        SkillTestObjectStore objects)
+        SkillTestObjectStore objects,
+        TimeProvider? timeProvider = null)
     {
         var objectStore = new SkillContentObjectStore(objects);
         return new SkillContentService(
@@ -1559,9 +2862,9 @@ public sealed partial class ProjectsConfigPostgresTests
             new ProjectsConfigService(
                 db,
                 CreateProviderCatalog(),
-                TimeProvider.System,
+                timeProvider ?? TimeProvider.System,
                 skillContentObjects: objectStore),
-            TimeProvider.System);
+            timeProvider ?? TimeProvider.System);
     }
 
     private NpgsqlDataSource CreateRuntimeDataSource(string applicationName) =>
@@ -1603,6 +2906,188 @@ public sealed partial class ProjectsConfigPostgresTests
         }
         throw new TimeoutException($"The {applicationName} operation did not reach the expected database lock.");
     }
+
+    private async Task WaitForRefreshFenceBlockAsync(string waiterName, string blockerName)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand("""
+                SELECT blocker.pid = ANY(waiter.blocking)
+                FROM (
+                    SELECT pid, pg_catalog.pg_blocking_pids(pid) AS blocking
+                    FROM pg_catalog.pg_stat_activity
+                    WHERE application_name = @waiter
+                ) AS waiter
+                CROSS JOIN (
+                    SELECT pid
+                    FROM pg_catalog.pg_stat_activity
+                    WHERE application_name = @blocker
+                ) AS blocker
+                """, connection);
+            command.Parameters.AddWithValue("waiter", waiterName);
+            command.Parameters.AddWithValue("blocker", blockerName);
+            if (await command.ExecuteScalarAsync() is true)
+                return;
+            await Task.Delay(20);
+        }
+        throw new TimeoutException(
+            $"The {waiterName} refresh did not wait on the {blockerName} fence transaction.");
+    }
+
+    private async Task<SkillRefreshTestSetup> CreateSkillRefreshSetupAsync(ProjectsConfigDbContext db)
+    {
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var project = await CreateSkillInventoryProjectAsync(db, authorityStore);
+        var objects = new SkillTestObjectStore();
+        var objectStore = new SkillContentObjectStore(objects);
+        var configurations = new ProjectsConfigService(
+            db, CreateProviderCatalog(), TimeProvider.System, skillContentObjects: objectStore);
+        var configured = await configurations.UpdateProjectConfigurationAsync(
+            project.Owner,
+            project.Project.ProjectId,
+            project.Project.ConfigurationRevision,
+            ProjectSettings() with
+            {
+                AgentCharters =
+                [
+                    new ProjectAgentCharter(
+                        "agent-one", "Refresh Agent", "assistant", "Refresh test agent."),
+                ],
+                Casting = [new ProjectAgentCast("agent-one", "assistant", 0)],
+            },
+            CancellationToken.None);
+        var skills = new SkillContentService(
+            db, objectStore, configurations, TimeProvider.System);
+        skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
+        await SeedSkillsPolicyAsync(
+            db,
+            project.Owner,
+            """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+        var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+        fence.State = ProjectSkillAdmissionFenceState.Active;
+        fence.ReleaseInventoryRevision = "refresh-inventory-" + project.Suffix;
+        fence.PlatformSkillsPolicySha256 = "0" + new string('1', 63);
+        await db.SaveChangesAsync();
+        var candidate = SkillCandidate(
+            "A sufficiently long approved instruction for operator refresh.",
+            "# Refresh\n");
+        var preview = skills.Preview(candidate);
+        var imported = await skills.ImportAsync(
+            project.Owner,
+            project.Project.ProjectId,
+            new SkillContentImportRequest(
+                "refresh-import-" + project.Suffix,
+                preview.ContentDigest,
+                "refresh-skill",
+                null,
+                new SkillContentSourceSelection(
+                    "caller-source",
+                    "caller-revision",
+                    "main",
+                    new string('c', 40),
+                    "skills/refresh"),
+                candidate),
+            CancellationToken.None);
+        var assignedConfiguration = configured.Configuration with
+        {
+            Skills =
+            [
+                new SkillCatalogSetting(imported.SkillId, true, 0)
+                {
+                    Revision = imported.Revision,
+                    ContentDigest = imported.ContentDigest,
+                    AgentIds = ["agent-one"],
+                },
+            ],
+        };
+        var assignedRevision = configured.Revision + 1;
+        db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
+        {
+            ProjectId = project.Project.ProjectId,
+            Revision = assignedRevision,
+            ConfigurationJson = ProjectsConfigService.SerializeProjectConfiguration(
+                assignedConfiguration),
+            UpdatedByActorId = project.Owner.ActorId,
+            CreatedAt = TimeProvider.System.GetUtcNow(),
+        });
+        var projectRecord = await db.Projects.SingleAsync(item =>
+            item.ProjectId == project.Project.ProjectId);
+        projectRecord.ConfigurationRevision = assignedRevision;
+        await db.SaveChangesAsync();
+        var runId = "refresh-run-" + project.Suffix;
+        var selection = new EffectiveRunSelection(
+            project.Project.ProjectId,
+            runId,
+            project.Project.Revision,
+            assignedRevision,
+            project.PlatformDefaultsRevision,
+            "refresh-context",
+            new ModelSelectionSettings("refresh-model"),
+            [],
+            [],
+            new CopilotRunLimits(),
+            assignedConfiguration,
+            [],
+            null,
+            []);
+        db.RunSelections.Add(new ProjectRunSelectionRecord
+        {
+            RunId = runId,
+            ProjectId = project.Project.ProjectId,
+            ProjectRevision = project.Project.Revision,
+            ProjectConfigurationRevision = assignedRevision,
+            PlatformRuntimeRevision = project.PlatformDefaultsRevision,
+            ContextRevision = "refresh-context",
+            RequestFingerprint = new string('a', 64),
+            SnapshotJson = ProjectsConfigService.SerializeRunSelection(selection),
+            CreatedAt = TimeProvider.System.GetUtcNow(),
+        });
+        await db.SaveChangesAsync();
+        var policy = await new SkillAdmissionService(db, TimeProvider.System)
+            .ReadPolicySnapshotAsync(project.Project.ProjectId, false, CancellationToken.None);
+        var request = new ProjectSkillRefreshRequest(
+            project.Project.ProjectId,
+            runId,
+            "agent-one",
+            imported.SkillId,
+            imported.Revision,
+            imported.ContentDigest,
+            new ProjectSkillRefreshPolicyPin(
+                policy.PlatformPolicyId,
+                policy.PlatformPolicyRevision,
+                policy.PlatformPolicySha256),
+            policy.ProjectPolicyId is null
+                ? null
+                : new ProjectSkillRefreshPolicyPin(
+                    policy.ProjectPolicyId,
+                    policy.ProjectPolicyRevision!.Value,
+                    policy.ProjectPolicySha256!),
+            "refresh-" + project.Suffix,
+            "Refresh the exact accepted Skill after a policy update.",
+            "refresh-correlation-" + project.Suffix);
+        return new SkillRefreshTestSetup(project, skills, objects, request);
+    }
+
+    private ProjectSkillTrustEvidenceService CreateRefreshEvidenceService(
+        SkillContentService skills,
+        NpgsqlDataSource dataSource,
+        TimeProvider? timeProvider = null) =>
+        new(
+            skills,
+            new ProjectGovernanceDecisionStore(
+                new PooledDbContextFactory<ProjectsConfigDbContext>(
+                    CreateRuntimeDbContextOptions(dataSource)),
+                timeProvider ?? TimeProvider.System),
+            timeProvider);
+
+    private sealed record SkillRefreshTestSetup(
+        SkillInventoryTestProject Project,
+        SkillContentService Skills,
+        SkillTestObjectStore Objects,
+        ProjectSkillRefreshRequest Request);
 
     private async Task<SkillTrustEvidenceTestSetup> CreateTrustEvidenceSetupAsync(
         ProjectsConfigDbContext db,
@@ -1823,6 +3308,22 @@ public sealed partial class ProjectsConfigPostgresTests
 
     private static string Hash(ReadOnlySpan<byte> content) =>
         Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+
+    private static PostgresException PostgresFailure(string sqlState) =>
+        new("Injected refresh failure.", "ERROR", "ERROR", sqlState);
+
+    private static PromptDefenseReport At(PromptDefenseReport report, DateTime evaluatedAt) =>
+        new()
+        {
+            PromptHash = report.PromptHash,
+            EvaluatedAt = evaluatedAt,
+            Score = report.Score,
+            Grade = report.Grade,
+            CoveredCount = report.CoveredCount,
+            VectorCount = report.VectorCount,
+            Passes = report.Passes,
+            Results = report.Results,
+        };
 
     private sealed record SkillTrustEvidenceTestSetup(
         SkillInventoryTestProject Project,

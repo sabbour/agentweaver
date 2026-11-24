@@ -135,6 +135,21 @@ no public route. See the
 [Skill marketplace architecture](skill-marketplace.md#skill-trust-evidence)
 for the scan and replay contract.
 
+The same internal boundary can refresh trust evidence for a Skill pin in an
+accepted run. Refresh takes the active Skill-admission fence before current
+project authority and the accepted run selection. It rechecks revocation,
+assignment, source kind, and policy pins under that fence. Concurrent identical
+requests return one immutable receipt and one matching audit intent. PostgreSQL
+keys bind each receipt to its exact evidence and admission tuple. The singleton
+fence has one ordering counter for committed writes and a separate cutover
+counter for admission validity. This blocks stale transactions after a policy
+publication or revocation without making another project's admission stale.
+
+Deployment must drain old requests and pooled database sessions before this
+lock order is enabled. Old binaries can still lock Project rows before the
+singleton fence. Keep the Project-head write switch off during that transition.
+No refresh route or publication path is exposed.
+
 ## BYOK credential publication
 
 The public provider metadata routes accept metadata, not credentials or

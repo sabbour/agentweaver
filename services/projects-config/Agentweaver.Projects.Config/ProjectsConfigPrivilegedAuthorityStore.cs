@@ -77,6 +77,8 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     .ConfigureAwait(false);
                 try
                 {
+                    _ = await new SkillAdmissionService(db, timeProvider)
+                        .LockFenceAsync(cancellationToken).ConfigureAwait(false);
                     var authorityProjectId = await db.ProjectSetupOperations.AsNoTracking()
                         .Where(operation =>
                             operation.InvocationId == request.InvocationId &&

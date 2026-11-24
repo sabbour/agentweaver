@@ -2219,6 +2219,10 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("generation");
 
+                    b.Property<long>("CutoverGeneration")
+                        .HasColumnType("bigint")
+                        .HasColumnName("cutover_generation");
+
                     b.Property<string>("PlatformSkillsPolicySha256")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
@@ -2244,6 +2248,8 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("project_skill_admission_fence", "projects_config", t =>
                         {
                             t.HasCheckConstraint("ck_skill_admission_fence_generation", "generation > 0");
+
+                            t.HasCheckConstraint("ck_skill_admission_fence_cutover_generation", "cutover_generation > 0");
 
                             t.HasCheckConstraint("ck_skill_admission_fence_id", "id = 1");
 
@@ -2643,6 +2649,220 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasKey("ProjectId", "ScopeDigest");
 
                     b.ToTable("project_skill_import_idempotency", "projects_config");
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillRefreshAuditIntentRecord", b =>
+                {
+                    b.Property<Guid>("AuditIntentId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("audit_intent_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("actor_issuer");
+
+                    b.Property<Guid>("AdmissionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("admission_id");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EffectiveRoleRevisionsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("effective_role_revisions");
+
+                    b.Property<Guid>("EvidenceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("evidence_id");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.Property<long>("MembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("membership_revision");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid>("ReceiptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("receipt_id");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("AuditIntentId");
+
+                    b.HasIndex("EvidenceId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_project_skill_refresh_audit_evidence");
+
+                    b.HasIndex("ReceiptId", "EvidenceId", "AdmissionId");
+
+                    b.ToTable("project_skill_refresh_audit_intents", "projects_config");
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillRefreshReceiptRecord", b =>
+                {
+                    b.Property<Guid>("ReceiptId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("receipt_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("actor_issuer");
+
+                    b.Property<Guid>("AdmissionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("admission_id");
+
+                    b.Property<string>("AgentId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("agent_id");
+
+                    b.Property<string>("ContentDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_digest");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("EvidenceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("evidence_id");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<DateTimeOffset>("ObservedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("observed_at");
+
+                    b.Property<string>("PlatformPolicyId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("platform_policy_id");
+
+                    b.Property<long>("PlatformPolicyRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("platform_policy_revision");
+
+                    b.Property<string>("PlatformPolicySha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("platform_policy_sha256");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProjectPolicyId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("project_policy_id");
+
+                    b.Property<long?>("ProjectPolicyRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("project_policy_revision");
+
+                    b.Property<string>("ProjectPolicySha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("project_policy_sha256");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("SkillId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("skill_id");
+
+                    b.HasKey("ReceiptId");
+
+                    b.HasIndex("EvidenceId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_project_skill_refresh_receipts_evidence");
+
+                    b.HasIndex("AdmissionId", "EvidenceId");
+
+                    b.HasIndex("ProjectId", "ActorIssuer", "ActorId", "IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_project_skill_refresh_receipts_idempotency");
+
+                    b.ToTable("project_skill_refresh_receipts", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_skill_refresh_receipt_hashes", "request_fingerprint ~ '^[0-9a-f]{64}$' AND content_digest ~ '^[0-9a-f]{64}$' AND platform_policy_sha256 ~ '^[0-9a-f]{64}$' AND (project_policy_sha256 IS NULL OR project_policy_sha256 ~ '^[0-9a-f]{64}$')");
+
+                            t.HasCheckConstraint("ck_project_skill_refresh_receipt_project_pin", "(project_policy_id IS NULL AND project_policy_revision IS NULL AND project_policy_sha256 IS NULL) OR (project_policy_id IS NOT NULL AND project_policy_revision IS NOT NULL AND project_policy_sha256 IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillTrustEvidenceRecord", b =>
@@ -3065,6 +3285,32 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillRefreshAuditIntentRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillRefreshReceiptRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ReceiptId", "EvidenceId", "AdmissionId")
+                        .HasPrincipalKey("ReceiptId", "EvidenceId", "AdmissionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillRefreshReceiptRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillTrustEvidenceRecord", null)
+                        .WithMany()
+                        .HasForeignKey("EvidenceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillAdmissionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("AdmissionId", "EvidenceId")
+                        .HasPrincipalKey("AdmissionId", "EvidenceId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

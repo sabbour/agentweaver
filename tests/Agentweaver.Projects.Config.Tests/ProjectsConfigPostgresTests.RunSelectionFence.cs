@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
@@ -192,6 +193,145 @@ public sealed partial class ProjectsConfigPostgresTests
                 await tests.ExecuteOwnerSqlAsync(
                     $"DROP TRIGGER IF EXISTS {triggerName} ON projects_config.project_run_selections; " +
                     $"DROP FUNCTION IF EXISTS projects_config.{triggerFunction}();");
+            }
+        });
+    }
+
+    [Fact]
+    public async Task RunSelectionWaitsForCastingConfirmationOnTheSharedFenceFirst()
+    {
+        await RunWithIsolatedProjectsAsync(async tests =>
+        {
+            await using var seedDb = tests.CreateDbContext();
+            var store = new ProjectsConfigPrivilegedAuthorityStore(
+                tests.CreateDbContextOptions(), TimeProvider.System);
+            var seedService = new ProjectsConfigService(
+                seedDb, CreateProviderCatalog(), TimeProvider.System);
+            var suffix = Guid.NewGuid().ToString("N")[..12];
+            var tenantId = "accept-confirm-tenant-" + suffix;
+            var runId = "accept-confirm-run-" + suffix;
+            var admin = await SeedCallerAsync(
+                seedDb,
+                store,
+                "accept-confirm-admin-" + suffix,
+                tenantId,
+                ["api.read", "projects.admin"],
+                ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin);
+            var owner = await SeedCallerAsync(
+                seedDb,
+                store,
+                "accept-confirm-owner-" + suffix,
+                tenantId,
+                ["api.read", "projects.admin"],
+                ProjectAuthorityResourceType.Tenant,
+                tenantId,
+                ProjectAuthorityRole.TenantAdmin);
+            var platform = await seedService.UpdatePlatformRuntimeDefaultsAsync(
+                admin,
+                (await seedService.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None)).Revision,
+                PlatformDefaults(),
+                CancellationToken.None);
+            var project = await seedService.CreateProjectAsync(
+                owner, "Acceptance fence project", CancellationToken.None);
+            var membership = await SeedMembershipAsync(store, "accept-confirm-orch-" + suffix, tenantId);
+            await store.AssignRoleAsync(
+                membership,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                ProjectAuthorityRole.Orchestrator,
+                "test",
+                CancellationToken.None);
+            var orchestrator = await ResolveCallerAsync(
+                seedDb,
+                "accept-confirm-orch-" + suffix,
+                tenantId,
+                ["api.read", "projects.orchestrator"],
+                project.ProjectId,
+                runId);
+            var configuration = await seedService.GetProjectConfigurationAsync(
+                owner, project.ProjectId, null, CancellationToken.None);
+            var proposal = await seedService.CreateCastingProposalAsync(
+                owner,
+                project.ProjectId,
+                configuration.Revision,
+                configuration.Configuration,
+                CancellationToken.None);
+
+            var lockKey = RandomNumberGenerator.GetInt32(int.MaxValue);
+            var trigger = "test_accept_casting_fence_" + suffix;
+            var function = "pause_accept_casting_fence_" + suffix;
+            await using var blocker = await tests.OpenOwnerConnectionAsync();
+            await using (var install = new NpgsqlCommand($"""
+                CREATE FUNCTION projects_config.{function}() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    PERFORM pg_catalog.pg_advisory_xact_lock({lockKey});
+                    RETURN NEW;
+                END;
+                $$;
+                CREATE TRIGGER {trigger}
+                BEFORE INSERT ON projects_config.project_configuration_revisions
+                FOR EACH ROW EXECUTE FUNCTION projects_config.{function}();
+                SELECT pg_catalog.pg_advisory_lock({lockKey});
+                """, blocker))
+                await install.ExecuteNonQueryAsync();
+
+            Task<ProjectCastingProposal>? confirmation = null;
+            Task<EffectiveRunSelection>? acceptance = null;
+            try
+            {
+                await using var confirmDb = tests.CreateDbContext();
+                await using var acceptDb = tests.CreateDbContext();
+                var confirmService = new ProjectsConfigService(
+                    confirmDb, CreateProviderCatalog(), TimeProvider.System);
+                var acceptService = new ProjectsConfigService(
+                    acceptDb,
+                    CreateProviderCatalog(),
+                    TimeProvider.System,
+                    new CountingDbContextFactory(tests.CreateDbContext));
+                confirmation = confirmService.ConfirmCastingProposalAsync(
+                    owner,
+                    project.ProjectId,
+                    proposal.ProposalId,
+                    proposal.DraftRevision,
+                    CancellationToken.None);
+                await tests.WaitForRunSelectionFenceActivityAsync(
+                    "wait_event = 'advisory' AND query ILIKE '%project_configuration_revisions%'",
+                    confirmation);
+
+                acceptance = acceptService.AcceptRunSelectionAsync(
+                    orchestrator,
+                    project.ProjectId,
+                    runId,
+                    RunRequest(configuration.Revision + 1, platform.Revision),
+                    CancellationToken.None);
+                await tests.WaitForRunSelectionFenceActivityAsync(
+                    "wait_event_type = 'Lock' AND query ILIKE '%project_skill_admission_fence%'",
+                    acceptance);
+                Assert.False(acceptance.IsCompleted);
+
+                await using (var unlock = new NpgsqlCommand(
+                    $"SELECT pg_catalog.pg_advisory_unlock({lockKey})", blocker))
+                    await unlock.ExecuteScalarAsync();
+                await confirmation.WaitAsync(TimeSpan.FromSeconds(20));
+                var accepted = await acceptance.WaitAsync(TimeSpan.FromSeconds(20));
+                Assert.Equal(configuration.Revision + 1, accepted.ProjectConfigurationRevision);
+            }
+            finally
+            {
+                await using var cleanup = new NpgsqlCommand($"""
+                    SELECT pg_catalog.pg_advisory_unlock({lockKey});
+                    DROP TRIGGER IF EXISTS {trigger}
+                        ON projects_config.project_configuration_revisions;
+                    DROP FUNCTION IF EXISTS projects_config.{function}();
+                    """, blocker);
+                await cleanup.ExecuteNonQueryAsync();
+                if (confirmation is not null)
+                    try { await confirmation; } catch { }
+                if (acceptance is not null)
+                    try { await acceptance; } catch { }
             }
         });
     }

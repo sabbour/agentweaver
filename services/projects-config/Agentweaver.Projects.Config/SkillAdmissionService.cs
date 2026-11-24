@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Policy.Acs;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
@@ -15,7 +16,7 @@ public sealed class SkillAdmissionService(
     SkillReleasePublisherKeys? publisherKeys = null,
     NativeAcsPolicyEvaluator? evaluator = null)
 {
-    private const string SkillsPolicyDataPath = "policy/skills/data.json";
+    internal const string SkillsPolicyDataPath = "policy/skills/data.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         AllowDuplicateProperties = false,
@@ -42,7 +43,7 @@ public sealed class SkillAdmissionService(
     {
         return await db.SkillAdmissionFences
             .FromSqlRaw("""
-                SELECT id, state, generation, release_inventory_revision,
+                SELECT id, state, generation, cutover_generation, release_inventory_revision,
                        platform_skills_policy_sha256, updated_at
                 FROM projects_config.project_skill_admission_fence
                 WHERE id = 1
@@ -57,7 +58,7 @@ public sealed class SkillAdmissionService(
     {
         return await db.SkillAdmissionFences
             .FromSqlRaw("""
-                SELECT id, state, generation, release_inventory_revision,
+                SELECT id, state, generation, cutover_generation, release_inventory_revision,
                        platform_skills_policy_sha256, updated_at
                 FROM projects_config.project_skill_admission_fence
                 WHERE id = 1
@@ -82,6 +83,7 @@ public sealed class SkillAdmissionService(
         fence.State = ProjectSkillAdmissionFenceState.Draining;
         fence.ReleaseInventoryRevision = releaseInventoryRevision;
         fence.Generation = checked(fence.Generation + 1);
+        fence.CutoverGeneration = checked(fence.CutoverGeneration + 1);
         fence.UpdatedAt = timeProvider.GetUtcNow();
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -187,6 +189,7 @@ public sealed class SkillAdmissionService(
         await using var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
+        var fence = await LockFenceAsync(cancellationToken).ConfigureAwait(false);
         await db.Database.ExecuteSqlRawAsync(
             "SELECT set_config('agentweaver.skill_release_management_v1', '1', true)",
             cancellationToken).ConfigureAwait(false);
@@ -203,6 +206,8 @@ public sealed class SkillAdmissionService(
                     {release.SignatureSha256},
                     {release.CreatedAt})
                 """, cancellationToken).ConfigureAwait(false);
+        fence.Generation = checked(fence.Generation + 1);
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return releases;
     }
@@ -228,6 +233,8 @@ public sealed class SkillAdmissionService(
             .ConfigureAwait(false);
         fence.PlatformSkillsPolicySha256 = policy.PlatformPolicySha256;
         fence.State = ProjectSkillAdmissionFenceState.Active;
+        fence.Generation = checked(fence.Generation + 1);
+        fence.CutoverGeneration = checked(fence.CutoverGeneration + 1);
         fence.UpdatedAt = timeProvider.GetUtcNow();
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -335,7 +342,7 @@ public sealed class SkillAdmissionService(
         if (scopeType == NativeAcsPolicyScopeType.Platform)
         {
             _ = await db.SkillAdmissionFences.FromSqlRaw("""
-                    SELECT id, state, generation, release_inventory_revision,
+                    SELECT id, state, generation, cutover_generation, release_inventory_revision,
                            platform_skills_policy_sha256, updated_at
                     FROM projects_config.project_skill_admission_fence
                     WHERE id = 1

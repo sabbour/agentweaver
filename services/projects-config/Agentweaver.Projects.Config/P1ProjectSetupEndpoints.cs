@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -201,6 +202,14 @@ internal static class P1ProjectSetupEndpoints
         {
             await using var connection = await dataSource.OpenConnectionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            await using var transaction = await connection
+                .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+                .ConfigureAwait(false);
+            await using (var fenceLock = new NpgsqlCommand(
+                "SELECT id FROM projects_config.project_skill_admission_fence WHERE id = 1 FOR UPDATE",
+                connection,
+                transaction))
+                await fenceLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             // Keep the invocation lock, live grant checks, and project/audit writes in one database function.
             await using var command = new NpgsqlCommand(
                 """
@@ -214,13 +223,16 @@ internal static class P1ProjectSetupEndpoints
                     @tenant_admin_assignment_id,
                     @expected_tenant_admin_assignment_revision)
                 """,
-                connection);
+                connection,
+                transaction);
             AddBindingParameters(command, caller, invocationId, tenantAdminGrant);
             var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             var json = value as string
                 ?? throw new InvalidOperationException("The P1 setup issue function returned no JSON receipt.");
-            return JsonSerializer.Deserialize<P1ProjectSetupFunctionResult>(json, FunctionJsonOptions)
+            var result = JsonSerializer.Deserialize<P1ProjectSetupFunctionResult>(json, FunctionJsonOptions)
                 ?? throw new InvalidOperationException("The P1 setup issue function returned an empty receipt.");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return result;
         }
         catch (PostgresException exception)
         {

@@ -42,15 +42,31 @@ public sealed partial class ProjectsConfigPostgresTests
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
         var grant = Assert.Single(caller.Grants);
         var invocationId = Guid.NewGuid();
+        var orderingBefore = await db.SkillAdmissionFences.AsNoTracking()
+            .Where(item => item.Id == 1)
+            .Select(item => item.Generation)
+            .SingleAsync();
         var issued = await P1ProjectSetupEndpoints.IssueAsync(
             fixture.DataSource, caller, invocationId, grant, CancellationToken.None);
+        Assert.Equal(orderingBefore + 1, await db.SkillAdmissionFences.AsNoTracking()
+            .Where(item => item.Id == 1)
+            .Select(item => item.Generation)
+            .SingleAsync());
         caller = await ResolveCallerAsync(
             db, caller.ActorId, tenantId, ["api.read", "projects.admin", "projects.orchestrator"]);
         var projectId = issued.Receipt.ProjectId;
+        var initialConfiguration = await service.GetProjectConfigurationAsync(
+            caller, projectId, null, CancellationToken.None);
+        var savedConfiguration = await service.UpdateProjectConfigurationAsync(
+            caller,
+            projectId,
+            initialConfiguration.Revision,
+            initialConfiguration.Configuration,
+            CancellationToken.None);
         var runId = "p1-bound-run-" + suffix;
         await service.AcceptInteractiveRunSelectionAsync(
             caller, projectId, runId,
-            new InteractiveRunSelectionRequest(issued.Receipt.ProjectConfigurationRevision),
+            new InteractiveRunSelectionRequest(savedConfiguration.Revision),
             CancellationToken.None);
         await using var app = await StartP1SetupServerAsync(fixture.DataSource);
         using var client = app.GetTestClient();
@@ -386,6 +402,8 @@ public sealed partial class ProjectsConfigPostgresTests
                 $"CREATE ROLE \"{roleName}\" LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT");
             roleCreated = true;
             await ExecuteOwnerSqlAsync($"GRANT USAGE ON SCHEMA projects_config TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, UPDATE ON projects_config.project_skill_admission_fence TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync($"""
                 GRANT EXECUTE ON FUNCTION projects_config.issue_p1_project(
                     uuid, text, text, text, uuid, bigint, uuid, bigint),
@@ -406,10 +424,18 @@ public sealed partial class ProjectsConfigPostgresTests
                 restrictedDataSource, caller, invocationId, adminGrant, CancellationToken.None);
             Assert.Equal(invocationId, issued.Receipt.InvocationId);
             Assert.True(issued.Readback.ProjectExists);
+            var orderingAfterIssue = await db.SkillAdmissionFences.AsNoTracking()
+                .Where(item => item.Id == 1)
+                .Select(item => item.Generation)
+                .SingleAsync();
 
             var replay = await P1ProjectSetupEndpoints.IssueAsync(
                 restrictedDataSource, caller, invocationId, adminGrant, CancellationToken.None);
             Assert.Equal(issued, replay);
+            Assert.Equal(orderingAfterIssue, await db.SkillAdmissionFences.AsNoTracking()
+                .Where(item => item.Id == 1)
+                .Select(item => item.Generation)
+                .SingleAsync());
             var read = await P1ProjectSetupEndpoints.ReadAsync(
                 restrictedDataSource, caller, invocationId, adminGrant, CancellationToken.None);
             Assert.Equal(issued, read);

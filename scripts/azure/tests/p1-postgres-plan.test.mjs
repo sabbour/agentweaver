@@ -558,7 +558,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 154);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 156);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'installation_identity').privileges, ['SELECT']);
   const reservation = projectsConfig.tables.find(table => table.table === 'model_provider_reference_reservations');
@@ -594,8 +594,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [22, 7, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 63);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [23, 7, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 64);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });
