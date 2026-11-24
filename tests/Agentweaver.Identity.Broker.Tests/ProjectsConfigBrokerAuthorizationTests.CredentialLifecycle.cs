@@ -869,17 +869,79 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         // 4. Split-state pending case 1: Projects committed Publish, but Broker claim remains PublicationPending.
         // GET MUST remain publication_pending (not published) and perform zero mutations.
-        await using (var revertClaim = _nativeDataSource.CreateCommand(
-            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'PublicationPending' WHERE operation_id = @op"))
+        using var createSplitPub = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, "/api/v1/platform/byok-providers",
+            adminToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0,
+                name = "Split Pub Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-5",
+                wire_api = "responses",
+                reasoning_efforts = new[] { "high" },
+            });
+        Assert.Equal(HttpStatusCode.OK, createSplitPub.StatusCode);
+        var splitPubProviderId = JsonDocument.Parse(await createSplitPub.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString()!;
+
+        var opSplitPub = Guid.NewGuid();
+        var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        using (var diScope = broker.Services.CreateScope())
         {
-            revertClaim.Parameters.AddWithValue("op", opPublish);
-            Assert.Equal(1, await revertClaim.ExecuteNonQueryAsync());
+            var store = diScope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = diScope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var preflight1 = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opSplitPub, ModelProviderBindingScope.Platform, null, splitPubProviderId,
+                    issuer, adminSub, TenantId, null, null, "draft-snapshot"),
+                CancellationToken.None);
+            var slotId = preflight1.CredentialSlotId ?? Guid.NewGuid();
+            var secretName = $"byok-platform-{splitPubProviderId}";
+            var pubClaim = new ClaimModelProviderCredentialPublication(
+                new ClaimModelProviderCredentialWrite(
+                    opSplitPub, 0, slotId, ModelProviderCredentialScope.Platform, null, splitPubProviderId,
+                    ModelProviderCredentialVaultSource.Byok, secretName, adminSub),
+                1, "credential-publication", issuer, preflight1.ResolvedTenant);
+            _ = await store.ClaimPublicationWriteAsync(pubClaim, CancellationToken.None);
+            await store.MarkPublicationDispatchedAsync(pubClaim, CancellationToken.None);
+            var writtenRef = await fakeVault.WriteVersionAsync(
+                secretName,
+                new SecretCredential("sk-split-pub-11111", DateTimeOffset.UtcNow.AddDays(30)),
+                opSplitPub, slotId, CancellationToken.None);
+            var pending = await store.CompletePublicationWriteAsync(pubClaim, writtenRef, CancellationToken.None);
+            var preflight2 = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opSplitPub, ModelProviderBindingScope.Platform, null, splitPubProviderId,
+                    issuer, adminSub, TenantId, null, null, "draft-snapshot"),
+                CancellationToken.None);
+            _ = await pubClient.PublishAsync(
+                new ModelProviderCredentialPublicationV2Request(
+                    opSplitPub,
+                    preflight2.PreflightId,
+                    1,
+                    ModelProviderBindingScope.Platform,
+                    null,
+                    splitPubProviderId,
+                    writtenRef.Version,
+                    new ModelCredentialIdentity(slotId, ModelProviderBindingScope.Platform, null, splitPubProviderId),
+                    writtenRef,
+                    issuer,
+                    adminSub,
+                    preflight1.ResolvedTenant,
+                    preflight2.MembershipId,
+                    preflight2.MembershipRevision,
+                    TenantId,
+                    null),
+                CancellationToken.None);
         }
+
         var preflightsBeforeSplitPub = await CountRowsAsync(
             projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
         using (var splitPub = await SendCredentialJsonAsync(
             gateway.Client, HttpMethod.Get,
-            $"/api/v1/platform/byok-providers/{platformProviderId}/credential/operations/{opPublish:D}",
+            $"/api/v1/platform/byok-providers/{splitPubProviderId}/credential/operations/{opSplitPub:D}",
             adminToken, null))
         {
             Assert.Equal(HttpStatusCode.OK, splitPub.StatusCode);
@@ -888,28 +950,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         Assert.Equal(preflightsBeforeSplitPub, await CountRowsAsync(
             projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
-        await using (var restoreClaim = _nativeDataSource.CreateCommand(
-            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Published' WHERE operation_id = @op"))
-        {
-            restoreClaim.Parameters.AddWithValue("op", opPublish);
-            Assert.Equal(1, await restoreClaim.ExecuteNonQueryAsync());
-        }
 
         // 5. Split-state pending case 2: Projects committed Disable, but Broker claim remains DisablePending.
-        // GET MUST remain disable_pending (not disabled) and perform zero mutations.
+        // GET MUST remain disable_pending (not disabled) and perform zero mutations; replay completes it.
         var opDisable = Guid.NewGuid();
-        using (var delResp = await SendCredentialJsonAsync(
-            gateway.Client, HttpMethod.Delete,
-            $"/api/v1/platform/byok-providers/{platformProviderId}/credential?operationId={opDisable:D}",
-            adminToken, null))
+        using (var diScope = broker.Services.CreateScope())
         {
-            Assert.Equal(HttpStatusCode.OK, delResp.StatusCode);
-        }
-        await using (var revertDisable = _nativeDataSource.CreateCommand(
-            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'DisablePending' WHERE operation_id = @op"))
-        {
-            revertDisable.Parameters.AddWithValue("op", opDisable);
-            Assert.Equal(1, await revertDisable.ExecuteNonQueryAsync());
+            var store = diScope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = diScope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var disableClaim = await store.ClaimDisableAsync(
+                new ClaimModelProviderCredentialDisable(
+                    opDisable, null, null, ModelProviderCredentialScope.Platform, null, platformProviderId,
+                    adminSub, issuer),
+                CancellationToken.None);
+            _ = await pubClient.DisableAsync(
+                new ModelProviderCredentialDisableRequest(
+                    opDisable, null, disableClaim.OriginalCredentialRevision,
+                    disableClaim.CredentialSlotId, disableClaim.CurrentVersion,
+                    ModelProviderBindingScope.Platform, null, platformProviderId,
+                    issuer, adminSub, TenantId, null),
+                CancellationToken.None);
         }
         var preflightsBeforeSplitDisable = await CountRowsAsync(
             projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
@@ -925,11 +985,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(preflightsBeforeSplitDisable, await CountRowsAsync(
             projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
 
-        await using (var restoreDisable = _nativeDataSource.CreateCommand(
-            "UPDATE identity_broker.model_provider_credential_write_claims SET state = 'Disabled' WHERE operation_id = @op"))
+        using (var finishDisable = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential?operationId={opDisable:D}",
+            adminToken, null))
         {
-            restoreDisable.Parameters.AddWithValue("op", opDisable);
-            Assert.Equal(1, await restoreDisable.ExecuteNonQueryAsync());
+            Assert.Equal(HttpStatusCode.OK, finishDisable.StatusCode);
         }
         using (var disabledStatus = await SendCredentialJsonAsync(
             gateway.Client, HttpMethod.Get,
