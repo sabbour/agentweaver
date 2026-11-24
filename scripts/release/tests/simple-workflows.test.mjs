@@ -3460,15 +3460,40 @@ test('Broker update quiesces identity-broker and projects-config, settles creden
       }),
       /Identity Broker rollback guard blocks/);
 
-    // 4. verifyImageCapability enforces origin/v1 ancestry and source file presence.
-    const v1Sha = run('git', ['rev-parse', 'origin/v1'], { cwd: root }).stdout.trim();
-    const headSha = run('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
-    const headTree = run('git', ['rev-parse', '--verify', `${headSha}^{tree}`], { cwd: root }).stdout.trim();
+    // Both fixture commits are ancestors of the capable origin/v1 tip.
+    const bareOrigin = path.join(directory, 'origin.git');
+    const cloneRepo = path.join(directory, 'repo');
+    assert.equal(run('git', ['init', '--bare', bareOrigin], { cwd: directory }).status, 0);
+    assert.equal(run('git', ['init', '-b', 'v1', cloneRepo], { cwd: directory }).status, 0);
+    assert.equal(run('git', ['config', 'user.name', 'Test'], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['config', 'user.email', 'test@example.com'], { cwd: cloneRepo }).status, 0);
+    const projectsProgram = path.join(cloneRepo, 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Program.cs');
+    const brokerMigrations = path.join(cloneRepo, 'services', 'identity', 'Agentweaver.Identity.Broker', 'Migrations');
+    mkdirSync(path.dirname(projectsProgram), { recursive: true });
+    writeFileSync(projectsProgram, 'var started = true;\n');
+    assert.equal(run('git', ['add', '.'], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['commit', '--no-gpg-sign', '-m', 'pre-capability'], { cwd: cloneRepo }).status, 0);
+    const preCapabilitySha = run('git', ['rev-parse', 'HEAD'], { cwd: cloneRepo }).stdout.trim();
+    const preCapabilityTree = run('git', ['rev-parse', '--verify', `${preCapabilitySha}^{tree}`], { cwd: cloneRepo }).stdout.trim();
+
+    writeFileSync(projectsProgram, 'var settle = "--settle-credential-operations";\n');
+    mkdirSync(brokerMigrations, { recursive: true });
+    writeFileSync(
+      path.join(brokerMigrations, '20261124020000_AddCredentialDisableClaims.cs'),
+      'public partial class AddCredentialDisableClaims {}\n',
+    );
+    assert.equal(run('git', ['add', '.'], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['commit', '--no-gpg-sign', '-m', 'capable'], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['remote', 'add', 'origin', bareOrigin], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['push', 'origin', 'v1'], { cwd: cloneRepo }).status, 0);
+    const capableSha = run('git', ['rev-parse', 'HEAD'], { cwd: cloneRepo }).stdout.trim();
+    const capableTree = run('git', ['rev-parse', '--verify', `${capableSha}^{tree}`], { cwd: cloneRepo }).stdout.trim();
+
     await assert.rejects(
       verifyImageCapability({
         image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
         capability: 'projects-config-settlement',
-        root,
+        root: cloneRepo,
         exec: run,
         readImage: async () => ({ sourceSha: '0'.repeat(40), sourceTree: '0'.repeat(40) }),
       }),
@@ -3477,54 +3502,30 @@ test('Broker update quiesces identity-broker and projects-config, settles creden
       verifyImageCapability({
         image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
         capability: 'projects-config-settlement',
-        root,
+        root: cloneRepo,
         exec: run,
-        readImage: async () => ({ sourceSha: v1Sha, sourceTree: 'f'.repeat(40) }),
+        readImage: async () => ({ sourceSha: capableSha, sourceTree: 'f'.repeat(40) }),
       }),
       /does not match commit/);
     await assert.rejects(
       verifyImageCapability({
         image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
         capability: 'projects-config-settlement',
-        root,
+        root: cloneRepo,
         exec: run,
-        readImage: async () => ({ sourceSha: v1Sha, sourceTree: run('git', ['rev-parse', '--verify', `${v1Sha}^{tree}`], { cwd: root }).stdout.trim() }),
+        readImage: async () => ({ sourceSha: preCapabilitySha, sourceTree: preCapabilityTree }),
       }),
       /does not support --settle-credential-operations/);
     await assert.rejects(
       verifyImageCapability({
         image: `${REGISTRY}/agentweaver.identity.broker@${'a'.repeat(64)}`,
         capability: 'identity-broker-disable-fence',
-        root,
+        root: cloneRepo,
         exec: run,
-        readImage: async () => ({ sourceSha: v1Sha, sourceTree: run('git', ['rev-parse', '--verify', `${v1Sha}^{tree}`], { cwd: root }).stdout.trim() }),
+        readImage: async () => ({ sourceSha: preCapabilitySha, sourceTree: preCapabilityTree }),
       }),
       /database requires AddCredentialDisableClaims/);
-    assert.notEqual(headTree, '');
 
-    // 5. Positive verifyImageCapability path against a real bare origin + commit + tree.
-    const bareOrigin = path.join(directory, 'origin.git');
-    const cloneRepo = path.join(directory, 'repo');
-    assert.equal(run('git', ['init', '--bare', bareOrigin], { cwd: directory }).status, 0);
-    assert.equal(run('git', ['init', '-b', 'v1', cloneRepo], { cwd: directory }).status, 0);
-    assert.equal(run('git', ['config', 'user.name', 'Test'], { cwd: cloneRepo }).status, 0);
-    assert.equal(run('git', ['config', 'user.email', 'test@example.com'], { cwd: cloneRepo }).status, 0);
-    mkdirSync(path.join(cloneRepo, 'services', 'projects-config', 'Agentweaver.Projects.Config'), { recursive: true });
-    mkdirSync(path.join(cloneRepo, 'services', 'identity', 'Agentweaver.Identity.Broker', 'Migrations'), { recursive: true });
-    writeFileSync(
-      path.join(cloneRepo, 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Program.cs'),
-      'var settle = "--settle-credential-operations";\n',
-    );
-    writeFileSync(
-      path.join(cloneRepo, 'services', 'identity', 'Agentweaver.Identity.Broker', 'Migrations', '20261124020000_AddCredentialDisableClaims.cs'),
-      'public partial class AddCredentialDisableClaims {}\n',
-    );
-    assert.equal(run('git', ['add', '.'], { cwd: cloneRepo }).status, 0);
-    assert.equal(run('git', ['commit', '-m', 'capable'], { cwd: cloneRepo }).status, 0);
-    assert.equal(run('git', ['remote', 'add', 'origin', bareOrigin], { cwd: cloneRepo }).status, 0);
-    assert.equal(run('git', ['push', 'origin', 'v1'], { cwd: cloneRepo }).status, 0);
-    const capableSha = run('git', ['rev-parse', 'HEAD'], { cwd: cloneRepo }).stdout.trim();
-    const capableTree = run('git', ['rev-parse', '--verify', `${capableSha}^{tree}`], { cwd: cloneRepo }).stdout.trim();
     await verifyImageCapability({
       image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
       capability: 'projects-config-settlement',
