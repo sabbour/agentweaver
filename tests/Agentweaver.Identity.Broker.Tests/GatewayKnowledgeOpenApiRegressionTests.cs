@@ -361,6 +361,12 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         "rejectKnowledgeProposal",
     ];
 
+    private static readonly string[] OptionalUuidIdempotencyWriteOperationIds =
+    [
+        "setPlatformByokProviderCredential",
+        "setProjectByokProviderCredential",
+    ];
+
     [Fact]
     public async Task ServedOpenApiRequiresIdempotencyKeyOnlyForIdempotentWrites()
     {
@@ -395,6 +401,19 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
                 schema.GetProperty("pattern").GetString());
         }
 
+        foreach (var operationId in OptionalUuidIdempotencyWriteOperationIds)
+        {
+            var operation = FindOperation(paths, operationId);
+            var header = Assert.Single(
+                operation.GetProperty("parameters").EnumerateArray(),
+                parameter => parameter.GetProperty("name").GetString() == "Idempotency-Key");
+            Assert.Equal("header", header.GetProperty("in").GetString());
+            Assert.False(header.GetProperty("required").GetBoolean());
+            var schema = header.GetProperty("schema");
+            Assert.Equal("string", schema.GetProperty("type").GetString());
+            Assert.Equal("uuid", schema.GetProperty("format").GetString());
+        }
+
         var operationsWithIdempotencyKey = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var path in paths.EnumerateObject())
         foreach (var method in path.Value.EnumerateObject())
@@ -405,7 +424,9 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         }
 
         Assert.Equal(
-            IdempotentWriteOperationIds.OrderBy(id => id, StringComparer.Ordinal),
+            IdempotentWriteOperationIds
+                .Concat(OptionalUuidIdempotencyWriteOperationIds)
+                .OrderBy(id => id, StringComparer.Ordinal),
             operationsWithIdempotencyKey);
     }
 
