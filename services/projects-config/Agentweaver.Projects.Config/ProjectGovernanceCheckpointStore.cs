@@ -40,6 +40,25 @@ internal sealed class ProjectGovernanceCheckpointStore(
         CancellationToken cancellationToken)
     {
         ValidateRequest(request);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await CreateOnceAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (PostgresException exception) when (IsRetryableCreateError(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (attempt == 3)
+                    throw;
+            }
+        }
+    }
+
+    private async Task<ProjectGovernanceCheckpointV1> CreateOnceAsync(
+        ProjectGovernanceCheckpointCreateRequest request,
+        CancellationToken cancellationToken)
+    {
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
@@ -122,6 +141,11 @@ internal sealed class ProjectGovernanceCheckpointStore(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return checkpoint;
     }
+
+    private static bool IsRetryableCreateError(PostgresException exception) =>
+        exception.SqlState == PostgresErrorCodes.SerializationFailure ||
+        exception.SqlState == PostgresErrorCodes.UniqueViolation &&
+        exception.ConstraintName == "IX_project_governance_decision_checkpoints_stream_idempotency";
 
     internal async Task<ProjectGovernanceCheckpointExport> ExportAsync(
         Guid checkpointId,

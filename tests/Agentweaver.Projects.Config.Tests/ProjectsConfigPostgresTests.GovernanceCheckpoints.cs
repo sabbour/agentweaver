@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
@@ -75,6 +76,305 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(
             ProjectGovernanceCheckpointVerification.Mismatch,
             await checkpointStore.VerifyRetainedAsync(checkpoint.CheckpointHash, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GovernanceCheckpointCreateReplaysConcurrentInsertRace()
+    {
+        var append = GovernanceAppendRequest(
+            "checkpoint-concurrent-" + Guid.NewGuid().ToString("N"),
+            key: "append-before-checkpoint");
+        await CreateGovernanceDecisionStore().AppendAsync(append, CancellationToken.None);
+        var request = GovernanceCheckpointRequest(append, "concurrent-create");
+        var store = CreateGovernanceCheckpointStore();
+
+        Task<ProjectGovernanceCheckpointV1> first;
+        Task<ProjectGovernanceCheckpointV1> second;
+        Exception? observationFailure = null;
+        await using (var blocker = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await blocker.BeginTransactionAsync())
+        {
+            await using (var lockTable = new NpgsqlCommand(
+                "LOCK TABLE projects_config.project_governance_decision_checkpoints IN SHARE MODE",
+                blocker,
+                transaction))
+                await lockTable.ExecuteNonQueryAsync();
+
+            first = store.CreateAsync(request, CancellationToken.None);
+            second = store.CreateAsync(request, CancellationToken.None);
+            try
+            {
+                await WaitForBlockedCheckpointInsertsAsync(blocker.ProcessID, minimum: 2);
+                Assert.False(first.IsCompleted);
+                Assert.False(second.IsCompleted);
+            }
+            catch (Exception exception)
+            {
+                observationFailure = exception;
+            }
+            finally
+            {
+                await transaction.RollbackAsync();
+            }
+        }
+
+        ProjectGovernanceCheckpointV1[] checkpoints;
+        try
+        {
+            checkpoints = await Task.WhenAll(first, second);
+        }
+        catch (Exception operationFailure)
+        {
+            if (observationFailure is not null)
+                throw new AggregateException(observationFailure, operationFailure);
+            throw;
+        }
+        if (observationFailure is not null)
+            ExceptionDispatchInfo.Capture(observationFailure).Throw();
+
+        await using var observer = await fixture.DataSource.OpenConnectionAsync();
+        await using var stored = new NpgsqlCommand("""
+            SELECT checkpoint_id, checkpoint_hash
+            FROM projects_config.project_governance_decision_checkpoints
+            WHERE scope_type = @scope_type AND scope_id = @scope_id
+              AND resource_type = @resource_type AND resource_id = @resource_id
+              AND idempotency_key = @idempotency_key
+            """, observer);
+        AddCheckpointRequestParameters(stored, request);
+        await using var reader = await stored.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var storedId = reader.GetGuid(0);
+        var storedHash = reader.GetString(1);
+        Assert.False(await reader.ReadAsync());
+        Assert.All(checkpoints, checkpoint => Assert.Equal(storedId, checkpoint.CheckpointId));
+        Assert.All(checkpoints, checkpoint => Assert.Equal(storedHash, checkpoint.CheckpointHash));
+    }
+
+    [Fact]
+    public async Task GovernanceCheckpointCreateRetriesMatchingUniqueConstraintExhaustion()
+    {
+        var append = GovernanceAppendRequest(
+            "checkpoint-unique-" + Guid.NewGuid().ToString("N"),
+            key: "append-before-unique-checkpoint");
+        await CreateGovernanceDecisionStore().AppendAsync(append, CancellationToken.None);
+        var suffix = Guid.NewGuid().ToString("N");
+        var sequence = $"projects_config.test_checkpoint_attempts_{suffix}";
+        var function = $"projects_config.test_checkpoint_unique_{suffix}";
+        var trigger = $"test_checkpoint_unique_{suffix}";
+        var request = GovernanceCheckpointRequest(append, "unique-exhaustion");
+
+        await using var owner = await fixture.DataSource.OpenConnectionAsync();
+        await using (var setup = new NpgsqlCommand($$"""
+            CREATE SEQUENCE {{sequence}};
+            CREATE FUNCTION {{function}}() RETURNS trigger
+            LANGUAGE plpgsql AS $body$
+            BEGIN
+                IF pg_trigger_depth() = 1 THEN
+                    PERFORM nextval('{{sequence}}');
+                    INSERT INTO projects_config.project_governance_decision_checkpoints
+                        (checkpoint_id, scope_type, scope_id, resource_type, resource_id, sequence,
+                         idempotency_key, head_hash, checkpoint_hash, canonical_checkpoint)
+                    VALUES
+                        (gen_random_uuid(), NEW.scope_type, NEW.scope_id, NEW.resource_type, NEW.resource_id,
+                         NEW.sequence, NEW.idempotency_key, NEW.head_hash, NEW.checkpoint_hash,
+                         NEW.canonical_checkpoint);
+                END IF;
+                RETURN NEW;
+            END;
+            $body$;
+            CREATE TRIGGER {{trigger}}
+            BEFORE INSERT ON projects_config.project_governance_decision_checkpoints
+            FOR EACH ROW EXECUTE FUNCTION {{function}}();
+            """, owner))
+            await setup.ExecuteNonQueryAsync();
+        try
+        {
+            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                CreateGovernanceCheckpointStore().CreateAsync(request, CancellationToken.None));
+
+            Assert.Equal(PostgresErrorCodes.UniqueViolation, exception.SqlState);
+            Assert.Equal(
+                "IX_project_governance_decision_checkpoints_stream_idempotency",
+                exception.ConstraintName);
+            await using var readAttempts = new NpgsqlCommand($"SELECT last_value FROM {sequence}", owner);
+            Assert.Equal(3, (long)(await readAttempts.ExecuteScalarAsync())!);
+            await AssertCheckpointRowCountAsync(owner, request, expected: 0);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand($$"""
+                DROP TRIGGER {{trigger}} ON projects_config.project_governance_decision_checkpoints;
+                DROP FUNCTION {{function}}();
+                DROP SEQUENCE {{sequence}};
+                """, owner);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public async Task GovernanceCheckpointCreateRetriesSerializationFailureAtCommit()
+    {
+        var append = GovernanceAppendRequest(
+            "checkpoint-commit-" + Guid.NewGuid().ToString("N"),
+            key: "append-before-commit-checkpoint");
+        await CreateGovernanceDecisionStore().AppendAsync(append, CancellationToken.None);
+        var suffix = Guid.NewGuid().ToString("N");
+        var sequence = $"projects_config.test_checkpoint_attempts_{suffix}";
+        var function = $"projects_config.test_checkpoint_commit_{suffix}";
+        var trigger = $"test_checkpoint_commit_{suffix}";
+        var request = GovernanceCheckpointRequest(append, "commit-exhaustion");
+
+        await using var owner = await fixture.DataSource.OpenConnectionAsync();
+        await using (var setup = new NpgsqlCommand($$"""
+            CREATE SEQUENCE {{sequence}};
+            CREATE FUNCTION {{function}}() RETURNS trigger
+            LANGUAGE plpgsql AS $body$
+            BEGIN
+                PERFORM nextval('{{sequence}}');
+                RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'checkpoint commit error';
+            END;
+            $body$;
+            CREATE CONSTRAINT TRIGGER {{trigger}}
+            AFTER INSERT ON projects_config.project_governance_decision_checkpoints
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION {{function}}();
+            """, owner))
+            await setup.ExecuteNonQueryAsync();
+        try
+        {
+            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                CreateGovernanceCheckpointStore().CreateAsync(request, CancellationToken.None));
+
+            Assert.Equal(PostgresErrorCodes.SerializationFailure, exception.SqlState);
+            await using var readAttempts = new NpgsqlCommand($"SELECT last_value FROM {sequence}", owner);
+            Assert.Equal(3, (long)(await readAttempts.ExecuteScalarAsync())!);
+            await AssertCheckpointRowCountAsync(owner, request, expected: 0);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand($$"""
+                DROP TRIGGER {{trigger}} ON projects_config.project_governance_decision_checkpoints;
+                DROP FUNCTION {{function}}();
+                DROP SEQUENCE {{sequence}};
+                """, owner);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData("P0001", null)]
+    [InlineData("23505", "other_checkpoint_index")]
+    public async Task GovernanceCheckpointCreateDoesNotRetryUnrelatedDatabaseErrors(
+        string sqlState,
+        string? constraint)
+    {
+        var append = GovernanceAppendRequest(
+            "checkpoint-error-" + Guid.NewGuid().ToString("N"),
+            key: "append-before-error-checkpoint");
+        await CreateGovernanceDecisionStore().AppendAsync(append, CancellationToken.None);
+        var suffix = Guid.NewGuid().ToString("N");
+        var sequence = $"projects_config.test_checkpoint_attempts_{suffix}";
+        var function = $"projects_config.test_checkpoint_error_{suffix}";
+        var trigger = $"test_checkpoint_error_{suffix}";
+        var constraintOption = constraint is null
+            ? string.Empty
+            : $", CONSTRAINT = '{constraint}'";
+        var request = GovernanceCheckpointRequest(append, "database-error");
+
+        await using var owner = await fixture.DataSource.OpenConnectionAsync();
+        await using (var setup = new NpgsqlCommand($$"""
+            CREATE SEQUENCE {{sequence}};
+            CREATE FUNCTION {{function}}() RETURNS trigger
+            LANGUAGE plpgsql AS $body$
+            BEGIN
+                PERFORM nextval('{{sequence}}');
+                RAISE EXCEPTION USING
+                    ERRCODE = '{{sqlState}}',
+                    MESSAGE = 'checkpoint test error'{{constraintOption}};
+            END;
+            $body$;
+            CREATE TRIGGER {{trigger}}
+            BEFORE INSERT ON projects_config.project_governance_decision_checkpoints
+            FOR EACH ROW EXECUTE FUNCTION {{function}}();
+            """, owner))
+            await setup.ExecuteNonQueryAsync();
+        try
+        {
+            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                CreateGovernanceCheckpointStore().CreateAsync(request, CancellationToken.None));
+
+            Assert.Equal(sqlState, exception.SqlState);
+            await using var readAttempts = new NpgsqlCommand($"SELECT last_value FROM {sequence}", owner);
+            Assert.Equal(1, (long)(await readAttempts.ExecuteScalarAsync())!);
+            await AssertCheckpointRowCountAsync(owner, request, expected: 0);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand($$"""
+                DROP TRIGGER {{trigger}} ON projects_config.project_governance_decision_checkpoints;
+                DROP FUNCTION {{function}}();
+                DROP SEQUENCE {{sequence}};
+                """, owner);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public async Task GovernanceCheckpointCreateKeepsIdempotencyKeyScopedToTheStream()
+    {
+        var firstRequest = GovernanceCheckpointRequest(
+            GovernanceAppendRequest("checkpoint-stream-first-" + Guid.NewGuid().ToString("N")),
+            "shared-key");
+        var secondRequest = GovernanceCheckpointRequest(
+            GovernanceAppendRequest("checkpoint-stream-second-" + Guid.NewGuid().ToString("N")),
+            "shared-key");
+        var store = CreateGovernanceCheckpointStore();
+
+        var first = await store.CreateAsync(firstRequest, CancellationToken.None);
+        var second = await store.CreateAsync(secondRequest, CancellationToken.None);
+
+        Assert.NotEqual(first.CheckpointId, second.CheckpointId);
+        Assert.NotEqual(first.CheckpointHash, second.CheckpointHash);
+    }
+
+    [Fact]
+    public async Task GovernanceCheckpointCreateRejectsCorruptStoredReplay()
+    {
+        var request = GovernanceCheckpointRequest(
+            GovernanceAppendRequest("checkpoint-corrupt-" + Guid.NewGuid().ToString("N")),
+            "corrupt-replay");
+        var store = CreateGovernanceCheckpointStore();
+        var checkpoint = await store.CreateAsync(request, CancellationToken.None);
+
+        await using var owner = await fixture.DataSource.OpenConnectionAsync();
+        await using (var disable = new NpgsqlCommand(
+            "ALTER TABLE projects_config.project_governance_decision_checkpoints " +
+            "DISABLE TRIGGER project_governance_decision_checkpoints_immutable",
+            owner))
+            await disable.ExecuteNonQueryAsync();
+        try
+        {
+            await using var corrupt = new NpgsqlCommand("""
+                UPDATE projects_config.project_governance_decision_checkpoints
+                SET canonical_checkpoint = @content
+                WHERE checkpoint_id = @checkpoint_id
+                """, owner);
+            corrupt.Parameters.AddWithValue("content", NpgsqlDbType.Bytea, new byte[] { 0 });
+            corrupt.Parameters.AddWithValue("checkpoint_id", checkpoint.CheckpointId);
+            Assert.Equal(1, await corrupt.ExecuteNonQueryAsync());
+        }
+        finally
+        {
+            await using var enable = new NpgsqlCommand(
+                "ALTER TABLE projects_config.project_governance_decision_checkpoints " +
+                "ENABLE TRIGGER project_governance_decision_checkpoints_immutable",
+                owner);
+            await enable.ExecuteNonQueryAsync();
+        }
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.CreateAsync(request, CancellationToken.None));
+        Assert.Equal("The stored governance checkpoint is invalid.", exception.Message);
     }
 
     [Fact]
@@ -216,6 +516,53 @@ public sealed partial class ProjectsConfigPostgresTests
     {
         Assert.True(ProjectGovernanceCheckpointCanonicalJson.TryDeserialize(bytes, out var checkpoint));
         return Assert.IsType<ProjectGovernanceCheckpointV1>(checkpoint);
+    }
+
+    private async Task WaitForBlockedCheckpointInsertsAsync(int blockerProcessId, int minimum)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var observer = await fixture.DataSource.OpenConnectionAsync(timeout.Token);
+        while (true)
+        {
+            await using var blocked = new NpgsqlCommand("""
+                SELECT count(*)
+                FROM pg_stat_activity
+                WHERE @blocker = ANY(pg_blocking_pids(pid))
+                  AND query LIKE '%project_governance_decision_checkpoints%'
+                  AND query LIKE '%INSERT%'
+                """, observer);
+            blocked.Parameters.AddWithValue("blocker", blockerProcessId);
+            if ((long)(await blocked.ExecuteScalarAsync(timeout.Token))! >= minimum)
+                return;
+            await Task.Delay(20, timeout.Token);
+        }
+    }
+
+    private static void AddCheckpointRequestParameters(
+        NpgsqlCommand command,
+        ProjectGovernanceCheckpointCreateRequest request)
+    {
+        command.Parameters.AddWithValue("scope_type", request.ScopeType.ToString());
+        command.Parameters.AddWithValue("scope_id", request.ScopeId);
+        command.Parameters.AddWithValue("resource_type", request.ResourceType);
+        command.Parameters.AddWithValue("resource_id", request.ResourceId);
+        command.Parameters.AddWithValue("idempotency_key", request.IdempotencyKey);
+    }
+
+    private static async Task AssertCheckpointRowCountAsync(
+        NpgsqlConnection connection,
+        ProjectGovernanceCheckpointCreateRequest request,
+        long expected)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT count(*)
+            FROM projects_config.project_governance_decision_checkpoints
+            WHERE scope_type = @scope_type AND scope_id = @scope_id
+              AND resource_type = @resource_type AND resource_id = @resource_id
+              AND idempotency_key = @idempotency_key
+            """, connection);
+        AddCheckpointRequestParameters(command, request);
+        Assert.Equal(expected, (long)(await command.ExecuteScalarAsync())!);
     }
 
     private async Task TamperGovernanceDecisionAsync(string scopeId)
