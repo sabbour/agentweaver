@@ -230,7 +230,9 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
             ["code_verifier"] = verifier,
         }));
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.False((await response.Content.ReadFromJsonAsync<JsonElement>()).TryGetProperty("access_token", out _));
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_grant", body);
+        Assert.DoesNotContain("access_token", body);
     }
 
     [Fact]

@@ -442,20 +442,83 @@ public sealed partial class ProjectsConfigPostgresTests
                 Assert.False(Assert.Single(payload!.Assignments).RefreshEligible);
             }
 
-            // Missing admission row reports refreshEligible: false.
-            await db.SkillContentRevocations
-                .Where(item =>
-                    item.ProjectId == setup.Request.ProjectId &&
-                    item.SkillId == setup.Request.SkillId &&
-                    item.Revision == setup.Request.Revision)
-                .ExecuteDeleteAsync();
-            await db.SkillAdmissions
-                .Where(item =>
-                    item.ProjectId == setup.Request.ProjectId &&
-                    item.SkillId == setup.Request.SkillId &&
-                    item.Revision == setup.Request.Revision)
-                .ExecuteDeleteAsync();
-            using (var noAdmissionReq = new HttpRequestMessage(HttpMethod.Get, inputsPath))
+            // Missing admission row reports refreshEligible: false (insert a ThirdParty revision with no admission row).
+            var noAdmissionCandidate = SkillCandidate(
+                "A sufficiently long Skill instruction without an admission row.",
+                "# No Admission\n");
+            var noAdmissionDigest = service.Preview(noAdmissionCandidate).ContentDigest;
+            db.SkillContentRevisions.Add(new ProjectSkillContentRevisionRecord
+            {
+                ProjectId = setup.Request.ProjectId,
+                SkillId = "no-admission-skill",
+                Revision = 1,
+                Name = "no-admission-skill",
+                Description = "A sufficiently long Skill instruction without an admission row.",
+                ContentDigest = noAdmissionDigest,
+                ObjectKey = "unused-object-key",
+                ResourceCount = 0,
+                TotalBytes = noAdmissionCandidate.SkillMarkdown.Length,
+                CreatedByActorId = setup.Project.Owner.ActorId,
+                CreatedAt = TimeProvider.System.GetUtcNow(),
+                AdmissionClassification = ProjectSkillAdmissionClassification.ThirdParty,
+                SourceAuthorityKind = ProjectSkillSourceAuthorityKind.CallerClaimed,
+            });
+            var noAdmissionConfig = ProjectSettings() with
+            {
+                AgentCharters = [new ProjectAgentCharter("agent-one", "Refresh Agent", "assistant", "Refresh test agent.")],
+                Casting = [new ProjectAgentCast("agent-one", "assistant", 0)],
+                Skills =
+                [
+                    new SkillCatalogSetting("no-admission-skill", true, 0)
+                    {
+                        Revision = 1,
+                        ContentDigest = noAdmissionDigest,
+                        AgentIds = ["agent-one"],
+                    },
+                ],
+            };
+            var noAdmissionConfigRev = 999L;
+            db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
+            {
+                ProjectId = setup.Request.ProjectId,
+                Revision = noAdmissionConfigRev,
+                ConfigurationJson = ProjectsConfigService.SerializeProjectConfiguration(noAdmissionConfig),
+                UpdatedByActorId = setup.Project.Owner.ActorId,
+                CreatedAt = TimeProvider.System.GetUtcNow(),
+            });
+            var noAdmissionRunId = "no-admission-run-" + setup.Project.Suffix;
+            var noAdmissionSelection = new EffectiveRunSelection(
+                setup.Request.ProjectId,
+                noAdmissionRunId,
+                setup.Project.Project.Revision,
+                noAdmissionConfigRev,
+                setup.Project.PlatformDefaultsRevision,
+                "refresh-context",
+                new ModelSelectionSettings("refresh-model"),
+                [],
+                [],
+                new CopilotRunLimits(),
+                noAdmissionConfig,
+                [],
+                null,
+                []);
+            db.RunSelections.Add(new ProjectRunSelectionRecord
+            {
+                RunId = noAdmissionRunId,
+                ProjectId = setup.Request.ProjectId,
+                ProjectRevision = setup.Project.Project.Revision,
+                ProjectConfigurationRevision = noAdmissionConfigRev,
+                PlatformRuntimeRevision = setup.Project.PlatformDefaultsRevision,
+                ContextRevision = "refresh-context",
+                RequestFingerprint = new string('b', 64),
+                SnapshotJson = ProjectsConfigService.SerializeRunSelection(noAdmissionSelection),
+                CreatedAt = TimeProvider.System.GetUtcNow(),
+            });
+            await db.SaveChangesAsync();
+
+            var noAdmissionPath =
+                $"/api/projects/{setup.Request.ProjectId}/runs/{noAdmissionRunId}/agents/agent-one/skills/refresh-inputs";
+            using (var noAdmissionReq = new HttpRequestMessage(HttpMethod.Get, noAdmissionPath))
             {
                 noAdmissionReq.Headers.Add("X-Test-Sub", setup.Project.Owner.ActorId);
                 noAdmissionReq.Headers.Add("X-Test-Actor-Class", "human");
