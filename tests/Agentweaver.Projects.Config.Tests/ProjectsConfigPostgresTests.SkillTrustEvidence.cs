@@ -396,12 +396,21 @@ public sealed partial class ProjectsConfigPostgresTests
 
             var initialConfig = await configService.GetProjectConfigurationAsync(
                 setup.Project.Owner, setup.Project.Project.ProjectId, null, CancellationToken.None);
-            var agentId = initialConfig.Configuration.Casting[0].AgentId;
+            var agentId = "agent-one";
+            var castConfig = await configService.UpdateProjectConfigurationAsync(
+                setup.Project.Owner,
+                setup.Project.Project.ProjectId,
+                initialConfig.Revision,
+                initialConfig.Configuration with
+                {
+                    Casting = [new ProjectAgentCast(agentId, "assistant", 0)],
+                },
+                CancellationToken.None);
             var updatedConfig = await setup.Skills.UpdateAsync(
                 setup.Project.Owner,
                 setup.Project.Project.ProjectId,
                 new SkillAssignmentUpdateRequest(
-                    initialConfig.Revision,
+                    castConfig.Revision,
                     setup.Imported.SkillId,
                     setup.Imported.Revision,
                     setup.Imported.ContentDigest,
@@ -570,10 +579,11 @@ public sealed partial class ProjectsConfigPostgresTests
 
             var initialConfig = await configService.GetProjectConfigurationAsync(
                 setup.Project.Owner, setup.Project.Project.ProjectId, null, CancellationToken.None);
-            var agentId = initialConfig.Configuration.Casting[0].AgentId;
+            var agentId = "agent-one";
             var runId = "run-legacy-scan-" + setup.Project.Suffix;
             var configWithMalicious = initialConfig.Configuration with
             {
+                Casting = [new ProjectAgentCast(agentId, "assistant", 0)],
                 Skills =
                 [
                     new SkillCatalogSetting("legacy-malicious", true, 0)
