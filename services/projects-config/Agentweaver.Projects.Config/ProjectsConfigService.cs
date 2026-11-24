@@ -402,6 +402,8 @@ public sealed partial class ProjectsConfigService
         {
             try
             {
+                _ = await new SkillAdmissionService(db, timeProvider)
+                    .LockFenceAsync(cancellationToken).ConfigureAwait(false);
                 await ProjectRoleAssignmentService.LockCurrentTenantAdminAsync(
                     db, caller, adminGrant, projectId, cancellationToken).ConfigureAwait(false);
                 var membership = await db.TenantMemberships.AsNoTracking()
@@ -657,62 +659,71 @@ public sealed partial class ProjectsConfigService
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
-        var project = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
+        _ = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
             .ConfigureAwait(false);
-        if (project.State != ProjectLifecycleState.Active)
-            throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
-        if (project.ConfigurationRevision != expectedRevision)
-            throw ProjectConfigException.Conflict("The project configuration revision has changed.");
-        var currentRevision = await db.ProjectConfigurationRevisions.AsNoTracking()
-            .SingleOrDefaultAsync(
-                record => record.ProjectId == project.ProjectId &&
-                    record.Revision == project.ConfigurationRevision,
-                cancellationToken)
-            .ConfigureAwait(false)
-            ?? throw ProjectConfigException.NotFound();
-        var previous = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
-        ArgumentNullException.ThrowIfNull(configuration);
-        RejectSubmittedProviderOverrides(configuration);
-        configuration = KeepStoredProviderOverrides(previous, configuration);
-        var normalized = await SkillContentService.ValidateConfigurationAsync(
-            db,
-            project.ProjectId,
-            previous,
-            configuration,
-            skillContentObjects,
-            timeProvider,
-            skillPolicyEvaluator,
-            cancellationToken).ConfigureAwait(false);
-        if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
-            reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
-            throw new ProjectConfigException(
-                "invalid_configuration",
-                "Reviewed remote tool snapshot references must belong to this project.",
-                (int)HttpStatusCode.BadRequest);
-
-        await EnsureProjectNarrowingAsync(normalized, cancellationToken).ConfigureAwait(false);
-        var now = timeProvider.GetUtcNow();
-        var nextRevision = checked(project.ConfigurationRevision + 1);
-        db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
-        {
-            ProjectId = project.ProjectId,
-            Revision = nextRevision,
-            ConfigurationJson = Serialize(normalized),
-            UpdatedByActorId = caller.ActorId,
-            CreatedAt = now,
-        });
-        project.ConfigurationRevision = nextRevision;
-        project.UpdatedAt = now;
+        db.ChangeTracker.Clear();
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            .ConfigureAwait(false);
         try
         {
+            _ = await new SkillAdmissionService(db, timeProvider)
+                .LockFenceAsync(cancellationToken).ConfigureAwait(false);
+            var project = await LockCastingProjectAndAuthorityAsync(
+                db, caller, projectId, write: true, cancellationToken).ConfigureAwait(false);
+            if (project.State != ProjectLifecycleState.Active)
+                throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
+            if (project.ConfigurationRevision != expectedRevision)
+                throw ProjectConfigException.Conflict("The project configuration revision has changed.");
+            var currentRevision = await db.ProjectConfigurationRevisions.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    record => record.ProjectId == project.ProjectId &&
+                        record.Revision == project.ConfigurationRevision,
+                    cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw ProjectConfigException.NotFound();
+            var previous = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+            ArgumentNullException.ThrowIfNull(configuration);
+            RejectSubmittedProviderOverrides(configuration);
+            configuration = KeepStoredProviderOverrides(previous, configuration);
+            var normalized = await SkillContentService.ValidateConfigurationAsync(
+                db,
+                project.ProjectId,
+                previous,
+                configuration,
+                skillContentObjects,
+                timeProvider,
+                skillPolicyEvaluator,
+                cancellationToken).ConfigureAwait(false);
+            if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
+                reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
+                throw new ProjectConfigException(
+                    "invalid_configuration",
+                    "Reviewed remote tool snapshot references must belong to this project.",
+                    (int)HttpStatusCode.BadRequest);
+
+            await EnsureProjectNarrowingAsync(normalized, cancellationToken).ConfigureAwait(false);
+            var now = timeProvider.GetUtcNow();
+            var nextRevision = checked(project.ConfigurationRevision + 1);
+            db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
+            {
+                ProjectId = project.ProjectId,
+                Revision = nextRevision,
+                ConfigurationJson = Serialize(normalized),
+                UpdatedByActorId = caller.ActorId,
+                CreatedAt = now,
+            });
+            project.ConfigurationRevision = nextRevision;
+            project.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new VersionedProjectConfiguration(
+                project.ProjectId, nextRevision, normalized, caller.ActorId, now);
         }
         catch (DbUpdateConcurrencyException)
         {
             throw ProjectConfigException.Conflict("The project configuration revision has changed.");
         }
-
-        return new VersionedProjectConfiguration(project.ProjectId, nextRevision, normalized, caller.ActorId, now);
     }
 
     /// <summary>Returns the current platform defaults to a caller with a current platform-admin role.</summary>
@@ -904,6 +915,15 @@ public sealed partial class ProjectsConfigService
         ArgumentNullException.ThrowIfNull(request);
         ValidateSelectionContext(request.Context);
         var originalRequest = request;
+        _ = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Orchestrator,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+        db.ChangeTracker.Clear();
 
         for (var attempt = 0; ; attempt++)
         {
@@ -945,6 +965,8 @@ public sealed partial class ProjectsConfigService
         await using var transaction = await context.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
+        _ = await new SkillAdmissionService(context, timeProvider)
+            .LockFenceAsync(cancellationToken).ConfigureAwait(false);
         // Lock mutable authority and revision heads before computing the snapshot, and serialize all writers for this run ID.
         await LockRunSelectionInputsAsync(context, caller, projectId, runId, cancellationToken).ConfigureAwait(false);
         if (!await HasCurrentRoleAsync(
@@ -2929,6 +2951,9 @@ public sealed partial class ProjectsConfigService
     internal static T Deserialize<T>(string value) =>
         JsonSerializer.Deserialize<T>(value, JsonOptions)
         ?? throw new InvalidOperationException($"Stored Projects & Config JSON could not be read as {typeof(T).Name}.");
+
+    internal static string SerializeRunSelection(EffectiveRunSelection selection) =>
+        Serialize(selection);
 
     private static JsonSerializerOptions CreateJsonOptions()
     {

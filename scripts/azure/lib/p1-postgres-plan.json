@@ -242,6 +242,54 @@
           ]
         },
         {
+          "table": "project_skill_refresh_receipts",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_skill_refresh_receipts_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_skill_refresh_receipts_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
+          "table": "project_skill_refresh_audit_intents",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "project_skill_refresh_audit_intents_immutable",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 27,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "project_skill_refresh_audit_intents_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
           "table": "project_role_assignments",
           "privileges": [
             "SELECT",
@@ -748,6 +796,10 @@
         },
         {
           "signature": "stamp_governance_decision_transaction_id()",
+          "execute": false
+        },
+        {
+          "signature": "bump_skill_admission_ordering()",
           "execute": false
         },
         {

@@ -419,6 +419,10 @@ public sealed partial class ProjectsConfigService
 
         return ExecuteCastingProposalTransactionAsync(async (context, token) =>
         {
+            await RequireCastingAuthorityBeforeFenceAsync(
+                context, caller, projectId, token).ConfigureAwait(false);
+            _ = await new SkillAdmissionService(context, timeProvider)
+                .LockFenceAsync(token).ConfigureAwait(false);
             var project = await LockCastingProjectAndAuthorityAsync(
                 context, caller, projectId, write: true, token).ConfigureAwait(false);
             var proposal = await LockCastingProposalAsync(context, project.ProjectId, proposalId, token)
@@ -655,6 +659,56 @@ public sealed partial class ProjectsConfigService
         return await context.Projects.SingleAsync(
             project => project.ProjectId == projectId,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task RequireCastingAuthorityBeforeFenceAsync(
+        ProjectsConfigDbContext context,
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var project = await context.Projects.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ProjectId == projectId, cancellationToken)
+            .ConfigureAwait(false);
+        if (project is null || project.TenantId != caller.TenantId)
+            throw ProjectConfigException.NotFound();
+        var membership = await context.TenantMemberships.AsNoTracking().AnyAsync(
+            item =>
+                item.MembershipId == caller.MembershipId &&
+                item.Issuer == caller.Issuer &&
+                item.Subject == caller.ActorId &&
+                item.TenantId == caller.TenantId &&
+                item.Revision == caller.MembershipRevision &&
+                item.State == ProjectAuthorityRecordState.Active,
+            cancellationToken).ConfigureAwait(false);
+        if (!membership)
+            throw ProjectConfigException.Forbidden();
+        var grantIds = caller.Grants
+            .Where(grant =>
+                grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                grant.ResourceId == projectId &&
+                grant.Role == ProjectAuthorityRole.Owner ||
+                grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                grant.ResourceId == caller.TenantId &&
+                grant.Role == ProjectAuthorityRole.TenantAdmin)
+            .Select(grant => grant.AssignmentId)
+            .ToArray();
+        var grants = await context.RoleAssignments.AsNoTracking()
+            .Where(item =>
+                grantIds.Contains(item.AssignmentId) &&
+                item.MembershipId == caller.MembershipId &&
+                item.State == ProjectAuthorityRecordState.Active)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (!caller.Grants.Any(grant =>
+                grantIds.Contains(grant.AssignmentId) &&
+                grants.Any(current =>
+                    current.AssignmentId == grant.AssignmentId &&
+                    current.Revision == grant.Revision &&
+                    current.ResourceType == grant.ResourceType &&
+                    current.ResourceId == grant.ResourceId &&
+                    current.Role == grant.Role)))
+            throw ProjectConfigException.Forbidden();
     }
 
     /// <summary>Locks one proposal row within its owning project before a transition or draft update.</summary>

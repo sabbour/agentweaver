@@ -1323,6 +1323,8 @@ public sealed class P1PostgresInitializerTests
                     null,
                     null),
                 AppendOnlyTable("project_skill_admissions"),
+                AppendOnlyTable("project_skill_refresh_receipts"),
+                AppendOnlyTable("project_skill_refresh_audit_intents"),
                 new TablePlan(
                     "project_skill_builtin_releases",
                     ["SELECT"],

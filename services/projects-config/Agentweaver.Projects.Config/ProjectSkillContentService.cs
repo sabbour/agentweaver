@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Data;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -61,6 +62,7 @@ public sealed class SkillContentService(
     public const int MaxInventoryPageSize = SkillMarketplaceBrowseService.MaxPageSize;
 
     private const int InventoryCursorVersion = 1;
+    private static readonly TimeSpan RefreshPersistenceTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MaximumSkillEvidenceAge = TimeSpan.FromDays(30);
     private const string InventoryCursorOrder = "skillId-ascending,revision-descending";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
@@ -72,6 +74,7 @@ public sealed class SkillContentService(
         bool,
         CancellationToken,
         Task>? EvaluateSkillsPolicyOverride { get; set; }
+    internal Func<CancellationToken, Task>? AfterSkillRefreshStagedOverride { get; set; }
 
     /// <summary>Validates candidate bytes and returns metadata without writing storage or database state.</summary>
     public SkillContentPreview Preview(SkillContentCandidate candidate)
@@ -332,6 +335,7 @@ public sealed class SkillContentService(
             {
                 var finalFence = await _admission.LockFenceForReadAsync(cancellationToken)
                     .ConfigureAwait(false);
+                var evaluatedAt = timeProvider.GetUtcNow();
                 var finalPolicy = await _admission.ReadPolicySnapshotAsync(
                     projectId, lockHeads: true, cancellationToken).ConfigureAwait(false);
                 await LockSkillRevisionForReadAsync(
@@ -370,7 +374,7 @@ public sealed class SkillContentService(
                         .ConfigureAwait(false)
                     : null;
                 if (finalFence.State != ProjectSkillAdmissionFenceState.Active ||
-                    finalAdmission.CutoverGeneration != finalFence.Generation ||
+                    finalAdmission.CutoverGeneration != finalFence.CutoverGeneration ||
                     (finalRelease is not null &&
                      finalRelease.InventoryRevision != finalFence.ReleaseInventoryRevision))
                     throw SkillAdmissionService.AdmissionUnavailable(
@@ -384,7 +388,7 @@ public sealed class SkillContentService(
                 SkillAdmissionService.RequirePassingAdmission(
                     finalAdmission, finalEvidence, finalPolicy, finalSource, finalRelease, finalRevoked);
                 ValidateRuntimeEvidence(
-                    finalAdmission, finalEvidence, lockedContent, verified, timeProvider.GetUtcNow());
+                    finalAdmission, finalEvidence, lockedContent, verified, evaluatedAt);
                 await EvaluateSkillsPolicyAsync(
                     projectId,
                     finalPolicy,
@@ -396,7 +400,7 @@ public sealed class SkillContentService(
                     builtInExempt: finalAdmission.Classification ==
                         ProjectSkillAdmissionClassification.BuiltInExempt,
                     cancellationToken).ConfigureAwait(false);
-                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, timeProvider.GetUtcNow());
+                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, evaluatedAt);
                 await EnsureInventoryAccessAsync(caller, projectId, cancellationToken)
                     .ConfigureAwait(false);
                 if (await db.SkillContentRevocations.AsNoTracking().AnyAsync(
@@ -406,7 +410,7 @@ public sealed class SkillContentService(
                     cancellationToken).ConfigureAwait(false))
                     throw SkillContentServiceException.Conflict(
                         "The Skill revision was revoked during trust projection.");
-                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, timeProvider.GetUtcNow());
+                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, evaluatedAt);
 
                 var finalBuiltIn = finalAdmission.Classification ==
                     ProjectSkillAdmissionClassification.BuiltInExempt;
@@ -671,7 +675,7 @@ public sealed class SkillContentService(
                 SkillId = skillId,
                 Revision = revision,
                 EvidenceId = evidence.EvidenceId,
-                CutoverGeneration = fence.Generation,
+                CutoverGeneration = fence.CutoverGeneration,
                 Classification = revisionRecord.AdmissionClassification,
                 SourceAuthorityKind = revisionRecord.SourceAuthorityKind,
                 VerifiedSourceId = ownerProvenance?.Source.SourceId.ToString("D"),
@@ -784,6 +788,503 @@ public sealed class SkillContentService(
         return new ProjectSkillTrustEvidenceInput(stored, content);
     }
 
+    internal async Task<ProjectSkillRefreshStart> BeginRefreshAsync(
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateRefreshRequest(caller, request);
+        await EnsureWriteAccessAsync(caller, request.ProjectId, cancellationToken).ConfigureAwait(false);
+        await RequireAcceptedRefreshAssignmentAsync(request, cancellationToken).ConfigureAwait(false);
+        var fingerprint = RefreshRequestFingerprint(caller, request);
+        var evidence = await db.SkillTrustEvidence.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ProjectId == request.ProjectId &&
+                item.ActorIssuer == caller.Issuer &&
+                item.ActorId == caller.ActorId &&
+                item.IdempotencyKey == request.IdempotencyKey,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (evidence is not null)
+        {
+            var requestCancellationToken = cancellationToken;
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken);
+            deadline.CancelAfter(RefreshPersistenceTimeout);
+            cancellationToken = deadline.Token;
+            IDbContextTransaction? transaction = null;
+            try
+            {
+                transaction = await db.Database
+                    .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+                    .ConfigureAwait(false);
+                await db.Database.ExecuteSqlRawAsync(
+                        "SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '15s'",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                await LockCurrentSkillWriteAuthorityAsync(caller, request.ProjectId, cancellationToken)
+                    .ConfigureAwait(false);
+                var activeProject = await db.Projects
+                    .FromSqlInterpolated($"""
+                        SELECT project_id, tenant_id, created_by_actor_id, name, state, revision,
+                               configuration_revision, created_at, updated_at
+                        FROM projects_config.projects
+                        WHERE project_id = {request.ProjectId}
+                          AND tenant_id = {caller.TenantId}
+                        FOR SHARE
+                        """)
+                    .SingleOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (activeProject is null)
+                    throw ProjectConfigException.NotFound();
+                if (activeProject.State != ProjectLifecycleState.Active)
+                    throw ProjectConfigException.Conflict("Archived projects cannot refresh Skill evidence.");
+                await RequireAcceptedRefreshAssignmentAsync(request, cancellationToken).ConfigureAwait(false);
+                var lockedEvidence = await db.SkillTrustEvidence.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.EvidenceId == evidence.EvidenceId, cancellationToken)
+                    .ConfigureAwait(false);
+                var lockedReceipt = lockedEvidence is null
+                    ? null
+                    : await db.SkillRefreshReceipts.AsNoTracking()
+                        .SingleOrDefaultAsync(
+                            item => item.EvidenceId == lockedEvidence.EvidenceId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                if (lockedReceipt is null)
+                    throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
+                var replay = ReadRefreshReceipt(lockedReceipt, caller, request, fingerprint);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return new ProjectSkillRefreshStart(null, replay);
+            }
+            catch (Exception exception) when (IsRefreshSerializationFailure(exception))
+            {
+                await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+                throw SkillContentServiceException.Conflict(
+                    "The Skill refresh replay conflicted with a concurrent update.");
+            }
+            catch (Exception exception) when (
+                !requestCancellationToken.IsCancellationRequested &&
+                (IsRefreshUnavailableFailure(exception) || deadline.IsCancellationRequested))
+            {
+                await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+                throw SkillContentServiceException.Unavailable(
+                    "The Skill refresh replay timed out or could not obtain a required lock.");
+            }
+            finally
+            {
+                if (transaction is not null)
+                    await transaction.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        return new ProjectSkillRefreshStart(
+            new ProjectSkillRefreshPreparation(request, fingerprint),
+            null);
+    }
+
+    internal async Task<ProjectSkillRefreshReceipt> PersistRefreshAsync(
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshPreparation preparation,
+        ProjectSkillContentRevisionRecord revisionSnapshot,
+        ValidatedSkillContent content,
+        byte[] reportSetJson,
+        string reportSetSha256,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(preparation);
+        ArgumentNullException.ThrowIfNull(revisionSnapshot);
+        var request = preparation.Request;
+        ValidateRefreshRequest(caller, request);
+        if (preparation.RequestFingerprint != RefreshRequestFingerprint(caller, request) ||
+            reportSetJson is null || reportSetJson.Length is 0 or > 1_048_576 ||
+            Hash(reportSetJson) != reportSetSha256)
+            throw SkillContentServiceException.Invalid("The prepared Skill refresh is invalid.");
+
+        var requestCancellationToken = cancellationToken;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken);
+        deadline.CancelAfter(RefreshPersistenceTimeout);
+        cancellationToken = deadline.Token;
+        IDbContextTransaction? transaction = null;
+        try
+        {
+            transaction = await db.Database
+                .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+                .ConfigureAwait(false);
+            await db.Database.ExecuteSqlRawAsync(
+                    "SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '15s'",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+            await LockCurrentSkillWriteAuthorityAsync(caller, request.ProjectId, cancellationToken)
+                .ConfigureAwait(false);
+            var project = await db.Projects
+                .FromSqlInterpolated($"""
+                    SELECT project_id, tenant_id, created_by_actor_id, name, state, revision,
+                           configuration_revision, created_at, updated_at
+                    FROM projects_config.projects
+                    WHERE project_id = {request.ProjectId}
+                      AND tenant_id = {caller.TenantId}
+                    FOR SHARE
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw ProjectConfigException.NotFound();
+            if (project.State != ProjectLifecycleState.Active)
+                throw ProjectConfigException.Conflict("Archived projects cannot refresh Skill evidence.");
+            await RequireAcceptedRefreshAssignmentAsync(request, cancellationToken).ConfigureAwait(false);
+
+            // Read Committed needs this fresh statement after the fence wait; the tracked preparation is not reused.
+            var keyEvidence = await db.SkillTrustEvidence.AsNoTracking()
+                .SingleOrDefaultAsync(item =>
+                    item.ProjectId == request.ProjectId &&
+                    item.ActorIssuer == caller.Issuer &&
+                    item.ActorId == caller.ActorId &&
+                    item.IdempotencyKey == request.IdempotencyKey,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var keyReceipt = keyEvidence is null
+                ? null
+                : await db.SkillRefreshReceipts.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.EvidenceId == keyEvidence.EvidenceId, cancellationToken)
+                    .ConfigureAwait(false);
+            if (keyEvidence is not null && keyReceipt is null)
+                throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
+            if (keyReceipt is not null)
+            {
+                var replay = ReadRefreshReceipt(
+                    keyReceipt, caller, request, preparation.RequestFingerprint);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return replay;
+            }
+
+            if (fence.State != ProjectSkillAdmissionFenceState.Active)
+                throw SkillAdmissionService.AdmissionUnavailable(
+                    "Skill admission is not active for evidence refresh.");
+            var policy = await _admission.ReadPolicySnapshotAsync(
+                request.ProjectId, lockHeads: true, cancellationToken).ConfigureAwait(false);
+            RequireExpectedPolicy(request, policy);
+
+            await LockSkillRevisionAsync(
+                request.ProjectId, request.SkillId, request.Revision, cancellationToken)
+                .ConfigureAwait(false);
+            var current = await db.SkillContentRevisions.AsNoTracking()
+                .SingleOrDefaultAsync(item =>
+                    item.ProjectId == request.ProjectId &&
+                    item.SkillId == request.SkillId &&
+                    item.Revision == request.Revision &&
+                    item.ContentDigest == request.ContentDigest,
+                    cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw ProjectConfigException.NotFound();
+            if (!SameSourceMetadata(revisionSnapshot, current))
+                throw SkillContentServiceException.Conflict(
+                    "The stored Skill source metadata changed during scanning.");
+            if (await db.SkillContentRevocations.AsNoTracking().AnyAsync(item =>
+                    item.ProjectId == request.ProjectId &&
+                    item.SkillId == request.SkillId &&
+                    item.Revision == request.Revision,
+                    cancellationToken).ConfigureAwait(false))
+                throw SkillContentServiceException.Conflict("The selected Skill revision was revoked.");
+
+            var priorAdmission = await db.SkillAdmissions.AsNoTracking()
+                .Where(item =>
+                    item.ProjectId == request.ProjectId &&
+                    item.SkillId == request.SkillId &&
+                    item.Revision == request.Revision)
+                .OrderByDescending(item => item.CreatedAt)
+                .ThenByDescending(item => item.AdmissionId)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw SkillAdmissionService.AdmissionDenied(
+                    "The Skill revision has no prior admission classification.");
+            if (priorAdmission.Classification == ProjectSkillAdmissionClassification.LegacyThirdParty)
+                throw SkillAdmissionService.AdmissionDenied(
+                    "The legacy Skill classification is not eligible for refresh.");
+
+            var source = priorAdmission.VerifiedSourceId is not null &&
+                Guid.TryParse(priorAdmission.VerifiedSourceId, out var sourceId)
+                ? await LockMarketplaceSourceAsync(request.ProjectId, sourceId, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+            var release = priorAdmission.ReleaseId is { } releaseId
+                ? await LockBuiltInReleaseAsync(releaseId, cancellationToken).ConfigureAwait(false)
+                : null;
+            RequireMatchingRefreshSource(current, priorAdmission, source, release, fence);
+
+            var observedAt = ToPostgresTimestampPrecision(timeProvider.GetUtcNow());
+            if (observedAt < priorAdmission.CreatedAt)
+                throw SkillContentServiceException.Conflict(
+                    "The Skill refresh clock moved backward before persistence.");
+            var persistedAt = priorAdmission.CreatedAt >= observedAt
+                ? priorAdmission.CreatedAt.AddTicks(10)
+                : observedAt;
+            var reports = ReadRefreshReports(reportSetJson, reportSetSha256);
+            SkillContentScanAdmission.RequirePassingReports(
+                CreateRefreshScanInputs(current, content),
+                reports,
+                DateTimeOffset.MinValue,
+                observedAt.AddMicroseconds(1));
+            var score = SkillTrustScore.Compute(
+                content.Description,
+                priorAdmission.Classification == ProjectSkillAdmissionClassification.BuiltInExempt
+                    ? release?.SignatureSha256 is not null
+                    : false,
+                !content.CapabilityRequests.IsEmpty);
+            await EvaluateSkillsPolicyAsync(
+                    request.ProjectId,
+                    policy,
+                    score,
+                    evidenceComplete: reports.All(item => item.Status == PromptContentScanStatus.Completed),
+                    builtInExempt: priorAdmission.Classification ==
+                        ProjectSkillAdmissionClassification.BuiltInExempt,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var evidence = new ProjectSkillTrustEvidenceRecord
+            {
+                EvidenceId = Guid.NewGuid(),
+                ProjectId = current.ProjectId,
+                SkillId = current.SkillId,
+                Revision = current.Revision,
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                IdempotencyKey = request.IdempotencyKey,
+                RequestFingerprint = preparation.RequestFingerprint,
+                ContentDigest = current.ContentDigest,
+                SourceId = current.SourceId,
+                SourceRevision = current.SourceRevision,
+                RequestedRef = current.RequestedRef,
+                ResolvedCommitSha = current.ResolvedCommitSha,
+                SelectedPath = current.SelectedPath,
+                ReportSetJson = reportSetJson,
+                ReportSetSha256 = reportSetSha256,
+                ScoreStatus = score.Status,
+                HeuristicScore = score.Value,
+                TrustTier = score.Tier,
+                SignatureVerified = score.SignatureVerified,
+                CapabilityDeclarationValid = score.CapabilityDeclarationValid,
+                ShortDescription = score.ShortDescription,
+                CreatedAt = observedAt,
+            };
+            var admission = new ProjectSkillAdmissionRecord
+            {
+                AdmissionId = Guid.NewGuid(),
+                ProjectId = current.ProjectId,
+                SkillId = current.SkillId,
+                Revision = current.Revision,
+                EvidenceId = evidence.EvidenceId,
+                CutoverGeneration = fence.CutoverGeneration,
+                Classification = priorAdmission.Classification,
+                SourceAuthorityKind = priorAdmission.SourceAuthorityKind,
+                VerifiedSourceId = priorAdmission.VerifiedSourceId,
+                VerifiedSourceRevision = priorAdmission.VerifiedSourceRevision,
+                VerifiedRequestedRef = priorAdmission.VerifiedRequestedRef,
+                VerifiedResolvedCommitSha = priorAdmission.VerifiedResolvedCommitSha,
+                VerifiedSelectedPath = priorAdmission.VerifiedSelectedPath,
+                ReleaseId = release?.ReleaseId,
+                TrustedPublisherId = release?.TrustedPublisherId,
+                SignatureSha256 = release?.SignatureSha256,
+                PlatformPolicyId = policy.PlatformPolicyId,
+                PlatformPolicyRevision = policy.PlatformPolicyRevision,
+                PlatformPolicySha256 = policy.PlatformPolicySha256,
+                ProjectPolicyId = policy.ProjectPolicyId,
+                ProjectPolicyRevision = policy.ProjectPolicyRevision,
+                ProjectPolicySha256 = policy.ProjectPolicySha256,
+                CreatedAt = persistedAt,
+            };
+            var receipt = new ProjectSkillRefreshReceiptRecord
+            {
+                ReceiptId = Guid.NewGuid(),
+                ProjectId = request.ProjectId,
+                RunId = request.RunId,
+                AgentId = request.AgentId,
+                SkillId = request.SkillId,
+                Revision = request.Revision,
+                ContentDigest = request.ContentDigest,
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                IdempotencyKey = request.IdempotencyKey,
+                RequestFingerprint = preparation.RequestFingerprint,
+                EvidenceId = evidence.EvidenceId,
+                AdmissionId = admission.AdmissionId,
+                PlatformPolicyId = policy.PlatformPolicyId,
+                PlatformPolicyRevision = policy.PlatformPolicyRevision,
+                PlatformPolicySha256 = policy.PlatformPolicySha256,
+                ProjectPolicyId = policy.ProjectPolicyId,
+                ProjectPolicyRevision = policy.ProjectPolicyRevision,
+                ProjectPolicySha256 = policy.ProjectPolicySha256,
+                ObservedAt = observedAt,
+                CreatedAt = observedAt,
+            };
+            var eligibleRoleGrants = caller.Grants
+                .Where(grant =>
+                    grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                    grant.ResourceId == request.ProjectId &&
+                    grant.Role == ProjectAuthorityRole.Owner ||
+                    grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                    grant.ResourceId == caller.TenantId &&
+                    grant.Role == ProjectAuthorityRole.TenantAdmin)
+                .ToArray();
+            var eligibleRoleGrantIds = eligibleRoleGrants
+                .Select(grant => grant.AssignmentId)
+                .ToArray();
+            var activeRoleAssignments = await db.RoleAssignments.AsNoTracking()
+                .Where(current =>
+                    eligibleRoleGrantIds.Contains(current.AssignmentId) &&
+                    current.MembershipId == caller.MembershipId &&
+                    current.State == ProjectAuthorityRecordState.Active)
+                .Select(current => new
+                {
+                    current.AssignmentId,
+                    current.Revision,
+                    current.ResourceType,
+                    current.ResourceId,
+                    current.Role,
+                })
+                .ToArrayAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var checkedRoleRevisions = eligibleRoleGrants
+                .Where(grant => activeRoleAssignments.Any(current =>
+                    current.AssignmentId == grant.AssignmentId &&
+                    current.Revision == grant.Revision &&
+                    current.ResourceType == grant.ResourceType &&
+                    current.ResourceId == grant.ResourceId &&
+                    current.Role == grant.Role))
+                .Select(grant => new { grant.AssignmentId, grant.Revision })
+                .ToArray();
+            if (checkedRoleRevisions.Length == 0)
+                throw ProjectConfigException.Forbidden();
+            var audit = new ProjectSkillRefreshAuditIntentRecord
+            {
+                AuditIntentId = Guid.NewGuid(),
+                ReceiptId = receipt.ReceiptId,
+                EvidenceId = evidence.EvidenceId,
+                AdmissionId = admission.AdmissionId,
+                ProjectId = request.ProjectId,
+                TenantId = caller.TenantId,
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                MembershipId = caller.MembershipId,
+                MembershipRevision = caller.MembershipRevision,
+                EffectiveRoleRevisionsJson = JsonSerializer.Serialize(
+                    checkedRoleRevisions,
+                    JsonOptions),
+                Reason = request.Reason.Trim(),
+                CorrelationId = request.CorrelationId,
+                CreatedAt = observedAt,
+            };
+            db.SkillTrustEvidence.Add(evidence);
+            db.SkillAdmissions.Add(admission);
+            db.SkillRefreshReceipts.Add(receipt);
+            db.SkillRefreshAuditIntents.Add(audit);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (AfterSkillRefreshStagedOverride is { } afterStaged)
+                await afterStaged(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return ToRefreshReceipt(receipt, replayed: false);
+        }
+        catch (Exception exception) when (IsRefreshSerializationFailure(exception))
+        {
+            await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+            throw SkillContentServiceException.Conflict(
+                "The Skill refresh conflicted with a concurrent update.");
+        }
+        catch (DbUpdateException exception) when (IsRefreshKeyViolation(exception))
+        {
+            await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+            throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
+        }
+        catch (Exception exception) when (
+            !requestCancellationToken.IsCancellationRequested &&
+            (IsRefreshUnavailableFailure(exception) || deadline.IsCancellationRequested))
+        {
+            await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+            throw SkillContentServiceException.Unavailable(
+                "The Skill refresh database operation timed out or could not obtain a required lock.");
+        }
+        finally
+        {
+            if (transaction is not null)
+                await transaction.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    internal async Task<ProjectSkillRefreshReceipt> ResolveRefreshPreparationFailureAsync(
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshPreparation preparation,
+        Exception preparationFailure,
+        CancellationToken cancellationToken)
+    {
+        var request = preparation.Request;
+        var requestCancellationToken = cancellationToken;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken);
+        deadline.CancelAfter(RefreshPersistenceTimeout);
+        cancellationToken = deadline.Token;
+        IDbContextTransaction? transaction = null;
+        Exception? preparationFailureToRethrow = null;
+        try
+        {
+            transaction = await db.Database
+                .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+                .ConfigureAwait(false);
+            await db.Database.ExecuteSqlRawAsync(
+                    "SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '15s'",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+            await LockCurrentSkillWriteAuthorityAsync(caller, request.ProjectId, cancellationToken)
+                .ConfigureAwait(false);
+            await RequireAcceptedRefreshAssignmentAsync(request, cancellationToken).ConfigureAwait(false);
+            var evidence = await db.SkillTrustEvidence.AsNoTracking()
+                .SingleOrDefaultAsync(item =>
+                    item.ProjectId == request.ProjectId &&
+                    item.ActorIssuer == caller.Issuer &&
+                    item.ActorId == caller.ActorId &&
+                    item.IdempotencyKey == request.IdempotencyKey,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var receipt = evidence is null
+                ? null
+                : await db.SkillRefreshReceipts.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.EvidenceId == evidence.EvidenceId, cancellationToken)
+                    .ConfigureAwait(false);
+            if (evidence is not null && receipt is null)
+                throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
+            if (receipt is not null)
+            {
+                var replay = ReadRefreshReceipt(
+                    receipt, caller, request, preparation.RequestFingerprint);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return replay;
+            }
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            transaction = null;
+            preparationFailureToRethrow = preparationFailure;
+        }
+        catch (Exception exception) when (IsRefreshSerializationFailure(exception))
+        {
+            await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+            throw SkillContentServiceException.Conflict(
+                "The Skill refresh preparation recovery conflicted with a concurrent update.");
+        }
+        catch (Exception exception) when (
+            !requestCancellationToken.IsCancellationRequested &&
+            (IsRefreshUnavailableFailure(exception) || deadline.IsCancellationRequested))
+        {
+            await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+            throw SkillContentServiceException.Unavailable(
+                "The Skill refresh preparation recovery timed out or could not obtain a required lock.");
+        }
+        finally
+        {
+            if (transaction is not null)
+                await transaction.DisposeAsync().ConfigureAwait(false);
+        }
+        if (preparationFailureToRethrow is not null)
+            ExceptionDispatchInfo.Capture(preparationFailureToRethrow).Throw();
+        throw new InvalidOperationException();
+    }
+
     internal async Task<ProjectSkillTrustEvidenceSaveResult> PersistTrustEvidenceAsync(
         ProjectAuthorizationContext caller,
         ProjectSkillContentRevisionRecord revisionSnapshot,
@@ -807,15 +1308,11 @@ public sealed class SkillContentService(
         await EnsureWriteAccessAsync(caller, revisionSnapshot.ProjectId, cancellationToken).ConfigureAwait(false);
 
         await using var transaction = await db.Database
-            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
             .ConfigureAwait(false);
         var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
-        var policy = fence.State == ProjectSkillAdmissionFenceState.Active
-            ? await _admission.ReadPolicySnapshotAsync(
-                    revisionSnapshot.ProjectId, lockHeads: true, cancellationToken)
-                .ConfigureAwait(false)
-            : null;
-        await EnsureWriteAccessAsync(caller, revisionSnapshot.ProjectId, cancellationToken).ConfigureAwait(false);
+        await LockCurrentSkillWriteAuthorityAsync(
+            caller, revisionSnapshot.ProjectId, cancellationToken).ConfigureAwait(false);
         var current = await FindAvailableRevisionAsync(
             revisionSnapshot.ProjectId,
             revisionSnapshot.SkillId,
@@ -835,6 +1332,10 @@ public sealed class SkillContentService(
             .ConfigureAwait(false);
         if (existing is not null)
         {
+            if (await db.SkillRefreshReceipts.AsNoTracking()
+                    .AnyAsync(item => item.EvidenceId == existing.EvidenceId, cancellationToken)
+                    .ConfigureAwait(false))
+                throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
             if (existing.SkillId != current.SkillId ||
                 existing.Revision != current.Revision ||
                 existing.ContentDigest != current.ContentDigest ||
@@ -850,6 +1351,11 @@ public sealed class SkillContentService(
             return new ProjectSkillTrustEvidenceSaveResult(existing, Replayed: true);
         }
 
+        var policy = fence.State == ProjectSkillAdmissionFenceState.Active
+            ? await _admission.ReadPolicySnapshotAsync(
+                    revisionSnapshot.ProjectId, lockHeads: true, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
         var release = fence.State == ProjectSkillAdmissionFenceState.Active &&
             current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified &&
             current.ResolvedCommitSha is not null &&
@@ -960,7 +1466,7 @@ public sealed class SkillContentService(
                     SkillId = priorAdmission.SkillId,
                     Revision = priorAdmission.Revision,
                     EvidenceId = record.EvidenceId,
-                    CutoverGeneration = fence.Generation,
+                    CutoverGeneration = fence.CutoverGeneration,
                     Classification = priorAdmission.Classification,
                     SourceAuthorityKind = priorAdmission.SourceAuthorityKind,
                     VerifiedSourceId = priorAdmission.VerifiedSourceId,
@@ -1027,9 +1533,11 @@ public sealed class SkillContentService(
         await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
 
         await using var transaction = await db.Database
-            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
             .ConfigureAwait(false);
-        _ = await _admission.LockFenceForReadAsync(cancellationToken).ConfigureAwait(false);
+        var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+        await LockCurrentSkillWriteAuthorityAsync(caller, projectId, cancellationToken)
+            .ConfigureAwait(false);
         await LockSkillRevisionAsync(projectId, skillId, revision, cancellationToken)
             .ConfigureAwait(false);
         var content = await db.SkillContentRevisions.AsNoTracking()
@@ -1058,6 +1566,7 @@ public sealed class SkillContentService(
             Reason = reason.Trim(),
             RevokedAt = timeProvider.GetUtcNow(),
         });
+        fence.Generation = checked(fence.Generation + 1);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -1174,6 +1683,7 @@ public sealed class SkillContentService(
             .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
             .ConfigureAwait(false);
         var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+        var evaluatedAt = timeProvider.GetUtcNow();
         if (fence.State == ProjectSkillAdmissionFenceState.Draining)
             throw SkillAdmissionService.AdmissionUnavailable(
                 "Skill runtime admission is draining for cutover.");
@@ -1216,13 +1726,16 @@ public sealed class SkillContentService(
                     .ConfigureAwait(false) ??
                     throw SkillAdmissionService.AdmissionDenied(
                         "The Skill revision has no cutover admission binding.");
+                if (admission.CutoverGeneration != fence.CutoverGeneration)
+                    throw SkillAdmissionService.AdmissionUnavailable(
+                        "The Skill admission fence does not match the current cutover.");
                 var evidence = await db.SkillTrustEvidence.AsNoTracking().SingleOrDefaultAsync(
                         item => item.EvidenceId == admission.EvidenceId,
                         cancellationToken)
                     .ConfigureAwait(false) ??
                     throw SkillAdmissionService.AdmissionUnavailable(
                         "The required Skill admission evidence is unavailable.");
-                ValidateRuntimeEvidence(admission, evidence, revision, verified, timeProvider.GetUtcNow());
+                ValidateRuntimeEvidence(admission, evidence, revision, verified, evaluatedAt);
                 ProjectMarketplaceSourceRecord? source = null;
                 if (admission.VerifiedSourceId is not null &&
                     Guid.TryParse(admission.VerifiedSourceId, out var sourceId))
@@ -1252,7 +1765,7 @@ public sealed class SkillContentService(
                             ProjectSkillAdmissionClassification.BuiltInExempt,
                         cancellationToken)
                     .ConfigureAwait(false);
-                RequireFreshRuntimeEvidence(evidence.CreatedAt, timeProvider.GetUtcNow());
+                RequireFreshRuntimeEvidence(evidence.CreatedAt, evaluatedAt);
                 admitted.Add((admission, evidence, verified));
             }
             await EnsureCurrentRunAuthorityAsync(caller, projectId, runId, cancellationToken)
@@ -1312,11 +1825,11 @@ public sealed class SkillContentService(
                             ProjectSkillAdmissionClassification.BuiltInExempt,
                         cancellationToken)
                     .ConfigureAwait(false);
-                RequireFreshRuntimeEvidence(evidence.CreatedAt, timeProvider.GetUtcNow());
+                RequireFreshRuntimeEvidence(evidence.CreatedAt, evaluatedAt);
             }
         }
         foreach (var (_, evidence, _) in admitted)
-            RequireFreshRuntimeEvidence(evidence.CreatedAt, timeProvider.GetUtcNow());
+            RequireFreshRuntimeEvidence(evidence.CreatedAt, evaluatedAt);
         await admissionRead.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result.ToImmutable();
     }
@@ -1505,7 +2018,8 @@ public sealed class SkillContentService(
                 connection,
                 transaction);
             if (await fenceExists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
-                fence = await admissionService.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+                fence = await admissionService.LockFenceAsync(cancellationToken)
+                    .ConfigureAwait(false);
         }
         finally
         {
@@ -1797,6 +2311,56 @@ public sealed class SkillContentService(
         left.ResolvedCommitSha == right.ResolvedCommitSha &&
         left.SelectedPath == right.SelectedPath;
 
+    private static bool IsRefreshKeyViolation(DbUpdateException exception) =>
+        exception.InnerException is PostgresException postgres &&
+        postgres.SqlState == PostgresErrorCodes.UniqueViolation &&
+        postgres.ConstraintName is
+            "ux_project_skill_trust_evidence_idempotency" or
+            "ux_project_skill_refresh_receipts_idempotency";
+
+    private static bool IsRefreshSerializationFailure(Exception exception) =>
+        FindPostgresException(exception) is { } postgres &&
+        postgres.SqlState is PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.DeadlockDetected;
+
+    private static bool IsRefreshUnavailableFailure(Exception exception) =>
+        HasTimeoutException(exception) ||
+        exception is OperationCanceledException ||
+        FindPostgresException(exception) is
+        {
+            SqlState: PostgresErrorCodes.LockNotAvailable or
+                PostgresErrorCodes.QueryCanceled or
+                "55P03"
+        };
+
+    private static bool HasTimeoutException(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+            if (current is TimeoutException)
+                return true;
+        return false;
+    }
+
+    private static PostgresException? FindPostgresException(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+            if (current is PostgresException postgres)
+                return postgres;
+        return null;
+    }
+
+    private static async Task RollbackRefreshAsync(IDbContextTransaction? transaction)
+    {
+        if (transaction is null)
+            return;
+        try
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
     /// <summary>Returns a saved import receipt only when actor, key, and complete request digest all match.</summary>
     private static SkillContentImportReceipt ReadIdempotentReceipt(
         ProjectSkillImportIdempotencyRecord existing,
@@ -1932,6 +2496,300 @@ public sealed class SkillContentService(
         if (string.IsNullOrWhiteSpace(reason) || reason.Length > 2000 ||
             reason.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t')))
             throw SkillContentServiceException.Invalid("A bounded human-readable revocation reason is required.");
+    }
+
+    private static void ValidateRefreshRequest(
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        RequireProjectId(request.ProjectId);
+        RequireIdentifier(request.RunId, nameof(request.RunId));
+        RequireIdentifier(request.AgentId, nameof(request.AgentId));
+        RequireIdentifier(request.SkillId, nameof(request.SkillId));
+        if (request.Revision <= 0)
+            throw SkillContentServiceException.Invalid("Skill revision must be positive.");
+        RequireHash(request.ContentDigest);
+        RequireIdempotencyKey(request.IdempotencyKey);
+        ValidateReason(request.Reason);
+        RequireIdentifier(request.CorrelationId, nameof(request.CorrelationId));
+        if (request.CorrelationId.Length > 128)
+            throw SkillContentServiceException.Invalid("The correlation identifier is too long.");
+        ValidatePolicyPin(request.ExpectedPlatformPolicy, nameof(request.ExpectedPlatformPolicy));
+        if (request.ExpectedProjectPolicy is not null)
+            ValidatePolicyPin(request.ExpectedProjectPolicy, nameof(request.ExpectedProjectPolicy));
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireUnboundRequest();
+        caller.RequireResourceBinding(request.ProjectId);
+    }
+
+    private static void ValidatePolicyPin(ProjectSkillRefreshPolicyPin pin, string name)
+    {
+        if (pin is null || string.IsNullOrWhiteSpace(pin.PolicyId) || pin.PolicyId.Length > 256 ||
+            pin.Revision <= 0)
+            throw SkillContentServiceException.Invalid($"'{name}' is invalid.");
+        RequireHash(pin.ContentSha256);
+    }
+
+    private string RefreshRequestFingerprint(
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshRequest request) =>
+        Hash(JsonSerializer.SerializeToUtf8Bytes(
+            new
+            {
+                Operation = "project-skill-refresh",
+                Version = 1,
+                TenantId = caller.TenantId,
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                request.ProjectId,
+                request.RunId,
+                request.AgentId,
+                request.SkillId,
+                request.Revision,
+                request.ContentDigest,
+                request.ExpectedPlatformPolicy,
+                request.ExpectedProjectPolicy,
+                request.IdempotencyKey,
+                request.Reason,
+                request.CorrelationId,
+            },
+            JsonOptions));
+
+    private async Task RequireAcceptedRefreshAssignmentAsync(
+        ProjectSkillRefreshRequest request,
+        CancellationToken cancellationToken)
+    {
+        var selection = await db.RunSelections.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ProjectId == request.ProjectId && item.RunId == request.RunId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (selection is null)
+            throw ProjectConfigException.NotFound();
+        var accepted = Deserialize<EffectiveRunSelection>(selection.SnapshotJson);
+        if (accepted.ProjectId != request.ProjectId ||
+            accepted.RunId != request.RunId ||
+            accepted.ProjectConfigurationRevision != selection.ProjectConfigurationRevision)
+            throw SkillContentServiceException.Conflict(
+                "The accepted Skill configuration binding is inconsistent.");
+        var configuration = ProjectConfigurationValidator.Validate(accepted.ProjectConfiguration);
+        if (!configuration.Casting.Any(agent => agent.AgentId == request.AgentId))
+            throw ProjectConfigException.NotFound();
+        var assignments = configuration.Skills
+            .Where(item =>
+                item.Enabled &&
+                item.AgentIds is { } agentIds &&
+                agentIds.Contains(request.AgentId, StringComparer.Ordinal))
+            .OrderBy(item => item.Order)
+            .ThenBy(item => item.SkillId, StringComparer.Ordinal)
+            .ToArray();
+        if (assignments.Length > SkillRuntimeContentContract.MaxSkillCount ||
+            assignments.Count(item =>
+                item.SkillId == request.SkillId &&
+                item.Revision == request.Revision &&
+                item.ContentDigest == request.ContentDigest) != 1)
+            throw ProjectConfigException.NotFound();
+    }
+
+    private async Task LockCurrentSkillWriteAuthorityAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT projects_config.lock_casting_authority(
+                @membership_id, @issuer, @subject, @tenant_id, @membership_revision, @project_id, true)
+            """,
+            connection,
+            transaction))
+        {
+            command.Parameters.AddWithValue("membership_id", caller.MembershipId);
+            command.Parameters.AddWithValue("issuer", caller.Issuer);
+            command.Parameters.AddWithValue("subject", caller.ActorId);
+            command.Parameters.AddWithValue("tenant_id", caller.TenantId);
+            command.Parameters.AddWithValue("membership_revision", caller.MembershipRevision);
+            command.Parameters.AddWithValue("project_id", projectId);
+            if (!string.Equals(
+                    await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string,
+                    "authorized",
+                    StringComparison.Ordinal))
+                throw ProjectConfigException.Forbidden();
+        }
+        var eligibleGrantIds = caller.Grants
+            .Where(grant =>
+                grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                grant.ResourceId == projectId &&
+                grant.Role == ProjectAuthorityRole.Owner ||
+                grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                grant.ResourceId == caller.TenantId &&
+                grant.Role == ProjectAuthorityRole.TenantAdmin)
+            .Select(grant => grant.AssignmentId)
+            .ToArray();
+        var locked = await db.RoleAssignments.AsNoTracking()
+            .Where(grant =>
+                eligibleGrantIds.Contains(grant.AssignmentId) &&
+                grant.MembershipId == caller.MembershipId &&
+                grant.State == ProjectAuthorityRecordState.Active)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (!caller.Grants.Any(grant =>
+                eligibleGrantIds.Contains(grant.AssignmentId) &&
+                locked.Any(current =>
+                    current.AssignmentId == grant.AssignmentId &&
+                    current.Revision == grant.Revision &&
+                    current.ResourceType == grant.ResourceType &&
+                    current.ResourceId == grant.ResourceId &&
+                    current.Role == grant.Role)))
+            throw ProjectConfigException.Forbidden();
+    }
+
+    private static ProjectSkillRefreshReceipt ReadRefreshReceipt(
+        ProjectSkillRefreshReceiptRecord receipt,
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshRequest request,
+        string fingerprint)
+    {
+        if (receipt.ActorIssuer != caller.Issuer ||
+            receipt.ActorId != caller.ActorId ||
+            receipt.ProjectId != request.ProjectId ||
+            receipt.RunId != request.RunId ||
+            receipt.AgentId != request.AgentId ||
+            receipt.SkillId != request.SkillId ||
+            receipt.Revision != request.Revision ||
+            receipt.ContentDigest != request.ContentDigest ||
+            receipt.IdempotencyKey != request.IdempotencyKey ||
+            receipt.RequestFingerprint != fingerprint)
+            throw SkillContentServiceException.TrustEvidenceIdempotencyConflict();
+        return ToRefreshReceipt(receipt, replayed: true);
+    }
+
+    private static ProjectSkillRefreshReceipt ToRefreshReceipt(
+        ProjectSkillRefreshReceiptRecord receipt,
+        bool replayed) =>
+        new(
+            receipt.EvidenceId,
+            receipt.AdmissionId,
+            new ProjectSkillRefreshPolicyPin(
+                receipt.PlatformPolicyId,
+                receipt.PlatformPolicyRevision,
+                receipt.PlatformPolicySha256),
+            receipt.ProjectPolicyId is null
+                ? null
+                : new ProjectSkillRefreshPolicyPin(
+                    receipt.ProjectPolicyId,
+                    receipt.ProjectPolicyRevision!.Value,
+                    receipt.ProjectPolicySha256!),
+            receipt.ObservedAt,
+            replayed);
+
+    private static void RequireExpectedPolicy(
+        ProjectSkillRefreshRequest request,
+        SkillAdmissionPolicySnapshot policy)
+    {
+        if (request.ExpectedPlatformPolicy.PolicyId != policy.PlatformPolicyId ||
+            request.ExpectedPlatformPolicy.Revision != policy.PlatformPolicyRevision ||
+            request.ExpectedPlatformPolicy.ContentSha256 != policy.PlatformPolicySha256 ||
+            !EqualsPolicyPin(request.ExpectedProjectPolicy, policy))
+            throw SkillContentServiceException.Conflict("The expected Skills policy pin changed.");
+    }
+
+    private static bool EqualsPolicyPin(
+        ProjectSkillRefreshPolicyPin? expected,
+        SkillAdmissionPolicySnapshot policy) =>
+        expected is null
+            ? policy.ProjectPolicyId is null &&
+              policy.ProjectPolicyRevision is null &&
+              policy.ProjectPolicySha256 is null
+            : expected.PolicyId == policy.ProjectPolicyId &&
+              expected.Revision == policy.ProjectPolicyRevision &&
+              expected.ContentSha256 == policy.ProjectPolicySha256;
+
+    private static void RequireMatchingRefreshSource(
+        ProjectSkillContentRevisionRecord current,
+        ProjectSkillAdmissionRecord prior,
+        ProjectMarketplaceSourceRecord? source,
+        ProjectSkillBuiltInReleaseRecord? release,
+        ProjectSkillAdmissionFenceRecord fence)
+    {
+        if (prior.SourceAuthorityKind != current.SourceAuthorityKind ||
+            current.AdmissionClassification != prior.Classification)
+            throw SkillContentServiceException.Conflict("The stored Skill source binding changed.");
+        if (current.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.CallerClaimed)
+        {
+            if (source is not null || release is not null)
+                throw SkillContentServiceException.Conflict("The caller-claimed Skill source binding changed.");
+            return;
+        }
+        if (prior.VerifiedSourceId != current.SourceId ||
+            prior.VerifiedSourceRevision != current.SourceRevision ||
+            prior.VerifiedRequestedRef != current.RequestedRef ||
+            prior.VerifiedResolvedCommitSha != current.ResolvedCommitSha ||
+            prior.VerifiedSelectedPath != current.SelectedPath)
+            throw SkillContentServiceException.Conflict("The stored Skill source proof changed.");
+        if (source is null ||
+            source.SourceId.ToString("D") != current.SourceId ||
+            source.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture) !=
+                current.SourceRevision ||
+            source.State != ProjectMarketplaceSourceState.Active ||
+            source.RequestedRef != current.RequestedRef)
+            throw SkillContentServiceException.Conflict("The verified Skill source is no longer active.");
+        if (prior.Classification == ProjectSkillAdmissionClassification.BuiltInExempt)
+        {
+            if (release is null ||
+                !release.IsActive ||
+                release.InventoryRevision != fence.ReleaseInventoryRevision ||
+                release.Repository != source.Repository ||
+                release.ResolvedCommitSha != current.ResolvedCommitSha ||
+                release.SelectedPath != current.SelectedPath ||
+                release.ContentDigest != current.ContentDigest ||
+                release.TrustedPublisherId != prior.TrustedPublisherId ||
+                release.SignatureSha256 != prior.SignatureSha256 ||
+                string.IsNullOrWhiteSpace(release.SignatureSha256))
+                throw SkillContentServiceException.Conflict(
+                    "The verified Skill release proof is no longer active.");
+        }
+    }
+
+    private static ImmutableArray<PromptContentScanInput> CreateRefreshScanInputs(
+        ProjectSkillContentRevisionRecord revision,
+        ValidatedSkillContent content) =>
+        SkillContentScanAdmission.CreateInputs(
+            content,
+            SkillContentScanAdmission.StoredOwnerId(revision.ProjectId, revision.SkillId),
+            revision.Revision,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? PromptContentScanProvenance.Git
+                : PromptContentScanProvenance.Authored,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? revision.SourceRevision
+                : null,
+            revision.SourceAuthorityKind == ProjectSkillSourceAuthorityKind.MarketplaceVerified
+                ? revision.ResolvedCommitSha
+                : null);
+
+    private static ImmutableArray<PromptContentScanReportV1> ReadRefreshReports(
+        byte[] reportSetJson,
+        string reportSetSha256)
+    {
+        if (Hash(reportSetJson) != reportSetSha256)
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The prepared Skill admission evidence hash is invalid.");
+        try
+        {
+            return JsonSerializer.Deserialize<ImmutableArray<PromptContentScanReportV1>>(
+                reportSetJson, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw SkillAdmissionService.AdmissionUnavailable(
+                "The prepared Skill admission evidence is corrupt.");
+        }
     }
 
     private static void RequireProjectId(string projectId)

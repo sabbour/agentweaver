@@ -44,6 +44,7 @@ public sealed class ProjectSkillAdmissionFenceRecord
     public int Id { get; set; }
     public ProjectSkillAdmissionFenceState State { get; set; }
     public long Generation { get; set; }
+    public long CutoverGeneration { get; set; }
     public string? ReleaseInventoryRevision { get; set; }
     public string? PlatformSkillsPolicySha256 { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

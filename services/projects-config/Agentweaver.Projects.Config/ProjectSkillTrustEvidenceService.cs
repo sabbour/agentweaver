@@ -10,12 +10,84 @@ namespace Agentweaver.Projects.Config;
 
 internal sealed class ProjectSkillTrustEvidenceService(
     SkillContentService skills,
-    ProjectGovernanceDecisionStore decisions)
+    ProjectGovernanceDecisionStore decisions,
+    TimeProvider? timeProvider = null)
 {
     private const int FingerprintVersion = 1;
     private const int MaximumReportSetBytes = 1_048_576;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private static readonly PromptDefenseEvaluator Evaluator = new();
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    internal Func<CancellationToken, Task>? AfterRefreshInitialMissOverride { get; set; }
+
+    internal Task<ProjectSkillRefreshReceipt> RefreshAsync(
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshRequest request,
+        CancellationToken cancellationToken) =>
+        RefreshAsync(caller, request, Evaluator.Evaluate, cancellationToken);
+
+    internal async Task<ProjectSkillRefreshReceipt> RefreshAsync(
+        ProjectAuthorizationContext caller,
+        ProjectSkillRefreshRequest request,
+        Func<string, PromptDefenseReport> evaluate,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(evaluate);
+        var start = await skills.BeginRefreshAsync(caller, request, cancellationToken)
+            .ConfigureAwait(false);
+        if (start.Replay is not null)
+            return start.Replay;
+        var preparation = start.Preparation ??
+            throw new InvalidOperationException("The Skill refresh start state is incomplete.");
+        if (AfterRefreshInitialMissOverride is { } afterMiss)
+            await afterMiss(cancellationToken).ConfigureAwait(false);
+
+        ProjectSkillTrustEvidenceInput input;
+        ValidatedSkillContent content;
+        byte[] reportSetJson;
+        try
+        {
+            input = await skills.ReadTrustEvidenceInputAsync(
+                    caller,
+                    request.ProjectId,
+                    request.SkillId,
+                    request.Revision,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (input.Revision.ContentDigest != request.ContentDigest)
+                throw SkillContentServiceException.Conflict(
+                    "The immutable Skill revision digest changed during refresh preparation.");
+            var scanStartedAt = _timeProvider.GetUtcNow();
+            var reports = PromptContentScanner.ScanSet(
+                CreateScanInputs(request.ProjectId, input.Revision, input.Content),
+                evaluate);
+            var scanCompletedAt = _timeProvider.GetUtcNow();
+            if (reports.Any(report => report.EvaluatedAt < scanStartedAt || report.EvaluatedAt > scanCompletedAt))
+                throw SkillAdmissionService.AdmissionUnavailable(
+                    "The Skill scan report timestamp is outside its scan window.");
+            reportSetJson = JsonSerializer.SerializeToUtf8Bytes(reports, JsonOptions);
+            if (reportSetJson.Length > MaximumReportSetBytes)
+                throw SkillAdmissionService.AdmissionUnavailable(
+                    "The Skill scan report set exceeds its storage limit.");
+            content = input.Content;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return await skills.ResolveRefreshPreparationFailureAsync(
+                    caller, preparation, exception, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return await skills.PersistRefreshAsync(
+                caller,
+                preparation,
+                input.Revision,
+                content,
+                reportSetJson,
+                Hash(reportSetJson),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     internal Task<ProjectSkillTrustEvidenceReceipt> CreateAsync(
         ProjectAuthorizationContext caller,
@@ -44,9 +116,9 @@ internal sealed class ProjectSkillTrustEvidenceService(
         var input = await skills.ReadTrustEvidenceInputAsync(
             caller, projectId, skillId, revision, cancellationToken).ConfigureAwait(false);
         var scanInputs = CreateScanInputs(projectId, input.Revision, input.Content);
-        var scanStartedAt = DateTimeOffset.UtcNow;
+        var scanStartedAt = _timeProvider.GetUtcNow();
         var reports = PromptContentScanner.ScanSet(scanInputs, evaluate);
-        var scanCompletedAt = DateTimeOffset.UtcNow;
+        var scanCompletedAt = _timeProvider.GetUtcNow();
         if (reports.Any(report => report.EvaluatedAt < scanStartedAt || report.EvaluatedAt > scanCompletedAt))
             throw new InvalidOperationException("The Skill scan report timestamp is outside its scan window.");
 

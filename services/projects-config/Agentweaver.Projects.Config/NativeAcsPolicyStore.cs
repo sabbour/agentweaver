@@ -51,6 +51,12 @@ internal sealed class NativeAcsPolicyStore(
 
         try
         {
+        var skillAdmissionFence = request.Artifact.Files.Any(file =>
+            string.Equals(file.RelativePath, SkillAdmissionService.SkillsPolicyDataPath,
+                StringComparison.Ordinal))
+            ? await new SkillAdmissionService(db, timeProvider)
+                .LockFenceAsync(cancellationToken).ConfigureAwait(false)
+            : null;
         var authorizingGrant = await LockAndCheckAuthorityAsync(
             db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
         // Check current database authority before returning a saved receipt for a retry.
@@ -179,6 +185,8 @@ internal sealed class NativeAcsPolicyStore(
             CorrelationId = request.CorrelationId,
             CreatedAt = now,
         });
+        if (skillAdmissionFence is not null)
+            skillAdmissionFence.Generation = checked(skillAdmissionFence.Generation + 1);
         db.NativeAcsPolicyOutbox.Add(new NativeAcsPolicyOutboxRecord
         {
             OutboxId = outboxId,
