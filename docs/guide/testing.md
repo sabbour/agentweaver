@@ -712,6 +712,25 @@ verified result import and hold release, rejection with the hold retained, and
 one-time import on retry. Do not run these PostgreSQL tests locally. Controlled
 tests do not prove a live Environment or Host recovery.
 
+## Test governance checkpoint create replay
+
+The Projects Config PostgreSQL tests hold a `SHARE` lock on the governance
+checkpoint table while two serializable create transactions reach their
+inserts. The test observes both blocked backends through `pg_blocking_pids`,
+then releases the lock. Both calls must return the same checkpoint ID and hash,
+and PostgreSQL must contain one row for the stream and idempotency key. The same
+test project also checks retry exhaustion, unrelated error propagation, stream
+scoping, later-head replay, corrupt stored data, and export recovery.
+
+Run the focused tests from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~GovernanceCheckpoint"
+```
+
+These tests use Testcontainers PostgreSQL. They require a Docker-compatible
+container engine.
+
 The prepared-native-child recovery cases also run only in hosted PostgreSQL
 CI. They cover immutable-origin supersession, ready-commit rollback and replay,
 ordinary replacement accounting, verified checkpoint descendants,
