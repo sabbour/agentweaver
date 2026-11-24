@@ -154,8 +154,15 @@ migration Job and fails closed if it is missing.
 The Broker migration Job applies EF migrations and the reviewed runtime grants.
 It then creates the exact migrated CLI registration when missing, adds the
 registered-scope permission to an exact prior registration, or stops on drift.
-The deploy command waits for this Job before it applies the Broker workload.
-Runtime privilege errors keep the rollout from reporting success.
+When updating `identity-broker`, the deploy command first scales existing
+`identity-broker` and `projects-config` deployments to `0` and waits for all
+Pods to stop, then runs `identity-broker-migration` and
+`projects-config-credential-settlement` (`--settle-credential-operations`) to
+drain pending commits under bounded table-owner locks before applying workloads.
+The deploy command waits for these Jobs before it applies the Broker workload,
+and blocks rolling `identity-broker` back to an older image once
+`identityBroker.disableFenceRequired` is recorded. Runtime privilege errors keep the
+rollout from reporting success.
 
 ### Cluster checks and install smoke check
 

@@ -1233,6 +1233,108 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(HttpStatusCode.OK, readAfterDisable.StatusCode);
         using var afterDisableDoc = JsonDocument.Parse(await readAfterDisable.Content.ReadAsStringAsync());
         Assert.Equal("Draft", afterDisableDoc.RootElement.GetProperty("state").GetString());
+
+        // 8. Re-enable and verify DELETE vs PUT separation, durable DisablePending fence, cancel tombstone, and replay.
+        var reEnableOp = Guid.NewGuid();
+        using (var putReEnable = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = reEnableOp,
+                expectedProviderRevision = 5,
+                expectedCredentialRevision = 3,
+                apiKey = "sk-reenable-secret-67890",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, putReEnable.StatusCode);
+        }
+
+        // Cancel with mismatched revision on Projects returns 409 without releasing DisablePending until v2/cancel commits.
+        var staleDisableOp = Guid.NewGuid();
+        using (var staleDelete = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{providerId}/credential?operationId={staleDisableOp:D}&expectedProviderRevision=99&expectedCredentialRevision=4",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, staleDelete.StatusCode);
+        }
+
+        // Concurrent PUT is blocked (409) while DisablePending is still active (even after Projects returned 409).
+        using (var fencedPut = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 6,
+                expectedCredentialRevision = 4,
+                apiKey = "sk-fenced-secret-11111",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, fencedPut.StatusCode);
+        }
+
+        // PUT with the DisablePending operationId is rejected (409).
+        using (var sameOpPut = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential", adminToken,
+            new
+            {
+                operationId = staleDisableOp,
+                expectedProviderRevision = 6,
+                expectedCredentialRevision = 4,
+                apiKey = "sk-same-op-secret-22222",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, sameOpPut.StatusCode);
+        }
+
+        // Cancel with ?cancel=true commits Projects v2/cancel tombstone and releases DisablePending.
+        using (var cancelDelete = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{providerId}/credential?operationId={staleDisableOp:D}&cancel=true",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, cancelDelete.StatusCode);
+            using var cancelDoc = JsonDocument.Parse(await cancelDelete.Content.ReadAsStringAsync());
+            Assert.Equal("cancelled", cancelDoc.RootElement.GetProperty("status").GetString());
+        }
+
+        // After cancel tombstone, a valid DELETE completes and replays idempotently.
+        var finalDisableOp = Guid.NewGuid();
+        using (var finalDelete = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{providerId}/credential?operationId={finalDisableOp:D}&expectedProviderRevision=6&expectedCredentialRevision=4",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, finalDelete.StatusCode);
+        }
+        using (var replayDelete = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{providerId}/credential?operationId={finalDisableOp:D}&expectedProviderRevision=6&expectedCredentialRevision=4",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, replayDelete.StatusCode);
+        }
+
+        // Revoking the actor's Projects.Config authority blocks completed DELETE replay (403 Forbidden).
+        await using (var revokeConn = await projects.PrivilegedFixtureDataSource.OpenConnectionAsync())
+        await using (var revokeCmd = new NpgsqlCommand("""
+            UPDATE projects_config.project_role_assignments
+            SET state = 'Revoked',
+                revision = revision + 1
+            WHERE membership_id = @membershipId
+              AND role = 'PlatformAdmin'
+            """, revokeConn))
+        {
+            revokeCmd.Parameters.AddWithValue("membershipId", adminMembership.MembershipId);
+            await revokeCmd.ExecuteNonQueryAsync();
+        }
+        using (var revokedDeleteReplay = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/platform/byok-providers/{providerId}/credential?operationId={finalDisableOp:D}&expectedProviderRevision=6&expectedCredentialRevision=4",
+            adminToken, null))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, revokedDeleteReplay.StatusCode);
+        }
     }
 
     private sealed class ForwardToClientHandler(HttpClient target) : HttpMessageHandler

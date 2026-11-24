@@ -13,7 +13,7 @@ import { p1PostgresPlanHash } from './p1-postgres-plan.mjs';
 import { bootstrapIdentityPostgres } from './identity-postgres-bootstrap.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
 import { componentImageRepository } from '../../release/image-names.mjs';
-import { readServiceImageRevision } from '../../release/registry.mjs';
+import { readServiceImageRevision, verifyServiceRegistryImage } from '../../release/registry.mjs';
 import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 import { installTarget } from './targets.mjs';
 
@@ -1019,6 +1019,111 @@ export async function runDbMaintenance(options, overrides = {}) {
       step('terminal-cleanup-owners-checked');
     }
 
+    const brokerPriorReplicas = {};
+    let brokerTargetImage;
+    let projectsSettlementJob;
+    if (options.brokerDigest) {
+      const verifyCapability = deps.verifyImageCapability ?? (async ({ image, capability }) => {
+        const readImage = deps.readImage ?? (ref => verifyServiceRegistryImage(ref));
+        const { sourceSha, sourceTree } = await readImage(image);
+        if (!/^[0-9a-f]{40}$/.test(sourceSha ?? '')) {
+          throw new Error(`Image ${image} has no valid source commit label for ${capability}.`);
+        }
+        exec('git', ['fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/v1:refs/remotes/origin/v1'],
+          { cwd: repoRoot });
+        if (exec('git', ['merge-base', '--is-ancestor', sourceSha, 'refs/remotes/origin/v1'], { cwd: repoRoot }).status !== 0) {
+          throw new Error(`Image ${image} commit ${sourceSha} is not an ancestor of origin/v1.`);
+        }
+        if (sourceTree !== undefined) {
+          const treeCheck = exec('git', ['rev-parse', '--verify', `${sourceSha}^{tree}`], { cwd: repoRoot });
+          if (treeCheck.status !== 0 || treeCheck.stdout.trim() !== sourceTree) {
+            throw new Error(`Image ${image} tree ${sourceTree} does not match commit ${sourceSha}.`);
+          }
+        }
+        if (capability === 'identity-broker-disable-fence') {
+          if (exec('git', ['cat-file', '-e', `${sourceSha}:services/identity/Agentweaver.Identity.Broker/Migrations/20261124020000_AddCredentialDisableClaims.cs`],
+            { cwd: repoRoot }).status !== 0) {
+            throw new Error(`Identity Broker rollback guard blocks ${image} (${sourceSha}): database requires AddCredentialDisableClaims.`);
+          }
+          return;
+        }
+        if (capability === 'projects-config-settlement') {
+          const shown = exec('git', ['show', `${sourceSha}:services/projects-config/Agentweaver.Projects.Config/Program.cs`],
+            { cwd: repoRoot });
+          if (shown.status !== 0 || !shown.stdout.includes('--settle-credential-operations')) {
+            throw new Error(`Projects & Config image ${image} (${sourceSha}) does not support --settle-credential-operations.`);
+          }
+          return;
+        }
+        throw new Error(`Unknown capability ${capability}.`);
+      });
+
+      brokerTargetImage = imageReference('Agentweaver.Identity.Broker', options.brokerDigest);
+      if (stateData['identityBroker.disableFenceRequired'] === 'true') {
+        await verifyCapability({ image: brokerTargetImage, capability: 'identity-broker-disable-fence' });
+      }
+
+      const restoreAnnotation = 'agentweaver.io/local-deploy-restore-replicas';
+      const pcDepRes = kubectl(['get', 'deployment', 'projects-config', '--ignore-not-found=true', '-o', 'json']);
+      if (pcDepRes.stdout?.trim()) {
+        const pcDep = JSON.parse(pcDepRes.stdout);
+        const pcImage = pcDep.spec?.template?.spec?.containers?.[0]?.image;
+        if (!pcImage) throw new Error('Could not read live deployment/projects-config image before Broker migration.');
+        await verifyCapability({ image: pcImage, capability: 'projects-config-settlement' });
+        const pcClientId = must(kubectl(['get', 'serviceaccount', 'projects-config-migration', '-o',
+          'jsonpath={.metadata.annotations.azure\\.workload\\.identity/client-id}']),
+        'ServiceAccount/projects-config-migration has no configured workload identity client ID').stdout.trim();
+        if (!GUID.test(pcClientId)) throw new Error('ServiceAccount/projects-config-migration has an invalid client ID.');
+        const pcTemplate = parseKustomizeResources(applyTargetValues(
+          readFileSync(join(repoRoot, 'deploy', 'k8s', 'migrations', 'projects-config', 'job.yaml'), 'utf8'),
+          targetValuePairs(target.resourceGroup))).items[0];
+        const pcJob = prepareJob(pcTemplate, { name: `projects-config-credential-settlement-${runId}`, image: pcImage, runId });
+        const pcContainer = pcJob.spec.template.spec.containers[0];
+        pcContainer.command = ['dotnet', 'Agentweaver.Projects.Config.dll', '--settle-credential-operations'];
+        const pcEnv = pcContainer.env.find(entry => entry.name === 'ProjectsConfig__Migration__WorkloadIdentity__ClientId');
+        if (pcEnv) pcEnv.value = pcClientId;
+        projectsSettlementJob = pcJob;
+        const pcMarker = pcDep.metadata?.annotations?.[restoreAnnotation];
+        brokerPriorReplicas['projects-config'] = typeof pcMarker === 'string' && /^\d+$/.test(pcMarker)
+          ? Number(pcMarker)
+          : (Number.isInteger(pcDep.spec?.replicas) ? pcDep.spec.replicas : 1);
+      }
+
+      const ibDepRes = kubectl(['get', 'deployment', 'identity-broker', '--ignore-not-found=true', '-o', 'json']);
+      if (ibDepRes.stdout?.trim()) {
+        const ibDep = JSON.parse(ibDepRes.stdout);
+        const ibMarker = ibDep.metadata?.annotations?.[restoreAnnotation];
+        brokerPriorReplicas['identity-broker'] = typeof ibMarker === 'string' && /^\d+$/.test(ibMarker)
+          ? Number(ibMarker)
+          : (Number.isInteger(ibDep.spec?.replicas) ? ibDep.spec.replicas : 1);
+      }
+
+      for (const [deploymentName, priorCount] of Object.entries(brokerPriorReplicas)) {
+        must(kubectl(['annotate', `deployment/${deploymentName}`, `${restoreAnnotation}=${priorCount}`, '--overwrite']),
+          `Could not save deployment/${deploymentName} replicas before Identity Broker migration`);
+        must(kubectl(['scale', `deployment/${deploymentName}`, '--replicas=0']),
+          `Could not stop deployment/${deploymentName} before Identity Broker migration`);
+        const stopDeadline = Date.now() + 120_000;
+        let stopped = false;
+        while (Date.now() < stopDeadline) {
+          const podsRes = must(kubectl(['get', 'pods', '-l', `app.kubernetes.io/name=${deploymentName}`, '-o', 'json']),
+            `Could not check ${deploymentName} pods`);
+          const items = JSON.parse(podsRes.stdout || '{}').items ?? [];
+          if (!items.some(p => p.metadata?.labels?.['agentweaver.io/migration'] !== 'projects-config')) {
+            stopped = true;
+            break;
+          }
+          await deps.sleep(5_000);
+        }
+        if (!stopped) {
+          throw new Error(`Timed out waiting for deployment/${deploymentName} pods to stop.`);
+        }
+      }
+
+      updateState({ 'identityBroker.disableFenceRequired': 'true' },
+        'Could not record identityBroker.disableFenceRequired in state ConfigMap');
+    }
+
     // Migration Jobs run one at a time, in prerequisite order: Broker, Environment, Core, Events.
     const jobs = [
       ...(options.brokerDigest ? [{ key: 'identity-broker', template: brokerJobTemplate,
@@ -1050,6 +1155,32 @@ export async function runDbMaintenance(options, overrides = {}) {
       // The Broker migrator has no marker; its zero exit is the documented success signal.
       const marker = job.versions ? verifyGrantsMarker(logs, { service: job.key, schema: job.schema, versions: job.versions }) : undefined;
       step(`${job.key}-migrated`, { job: name, image: job.image, ...(marker ? { marker } : {}) });
+      if (job.key === 'identity-broker' && projectsSettlementJob) {
+        const settleName = projectsSettlementJob.metadata.name;
+        must(kubectl(['create', '-f', '-'], { input: JSON.stringify(projectsSettlementJob) }),
+          `Could not create settlement Job ${settleName}`);
+        createdJobs.push(settleName);
+        const settleOutcome = await waitForJob(kubectl, deps, settleName, options.jobTimeoutSeconds);
+        const settleLogs = kubectl(['logs', `job/${settleName}`, '--tail=-1']).stdout ?? '';
+        if (settleOutcome !== 'complete') {
+          throw new Error(`Settlement Job ${settleName} ${settleOutcome}. Last log lines:\n${redact(settleLogs.split(/\r?\n/).slice(-20).join('\n'))}`);
+        }
+        step('projects-config-credential-operations-settled', { job: settleName });
+      }
+    }
+    if (options.brokerDigest && brokerPriorReplicas['identity-broker'] !== undefined) {
+      must(kubectl(['set', 'image', 'deployment/identity-broker', `identity-broker=${brokerTargetImage}`]),
+        'Could not update deployment/identity-broker image after credential migration');
+    }
+    for (const [deploymentName, priorCount] of Object.entries(brokerPriorReplicas)) {
+      must(kubectl(['scale', `deployment/${deploymentName}`, `--replicas=${priorCount}`]),
+        `Could not restore deployment/${deploymentName} replicas to ${priorCount}`);
+      if (priorCount > 0) {
+        must(kubectl(['rollout', 'status', `deployment/${deploymentName}`, '--timeout=5m']),
+          `Deployment ${deploymentName} did not become ready after credential settlement`);
+      }
+      must(kubectl(['annotate', `deployment/${deploymentName}`, 'agentweaver.io/local-deploy-restore-replicas-']),
+        `Could not clear deployment/${deploymentName} restore-replicas annotation`);
     }
     // The verified markers prove each schema now equals the plan, so record its version. Later
     // runs use it to tell whether a target image accepts the current schema.

@@ -303,7 +303,7 @@ public sealed class IdentityBrokerDbContext : DbContext
                     "vault_source IN ('Existing', 'Byok')");
                 table.HasCheckConstraint(
                     "ck_model_provider_credential_write_claims_state",
-                    "state IN ('Claimed', 'Quarantined', 'Completed', 'PublicationPending', 'Published', 'Cancelled')");
+                    "state IN ('Claimed', 'Quarantined', 'Completed', 'PublicationPending', 'Published', 'Cancelled', 'DisablePending', 'Disabled')");
                 table.HasCheckConstraint(
                     "ck_model_provider_credential_write_claims_revision",
                     "expected_revision >= 0");
@@ -321,7 +321,10 @@ public sealed class IdentityBrokerDbContext : DbContext
                     "(expected_provider_revision IS NULL AND purpose IS NULL AND issuer IS NULL AND tenant IS NULL) OR " +
                     "(expected_provider_revision IS NOT NULL AND expected_provider_revision > 0 AND expected_provider_revision < 9223372036854775807 AND " +
                     "purpose IS NOT NULL AND purpose = 'credential-publication' AND issuer IS NOT NULL AND octet_length(issuer) = length(issuer) AND issuer COLLATE \"C\" ~ '^[!-~]+$' AND " +
-                    "tenant IS NOT NULL AND octet_length(tenant) = length(tenant) AND tenant COLLATE \"C\" ~ '^[A-Za-z0-9._:-]+$')");
+                    "tenant IS NOT NULL AND octet_length(tenant) = length(tenant) AND tenant COLLATE \"C\" ~ '^[A-Za-z0-9._:-]+$') OR " +
+                    "((expected_provider_revision IS NULL OR (expected_provider_revision > 0 AND expected_provider_revision < 9223372036854775807)) AND " +
+                    "purpose IS NOT NULL AND purpose = 'credential-disable' AND issuer IS NOT NULL AND octet_length(issuer) = length(issuer) AND issuer COLLATE \"C\" ~ '^[!-~]+$' AND " +
+                    "(tenant IS NULL OR (octet_length(tenant) = length(tenant) AND tenant COLLATE \"C\" ~ '^[A-Za-z0-9._:-]+$')))");
                 table.HasCheckConstraint(
                     "ck_model_provider_credential_write_claims_outcome",
                     "((state = 'Claimed' AND quarantined_at IS NULL AND cancelled_at IS NULL AND pending_secret_version IS NULL AND completed_revision IS NULL AND completed_at IS NULL) OR " +
@@ -330,10 +333,16 @@ public sealed class IdentityBrokerDbContext : DbContext
                     "(state = 'PublicationPending' AND quarantined_at IS NULL AND cancelled_at IS NULL AND pending_secret_version IS NOT NULL AND pending_secret_version ~ '^[0-9A-Fa-f]{32}$' AND completed_revision IS NULL AND completed_at IS NULL AND expected_provider_revision IS NOT NULL) OR " +
                     "(state IN ('Completed', 'Published') AND quarantined_at IS NULL AND cancelled_at IS NULL AND completed_revision IS NOT NULL AND completed_at IS NOT NULL AND " +
                     "CASE WHEN expected_revision < 9223372036854775807 THEN completed_revision = expected_revision + 1 ELSE FALSE END AND " +
-                    "((state = 'Completed' AND pending_secret_version IS NULL AND expected_provider_revision IS NULL) OR (state = 'Published' AND pending_secret_version IS NOT NULL AND pending_secret_version ~ '^[0-9A-Fa-f]{32}$' AND expected_provider_revision IS NOT NULL)))) AND " +
-                    "((state <> 'Published' AND published_provider_revision IS NULL AND published_configuration_hash IS NULL AND published_at IS NULL) OR " +
+                    "((state = 'Completed' AND pending_secret_version IS NULL AND expected_provider_revision IS NULL) OR (state = 'Published' AND pending_secret_version IS NOT NULL AND pending_secret_version ~ '^[0-9A-Fa-f]{32}$' AND expected_provider_revision IS NOT NULL))) OR " +
+                    "(state = 'DisablePending' AND purpose = 'credential-disable' AND tenant IS NULL AND quarantined_at IS NULL AND cancelled_at IS NULL AND pending_secret_version IS NOT NULL AND pending_secret_version ~ '^[0-9A-Fa-f]{32}$' AND completed_revision IS NULL AND completed_at IS NULL) OR " +
+                    "(state = 'Disabled' AND purpose = 'credential-disable' AND tenant IS NOT NULL AND quarantined_at IS NULL AND cancelled_at IS NULL AND pending_secret_version IS NOT NULL AND pending_secret_version ~ '^[0-9A-Fa-f]{32}$' AND completed_revision IS NOT NULL AND completed_at IS NOT NULL AND " +
+                    "CASE WHEN expected_revision < 9223372036854775807 THEN completed_revision = expected_revision + 1 ELSE FALSE END)) AND " +
+                    "((state NOT IN ('Published', 'Disabled') AND published_provider_revision IS NULL AND published_configuration_hash IS NULL AND published_at IS NULL) OR " +
                     "(state = 'Published' AND published_provider_revision IS NOT NULL AND published_configuration_hash IS NOT NULL AND published_at IS NOT NULL AND " +
                     "CASE WHEN expected_provider_revision IS NOT NULL AND expected_provider_revision < 9223372036854775807 THEN published_provider_revision = expected_provider_revision + 1 ELSE FALSE END AND " +
+                    "published_configuration_hash COLLATE \"C\" ~ '^[0-9A-Fa-f]{64}$') OR " +
+                    "(state = 'Disabled' AND published_provider_revision IS NOT NULL AND published_configuration_hash IS NOT NULL AND published_at IS NOT NULL AND " +
+                    "(expected_provider_revision IS NULL OR (expected_provider_revision < 9223372036854775807 AND published_provider_revision = expected_provider_revision + 1)) AND " +
                     "published_configuration_hash COLLATE \"C\" ~ '^[0-9A-Fa-f]{64}$'))");
             });
             entity.HasKey(claim => claim.OperationId);
@@ -369,9 +378,9 @@ public sealed class IdentityBrokerDbContext : DbContext
             entity.Property(claim => claim.PublishedProviderState).HasColumnName("published_provider_state").HasMaxLength(16);
             entity.Property(claim => claim.PublishedAt).HasColumnName("published_at");
             entity.HasIndex(claim => claim.CredentialSlotId).IsUnique()
-                .HasFilter("state IN ('Claimed', 'Quarantined', 'PublicationPending')");
+                .HasFilter("state IN ('Claimed', 'Quarantined', 'PublicationPending', 'DisablePending')");
             entity.HasIndex(claim => claim.ProviderId).IsUnique()
-                .HasFilter("state IN ('Claimed', 'Quarantined', 'PublicationPending')");
+                .HasFilter("state IN ('Claimed', 'Quarantined', 'PublicationPending', 'DisablePending')");
             entity.HasOne<ModelProviderCredentialRevision>()
                 .WithMany()
                 .HasForeignKey(claim => new { claim.CredentialSlotId, claim.CompletedRevision })
