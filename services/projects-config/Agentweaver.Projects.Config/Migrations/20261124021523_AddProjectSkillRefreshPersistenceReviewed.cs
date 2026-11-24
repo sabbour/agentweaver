@@ -194,6 +194,27 @@ namespace Agentweaver.Projects.Config.Migrations
         {
             migrationBuilder.Sql(
                 """
+                LOCK TABLE projects_config.project_skill_admission_fence,
+                           projects_config.project_skill_refresh_audit_intents,
+                           projects_config.project_skill_refresh_receipts
+                IN ACCESS EXCLUSIVE MODE;
+                DO $migration$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM projects_config.project_skill_refresh_audit_intents)
+                       OR EXISTS (SELECT 1 FROM projects_config.project_skill_refresh_receipts) THEN
+                        RAISE EXCEPTION 'skill refresh persistence must be retained'
+                            USING ERRCODE = '55000';
+                    END IF;
+                END
+                $migration$;
+
+                UPDATE projects_config.project_skill_admission_fence
+                SET generation = cutover_generation
+                WHERE id = 1
+                  AND generation <> cutover_generation;
+
+                ALTER TABLE projects_config.project_skill_admission_fence
+                DROP CONSTRAINT ck_skill_admission_fence_cutover_generation;
                 DROP TRIGGER projects_skill_admission_ordering
                 ON projects_config.projects;
                 DROP TRIGGER project_configuration_revisions_skill_admission_ordering

@@ -11,6 +11,7 @@ using Agentweaver.Policy.Acs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using Xunit;
 
@@ -876,7 +877,7 @@ public sealed partial class ProjectsConfigPostgresTests
         try
         {
             var replaySetup = await CreateSkillRefreshSetupAsync(db);
-            var holderSetup = await CreateSkillRefreshSetupAsync(db);
+            var holderSetup = await CreateSkillRefreshSetupAsync(db, seedPlatformPolicy: false);
             var writer = CreateRefreshEvidenceService(
                 CreateSkillService(db, replaySetup.Objects),
                 fixture.DataSource);
@@ -931,6 +932,106 @@ public sealed partial class ProjectsConfigPostgresTests
             await ResetSkillAdmissionCutoverAsync(db);
         }
     }
+
+    [Fact]
+    public Task RefreshPersistenceDowngradeRefusesAndPreservesPopulatedLedger() =>
+        RunWithIsolatedProjectsAsync(async tests =>
+        {
+            await using var db = tests.CreateDbContext();
+            await ResetSkillAdmissionCutoverAsync(db);
+            var setup = await tests.CreateSkillRefreshSetupAsync(db);
+            await using var refreshData = tests.CreateRuntimeDataSource("refresh-downgrade-refusal");
+            var receipt = await tests.CreateRefreshEvidenceService(
+                    tests.CreateSkillService(db, setup.Objects),
+                    refreshData)
+                .RefreshAsync(
+                    setup.Project.Owner,
+                    setup.Request,
+                    CancellationToken.None);
+            var receiptIds = await db.SkillRefreshReceipts.AsNoTracking()
+                .Select(item => item.ReceiptId)
+                .Order()
+                .ToArrayAsync();
+            var auditIds = await db.SkillRefreshAuditIntents.AsNoTracking()
+                .Select(item => item.AuditIntentId)
+                .Order()
+                .ToArrayAsync();
+
+            await using var migrationDb = tests.CreateMigrationDbContext();
+            var failure = await Record.ExceptionAsync(() =>
+                migrationDb.GetService<IMigrator>()
+                    .MigrateAsync("20261123101011_AddSkillAdmissionCutover"));
+            Assert.NotNull(failure);
+            var postgres = Assert.IsType<PostgresException>(FindPostgresException(failure));
+            Assert.Equal("55000", postgres.SqlState);
+            Assert.Equal("skill refresh persistence must be retained", postgres.MessageText);
+            Assert.Contains(
+                "20261124021523_AddProjectSkillRefreshPersistenceReviewed",
+                await migrationDb.Database.GetAppliedMigrationsAsync());
+            Assert.Equal(receiptIds, await db.SkillRefreshReceipts.AsNoTracking()
+                .Select(item => item.ReceiptId)
+                .Order()
+                .ToArrayAsync());
+            Assert.Equal(auditIds, await db.SkillRefreshAuditIntents.AsNoTracking()
+                .Select(item => item.AuditIntentId)
+                .Order()
+                .ToArrayAsync());
+            Assert.Single(receiptIds);
+            Assert.NotEqual(Guid.Empty, receipt.EvidenceId);
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task RefreshPersistenceDowngradeRestoresPriorCutoverCounterForEmptyLedger(
+        bool counterDiverged) =>
+        RunWithIsolatedProjectsAsync(async tests =>
+        {
+            await using var db = tests.CreateDbContext();
+            await ResetSkillAdmissionCutoverAsync(db);
+            await tests.CreateSkillRefreshSetupAsync(db);
+            var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
+            var cutoverGeneration = fence.CutoverGeneration;
+            fence.Generation = counterDiverged
+                ? cutoverGeneration + 7
+                : cutoverGeneration;
+            await db.SaveChangesAsync();
+
+            await using var migrationDb = tests.CreateMigrationDbContext();
+            await migrationDb.GetService<IMigrator>()
+                .MigrateAsync("20261123101011_AddSkillAdmissionCutover");
+
+            await using var connection = await tests.OpenOwnerConnectionAsync();
+            await using var verify = new NpgsqlCommand(
+                """
+                SELECT
+                    generation,
+                    NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'projects_config'
+                          AND table_name = 'project_skill_admission_fence'
+                          AND column_name = 'cutover_generation'),
+                    to_regclass('projects_config.project_skill_refresh_receipts') IS NULL,
+                    to_regclass('projects_config.project_skill_refresh_audit_intents') IS NULL,
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM projects_config.project_skill_admissions admission
+                        WHERE admission.cutover_generation <> (
+                            SELECT generation
+                            FROM projects_config.project_skill_admission_fence
+                            WHERE id = 1))
+                FROM projects_config.project_skill_admission_fence
+                WHERE id = 1
+                """,
+                connection);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(cutoverGeneration, reader.GetInt64(0));
+            Assert.True(reader.GetBoolean(1));
+            Assert.True(reader.GetBoolean(2));
+            Assert.True(reader.GetBoolean(3));
+            Assert.True(reader.GetBoolean(4));
+        });
 
     [Theory]
     [InlineData("authority")]
@@ -1071,7 +1172,10 @@ public sealed partial class ProjectsConfigPostgresTests
             _ = await staleDb.SkillAdmissionFences.AsNoTracking()
                 .SingleAsync(item => item.Id == 1);
 
-            await projectA.Skills.RevokeAsync(
+            await using var revokerData = CreateRuntimeDataSource("cross-project-revocation");
+            await using var revokerDb = CreateRuntimeDbContext(revokerData);
+            var revokerSkills = CreateSkillService(revokerDb, projectA.Objects);
+            await revokerSkills.RevokeAsync(
                 projectA.Project.Owner,
                 projectA.Request.ProjectId,
                 projectA.Request.SkillId,
@@ -1079,9 +1183,11 @@ public sealed partial class ProjectsConfigPostgresTests
                 "Revoke after stale acceptance captured its snapshot.",
                 CancellationToken.None);
 
-            var blocked = await Assert.ThrowsAsync<PostgresException>(() =>
+            var blocked = await Assert.ThrowsAnyAsync<Exception>(() =>
                 admission.LockFenceAsync(CancellationToken.None));
-            Assert.Equal(PostgresErrorCodes.SerializationFailure, blocked.SqlState);
+            var postgres = FindPostgresException(blocked);
+            Assert.NotNull(postgres);
+            Assert.Equal(PostgresErrorCodes.SerializationFailure, postgres.SqlState);
             var current = await db.SkillAdmissionFences.AsNoTracking()
                 .SingleAsync(item => item.Id == 1);
             Assert.Equal(baseline.Generation + 1, current.Generation);
@@ -2936,7 +3042,9 @@ public sealed partial class ProjectsConfigPostgresTests
             $"The {waiterName} refresh did not wait on the {blockerName} fence transaction.");
     }
 
-    private async Task<SkillRefreshTestSetup> CreateSkillRefreshSetupAsync(ProjectsConfigDbContext db)
+    private async Task<SkillRefreshTestSetup> CreateSkillRefreshSetupAsync(
+        ProjectsConfigDbContext db,
+        bool seedPlatformPolicy = true)
     {
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
             CreateDbContextOptions(), TimeProvider.System);
@@ -2962,10 +3070,11 @@ public sealed partial class ProjectsConfigPostgresTests
         var skills = new SkillContentService(
             db, objectStore, configurations, TimeProvider.System);
         skills.EvaluateSkillsPolicyOverride = (_, _, _, _, _, _) => Task.CompletedTask;
-        await SeedSkillsPolicyAsync(
-            db,
-            project.Owner,
-            """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
+        if (seedPlatformPolicy)
+            await SeedSkillsPolicyAsync(
+                db,
+                project.Owner,
+                """{"schemaVersion":1,"minimumScore":0,"requireCompletedEvidence":true}""");
         var fence = await db.SkillAdmissionFences.SingleAsync(item => item.Id == 1);
         fence.State = ProjectSkillAdmissionFenceState.Active;
         fence.ReleaseInventoryRevision = "refresh-inventory-" + project.Suffix;
@@ -3304,6 +3413,14 @@ public sealed partial class ProjectsConfigPostgresTests
         fence.ReleaseInventoryRevision = null;
         fence.PlatformSkillsPolicySha256 = null;
         await db.SaveChangesAsync();
+    }
+
+    private static PostgresException? FindPostgresException(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+            if (current is PostgresException postgres)
+                return postgres;
+        return null;
     }
 
     private static string Hash(ReadOnlySpan<byte> content) =>
