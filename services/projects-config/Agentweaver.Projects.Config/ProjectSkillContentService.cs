@@ -400,7 +400,7 @@ public sealed class SkillContentService(
                     builtInExempt: finalAdmission.Classification ==
                         ProjectSkillAdmissionClassification.BuiltInExempt,
                     cancellationToken).ConfigureAwait(false);
-                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, evaluatedAt);
+                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, timeProvider.GetUtcNow());
                 await EnsureInventoryAccessAsync(caller, projectId, cancellationToken)
                     .ConfigureAwait(false);
                 if (await db.SkillContentRevocations.AsNoTracking().AnyAsync(
@@ -410,7 +410,7 @@ public sealed class SkillContentService(
                     cancellationToken).ConfigureAwait(false))
                     throw SkillContentServiceException.Conflict(
                         "The Skill revision was revoked during trust projection.");
-                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, evaluatedAt);
+                RequireFreshRuntimeEvidence(finalEvidence.CreatedAt, timeProvider.GetUtcNow());
 
                 var finalBuiltIn = finalAdmission.Classification ==
                     ProjectSkillAdmissionClassification.BuiltInExempt;
@@ -1765,7 +1765,7 @@ public sealed class SkillContentService(
                             ProjectSkillAdmissionClassification.BuiltInExempt,
                         cancellationToken)
                     .ConfigureAwait(false);
-                RequireFreshRuntimeEvidence(evidence.CreatedAt, evaluatedAt);
+                RequireFreshRuntimeEvidence(evidence.CreatedAt, timeProvider.GetUtcNow());
                 admitted.Add((admission, evidence, verified));
             }
             await EnsureCurrentRunAuthorityAsync(caller, projectId, runId, cancellationToken)
@@ -1791,7 +1791,7 @@ public sealed class SkillContentService(
             var finalPolicy = await _admission.ReadPolicySnapshotAsync(
                     projectId, lockHeads: true, cancellationToken)
                 .ConfigureAwait(false);
-            if (policy != finalPolicy)
+            if (!SamePolicy(policy, finalPolicy))
                 throw SkillContentServiceException.Conflict(
                     "The Skill admission policy changed while projecting the run.");
             foreach (var (admission, evidence, content) in admitted)
@@ -1825,11 +1825,11 @@ public sealed class SkillContentService(
                             ProjectSkillAdmissionClassification.BuiltInExempt,
                         cancellationToken)
                     .ConfigureAwait(false);
-                RequireFreshRuntimeEvidence(evidence.CreatedAt, evaluatedAt);
+                RequireFreshRuntimeEvidence(evidence.CreatedAt, timeProvider.GetUtcNow());
             }
         }
         foreach (var (_, evidence, _) in admitted)
-            RequireFreshRuntimeEvidence(evidence.CreatedAt, evaluatedAt);
+            RequireFreshRuntimeEvidence(evidence.CreatedAt, timeProvider.GetUtcNow());
         await admissionRead.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result.ToImmutable();
     }
@@ -1990,6 +1990,18 @@ public sealed class SkillContentService(
             throw SkillAdmissionService.AdmissionUnavailable(
                 "The required Skill admission evidence is stale.");
     }
+
+    private static bool SamePolicy(
+        SkillAdmissionPolicySnapshot left,
+        SkillAdmissionPolicySnapshot right) =>
+        left.PlatformPolicyId == right.PlatformPolicyId &&
+        left.PlatformPolicyRevision == right.PlatformPolicyRevision &&
+        left.PlatformPolicySha256 == right.PlatformPolicySha256 &&
+        left.ProjectPolicyId == right.ProjectPolicyId &&
+        left.ProjectPolicyRevision == right.ProjectPolicyRevision &&
+        left.ProjectPolicySha256 == right.ProjectPolicySha256 &&
+        left.MinimumScore == right.MinimumScore &&
+        left.RequireCompletedEvidence == right.RequireCompletedEvidence;
 
     /// <summary>Validates enabled skill pins and assignments against the active cast and non-revoked stored revisions.</summary>
     internal static async Task<ProjectConfiguration> ValidateConfigurationAsync(

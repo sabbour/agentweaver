@@ -63,7 +63,10 @@ public sealed partial class ProjectsConfigPostgresTests
 
     [Fact]
     public Task Migration039BackfillsPreExistingSetupAndP1AuditRowsWithoutChangingThem() =>
-        RunWithIsolatedProjectsAsync(test => test.Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync(), preGuard: true);
+        RunWithIsolatedProjectsAsync(
+            test => test.Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync(),
+            preGuard: true,
+            legacySkillAdmissionFence: true);
 
     private async Task Migration039BackfillsPreExistingSetupAndP1AuditRowsCoreAsync()
     {
@@ -91,6 +94,7 @@ public sealed partial class ProjectsConfigPostgresTests
         const string beforeInvocationAudit = "20261023201615_AddHostedModelReasoningCatalogAfterCasting";
         const string invocationAudit = "20261026183946_039_LinkProjectSetupAuthorityAuditInvocation";
         var latestMigration = db.Database.GetMigrations().Last();
+        await RemoveLegacySkillAdmissionFenceAsync();
         Migration039AuditFixture? legacy = null;
         try
         {

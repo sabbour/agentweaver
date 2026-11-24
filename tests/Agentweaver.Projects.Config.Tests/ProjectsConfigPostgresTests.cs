@@ -52,12 +52,17 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         }
     }
 
-    private static async Task RunWithIsolatedProjectsAsync(Func<ProjectsConfigPostgresTests, Task> test, bool preGuard = false)
+    private static async Task RunWithIsolatedProjectsAsync(
+        Func<ProjectsConfigPostgresTests, Task> test,
+        bool preGuard = false,
+        bool legacySkillAdmissionFence = false)
     {
         var isolated = new ProjectsConfigPostgresFixture();
         try
         {
-            await isolated.InitializeToAsync(preGuard ? "20261119132116_ReserveModelProviderReferences" : null);
+            await isolated.InitializeToAsync(
+                preGuard ? "20261119132116_ReserveModelProviderReferences" : null,
+                legacySkillAdmissionFence);
             await test(new ProjectsConfigPostgresTests(isolated));
         }
         finally
@@ -344,7 +349,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
     [Fact]
     public Task RunAcceptanceRejectsAChangedProviderCredentialSlotOrSecretReference() =>
-        RunWithIsolatedProjectsAsync(test => test.RunAcceptanceWithLegacyProviderAsync(), preGuard: true);
+        RunWithIsolatedProjectsAsync(
+            test => test.RunAcceptanceWithLegacyProviderAsync(),
+            preGuard: true,
+            legacySkillAdmissionFence: true);
 
     private async Task RunAcceptanceWithLegacyProviderAsync()
     {
@@ -473,6 +481,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var migrationOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql(fixture.MigrationDataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema)).Options;
+        await RemoveLegacySkillAdmissionFenceAsync();
         await ProjectsConfigMigrator.MigrateAsync(fixture.MigrationDataSource, migrationOptions);
         await using var reopened = CreateDbContext();
         var persisted = await reopened.RunSelections.AsNoTracking()
@@ -619,7 +628,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
     [Fact]
     public Task DowngradeRemovesUnsupportedHostedReasoningEffortsBeforeRestoringConstraint() =>
-        RunWithIsolatedProjectsAsync(test => test.DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync(), preGuard: true);
+        RunWithIsolatedProjectsAsync(
+            test => test.DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync(),
+            preGuard: true,
+            legacySkillAdmissionFence: true);
 
     private async Task DowngradeRemovesUnsupportedHostedReasoningEffortsCoreAsync()
     {
@@ -678,7 +690,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
     [Fact]
     public Task DowngradeReturnsAvailableProviderToDraftBeforeRestoringStateConstraint() =>
-        RunWithIsolatedProjectsAsync(test => test.DowngradeReturnsAvailableProviderToDraftCoreAsync(), preGuard: true);
+        RunWithIsolatedProjectsAsync(
+            test => test.DowngradeReturnsAvailableProviderToDraftCoreAsync(),
+            preGuard: true,
+            legacySkillAdmissionFence: true);
 
     private async Task DowngradeReturnsAvailableProviderToDraftCoreAsync()
     {
@@ -734,7 +749,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     [InlineData("01")]
     [InlineData("9223372036854775808")]
     public Task DowngradeRefusesUnrepresentableRateCardVersionsWithoutChangingSchema(string cardVersion) =>
-        RunWithIsolatedProjectsAsync(test => test.DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(cardVersion), preGuard: true);
+        RunWithIsolatedProjectsAsync(
+            test => test.DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(cardVersion),
+            preGuard: true,
+            legacySkillAdmissionFence: true);
 
     private async Task DowngradeRefusesUnrepresentableRateCardVersionsCoreAsync(string cardVersion)
     {
@@ -4385,6 +4403,15 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
     private static NetworkEgressRule Fqdn(NetworkEgressPurpose purpose, string host) =>
         new(purpose, NetworkEgressDestinationKind.Fqdn, host, 443, EgressProtocol.Tcp);
+
+    private async Task RemoveLegacySkillAdmissionFenceAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var drop = new NpgsqlCommand(
+            "DROP TABLE projects_config.project_skill_admission_fence",
+            connection);
+        await drop.ExecuteNonQueryAsync();
+    }
 }
 
 public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
@@ -4403,8 +4430,15 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
     public Task InitializeAsync() => InitializeToAsync(StopBeforeInstallationIdentity
         ? "20261119174453_GuardModelProviderPublication" : null);
 
-    internal async Task InitializeToAsync(string? target)
+    internal async Task InitializeToAsync(
+        string? target,
+        bool legacySkillAdmissionFence = false)
     {
+        if (legacySkillAdmissionFence &&
+            target != "20261119132116_ReserveModelProviderReferences")
+            throw new ArgumentException(
+                "The legacy Skill fence shim requires the historical pre-cutover schema.",
+                nameof(legacySkillAdmissionFence));
         await _container.StartAsync();
         await using (var admin = NpgsqlDataSource.Create(_container.GetConnectionString()))
         await using (var connection = await admin.OpenConnectionAsync())
@@ -4451,6 +4485,36 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
         {
             await using var db = new ProjectsConfigDbContext(options);
             await db.GetService<IMigrator>().MigrateAsync(target);
+            if (legacySkillAdmissionFence)
+            {
+                await db.Database.OpenConnectionAsync();
+                await using var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+                await using var ensureFence = new NpgsqlCommand(
+                    """
+                    CREATE TABLE IF NOT EXISTS projects_config.project_skill_admission_fence (
+                        id integer NOT NULL,
+                        state character varying(16) NOT NULL,
+                        generation bigint NOT NULL,
+                        cutover_generation bigint NOT NULL DEFAULT 1,
+                        release_inventory_revision character varying(128),
+                        platform_skills_policy_sha256 character varying(64),
+                        updated_at timestamp with time zone NOT NULL,
+                        CONSTRAINT PK_project_skill_admission_fence PRIMARY KEY (id),
+                        CONSTRAINT ck_skill_admission_fence_generation CHECK (generation > 0),
+                        CONSTRAINT ck_skill_admission_fence_cutover_generation CHECK (cutover_generation > 0),
+                        CONSTRAINT ck_skill_admission_fence_id CHECK (id = 1),
+                        CONSTRAINT ck_skill_admission_fence_state CHECK (state IN ('Open', 'Draining', 'Active'))
+                    );
+                    INSERT INTO projects_config.project_skill_admission_fence
+                        (id, state, generation, cutover_generation, release_inventory_revision,
+                         platform_skills_policy_sha256, updated_at)
+                    VALUES (1, 'Open', 1, 1, NULL, NULL, now())
+                    ON CONFLICT (id) DO NOTHING;
+                    """,
+                    connection);
+                await ensureFence.ExecuteNonQueryAsync();
+                await db.Database.CloseConnectionAsync();
+            }
         }
     }
 

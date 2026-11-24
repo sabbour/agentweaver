@@ -57,16 +57,11 @@ public sealed partial class ProjectsConfigPostgresTests
         var projectId = issued.Receipt.ProjectId;
         var initialConfiguration = await service.GetProjectConfigurationAsync(
             caller, projectId, null, CancellationToken.None);
-        var savedConfiguration = await service.UpdateProjectConfigurationAsync(
-            caller,
-            projectId,
-            initialConfiguration.Revision,
-            initialConfiguration.Configuration,
-            CancellationToken.None);
+        Assert.Equal(issued.Receipt.ProjectConfigurationRevision, initialConfiguration.Revision);
         var runId = "p1-bound-run-" + suffix;
         await service.AcceptInteractiveRunSelectionAsync(
             caller, projectId, runId,
-            new InteractiveRunSelectionRequest(savedConfiguration.Revision),
+            new InteractiveRunSelectionRequest(initialConfiguration.Revision),
             CancellationToken.None);
         await using var app = await StartP1SetupServerAsync(fixture.DataSource);
         using var client = app.GetTestClient();

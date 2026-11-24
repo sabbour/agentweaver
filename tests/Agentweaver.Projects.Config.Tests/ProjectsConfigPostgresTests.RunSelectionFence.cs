@@ -675,7 +675,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     RunRequest(config.Revision, platform.Revision), CancellationToken.None);
             Assert.Equal(runId, accepted.RunId);
 
-            // Wrong tenant is denied on exact-fingerprint replay.
+            // Wrong tenant is concealed on exact-fingerprint replay.
             var otherTenantId = "other-tenant-" + suffix;
             _ = await SeedMembershipAsync(store, orchSubject, otherTenantId);
             var otherTenantOrch = await ResolveCallerAsync(
@@ -688,7 +688,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     : service.AcceptRunSelectionAsync(
                         otherTenantOrch, project.ProjectId, runId,
                         RunRequest(config.Revision, platform.Revision), CancellationToken.None));
-            Assert.Equal(StatusCodes.Status403Forbidden, wrongTenant.StatusCode);
+            Assert.Equal(StatusCodes.Status404NotFound, wrongTenant.StatusCode);
 
             // Revoke Orchestrator role and verify exact-fingerprint replay is denied on both routes.
             await store.RevokeRoleAssignmentAsync(
