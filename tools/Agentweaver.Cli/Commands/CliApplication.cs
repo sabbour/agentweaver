@@ -551,6 +551,8 @@ public static class CliApplication
               --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <model>
               [metadata options] [--operation-id <guid>] [--rate-card-id <id> --rate-card-version <version>]
           agentweaver platform byok save-prices <id> <version> --source manual|azure-retail --input <file.json>
+          agentweaver platform byok set-key <providerId> --from-stdin
+              --expected-revision <providerRevision> --operation-id <guid>
           agentweaver platform byok recheck-key <providerId> --expected-revision <revision>
               --expected-credential-revision <revision> --operation-id <guid>
           agentweaver platform byok disable-key <providerId> --expected-revision <revision>
@@ -567,6 +569,8 @@ public static class CliApplication
               --name <name> --type <openai|azure|anthropic> --base-url <https-url> --model <model>
               [metadata options] [--operation-id <guid>] [--rate-card-id <id> --rate-card-version <version>]
           agentweaver project byok prices --project-id <id> --region <region> --search <meter-text>
+          agentweaver project byok set-key <providerId> --project-id <id> --from-stdin
+              --expected-revision <providerRevision> --operation-id <guid>
           agentweaver project byok recheck-key <providerId> --project-id <id> --expected-revision <revision>
               --expected-credential-revision <revision> --operation-id <guid>
           agentweaver project byok disable-key <providerId> --project-id <id> --expected-revision <revision>

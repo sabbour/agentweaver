@@ -10,5 +10,7 @@ public sealed record CliRuntimeOptions(
     TextWriter? Error = null,
     INativeRepoAppSelectionHandoff? RepositorySelection = null)
 {
+    internal Stream? StandardInput { get; init; }
+    internal bool? StandardInputRedirected { get; init; }
     internal string? PolicyApplyStateDirectory { get; init; }
 }

@@ -1086,6 +1086,207 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     }
 
     [Fact]
+    public async Task OctetStreamCredentialPutSupportsUtf8PreservationNoWedgingOnInvalidInputAndReplayGuards()
+    {
+        using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var projects = _runBindingProjects;
+
+        var fakeVault = new FakeByokVault();
+        await using var broker = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                settings["IdentityBroker__SecretRedemption__ByokVaultUri"] =
+                    "https://agentweaver-byok-kv-v1.vault.azure.net/";
+                settings["IdentityBroker__SecretRedemption__ByokVaultHost"] =
+                    "agentweaver-byok-kv-v1.vault.azure.net";
+                for (var i = 0; i < ProjectScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                services.RemoveAll<IModelProviderByokVault>();
+                services.AddSingleton<IModelProviderByokVault>(fakeVault);
+                services.RemoveAll<ModelProviderCredentialRedemptionBackends>();
+                services.AddSingleton(new ModelProviderCredentialRedemptionBackends(fakeVault));
+            });
+
+        using var brokerClient = broker.CreateClient();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(signingCert),
+            () => new ForwardToClientHandler(projects.Client),
+            async (owner, req, ct) =>
+            {
+                var client = owner == GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker
+                    ? brokerClient
+                    : projects.Client;
+                using var clone = new HttpRequestMessage(req.Method, req.RequestUri!.PathAndQuery);
+                foreach (var header in req.Headers)
+                {
+                    if (!string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase))
+                        clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                if (req.Content is not null)
+                {
+                    var bytes = await req.Content.ReadAsByteArrayAsync(ct);
+                    clone.Content = new ByteArrayContent(bytes);
+                    foreach (var header in req.Content.Headers)
+                        clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                var resp = await client.SendAsync(clone, ct);
+                resp.RequestMessage = req;
+                return resp;
+            });
+
+        var adminToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, null, null, ["platform_admin"]))
+            .GetProperty("access_token").GetString()!;
+        var adminSub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(adminToken).Claims, "sub");
+        var membership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, adminSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, membership.MembershipId,
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+
+        using var createResp = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, "/api/v1/platform/byok-providers",
+            adminToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0,
+                name = "Octet Put Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-5",
+                wire_api = "responses",
+                reasoning_efforts = new[] { "high" },
+            });
+        Assert.Equal(HttpStatusCode.OK, createResp.StatusCode);
+        var providerId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString()!;
+
+        // 1. Invalid UTF-8, whitespace-only, empty, and >8192 bytes fail with 400/413 and insert ZERO claims.
+        var claimsBefore = await CountRowsAsync(
+            _nativeDataSource, "SELECT COUNT(*) FROM identity_broker.model_provider_credential_write_claims");
+
+        foreach (var badBytes in new[]
+        {
+            new byte[] { 0xFF, 0xFE },
+            Encoding.UTF8.GetBytes("   \t"),
+            Array.Empty<byte>(),
+            new byte[8193],
+        })
+        {
+            using var badReq = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential");
+            badReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+            badReq.Headers.Add("X-Agentweaver-Tenant", TenantId);
+            badReq.Headers.TryAddWithoutValidation("If-Match", "1");
+            badReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString("D"));
+            badReq.Content = new ByteArrayContent(badBytes);
+            badReq.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var badResp = await gateway.Client.SendAsync(badReq);
+            Assert.Equal(
+                badBytes.Length > 8192 ? HttpStatusCode.RequestEntityTooLarge : HttpStatusCode.BadRequest,
+                badResp.StatusCode);
+        }
+
+        Assert.Equal(claimsBefore, await CountRowsAsync(
+            _nativeDataSource, "SELECT COUNT(*) FROM identity_broker.model_provider_credential_write_claims"));
+        Assert.Equal(0, fakeVault.WriteCalls);
+
+        // 2. Valid UTF-8 non-ASCII key succeeds, preserves exact UTF-8 string, and replays cleanly.
+        const string utf8Secret = "sk-utf8-\u03C0-\U0001F511";
+        var op1 = Guid.NewGuid();
+        using (var okReq = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential"))
+        {
+            okReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+            okReq.Headers.Add("X-Agentweaver-Tenant", TenantId);
+            okReq.Headers.TryAddWithoutValidation("If-Match", "1");
+            okReq.Headers.Add("Idempotency-Key", op1.ToString("D"));
+            okReq.Content = new ByteArrayContent(Encoding.UTF8.GetBytes(utf8Secret));
+            okReq.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var okResp = await gateway.Client.SendAsync(okReq);
+            Assert.Equal(HttpStatusCode.OK, okResp.StatusCode);
+            var body = await okResp.Content.ReadAsStringAsync();
+            Assert.Contains("\"published\"", body);
+            Assert.DoesNotContain(utf8Secret, body);
+        }
+
+        // Replay with wrong ExpectedProviderRevision returns 409; replay with matching revision returns 200 without new Vault write.
+        using (var wrongRevReplay = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential"))
+        {
+            wrongRevReplay.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+            wrongRevReplay.Headers.Add("X-Agentweaver-Tenant", TenantId);
+            wrongRevReplay.Headers.TryAddWithoutValidation("If-Match", "2");
+            wrongRevReplay.Headers.Add("Idempotency-Key", op1.ToString("D"));
+            wrongRevReplay.Content = new ByteArrayContent(Encoding.UTF8.GetBytes(utf8Secret));
+            wrongRevReplay.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var resp = await gateway.Client.SendAsync(wrongRevReplay);
+            Assert.Equal(HttpStatusCode.Conflict, resp.StatusCode);
+        }
+        using (var okReplay = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential"))
+        {
+            okReplay.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+            okReplay.Headers.Add("X-Agentweaver-Tenant", TenantId);
+            okReplay.Headers.TryAddWithoutValidation("If-Match", "1");
+            okReplay.Headers.Add("Idempotency-Key", op1.ToString("D"));
+            okReplay.Content = new ByteArrayContent(Encoding.UTF8.GetBytes(utf8Secret));
+            okReplay.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var resp = await gateway.Client.SendAsync(okReplay);
+            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        }
+        Assert.Equal(1, fakeVault.WriteCalls);
+
+        // 3. Undispatched Claimed replay reuses existingClaim.CredentialSlotId and ExpectedRevision.
+        var opUndispatched = Guid.NewGuid();
+        Guid expectedSlotId;
+        using (var diScope = broker.Services.CreateScope())
+        {
+            var store = diScope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var head = await store.ReadHeadByProviderAsync(ModelProviderCredentialScope.Platform, null, providerId, CancellationToken.None);
+            Assert.NotNull(head);
+            expectedSlotId = head!.CredentialSlotId;
+            _ = await store.ClaimPublicationWriteAsync(
+                new ClaimModelProviderCredentialPublication(
+                    new ClaimModelProviderCredentialWrite(
+                        opUndispatched, head.Revision, head.CredentialSlotId,
+                        ModelProviderCredentialScope.Platform, null, providerId,
+                        ModelProviderCredentialVaultSource.Byok, head.SecretName, adminSub),
+                    2, "credential-publication",
+                    new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri, TenantId),
+                CancellationToken.None);
+        }
+        using (var undispatchedReplay = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId}/credential"))
+        {
+            undispatchedReplay.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+            undispatchedReplay.Headers.Add("X-Agentweaver-Tenant", TenantId);
+            undispatchedReplay.Headers.TryAddWithoutValidation("If-Match", "2");
+            undispatchedReplay.Headers.Add("Idempotency-Key", opUndispatched.ToString("D"));
+            undispatchedReplay.Content = new ByteArrayContent(Encoding.UTF8.GetBytes("sk-rotated-utf8-\u03C0"));
+            undispatchedReplay.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var resp = await gateway.Client.SendAsync(undispatchedReplay);
+            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            Assert.Equal(2L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+        }
+        using (var diScope = broker.Services.CreateScope())
+        {
+            var store = diScope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var replayed = await store.ReadWriteClaimByOperationAsync(opUndispatched, CancellationToken.None);
+            Assert.Equal(expectedSlotId, replayed!.CredentialSlotId);
+            Assert.Equal(1L, replayed.ExpectedRevision);
+        }
+    }
+
+    [Fact]
     public async Task ByokCredentialLifecycleDisableRejectsStaleSlotOrVersionUnderProviderLockAndPreservesReplayAndPins()
     {
         using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(

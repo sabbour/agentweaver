@@ -40,6 +40,139 @@ public sealed class GatewayModelProviderDraftTests
     ];
 
     [Fact]
+    public async Task CredentialPutStreamsOctetStreamRejectsUnsupportedMediaTypeAndAbortsOnPostHeaderError()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        string? forwardedContentType = null;
+        string? forwardedIfMatch = null;
+        string? forwardedIdempotency = null;
+        byte[]? forwardedBytes = null;
+        var throwAfterHeaders = false;
+
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new HttpClientHandler(),
+            async (owner, req, ct) =>
+            {
+                if (owner != GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker)
+                    throw new InvalidOperationException($"Unexpected owner {owner}.");
+
+                if (throwAfterHeaders)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StreamContent(new FailingMidStream()),
+                    };
+                }
+
+                forwardedContentType = req.Content?.Headers.ContentType?.MediaType;
+                forwardedIfMatch = req.Headers.TryGetValues("If-Match", out var ifm) ? string.Join(",", ifm) : null;
+                forwardedIdempotency = req.Headers.TryGetValues("Idempotency-Key", out var idem) ? string.Join(",", idem) : null;
+                forwardedBytes = req.Content is null ? null : await req.Content.ReadAsByteArrayAsync(ct);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"operationId":"11111111-1111-1111-1111-111111111111","status":"published","scope":"platform","projectId":null,"providerId":"byok-1"}""",
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            });
+
+        using var openApiResp = await gateway.Client.GetAsync("/openapi/v1.json");
+        openApiResp.EnsureSuccessStatusCode();
+        using var openApi = JsonDocument.Parse(await openApiResp.Content.ReadAsStringAsync());
+        var putOp = openApi.RootElement.GetProperty("paths")
+            .GetProperty("/api/v1/platform/byok-providers/{providerId}/credential")
+            .GetProperty("put");
+        var reqContent = putOp.GetProperty("requestBody").GetProperty("content");
+        Assert.True(reqContent.TryGetProperty("application/json", out _));
+        Assert.Equal("binary", reqContent.GetProperty("application/octet-stream").GetProperty("schema").GetProperty("format").GetString());
+        var paramNames = putOp.GetProperty("parameters").EnumerateArray().Select(p => p.GetProperty("name").GetString()).ToArray();
+        Assert.Contains("If-Match", paramNames);
+        Assert.Contains("Idempotency-Key", paramNames);
+
+        var bearer = CreateToken(signingKey);
+
+        // Unsupported media type returns 415 before calling Broker.
+        using (var badMedia = new HttpRequestMessage(HttpMethod.Put, "/api/v1/platform/byok-providers/byok-1/credential"))
+        {
+            badMedia.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            badMedia.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+            badMedia.Content = new StringContent("plain", Encoding.UTF8, "text/plain");
+            using var badMediaResp = await gateway.Client.SendAsync(badMedia);
+            Assert.Equal(HttpStatusCode.UnsupportedMediaType, badMediaResp.StatusCode);
+            Assert.Null(forwardedBytes);
+        }
+
+        // Oversized application/octet-stream returns 413 without buffering >8192 bytes.
+        using (var oversized = new HttpRequestMessage(HttpMethod.Put, "/api/v1/platform/byok-providers/byok-1/credential"))
+        {
+            oversized.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            oversized.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+            oversized.Content = new ByteArrayContent(new byte[8193]);
+            oversized.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var oversizedResp = await gateway.Client.SendAsync(oversized);
+            Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversizedResp.StatusCode);
+        }
+
+        // Valid UTF-8 octet-stream forwards headers and exact bytes with no-store.
+        var utf8Bytes = Encoding.UTF8.GetBytes("sk-gw-\u03C0-\U0001F511");
+        using (var valid = new HttpRequestMessage(HttpMethod.Put, "/api/v1/platform/byok-providers/byok-1/credential"))
+        {
+            valid.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            valid.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+            valid.Headers.TryAddWithoutValidation("If-Match", "2");
+            valid.Headers.Add("Idempotency-Key", "11111111-1111-1111-1111-111111111111");
+            valid.Content = new ByteArrayContent(utf8Bytes);
+            valid.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var validResp = await gateway.Client.SendAsync(valid);
+            Assert.Equal(HttpStatusCode.OK, validResp.StatusCode);
+            Assert.True(validResp.Headers.CacheControl?.NoStore);
+            Assert.Equal("application/octet-stream", forwardedContentType);
+            Assert.Equal("2", forwardedIfMatch);
+            Assert.Equal("11111111-1111-1111-1111-111111111111", forwardedIdempotency);
+            Assert.Equal(utf8Bytes, forwardedBytes);
+        }
+
+        // Failure after response headers start aborts cleanly instead of throwing from WriteProblemAsync.
+        throwAfterHeaders = true;
+        using (var midFail = new HttpRequestMessage(HttpMethod.Put, "/api/v1/platform/byok-providers/byok-1/credential"))
+        {
+            midFail.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            midFail.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+            midFail.Content = new ByteArrayContent(utf8Bytes);
+            midFail.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            await Assert.ThrowsAnyAsync<Exception>(() => gateway.Client.SendAsync(midFail));
+        }
+    }
+
+    private sealed class FailingMidStream : Stream
+    {
+        private bool _sentFirst;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("Simulated mid-stream failure.");
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (!_sentFirst)
+            {
+                _sentFirst = true;
+                buffer.Span[0] = (byte)'{';
+                return ValueTask.FromResult(1);
+            }
+            throw new IOException("Simulated mid-stream failure.");
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task CredentialOperationStatusRoutesExposeOpenApiContractsAndReturn503WhenOwnerUnavailable()
     {
         using var rsa = RSA.Create(2048);

@@ -873,7 +873,7 @@ public sealed class ByokDraftCommandsTests
     }
 
     [Fact]
-    public async Task HelpListsRuntimeCommandsWithoutCredentialUpload()
+    public async Task HelpListsRuntimeCommandsIncludingSetKey()
     {
         using var output = new StringWriter();
 
@@ -881,9 +881,237 @@ public sealed class ByokDraftCommandsTests
             ["--help"], new CliRuntimeOptions(Output: output)));
 
         Assert.Contains("byok save-prices", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("byok set-key", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("byok recheck-key", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("byok disable-key", output.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("set-key", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetKeyPreservesUtf8BytesStripsSingleTrailingCrLfAndOmitsEvidence()
+    {
+        const string secret = "sk-utf8-\u03C0-\U0001F511";
+        using var fixture = new Fixture();
+        using var stdin = new MemoryStream(Encoding.UTF8.GetBytes(secret + "\r\n"));
+        fixture.StandardInput = stdin;
+        fixture.StandardInputRedirected = true;
+        fixture.Respond = request =>
+        {
+            if (request.Method == "GET" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}")
+                return JsonResponse(Provider(ProviderId, "Primary", revision: 3));
+            if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+                return JsonResponse(new JsonObject { ["code"] = "credential_operation_not_found" }, HttpStatusCode.NotFound);
+            if (request.Method == "PUT" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}/credential")
+                return JsonResponse(CredentialReceipt("published", secret));
+            return JsonResponse("{}", HttpStatusCode.NotFound);
+        };
+
+        var exit = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "3", "--operation-id", OperationId);
+
+        Assert.Equal(0, exit);
+        var put = Assert.Single(fixture.Requests, r => r.Method == "PUT");
+        Assert.Equal("application/octet-stream", put.ContentType);
+        Assert.Equal("3", put.Headers["If-Match"]);
+        Assert.Equal(OperationId, put.Headers["Idempotency-Key"]);
+        Assert.Equal(Encoding.UTF8.GetBytes(secret), put.BodyBytes);
+        Assert.DoesNotContain(secret, fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.LastCreatedClient!.Calls, call =>
+            call.ToJsonString().Contains(secret, StringComparison.Ordinal) ||
+            GatewayContract.String(call, "operationId") == "setPlatformByokProviderCredential");
+    }
+
+    [Fact]
+    public async Task SetKeyProjectIgnoresAmbientRunIdAndUsesRunlessProjectIdentity()
+    {
+        var previousRunId = Environment.GetEnvironmentVariable("AGENTWEAVER_RUN_ID");
+        Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", "run-ambient-999");
+        try
+        {
+            const string secret = "sk-proj-\u00E9";
+            using var fixture = new Fixture();
+            using var stdin = new MemoryStream(Encoding.UTF8.GetBytes(secret + "\n"));
+            fixture.StandardInput = stdin;
+            fixture.StandardInputRedirected = true;
+            fixture.Respond = request =>
+            {
+                if (request.Method == "GET" && request.Path == $"/api/v1/projects/project-1/byok-providers/{ProviderId}")
+                    return JsonResponse(Provider(ProviderId, "Proj", revision: 2, scope: "project", projectId: "project-1"));
+                if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+                    return JsonResponse(new JsonObject { ["code"] = "credential_operation_not_found" }, HttpStatusCode.NotFound);
+                if (request.Method == "PUT" && request.Path == $"/api/v1/projects/project-1/byok-providers/{ProviderId}/credential")
+                {
+                    return JsonResponse(new JsonObject
+                    {
+                        ["operationId"] = OperationId,
+                        ["status"] = "published",
+                        ["scope"] = "project",
+                        ["projectId"] = "project-1",
+                        ["providerId"] = ProviderId,
+                        ["providerRevision"] = 3,
+                        ["credentialRevision"] = 1,
+                    });
+                }
+                return JsonResponse("{}", HttpStatusCode.NotFound);
+            };
+
+            var exit = await fixture.RunProject(
+                "set-key", ProviderId, "--from-stdin",
+                "--expected-revision", "2", "--operation-id", OperationId);
+
+            Assert.Equal(0, exit);
+            Assert.Equal("project-1", fixture.Authentication.Identity?.ProjectId);
+            Assert.Null(fixture.Authentication.Identity?.RunId);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", previousRunId);
+        }
+    }
+
+    [Fact]
+    public async Task SetKeyDoesNotReadStdinOnExistingOperationOrStaleRevision()
+    {
+        using var fixture = new Fixture();
+        using var trackingStdin = new ReadTrackingStream(Encoding.UTF8.GetBytes("sk-never-read\n"));
+        fixture.StandardInput = trackingStdin;
+        fixture.StandardInputRedirected = true;
+        fixture.Respond = request =>
+        {
+            if (request.Method == "GET" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}")
+                return JsonResponse(Provider(ProviderId, "Primary", revision: 3));
+            if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+            {
+                return JsonResponse(new JsonObject
+                {
+                    ["operationId"] = OperationId,
+                    ["scope"] = "platform",
+                    ["projectId"] = null,
+                    ["providerId"] = ProviderId,
+                    ["status"] = "published",
+                    ["providerRevision"] = 4,
+                    ["hasCredential"] = true,
+                });
+            }
+            return JsonResponse("{}", HttpStatusCode.NotFound);
+        };
+
+        var exitExisting = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "3", "--operation-id", OperationId);
+
+        Assert.Equal(1, exitExisting);
+        Assert.Equal(0, trackingStdin.ReadCalls);
+        Assert.DoesNotContain(fixture.Requests, r => r.Method == "PUT");
+
+        var exitStale = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "2", "--operation-id", OperationId);
+        Assert.Equal(1, exitStale);
+        Assert.Equal(0, trackingStdin.ReadCalls);
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0xFF, 0xFE })]
+    [InlineData(new byte[] { (byte)' ', (byte)'\t', (byte)'\n' })]
+    [InlineData(new byte[] { (byte)'\n' })]
+    public async Task SetKeyRejectsInvalidUtf8WhitespaceAndEmptyWithoutSendingPut(byte[] rawStdin)
+    {
+        using var fixture = new Fixture();
+        using var stdin = new MemoryStream(rawStdin);
+        fixture.StandardInput = stdin;
+        fixture.StandardInputRedirected = true;
+        fixture.Respond = request =>
+        {
+            if (request.Method == "GET" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}")
+                return JsonResponse(Provider(ProviderId, "Primary", revision: 1));
+            if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+                return JsonResponse(new JsonObject { ["code"] = "credential_operation_not_found" }, HttpStatusCode.NotFound);
+            return JsonResponse("{}", HttpStatusCode.NotFound);
+        };
+
+        var exit = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "1", "--operation-id", OperationId);
+
+        Assert.Equal(1, exit);
+        Assert.DoesNotContain(fixture.Requests, r => r.Method == "PUT");
+    }
+
+    [Fact]
+    public async Task SetKeyRecoversViaGetOnLostPutResponseWithoutResendingKey()
+    {
+        const string secret = "sk-recover-123";
+        using var fixture = new Fixture();
+        using var stdin = new MemoryStream(Encoding.UTF8.GetBytes(secret + "\n"));
+        fixture.StandardInput = stdin;
+        fixture.StandardInputRedirected = true;
+        var getStatusCalls = 0;
+        fixture.Respond = request =>
+        {
+            if (request.Method == "GET" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}")
+                return JsonResponse(Provider(ProviderId, "Primary", revision: 1));
+            if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+            {
+                getStatusCalls++;
+                return getStatusCalls == 1
+                    ? JsonResponse(new JsonObject { ["code"] = "credential_operation_not_found" }, HttpStatusCode.NotFound)
+                    : JsonResponse(new JsonObject
+                    {
+                        ["operationId"] = OperationId,
+                        ["scope"] = "platform",
+                        ["projectId"] = null,
+                        ["providerId"] = ProviderId,
+                        ["status"] = "published",
+                        ["providerRevision"] = 2,
+                        ["hasCredential"] = true,
+                    });
+            }
+            if (request.Method == "PUT")
+                return JsonResponse("{\"code\":\"unavailable\"}", HttpStatusCode.ServiceUnavailable);
+            return JsonResponse("{}", HttpStatusCode.NotFound);
+        };
+
+        var exit = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "1", "--operation-id", OperationId);
+
+        Assert.Equal(0, exit);
+        Assert.Single(fixture.Requests, r => r.Method == "PUT");
+        Assert.Equal(2, getStatusCalls);
+        Assert.DoesNotContain(secret, fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GatewayContractParsesOctetStreamWhileGenericInvokeRejectsNonJsonRequestBody()
+    {
+        using var fixture = new Fixture();
+        var identity = CliConfiguration.ReadIdentity(
+            ["projects.admin"],
+            options: CliOptions.Parse(TargetOptions, new HashSet<string>(StringComparer.Ordinal)),
+            unbound: true);
+        var client = fixture.Create(identity);
+        var doc = await client.DiscoverAsync(CancellationToken.None);
+        var ops = GatewayContract.Parse(doc);
+        var setOp = ops["setPlatformByokProviderCredential"];
+        Assert.Contains("application/octet-stream", setOp.RequestBodyMediaTypes!);
+        Assert.Contains("application/json", setOp.RequestBodyMediaTypes!);
+
+        fixture.TransformOpenApi = openApi =>
+        {
+            var content = openApi["paths"]!["/api/v1/platform/byok-providers/{providerId}/credential"]!["put"]!["requestBody"]!["content"]!.AsObject();
+            content.Remove("application/json");
+        };
+        var binaryOnlyClient = fixture.Create(identity);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => binaryOnlyClient.InvokeAsync(
+            "setPlatformByokProviderCredential",
+            new GatewayInvocation(
+                new Dictionary<string, string> { ["providerId"] = ProviderId },
+                Body: new JsonObject { ["operationId"] = OperationId }),
+            CancellationToken.None));
+        Assert.Contains("JSON request body", ex.Message, StringComparison.Ordinal);
     }
 
     private static string Page(IReadOnlyList<JsonObject> providers, string? nextAfterProviderId) =>
@@ -1043,9 +1271,12 @@ public sealed class ByokDraftCommandsTests
         public Authentication Authentication { get; } = new();
         public Func<Request, HttpResponseMessage>? Respond { get; set; }
         public Action<JsonObject>? TransformOpenApi { get; set; }
+        public Stream? StandardInput { get; set; }
+        public bool? StandardInputRedirected { get; set; }
+        public IGatewayClient? LastCreatedClient { get; private set; }
 
         public IGatewayClient Create(CliIdentity identity) =>
-            new GatewayClient(_http, identity, Authentication);
+            LastCreatedClient = new GatewayClient(_http, identity, Authentication);
 
         public Task<int> Run(params string[] args) =>
             Run(CancellationToken.None, args);
@@ -1057,7 +1288,11 @@ public sealed class ByokDraftCommandsTests
                     GatewayClientFactory: this,
                     Authentication: Authentication,
                     Output: Output,
-                    Error: Error),
+                    Error: Error)
+                {
+                    StandardInput = StandardInput,
+                    StandardInputRedirected = StandardInputRedirected,
+                },
                 cancellationToken);
 
         public Task<int> RunProject(params string[] args) =>
@@ -1067,7 +1302,11 @@ public sealed class ByokDraftCommandsTests
                     GatewayClientFactory: this,
                     Authentication: Authentication,
                     Output: Output,
-                    Error: Error));
+                    Error: Error)
+                {
+                    StandardInput = StandardInput,
+                    StandardInputRedirected = StandardInputRedirected,
+                });
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -1099,10 +1338,21 @@ public sealed class ByokDraftCommandsTests
                 });
             }
 
-            var body = request.Content is null
-                ? string.Empty
-                : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            var captured = new Request(request.Method.Method, request.RequestUri.PathAndQuery, path, body);
+            var bodyBytes = request.Content is null
+                ? []
+                : await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+            var body = Encoding.UTF8.GetString(bodyBytes);
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var h in request.Headers)
+                headers[h.Key] = string.Join(",", h.Value);
+            var captured = new Request(
+                request.Method.Method,
+                request.RequestUri.PathAndQuery,
+                path,
+                body,
+                bodyBytes,
+                request.Content?.Headers.ContentType?.MediaType,
+                headers);
             Requests.Add(captured);
             return Respond?.Invoke(captured) ??
                    JsonResponse("{}", HttpStatusCode.NotFound);
@@ -1116,7 +1366,25 @@ public sealed class ByokDraftCommandsTests
         }
     }
 
-    private sealed record Request(string Method, string PathAndQuery, string Path, string Body)
+    private sealed class ReadTrackingStream(byte[] data) : MemoryStream(data)
+    {
+        public int ReadCalls { get; private set; }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            ReadCalls++;
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
+    private sealed record Request(
+        string Method,
+        string PathAndQuery,
+        string Path,
+        string Body,
+        byte[] BodyBytes,
+        string? ContentType,
+        IReadOnlyDictionary<string, string> Headers)
     {
         public string Query => PathAndQuery.Contains('?')
             ? PathAndQuery[(PathAndQuery.IndexOf('?') + 1)..]

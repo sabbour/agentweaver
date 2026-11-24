@@ -110,11 +110,13 @@ do not accept rate values. The public response `state` is `Draft` or
 [service contract](./contracts.md#customer-provided-model-provider-draft-contract).
 
 The CLI exposes these routes as `platform byok` and `project byok` commands.
-It excludes credential upload from command dispatch. `recheck-key` calls the
-credential `PUT` with `recheckExistingVersion: true`; `disable-key` calls the
-credential `DELETE` with `cancel: false`. The CLI prints only validated
-receipt fields and uses exit code `1` for conflicts, quarantined credentials,
-and pending publication, and code `130` for cancellation.
+`set-key` uploads a UTF-8 API key as `application/octet-stream` (`If-Match` for
+the provider revision and `Idempotency-Key` for the operation ID) after verifying
+the draft revision and operation status (`404`). `recheck-key` calls the
+credential `PUT` with `application/json` and `recheckExistingVersion: true`;
+`disable-key` calls the credential `DELETE` with `cancel: false`. The CLI
+prints only validated receipt fields and uses exit code `1` for conflicts,
+quarantined credentials, and pending publication, and code `130` for cancellation.
 See the [contract details](./contracts.md#customer-provided-model-provider-draft-contract).
 
 To inspect an in-flight or uncertain credential operation without re-sending

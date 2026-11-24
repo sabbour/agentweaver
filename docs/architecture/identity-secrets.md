@@ -138,6 +138,11 @@ and `/api/projects/{projectId}/byok-providers/{providerId}/credential`), proxied
 through Gateway, plus read-only operation status routes
 (`/api/platform/byok-providers/{providerId}/credential/operations/{operationId}`
 and `/api/projects/{projectId}/byok-providers/{providerId}/credential/operations/{operationId}`).
+`PUT` accepts both `application/json` (for `recheckExistingVersion` and
+`recoverySecretVersion`) and non-buffered `application/octet-stream` (up to 8,192
+valid UTF-8 bytes with `If-Match` and `Idempotency-Key`), validating authority
+and preflight before reading or claiming the slot so invalid bodies never wedge
+a provider.
 Status reads query Projects & Config via `/internal/byok/credential-publications/v2/read-operation`
 without creating preflight rows, calling Key Vault, or mutating state, and keep
 `publication_pending` or `disable_pending` until Broker completes the operation.
