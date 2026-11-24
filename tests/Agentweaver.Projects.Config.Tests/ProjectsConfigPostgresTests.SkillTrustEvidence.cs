@@ -401,7 +401,7 @@ public sealed partial class ProjectsConfigPostgresTests
                 setup.Project.Owner,
                 setup.Project.Project.ProjectId,
                 initialConfig.Revision,
-                initialConfig.Configuration with
+                ProjectSettings() with
                 {
                     Casting = [new ProjectAgentCast(agentId, "assistant", 0)],
                 },
@@ -581,7 +581,7 @@ public sealed partial class ProjectsConfigPostgresTests
                 setup.Project.Owner, setup.Project.Project.ProjectId, null, CancellationToken.None);
             var agentId = "agent-one";
             var runId = "run-legacy-scan-" + setup.Project.Suffix;
-            var configWithMalicious = initialConfig.Configuration with
+            var configWithMalicious = ProjectSettings() with
             {
                 Casting = [new ProjectAgentCast(agentId, "assistant", 0)],
                 Skills =
