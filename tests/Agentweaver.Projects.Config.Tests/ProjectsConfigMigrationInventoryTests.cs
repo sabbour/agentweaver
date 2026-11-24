@@ -69,4 +69,35 @@ public sealed class ProjectsConfigMigrationInventoryTests(
             migrationIds.IndexOf("20261113221434_EnforceOneNativeAcsPolicyHeadPerScope"));
         Assert.All(migrationIds, migrationId => Assert.Contains('_', migrationId));
     }
+
+    [Fact]
+    public async Task SettleCredentialOperationsDrainsOpenOperationInsertAndFailsClosedOnTimeout()
+    {
+        await using var holder = await fixture.DataSource.OpenConnectionAsync();
+        await using var tx = await holder.BeginTransactionAsync();
+        await using (var lockCmd = new NpgsqlCommand(
+            "LOCK TABLE projects_config.model_provider_credential_operations IN ROW EXCLUSIVE MODE",
+            holder,
+            tx))
+        {
+            await lockCmd.ExecuteNonQueryAsync();
+        }
+
+        var timeoutError = await Assert.ThrowsAsync<PostgresException>(() =>
+            ProjectsConfigMigrator.SettleCredentialOperationsAsync(
+                fixture.MigrationDataSource,
+                TimeSpan.FromSeconds(1)));
+        Assert.Equal(PostgresErrorCodes.LockNotAvailable, timeoutError.SqlState);
+
+        var nonOwnerError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ProjectsConfigMigrator.SettleCredentialOperationsAsync(
+                fixture.DataSource,
+                TimeSpan.FromSeconds(1)));
+        Assert.Contains("owner", nonOwnerError.Message, StringComparison.OrdinalIgnoreCase);
+
+        await tx.CommitAsync();
+        await ProjectsConfigMigrator.SettleCredentialOperationsAsync(
+            fixture.MigrationDataSource,
+            TimeSpan.FromSeconds(5));
+    }
 }

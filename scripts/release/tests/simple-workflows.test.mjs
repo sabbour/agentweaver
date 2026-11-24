@@ -12,8 +12,9 @@ import {
   assertTargetContext,
   BYOK_SMOKE_LOOP,
   deleteContainerNetworkLog,
-  deployKustomize,
+  deployKustomize as realDeployKustomize,
   ENVIRONMENT_RBAC_REQUIREMENTS,
+  verifyImageCapability,
   ensureAgentHostPlatformEgressSeed,
   parseDeployKustomizeArgs,
   parseImageManifest,
@@ -28,6 +29,10 @@ import {
   stampEventsRuntimeConfigDigest,
 } from '../model-bindings-overlay.mjs';
 import { applyTargetValues, targetValuePairs } from '../target-values.mjs';
+import { run } from '../../azure/lib/exec.mjs';
+
+const deployKustomize = (options, overrides = {}) =>
+  realDeployKustomize(options, { verifyImageCapability: async () => {}, ...overrides });
 import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
 import { classify } from '../../ci/v1-changes.mjs';
 
@@ -69,7 +74,7 @@ const serviceNames = [
 ];
 const jobNames = [
   'identity-broker-migration', 'environment-migration', 'orchestrator-migration',
-  'events-and-sessions-migration', 'projects-config-migration',
+  'events-and-sessions-migration', 'projects-config-credential-settlement', 'projects-config-migration',
 ];
 const imageRepositories = readYaml('deploy/k8s/kustomization.yaml').images
   .map(({ name }) => name.replace(`${REGISTRY}/`, ''));
@@ -2290,6 +2295,63 @@ test('Kustomize release preserves a validated active provider successor with a r
   }
 });
 
+test('Broker quiesce refreshes providerSetup resourceVersion after simulated kubectl scale', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  const plan = buildIdentityBrokerProviderPlan(providerSetupInput, root);
+  const liveImageRefs = Object.fromEntries(imageRepositories.map(repository => [repository, existingTag]));
+  liveImageRefs['agentweaver-agenthost'] = existingAgentHostRegistry.childDigest;
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver.identity.broker': selectedTag } }));
+  let brokerResourceVersion = '10';
+  const baseExec = fakeExec(calls, { liveProviderSetup: plan, liveImageRefs, distinctDigests: true });
+  const scalingExec = (command, args, options) => {
+    if (command === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'identity-broker') {
+      const res = baseExec(command, args, options);
+      if (res.status === 0 && res.stdout.trim()) {
+        const dep = JSON.parse(res.stdout);
+        dep.metadata.resourceVersion = brokerResourceVersion;
+        return { ...res, stdout: JSON.stringify(dep) };
+      }
+      return res;
+    }
+    if (command === 'kubectl' && args[0] === 'scale' && args[1] === 'deployment/identity-broker') {
+      brokerResourceVersion = '11';
+      calls.push({ command, args, options });
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    if (command === 'kubectl' && args[0] === 'annotate' && args[1] === 'deployment/identity-broker') {
+      calls.push({ command, args, options });
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    if (command === 'kubectl' && args[0] === 'get' && args[1] === 'pods' && args.includes('--selector')) {
+      calls.push({ command, args, options });
+      return { status: 0, stdout: JSON.stringify({ items: [] }), stderr: '' };
+    }
+    if (command === 'kubectl' && args[0] === 'patch' && args[1] === 'deployment/identity-broker') {
+      const patch = JSON.parse(args[args.indexOf('--patch') + 1]);
+      const testedRv = patch.find(op => op.op === 'test' && op.path === '/metadata/resourceVersion')?.value;
+      if (testedRv !== brokerResourceVersion) {
+        return { status: 1, stdout: '', stderr: `Conflict: expected ${brokerResourceVersion}, got ${testedRv}` };
+      }
+      calls.push({ command, args, options });
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    return baseExec(command, args, options);
+  };
+  try {
+    await deployKustomize({ imageManifest: manifestPath }, {
+      root: directory, exec: scalingExec, sleep: async () => {}, log() {},
+    });
+    const patchCall = calls.find(call => call.command === 'kubectl' &&
+      call.args[0] === 'patch' && call.args[1] === 'deployment/identity-broker');
+    const patch = JSON.parse(patchCall.args[patchCall.args.indexOf('--patch') + 1]);
+    assert.equal(patch.find(op => op.path === '/metadata/resourceVersion').value, '11');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('provider activation during release migrations blocks the stale Broker release write', async () => {
   const directory = scratch();
   const calls = [];
@@ -2861,7 +2923,7 @@ test('deployment creates existing migration Jobs directly before one namespaced 
     assert.equal(createdJobs.every(value => value.spec.ttlSecondsAfterFinished === 3600), true);
     assert.equal(createdJobs.every(value => value.spec.template.spec.containers[0].image.startsWith(`${REGISTRY}/`)), true);
     assert.equal(createdJobs[1].spec.template.spec.containers[0].env[0].value, serviceClientId);
-    const projectsConfigJob = createdJobs[4];
+    const projectsConfigJob = createdJobs[5];
     const projectsConfigSpec = projectsConfigJob.spec.template.spec;
     const projectsConfigEnv = Object.fromEntries(
       projectsConfigSpec.containers[0].env.map(({ name, value }) => [name, value]),
@@ -3255,10 +3317,228 @@ test('single Broker image update runs only its matching migration Job', async ()
       .map(call => parse(call.options.input))
       .filter(value => value.kind === 'Job');
     assert.deepEqual(createdJobs.map(value => value.metadata.name.split('-').slice(0, -1).join('-')),
-      ['identity-broker-migration']);
+      ['identity-broker-migration', 'projects-config-credential-settlement']);
     const identityReads = calls.filter(call => call.command === 'az' && call.args[0] === 'identity' &&
       call.args[1] === 'show' && call.args.includes('agentweaver-id-identity-broker-migration'));
     assert.equal(identityReads.length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker update quiesces identity-broker and projects-config, settles credentials, and blocks rollback', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const gatewayOnlyPath = path.join(directory, 'gateway-only.json');
+  const calls = [];
+  const liveImageRefs = Object.fromEntries(imageRepositories.map(repository => [repository, existingTag]));
+  liveImageRefs['agentweaver-agenthost'] = existingAgentHostRegistry.childDigest;
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver.identity.broker': selectedTag } }));
+  writeFileSync(gatewayOnlyPath, JSON.stringify({ images: { 'agentweaver.gateway': selectedTag } }));
+  try {
+    const baseExec = fakeExec(calls, { liveImageRefs, distinctDigests: true });
+    const execWithDeployments = (command, args, options) => {
+      if (command === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' &&
+          args.includes('--ignore-not-found=true') && args[2] === 'projects-config') {
+        calls.push({ command, args, options });
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            metadata: { name: args[2], namespace: 'agentweaver' },
+            spec: {
+              replicas: 2,
+              selector: { matchLabels: { 'app.kubernetes.io/name': args[2] } },
+              template: { spec: { containers: [{ image: existingTag }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (command === 'kubectl' && args[0] === 'get' && args[1] === 'pods' && args.includes('--selector')) {
+        calls.push({ command, args, options });
+        return { status: 0, stdout: JSON.stringify({ items: [] }), stderr: '' };
+      }
+      if (command === 'kubectl' && args[0] === 'annotate') {
+        calls.push({ command, args, options });
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (command === 'kubectl' && args[0] === 'scale') {
+        calls.push({ command, args, options });
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return baseExec(command, args, options);
+    };
+
+    // 1. Old Projects image lacking --settle-credential-operations fails BEFORE scaling anything to 0.
+    await assert.rejects(
+      deployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: execWithDeployments,
+        sleep: async () => {},
+        verifyImageCapability: async ({ capability }) => {
+          if (capability === 'projects-config-settlement') {
+            throw new Error('Projects & Config image does not support --settle-credential-operations');
+          }
+        },
+        log() {},
+      }),
+      /does not support --settle-credential-operations/);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'scale'), false);
+
+    // 2. Interrupted cutover rerun (projects-config at replicas: 0 with restore annotation=2) restores 2 and clears annotation.
+    calls.length = 0;
+    const rerunExec = (command, args, options) => {
+      if (command === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' &&
+          args.includes('--ignore-not-found=true') && args[2] === 'projects-config') {
+        calls.push({ command, args, options });
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            metadata: {
+              name: 'projects-config',
+              namespace: 'agentweaver',
+              annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+            },
+            spec: {
+              replicas: 0,
+              selector: { matchLabels: { 'app.kubernetes.io/name': 'projects-config' } },
+              template: { spec: { containers: [{ image: existingTag }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      return execWithDeployments(command, args, options);
+    };
+    await deployKustomize({ imageManifest: manifestPath }, {
+      root: directory, exec: rerunExec, sleep: async () => {},
+      verifyImageCapability: async () => {}, log() {},
+    });
+    const scaleProjectsBeforeSettle = calls.findIndex((call, index) => index < calls.length &&
+      call.command === 'kubectl' && call.args[0] === 'scale' &&
+      call.args[1] === 'deployment/projects-config' && call.args.includes('--replicas=0'));
+    const persistFloor = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      call.options?.input?.includes('identityBroker.disableFenceRequired'));
+    const settleCreate = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      call.options?.input?.includes('projects-config-credential-settlement'));
+    const applyCall = calls.find(call => call.command === 'kubectl' && call.args[0] === 'apply');
+    assert.ok(scaleProjectsBeforeSettle === -1 || scaleProjectsBeforeSettle > settleCreate);
+    assert.ok(persistFloor >= 0 && settleCreate >= 0);
+    assert.ok(settleCreate < calls.indexOf(applyCall));
+    assert.ok(applyCall.options.input.includes('replicas: 2'));
+    assert.ok(calls.some(call => call.command === 'kubectl' && call.args[0] === 'annotate' &&
+      call.args[1] === 'deployment/projects-config' &&
+      call.args[2] === 'agentweaver.io/local-deploy-restore-replicas-'));
+
+    // 3. Durable floor blocks rollback even on a partial deploy that omits agentweaver.identity.broker.
+    const rollbackExec = (command, args, options) => {
+      if (command === 'kubectl' && args[0] === 'get' && args[1] === 'configmap' &&
+          args[2] === 'p1-db-maintenance-state') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ data: { 'identityBroker.disableFenceRequired': 'true' } }),
+          stderr: '',
+        };
+      }
+      return execWithDeployments(command, args, options);
+    };
+    await assert.rejects(
+      deployKustomize({ imageManifest: gatewayOnlyPath }, {
+        root: directory,
+        exec: rollbackExec,
+        sleep: async () => {},
+        verifyImageCapability: async ({ capability }) => {
+          if (capability === 'identity-broker-disable-fence') {
+            throw new Error('Identity Broker rollback guard blocks pre-fence image');
+          }
+        },
+        log() {},
+      }),
+      /Identity Broker rollback guard blocks/);
+
+    // 4. verifyImageCapability enforces origin/v1 ancestry and source file presence.
+    const v1Sha = run('git', ['rev-parse', 'origin/v1'], { cwd: root }).stdout.trim();
+    const headSha = run('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+    const headTree = run('git', ['rev-parse', '--verify', `${headSha}^{tree}`], { cwd: root }).stdout.trim();
+    await assert.rejects(
+      verifyImageCapability({
+        image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
+        capability: 'projects-config-settlement',
+        root,
+        exec: run,
+        readImage: async () => ({ sourceSha: '0'.repeat(40), sourceTree: '0'.repeat(40) }),
+      }),
+      /is not an ancestor of origin\/v1/);
+    await assert.rejects(
+      verifyImageCapability({
+        image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
+        capability: 'projects-config-settlement',
+        root,
+        exec: run,
+        readImage: async () => ({ sourceSha: v1Sha, sourceTree: 'f'.repeat(40) }),
+      }),
+      /does not match commit/);
+    await assert.rejects(
+      verifyImageCapability({
+        image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
+        capability: 'projects-config-settlement',
+        root,
+        exec: run,
+        readImage: async () => ({ sourceSha: v1Sha, sourceTree: run('git', ['rev-parse', '--verify', `${v1Sha}^{tree}`], { cwd: root }).stdout.trim() }),
+      }),
+      /does not support --settle-credential-operations/);
+    await assert.rejects(
+      verifyImageCapability({
+        image: `${REGISTRY}/agentweaver.identity.broker@${'a'.repeat(64)}`,
+        capability: 'identity-broker-disable-fence',
+        root,
+        exec: run,
+        readImage: async () => ({ sourceSha: v1Sha, sourceTree: run('git', ['rev-parse', '--verify', `${v1Sha}^{tree}`], { cwd: root }).stdout.trim() }),
+      }),
+      /database requires AddCredentialDisableClaims/);
+    assert.notEqual(headTree, '');
+
+    // 5. Positive verifyImageCapability path against a real bare origin + commit + tree.
+    const bareOrigin = path.join(directory, 'origin.git');
+    const cloneRepo = path.join(directory, 'repo');
+    assert.equal(run('git', ['init', '--bare', bareOrigin], { cwd: directory }).status, 0);
+    assert.equal(run('git', ['init', '-b', 'v1', cloneRepo], { cwd: directory }).status, 0);
+    assert.equal(run('git', ['config', 'user.name', 'Test'], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['config', 'user.email', 'test@example.com'], { cwd: cloneRepo }).status, 0);
+    mkdirSync(path.join(cloneRepo, 'services', 'projects-config', 'Agentweaver.Projects.Config'), { recursive: true });
+    mkdirSync(path.join(cloneRepo, 'services', 'identity', 'Agentweaver.Identity.Broker', 'Migrations'), { recursive: true });
+    writeFileSync(
+      path.join(cloneRepo, 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Program.cs'),
+      'var settle = "--settle-credential-operations";\n',
+    );
+    writeFileSync(
+      path.join(cloneRepo, 'services', 'identity', 'Agentweaver.Identity.Broker', 'Migrations', '20261124020000_AddCredentialDisableClaims.cs'),
+      'public partial class AddCredentialDisableClaims {}\n',
+    );
+    assert.equal(run('git', ['add', '.'], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['commit', '-m', 'capable'], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['remote', 'add', 'origin', bareOrigin], { cwd: cloneRepo }).status, 0);
+    assert.equal(run('git', ['push', 'origin', 'v1'], { cwd: cloneRepo }).status, 0);
+    const capableSha = run('git', ['rev-parse', 'HEAD'], { cwd: cloneRepo }).stdout.trim();
+    const capableTree = run('git', ['rev-parse', '--verify', `${capableSha}^{tree}`], { cwd: cloneRepo }).stdout.trim();
+    await verifyImageCapability({
+      image: `${REGISTRY}/agentweaver.projects.config@${'a'.repeat(64)}`,
+      capability: 'projects-config-settlement',
+      root: cloneRepo,
+      exec: run,
+      readImage: async () => ({ sourceSha: capableSha, sourceTree: capableTree }),
+    });
+    await verifyImageCapability({
+      image: `${REGISTRY}/agentweaver.identity.broker@${'a'.repeat(64)}`,
+      capability: 'identity-broker-disable-fence',
+      root: cloneRepo,
+      exec: run,
+      readImage: async () => ({ sourceSha: capableSha, sourceTree: capableTree }),
+    });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -3308,7 +3588,8 @@ test('active installer guards both runtime maps, activates Environment, and reco
 
     const scaleDown = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
       call.args[1] === 'deployment/environment' && call.args.includes('--replicas=0'));
-    const podWait = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'get' &&
+    const podWait = calls.findIndex((call, index) => index > scaleDown &&
+      call.command === 'kubectl' && call.args[0] === 'get' &&
       call.args[1] === 'pods' && call.args.includes('--selector'));
     const deletions = calls.map((call, index) => ({ call, index }))
       .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'delete' &&
@@ -3354,7 +3635,8 @@ test('active installer guards both runtime maps, activates Environment, and reco
       call.args[1] === '--raw'), false);
     assert.equal(retry.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
       parse(call.options.input).kind === 'ConfigMap'), false);
-    assert.deepEqual(retry.filter(call => call.command === 'kubectl' && call.args[0] === 'scale')
+    assert.deepEqual(retry.filter(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
+      call.args[1] === 'deployment/environment')
       .map(call => call.args[1] + ':' + call.args.find(arg => arg.startsWith('--replicas='))),
     ['deployment/environment:--replicas=0', 'deployment/environment:--replicas=3']);
     assert.equal(state.deployments.environment.spec.replicas, 3);

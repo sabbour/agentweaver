@@ -251,4 +251,29 @@ public static class ProjectsConfigMigrator
         await ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, transaction, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Drains already-dispatched credential operations as the Projects migration table owner.
+    /// </summary>
+    public static async Task SettleCredentialOperationsAsync(
+        NpgsqlDataSource dataSource,
+        TimeSpan? lockTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        var timeoutSeconds = Math.Max(1, (int)Math.Ceiling((lockTimeout ?? TimeSpan.FromSeconds(30)).TotalSeconds));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await ProjectsConfigRuntimeGrantPlan.VerifyMigrationPrincipalAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            $"""
+            SET LOCAL lock_timeout = '{timeoutSeconds}s';
+            LOCK TABLE projects_config.model_provider_credential_operations IN SHARE MODE;
+            """,
+            connection,
+            transaction);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

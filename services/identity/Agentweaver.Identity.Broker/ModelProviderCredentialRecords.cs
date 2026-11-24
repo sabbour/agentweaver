@@ -34,6 +34,8 @@ public enum ModelProviderCredentialWriteClaimState
     PublicationPending,
     Published,
     Cancelled,
+    DisablePending,
+    Disabled,
 }
 
 public enum ModelProviderCredentialWriteClaimStatus
@@ -45,6 +47,8 @@ public enum ModelProviderCredentialWriteClaimStatus
     PublicationPending,
     Published,
     Cancelled,
+    DisablePending,
+    Disabled,
 }
 
 public enum ModelProviderCredentialCurrentStatus
@@ -174,6 +178,42 @@ internal sealed record ModelProviderCredentialPublicationClaimResult(
     string? PublishedConfigurationHash,
     DateTimeOffset? PublishedAt,
     string? PublishedProviderState = null);
+
+internal sealed record ClaimModelProviderCredentialDisable(
+    Guid OperationId,
+    long? ExpectedProviderRevision,
+    long? ExpectedCredentialRevision,
+    ModelProviderCredentialScope Scope,
+    string? ProjectId,
+    string ProviderId,
+    string ActorId,
+    string Issuer);
+
+internal sealed record CompleteModelProviderCredentialDisable(
+    Guid OperationId,
+    long ExpectedCredentialRevision,
+    Guid CredentialSlotId,
+    ModelProviderCredentialScope Scope,
+    string? ProjectId,
+    string ProviderId,
+    string ActorId,
+    string RequestFingerprint,
+    long PublishedProviderRevision,
+    string PublishedConfigurationHash,
+    string OriginalTenant);
+
+internal sealed record ModelProviderCredentialDisableClaimResult(
+    ModelProviderCredentialWriteClaimStatus Status,
+    bool Acquired,
+    long OriginalCredentialRevision,
+    long? CompletedCredentialRevision,
+    Guid CredentialSlotId,
+    string CurrentVersion,
+    long? ExpectedProviderRevision,
+    long? PublishedProviderRevision,
+    string? PublishedConfigurationHash,
+    string RequestFingerprint,
+    ModelProviderCredentialWriteClaim? ExistingOtherClaim);
 
 public sealed record ModelProviderCredentialIdentity(
     Guid CredentialSlotId,

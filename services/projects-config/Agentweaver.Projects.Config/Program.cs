@@ -17,6 +17,9 @@ using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentit
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
+var runSettleCredentialOperations = args.Length == 1 && args[0] == "--settle-credential-operations";
+if (args.Contains("--settle-credential-operations", StringComparer.Ordinal) && !runSettleCredentialOperations)
+    throw new ArgumentException("The --settle-credential-operations command must be used by itself.", nameof(args));
 var runPrivilegedProjectSetup = args.Length == 1 && args[0] == "--privileged-project-setup";
 if (args.Contains("--privileged-project-setup", StringComparer.Ordinal) && !runPrivilegedProjectSetup)
     throw new ArgumentException(
@@ -37,8 +40,8 @@ if (args.Contains(PlatformAdminInspectionCommand.Argument, StringComparer.Ordina
         "The --inspect-first-platform-admin command must be used by itself.", nameof(args));
 
 var builder = WebApplication.CreateBuilder(
-    runMigrations || runPrivilegedProjectSetup || runFirstTenantAdminBootstrap ||
-        runFirstPlatformAdminBootstrap || runFirstPlatformAdminInspection ? [] : args);
+    runMigrations || runSettleCredentialOperations || runPrivilegedProjectSetup ||
+        runFirstTenantAdminBootstrap || runFirstPlatformAdminBootstrap || runFirstPlatformAdminInspection ? [] : args);
 var requestContext = new HttpContextAccessor();
 builder.Services.AddSingleton<IHttpContextAccessor>(requestContext);
 ModelProviderCredentialPublicationEndpoints.SuppressLegacyRequestLogs(builder.Services, requestContext);
@@ -144,6 +147,15 @@ if (runMigrations)
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
         .Options;
     await ProjectsConfigMigrator.MigrateAsync(migrationDataSource, migrationDbOptions);
+    return;
+}
+
+if (runSettleCredentialOperations)
+{
+    await using var migrationDataSource =
+        ProjectsConfigPostgresDataSource.CreateMigrationDataSource(builder.Configuration);
+    await ProjectsConfigMigrator.SettleCredentialOperationsAsync(migrationDataSource);
+    await Console.Out.WriteLineAsync("PROJECTS_CONFIG_CREDENTIAL_OPERATIONS_SETTLED");
     return;
 }
 

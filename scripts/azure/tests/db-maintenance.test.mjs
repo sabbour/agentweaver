@@ -1204,3 +1204,162 @@ test('a separate target runs the full migration on its own cluster with its own 
     assert.ok(!applied.includes('agentweaver-pg.'), 'rendered Jobs keep the default PostgreSQL host');
   } finally { fake.done(); }
 });
+
+test('--broker-digest quiesces both services, runs Projects settlement, preserves replicas, and enforces durable floor', async () => {
+  const pcImage = `${DB_MAINTENANCE_TARGET.registry}/agentweaver.projects.config@${digest('e')}`;
+  const ibImage = imageReference('Agentweaver.Identity.Broker', digest('d'));
+  const fake = world({
+    state: {
+      kind: 'ConfigMap',
+      metadata: { name: STATE_NAME },
+      data: { handoverPrincipalObjectId: PRINCIPAL_ID, 'identityBroker.disableFenceRequired': 'true' },
+    },
+  });
+  const baseExec = fake.deps.exec;
+  const execWithBrokerDeployments = (command, args, settings) => {
+    if (command === 'kubectl') {
+      const action = args[4];
+      const rest = args.slice(5);
+      if (action === 'get' && rest[0] === 'deployment' && (rest[1] === 'projects-config' || rest[1] === 'identity-broker')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            metadata: { name: rest[1] },
+            spec: {
+              replicas: rest[1] === 'projects-config' ? 3 : 2,
+              template: { spec: { containers: [{ image: rest[1] === 'projects-config' ? pcImage : ibImage }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (action === 'get' && rest[0] === 'serviceaccount' && rest[1] === 'projects-config-migration') {
+        return { status: 0, stdout: CLIENT_ID, stderr: '' };
+      }
+      if (action === 'get' && rest[0] === 'pods' && rest.includes('-l')) {
+        return { status: 0, stdout: JSON.stringify({ items: [] }), stderr: '' };
+      }
+      if (action === 'scale' || action === 'set' || action === 'annotate') {
+        fake.calls.push({ command, args, settings });
+        return { status: 0, stdout: '', stderr: '' };
+      }
+    }
+    return baseExec(command, args, settings);
+  };
+  try {
+    const args = [...baseArgs, '--broker-digest', digest('f'), '--execute'];
+    const capabilityChecks = [];
+    const receipt = await runDbMaintenance(
+      { ...parseDbMaintenanceArgs(args), receiptDir: fake.receiptDir },
+      {
+        ...fake.deps,
+        exec: execWithBrokerDeployments,
+        verifyImageCapability: async entry => { capabilityChecks.push(entry); },
+      },
+    );
+    assert.equal(receipt.result, 'succeeded');
+    assert.deepEqual(capabilityChecks.map(c => c.capability), ['identity-broker-disable-fence', 'projects-config-settlement']);
+    assert.ok(receipt.steps.some(s => s.name === 'identity-broker-migrated'));
+    assert.ok(receipt.steps.some(s => s.name === 'projects-config-credential-operations-settled'));
+
+    const scaleCalls = fake.calls.filter(c => c.command === 'kubectl' && c.args[4] === 'scale')
+      .map(c => `${c.args[5]}:${c.args[6]}`);
+    assert.deepEqual(scaleCalls, [
+      'deployment/projects-config:--replicas=0',
+      'deployment/identity-broker:--replicas=0',
+      'deployment/projects-config:--replicas=3',
+      'deployment/identity-broker:--replicas=2',
+    ]);
+    const setBrokerImage = fake.calls.findIndex(c => c.command === 'kubectl' && c.args[4] === 'set' &&
+      c.args[5] === 'image' && c.args[6] === 'deployment/identity-broker' &&
+      c.args[7] === `identity-broker=${imageReference('Agentweaver.Identity.Broker', digest('f'))}`);
+    const restoreBroker = fake.calls.findIndex(c => c.command === 'kubectl' && c.args[4] === 'scale' &&
+      c.args[5] === 'deployment/identity-broker' && c.args[6] === '--replicas=2');
+    assert.ok(setBrokerImage >= 0 && setBrokerImage < restoreBroker);
+    assert.equal(fake.cluster.get(`configmap/${STATE_NAME}`).data['identityBroker.disableFenceRequired'], 'true');
+  } finally { fake.done(); }
+});
+
+test('--broker-digest fails closed before scaling when Projects image lacks settlement or when pod stop times out', async () => {
+  const pcImage = `${DB_MAINTENANCE_TARGET.registry}/agentweaver.projects.config@${digest('e')}`;
+  const fakeOldPc = world({});
+  const baseOldExec = fakeOldPc.deps.exec;
+  const oldPcExec = (command, args, settings) => {
+    if (command === 'kubectl' && args[4] === 'get' && args[5] === 'deployment' && args[6] === 'projects-config') {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          metadata: { name: 'projects-config' },
+          spec: { replicas: 1, template: { spec: { containers: [{ image: pcImage }] } } },
+        }),
+        stderr: '',
+      };
+    }
+    return baseOldExec(command, args, settings);
+  };
+  try {
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--broker-digest', digest('f'), '--execute']), receiptDir: fakeOldPc.receiptDir },
+        {
+          ...fakeOldPc.deps,
+          exec: oldPcExec,
+          verifyImageCapability: async ({ capability }) => {
+            if (capability === 'projects-config-settlement') throw new Error('missing --settle-credential-operations');
+          },
+        },
+      ),
+      /missing --settle-credential-operations/);
+    assert.equal(fakeOldPc.calls.some(c => c.command === 'kubectl' && c.args[4] === 'scale'), false);
+  } finally { fakeOldPc.done(); }
+
+  const fakeTimeout = world({});
+  const baseTimeoutExec = fakeTimeout.deps.exec;
+  const timeoutExec = (command, args, settings) => {
+    if (command === 'kubectl') {
+      const action = args[4];
+      const rest = args.slice(5);
+      if (action === 'get' && rest[0] === 'deployment' && rest[1] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            metadata: { name: 'projects-config' },
+            spec: { replicas: 1, template: { spec: { containers: [{ image: pcImage }] } } },
+          }),
+          stderr: '',
+        };
+      }
+      if (action === 'get' && rest[0] === 'serviceaccount' && rest[1] === 'projects-config-migration') {
+        return { status: 0, stdout: CLIENT_ID, stderr: '' };
+      }
+      if (action === 'scale' || action === 'annotate') return { status: 0, stdout: '', stderr: '' };
+      if (action === 'get' && rest[0] === 'pods' && rest.includes('app.kubernetes.io/name=projects-config')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            items: [{ metadata: { name: 'projects-config-0', labels: { 'app.kubernetes.io/name': 'projects-config' } } }],
+          }),
+          stderr: '',
+        };
+      }
+    }
+    return baseTimeoutExec(command, args, settings);
+  };
+  const realNow = Date.now;
+  let clock = 1_000_000;
+  Date.now = () => (clock += 70_000);
+  try {
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--broker-digest', digest('f'), '--execute']), receiptDir: fakeTimeout.receiptDir },
+        { ...fakeTimeout.deps, exec: timeoutExec, verifyImageCapability: async () => {} },
+      ),
+      /Timed out waiting for deployment\/projects-config pods to stop/);
+    assert.equal(fakeTimeout.calls.some(c => c.command === 'kubectl' && c.args[4] === 'create' &&
+      c.settings?.input?.includes('"kind":"Job"') &&
+      c.settings?.input?.includes('"image":"ghcr.io/sabbour/agentweaver.identity.broker@')), false);
+  } finally {
+    Date.now = realNow;
+    fakeTimeout.done();
+  }
+});

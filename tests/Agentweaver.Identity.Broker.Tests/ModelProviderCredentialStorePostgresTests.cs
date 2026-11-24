@@ -1599,6 +1599,176 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
     private static ModelProviderCredentialStore Store(IdentityBrokerDbContext db) =>
         new(db, ModelProviderCredentialVaults.Create(ExistingVault, ByokVault), TimeProvider.System);
 
+    [Fact]
+    public async Task DisablePendingFencesConcurrentWritesCompletesIdempotentlyAndBlocksInvalidRollback()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        var identity = Identity();
+        var opRecord = Guid.NewGuid();
+        var opDisable = Guid.NewGuid();
+        await using (var db = CreateDb(connectionString))
+            await Store(db).RecordReferenceAsync(Record(opRecord, 0, identity, Ref("provider-key", 'a')));
+
+        var claimDisable = new ClaimModelProviderCredentialDisable(
+            opDisable, null, 1, identity.Scope, identity.ProjectId, identity.ProviderId,
+            "broker:actor", "https://issuer.example/");
+
+        await using (var db = CreateDb(connectionString))
+        {
+            var store = Store(db);
+            var acquired = await store.ClaimDisableAsync(claimDisable);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.DisablePending, acquired.Status);
+            Assert.True(acquired.Acquired);
+
+            await AssertCodeAsync("credential_slot_conflict", () =>
+                store.ClaimWriteAsync(Claim(Guid.NewGuid(), 1, identity)));
+            await AssertCodeAsync("credential_slot_conflict", () =>
+                store.RecordReferenceAsync(Record(Guid.NewGuid(), 1, identity, Ref("provider-key", 'b'))));
+            await AssertCodeAsync("credential_slot_conflict", () =>
+                store.ClaimDisableAsync(claimDisable with { OperationId = Guid.NewGuid() }));
+        }
+
+        // Concurrent same-operation completion returns deterministic Disabled replay.
+        var complete = new CompleteModelProviderCredentialDisable(
+            opDisable, 1, identity.CredentialSlotId, identity.Scope, identity.ProjectId,
+            identity.ProviderId, "broker:actor",
+            (await Store(CreateDb(connectionString)).ClaimDisableAsync(claimDisable)).RequestFingerprint,
+            4, new string('b', 64), "tenant-1");
+        var completions = await Task.WhenAll(
+            Store(CreateDb(connectionString)).CompleteDisableAsync(complete),
+            Store(CreateDb(connectionString)).CompleteDisableAsync(complete));
+        Assert.All(completions, result =>
+        {
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.Disabled, result.Status);
+            Assert.Equal(2, result.CompletedCredentialRevision);
+            Assert.Equal(4, result.PublishedProviderRevision);
+        });
+
+        await using (var verify = CreateDb(connectionString))
+        {
+            Assert.Equal(2, await verify.ModelProviderCredentialRevisions.CountAsync());
+            var claimRow = await verify.ModelProviderCredentialWriteClaims.AsNoTracking()
+                .SingleAsync(row => row.OperationId == opDisable);
+            Assert.Equal(ModelProviderCredentialWriteClaimState.Disabled, claimRow.State);
+            Assert.Equal("tenant-1", claimRow.Tenant);
+        }
+
+        // Actual EF Core Down() blocks when Disabled row exists.
+        await using (var downDb = CreateDb(connectionString))
+        {
+            var migrator = downDb.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+            var rollbackError = await Assert.ThrowsAsync<PostgresException>(() =>
+                migrator.MigrateAsync("20261120231128_AddCredentialLifecycleDispatchAndCancel"));
+            Assert.Equal("55000", rollbackError.SqlState);
+            Assert.Contains("credential_disable_claims_rollback_blocked", rollbackError.MessageText);
+        }
+
+        // Trigger guard: reject direct DisablePending -> Disabled without matching Disable revision,
+        // reject Disabled with NULL tenant, and reject changing tenant once committed.
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using (var mutateTenant = new NpgsqlCommand("""
+            UPDATE identity_broker.model_provider_credential_write_claims
+            SET tenant = 'other-tenant'
+            WHERE operation_id = @op
+            """, conn))
+        {
+            mutateTenant.Parameters.AddWithValue("op", opDisable);
+            var err = await Assert.ThrowsAsync<PostgresException>(() => mutateTenant.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.CheckViolation, err.SqlState);
+            Assert.Equal("credential_write_claim_identity_immutable", err.MessageText);
+        }
+
+        await using (var insertWithTenant = new NpgsqlCommand("""
+            INSERT INTO identity_broker.model_provider_credential_write_claims
+            (operation_id, credential_slot_id, scope, project_id, provider_id, vault_source, vault_uri,
+             secret_name, expected_revision, request_fingerprint, actor_id, state, claimed_at,
+             pending_secret_version, purpose, issuer, tenant)
+            VALUES (@op, @slot, 'Project', 'project-1', @provider, 'Existing', @vault,
+             'provider-key', 1, @fp, 'broker:actor', 'DisablePending', now(),
+             @ver, 'credential-disable', 'https://issuer.example/', 'tenant-1')
+            """, conn))
+        {
+            insertWithTenant.Parameters.AddWithValue("op", Guid.NewGuid());
+            insertWithTenant.Parameters.AddWithValue("slot", Guid.NewGuid());
+            insertWithTenant.Parameters.AddWithValue("provider", Guid.NewGuid().ToString("N"));
+            insertWithTenant.Parameters.AddWithValue("vault", ExistingVault);
+            insertWithTenant.Parameters.AddWithValue("fp", new string('c', 64));
+            insertWithTenant.Parameters.AddWithValue("ver", new string('d', 32));
+            var err = await Assert.ThrowsAsync<PostgresException>(() => insertWithTenant.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.CheckViolation, err.SqlState);
+        }
+
+        // Actual EF Core Down() succeeds on a clean DB without DisablePending/Disabled rows.
+        var cleanConnectionString = await postgres.CreateMigratedDatabaseAsync();
+        await using (var cleanDb = CreateDb(cleanConnectionString))
+        {
+            var migrator = cleanDb.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+            await migrator.MigrateAsync("20261120231128_AddCredentialLifecycleDispatchAndCancel");
+        }
+    }
+
+    [Fact]
+    public async Task DisablePendingTriggerRejectsDirectDisabledTransitionWithoutMatchingDisableRevision()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        var identity = Identity();
+        await using (var db = CreateDb(connectionString))
+            await Store(db).RecordReferenceAsync(Record(Guid.NewGuid(), 0, identity, Ref("provider-key", 'a')));
+
+        var opDisable = Guid.NewGuid();
+        await using (var db = CreateDb(connectionString))
+            await Store(db).ClaimDisableAsync(new ClaimModelProviderCredentialDisable(
+                opDisable, null, 1, identity.Scope, identity.ProjectId, identity.ProviderId,
+                "broker:actor", "https://issuer.example/"));
+
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var directDisable = new NpgsqlCommand("""
+            UPDATE identity_broker.model_provider_credential_write_claims
+            SET state = 'Disabled',
+                completed_revision = 2,
+                completed_at = now(),
+                tenant = 'tenant-1',
+                published_provider_revision = 4,
+                published_configuration_hash = @hash,
+                published_at = now()
+            WHERE operation_id = @op
+            """, conn);
+        directDisable.Parameters.AddWithValue("op", opDisable);
+        directDisable.Parameters.AddWithValue("hash", new string('e', 64));
+        var err = await Assert.ThrowsAsync<PostgresException>(() => directDisable.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.CheckViolation, err.SqlState);
+        Assert.Equal("credential_write_claim_transition_invalid", err.MessageText);
+    }
+
+    [Fact]
+    public async Task DisablePendingCancelRequiresResolvedTenantAndReleasesFence()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        var identity = Identity();
+        await using (var db = CreateDb(connectionString))
+            await Store(db).RecordReferenceAsync(Record(Guid.NewGuid(), 0, identity, Ref("provider-key", 'a')));
+
+        var opDisable = Guid.NewGuid();
+        var claimDisable = new ClaimModelProviderCredentialDisable(
+            opDisable, 3, 1, identity.Scope, identity.ProjectId, identity.ProviderId,
+            "broker:actor", "https://issuer.example/");
+        ModelProviderCredentialDisableClaimResult pending;
+        await using (var db = CreateDb(connectionString))
+            pending = await Store(db).ClaimDisableAsync(claimDisable);
+
+        await using (var db = CreateDb(connectionString))
+            await Store(db).CancelDisableClaimAsync(opDisable, "tenant-1", pending.RequestFingerprint);
+
+        await using (var db = CreateDb(connectionString))
+        {
+            var rotated = await Store(db).RecordReferenceAsync(
+                Record(Guid.NewGuid(), 1, identity, Ref("provider-key", 'b')));
+            Assert.Equal(2, rotated.Revision);
+        }
+    }
+
     private static ModelProviderCredentialIdentity Identity() =>
         new(Guid.NewGuid(), ModelProviderCredentialScope.Project, "project-1", "provider-1");
 
