@@ -1203,9 +1203,14 @@ head updates. Platform and project owners use separate streams.
 The checkpoint store captures a stream head with a required idempotency key.
 It writes the checkpoint row and canonical export bytes to PostgreSQL in one
 transaction. A retry with the same key returns the saved checkpoint, even when
-the stream has advanced. An export request can also select a saved checkpoint
-by ID. The store is internal to the Projects service. Projects exposes no
-HTTP route or background schedule for it.
+the stream has advanced. If concurrent creates reach the checkpoint insert
+together, Projects discards the failed transaction and retries the complete
+serializable transaction with a fresh context. It makes at most three attempts
+for a PostgreSQL serialization failure or a unique-key failure on the
+stream-idempotency index. Other database errors and cancellation propagate
+without retry. An export request can also select a saved checkpoint by ID. The
+store is internal to the Projects service. Projects exposes no HTTP route or
+background schedule for it.
 
 Version 1 exports contain the stream identity, sequence, head hash, creation
 time, and a SHA-256 checkpoint hash. The hash uses the
@@ -1264,12 +1269,29 @@ sequenceDiagram
     participant DB as Projects PostgreSQL
     participant Blob as Operator Blob container
     Caller->>Store: Stream identity and idempotency key
-    Store->>DB: Save canonical checkpoint
-    DB-->>Store: Checkpoint ID and hash
+    loop At most three serializable transactions
+        Store->>DB: Find exact idempotent replay
+        alt Saved checkpoint
+            DB-->>Store: Checkpoint ID and hash
+        else New checkpoint
+            Store->>DB: Save canonical checkpoint
+            alt Serialization or matching unique-key failure
+                DB-->>Store: Retryable database error
+                Store->>Store: Discard transaction and context
+            else Commit
+                DB-->>Store: Checkpoint ID and hash
+            end
+        end
+    end
+    Store-->>Caller: Checkpoint ID and hash, or final database error
+    Caller->>Store: Export checkpoint by ID
+    Store->>DB: Read saved checkpoint
+    DB-->>Store: Canonical checkpoint bytes
     opt Blob container configured
         Store->>Blob: Create checkpoint export
         Blob-->>Store: Write result
     end
+    Store-->>Caller: Checkpoint export bytes and retention state
     Caller->>Store: Verify retained checkpoint hash
     Store->>Blob: Read retained export
     Store->>DB: Verify decision prefix through checkpoint sequence
