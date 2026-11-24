@@ -1286,6 +1286,66 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task ReadRefreshInputsRequiresVerifiedHumanAndReportsEligibilityAndConcealsForeignRun()
+    {
+        await using var db = CreateDbContext();
+        await ResetSkillAdmissionCutoverAsync(db);
+        try
+        {
+            var setup = await CreateSkillRefreshSetupAsync(db);
+            var service = CreateSkillService(db, setup.Objects);
+            var nonHumanException = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.ReadRefreshInputsAsync(
+                    setup.Project.Owner,
+                    setup.Request.ProjectId,
+                    setup.Request.RunId,
+                    setup.Request.AgentId,
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status403Forbidden, nonHumanException.StatusCode);
+
+            var humanOwner = new ProjectAuthorizationContext(
+                setup.Project.Owner.Issuer,
+                setup.Project.Owner.ActorId,
+                setup.Project.Owner.TenantId,
+                setup.Project.Owner.MembershipId,
+                setup.Project.Owner.MembershipRevision,
+                setup.Project.Owner.Grants,
+                setup.Project.Owner.Scopes,
+                setup.Project.Owner.BoundProjectId,
+                setup.Project.Owner.BoundRunId,
+                setup.Project.Owner.Purpose,
+                isVerifiedHuman: true);
+            var inputs = await service.ReadRefreshInputsAsync(
+                humanOwner,
+                setup.Request.ProjectId,
+                setup.Request.RunId,
+                setup.Request.AgentId,
+                CancellationToken.None);
+            Assert.Equal(setup.Request.ExpectedPlatformPolicy.PolicyId, inputs.PlatformPolicy.PolicyId);
+            Assert.Equal(setup.Request.ExpectedPlatformPolicy.Revision, inputs.PlatformPolicy.Revision);
+            Assert.Equal(setup.Request.ExpectedPlatformPolicy.ContentSha256, inputs.PlatformPolicy.ContentSha256);
+            var assignment = Assert.Single(inputs.Assignments);
+            Assert.Equal(setup.Request.SkillId, assignment.SkillId);
+            Assert.Equal(setup.Request.Revision, assignment.Revision);
+            Assert.Equal(setup.Request.ContentDigest, assignment.ContentDigest);
+            Assert.True(assignment.RefreshEligible);
+
+            var missingRun = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.ReadRefreshInputsAsync(
+                    humanOwner,
+                    setup.Request.ProjectId,
+                    "missing-run",
+                    setup.Request.AgentId,
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status404NotFound, missingRun.StatusCode);
+        }
+        finally
+        {
+            await ResetSkillAdmissionCutoverAsync(db);
+        }
+    }
+
+    [Fact]
     public async Task OccupiedRefreshKeyReplaysWhileAnotherProjectHoldsSingletonFence()
     {
         await using var db = CreateDbContext();

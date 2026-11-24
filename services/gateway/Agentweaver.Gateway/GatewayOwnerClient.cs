@@ -2534,6 +2534,15 @@ public sealed partial class GatewayOwnerClient(
             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
         var isProjectPolicyValidation = route.OperationId == "validateProjectNativeAcsPolicy";
+        var isSkillRefresh = route.OperationId is
+            "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill";
+        if (isSkillRefresh && context.Request.QueryString.HasValue)
+        {
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody("skill_refresh_query_not_supported", StatusCodes.Status400BadRequest));
+        }
         if (isPlatformPolicyRevisionRead &&
             context.Request.Query.Keys.Any(key => !route.QueryParameters.Contains(key, StringComparer.Ordinal)))
         {

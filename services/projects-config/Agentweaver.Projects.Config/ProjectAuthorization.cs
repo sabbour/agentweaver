@@ -39,7 +39,8 @@ public sealed class ProjectAuthorizationContext
         ImmutableHashSet<string> scopes,
         string? boundProjectId,
         string? boundRunId,
-        string? purpose)
+        string? purpose,
+        bool isVerifiedHuman = false)
     {
         ContractVersion = CurrentContractVersion;
         Issuer = issuer;
@@ -52,6 +53,7 @@ public sealed class ProjectAuthorizationContext
         BoundProjectId = boundProjectId;
         BoundRunId = boundRunId;
         Purpose = purpose;
+        IsVerifiedHuman = isVerifiedHuman;
     }
 
     public int ContractVersion { get; }
@@ -65,6 +67,7 @@ public sealed class ProjectAuthorizationContext
     public string? BoundProjectId { get; }
     public string? BoundRunId { get; }
     public string? Purpose { get; }
+    public bool IsVerifiedHuman { get; }
 
     /// <summary>Checks for an exact resource type, resource ID, and role in the resolved grant snapshot.</summary>
     public bool HasRole(
@@ -111,6 +114,14 @@ public sealed class ProjectAuthorizationContext
     public void RequireUnboundRequest()
     {
         if (Purpose is not null || BoundProjectId is not null || BoundRunId is not null)
+            throw ProjectConfigException.Forbidden();
+    }
+
+    /// <summary>Requires an unbound token carrying the issuer-verified human credential class.</summary>
+    /// <exception cref="ProjectConfigException">The token lacks verified human class or is bound.</exception>
+    public void RequireHumanActor()
+    {
+        if (!IsVerifiedHuman || Purpose is not null || BoundProjectId is not null || BoundRunId is not null)
             throw ProjectConfigException.Forbidden();
     }
 
@@ -368,7 +379,8 @@ public sealed class ProjectAuthorizationOwner(
             request.Scopes,
             request.ProjectId,
             request.RunId,
-            request.Purpose);
+            request.Purpose,
+            request.IsVerifiedHuman);
     }
 
     /// <summary>
@@ -457,6 +469,11 @@ public sealed class ProjectAuthorizationOwner(
         if (purposes.Length > 1)
             throw ProjectConfigException.Forbidden();
 
+        var actorClasses = principal.FindAll("aw_actor_class").Take(2).ToArray();
+        if (actorClasses.Length > 1 ||
+            (actorClasses.Length == 1 && !string.Equals(actorClasses[0].Value, "human", StringComparison.Ordinal)))
+            throw ProjectConfigException.Forbidden();
+
         var scopes = principal.FindAll("scope")
             .Concat(principal.FindAll("scp"))
             .SelectMany(claim => claim.Value.Split(
@@ -470,7 +487,8 @@ public sealed class ProjectAuthorizationOwner(
             scopes,
             projectIds.SingleOrDefault()?.Value,
             runIds.SingleOrDefault()?.Value,
-            purposes.SingleOrDefault()?.Value);
+            purposes.SingleOrDefault()?.Value,
+            actorClasses.Length == 1);
     }
 
     private static bool IsOpaqueIdentifier(string value) =>
@@ -492,7 +510,8 @@ public sealed class ProjectAuthorizationOwner(
         ImmutableHashSet<string> Scopes,
         string? ProjectId,
         string? RunId,
-        string? Purpose);
+        string? Purpose,
+        bool IsVerifiedHuman);
 }
 
 /// <summary>Applies the Broker proof ticket's shorter lifetime and clock-skew profile after JWT validation.</summary>

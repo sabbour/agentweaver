@@ -853,6 +853,171 @@ public sealed class SkillContentService(
         return new ProjectSkillTrustEvidenceInput(stored, content);
     }
 
+    internal async Task<AcceptedRunSkillRefreshInputsResponse> ReadRefreshInputsAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string runId,
+        string agentId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireHumanActor();
+        if (string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(runId) ||
+            string.IsNullOrWhiteSpace(agentId))
+            throw ProjectConfigException.NotFound();
+
+        await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+
+        var requestCancellationToken = cancellationToken;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken);
+        deadline.CancelAfter(RefreshPersistenceTimeout);
+        cancellationToken = deadline.Token;
+        IDbContextTransaction? transaction = null;
+        try
+        {
+            transaction = await db.Database
+                .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+                .ConfigureAwait(false);
+            await db.Database.ExecuteSqlRawAsync(
+                    "SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '15s'",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var fence = await _admission.LockFenceAsync(cancellationToken).ConfigureAwait(false);
+            await LockCurrentSkillWriteAuthorityAsync(caller, projectId, cancellationToken)
+                .ConfigureAwait(false);
+            var activeProject = await db.Projects
+                .FromSqlInterpolated($"""
+                    SELECT project_id, tenant_id, created_by_actor_id, name, state, revision,
+                           configuration_revision, created_at, updated_at
+                    FROM projects_config.projects
+                    WHERE project_id = {projectId}
+                      AND tenant_id = {caller.TenantId}
+                    FOR SHARE
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (activeProject is null)
+                throw ProjectConfigException.NotFound();
+            if (activeProject.State != ProjectLifecycleState.Active)
+                throw ProjectConfigException.Conflict("Archived projects cannot refresh Skill evidence.");
+            if (fence.State != ProjectSkillAdmissionFenceState.Active)
+                throw SkillAdmissionService.AdmissionUnavailable(
+                    "Skill admission is not active for evidence refresh.");
+
+            var policy = await _admission.ReadPolicySnapshotAsync(
+                    projectId, lockHeads: true, cancellationToken)
+                .ConfigureAwait(false);
+            var selection = await db.RunSelections.AsNoTracking()
+                .SingleOrDefaultAsync(item =>
+                    item.ProjectId == projectId && item.RunId == runId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (selection is null)
+                throw ProjectConfigException.NotFound();
+            var accepted = Deserialize<EffectiveRunSelection>(selection.SnapshotJson);
+            if (accepted.ProjectId != projectId ||
+                accepted.RunId != runId ||
+                accepted.ProjectConfigurationRevision != selection.ProjectConfigurationRevision)
+                throw SkillContentServiceException.Conflict(
+                    "The accepted Skill configuration binding is inconsistent.");
+            var configuration = ProjectConfigurationValidator.Validate(accepted.ProjectConfiguration);
+            if (!configuration.Casting.Any(agent => agent.AgentId == agentId))
+                throw ProjectConfigException.NotFound();
+
+            var assignments = configuration.Skills
+                .Where(item =>
+                    item.Enabled &&
+                    item.AgentIds is { } agentIds &&
+                    agentIds.Contains(agentId, StringComparer.Ordinal))
+                .OrderBy(item => item.Order)
+                .ThenBy(item => item.SkillId, StringComparer.Ordinal)
+                .ToArray();
+            if (assignments.Length > SkillRuntimeContentContract.MaxSkillCount)
+                throw SkillContentServiceException.Conflict(
+                    "The accepted Skill configuration exceeds the runtime limit.");
+
+            var items = ImmutableArray.CreateBuilder<AcceptedRunSkillRefreshAssignment>(assignments.Length);
+            foreach (var assignment in assignments)
+            {
+                if (assignment.Revision is not { } revision ||
+                    string.IsNullOrWhiteSpace(assignment.ContentDigest))
+                    throw SkillContentServiceException.Conflict(
+                        "The accepted run contains an enabled skill without an imported revision.");
+                var revisionRecord = await db.SkillContentRevisions.AsNoTracking()
+                    .SingleOrDefaultAsync(item =>
+                        item.ProjectId == projectId &&
+                        item.SkillId == assignment.SkillId &&
+                        item.Revision == revision,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (revisionRecord is null ||
+                    revisionRecord.ContentDigest != assignment.ContentDigest)
+                    throw SkillContentServiceException.Conflict(
+                        "The accepted Skill revision is no longer available.");
+                var revoked = await db.SkillContentRevocations.AsNoTracking()
+                    .AnyAsync(item =>
+                        item.ProjectId == projectId &&
+                        item.SkillId == assignment.SkillId &&
+                        item.Revision == revision,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                var hasAdmission = await db.SkillAdmissions.AsNoTracking()
+                    .AnyAsync(item =>
+                        item.ProjectId == projectId &&
+                        item.SkillId == assignment.SkillId &&
+                        item.Revision == revision,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                var refreshEligible =
+                    revisionRecord.AdmissionClassification != ProjectSkillAdmissionClassification.LegacyThirdParty &&
+                    !revoked &&
+                    hasAdmission;
+                items.Add(new AcceptedRunSkillRefreshAssignment(
+                    assignment.SkillId,
+                    revision,
+                    assignment.ContentDigest,
+                    revisionRecord.AdmissionClassification.ToString(),
+                    refreshEligible));
+            }
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new AcceptedRunSkillRefreshInputsResponse(
+                new AcceptedRunSkillRefreshPolicyPin(
+                    policy.PlatformPolicyId,
+                    policy.PlatformPolicyRevision,
+                    policy.PlatformPolicySha256),
+                policy.ProjectPolicyId is null
+                    ? null
+                    : new AcceptedRunSkillRefreshPolicyPin(
+                        policy.ProjectPolicyId,
+                        policy.ProjectPolicyRevision!.Value,
+                        policy.ProjectPolicySha256!),
+                items.MoveToImmutable());
+        }
+        catch (Exception exception) when (IsRefreshSerializationFailure(exception))
+        {
+            await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+            throw SkillContentServiceException.Conflict(
+                "The Skill refresh inputs read conflicted with a concurrent update.");
+        }
+        catch (Exception exception) when (
+            !requestCancellationToken.IsCancellationRequested &&
+            (IsRefreshUnavailableFailure(exception) || deadline.IsCancellationRequested))
+        {
+            await RollbackRefreshAsync(transaction).ConfigureAwait(false);
+            throw SkillContentServiceException.Unavailable(
+                "The Skill refresh inputs read timed out or could not obtain a required lock.");
+        }
+        finally
+        {
+            if (transaction is not null)
+                await transaction.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
     internal async Task<ProjectSkillRefreshStart> BeginRefreshAsync(
         ProjectAuthorizationContext caller,
         ProjectSkillRefreshRequest request,

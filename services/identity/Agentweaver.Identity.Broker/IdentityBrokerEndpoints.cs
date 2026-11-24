@@ -30,6 +30,8 @@ public static class IdentityBrokerEndpoints
 {
     public const string LocalCookieScheme = "Identity.Local";
     public const string ExternalScheme = "Identity.External";
+    internal const string ActorClassClaim = "aw_actor_class";
+    internal const string HumanActorClass = "human";
     private const string NativeCliClientId = "agentweaver-cli";
     private const string SilentAuthorizationProperty = "agentweaver.prompt.none";
 
@@ -1082,6 +1084,14 @@ public static class IdentityBrokerEndpoints
             (selectionPayloadClaims.Length == 0) != (selectionIntentHashClaims.Length == 0))
             return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
 
+        var actorClassClaims = result.Principal.FindAll(ActorClassClaim).Take(2).ToArray();
+        if (actorClassClaims.Length > 1 ||
+            (actorClassClaims.Length == 1 &&
+             (!string.Equals(actorClassClaims[0].Value, HumanActorClass, StringComparison.Ordinal) ||
+              authorizationBinding is not null ||
+              selectionPayloadClaims.Length > 0)))
+            return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
+
         AuthenticationProperties? properties = null;
         if (selectionPayloadClaims.Length == 1)
         {
@@ -1190,7 +1200,8 @@ public static class IdentityBrokerEndpoints
         }
 
         var principal = BuildMinimalPrincipal(
-            userId, requestedScopes, authorizationBinding, authorityKind, bindingReceipt);
+            userId, requestedScopes, authorizationBinding, authorityKind, bindingReceipt,
+            isInteractiveHuman: authorizationBinding is null && protectedSelectionPayload is null);
         if ((protectedSelectionPayload is null) != (selectionIntentHash is null))
             throw new InvalidOperationException("The private repository selection ticket is invalid.");
         if (protectedSelectionPayload is not null && selectionIntentHash is not null)
@@ -1249,11 +1260,18 @@ public static class IdentityBrokerEndpoints
         IEnumerable<string> scopes,
         RequestedProjectBinding? authorizationBinding = null,
         string? authorityKind = null,
-        BrokerRunBindingReceipt? bindingReceipt = null)
+        BrokerRunBindingReceipt? bindingReceipt = null,
+        bool isInteractiveHuman = false)
     {
         var identity = new ClaimsIdentity(
             OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Claims.Name, Claims.Role);
         identity.AddClaim(new Claim(Claims.Subject, userId.ToString()).SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
+        if (isInteractiveHuman)
+        {
+            if (authorizationBinding is not null)
+                throw new InvalidOperationException("Bound authorizations cannot carry an interactive human class.");
+            identity.AddClaim(new Claim(ActorClassClaim, HumanActorClass).SetDestinations(Destinations.AccessToken));
+        }
         if (authorizationBinding is not null)
         {
             identity.AddClaim(new Claim(SecretRedemptionEndpoints.ProjectIdClaim, authorizationBinding.ProjectId)

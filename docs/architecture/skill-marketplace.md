@@ -259,6 +259,28 @@ the owner binds the decision to exact revision bytes, evidence, source
 authority, and current policy heads. It rechecks these bindings after all
 assigned Skills are projected, including checkpoint recovery.
 
+## Same-revision Skill recovery
+
+When a policy head advances, release inventory rotates, or runtime evidence
+expires, an interactive human Project Owner or TenantAdmin can recover
+post-cutover Skills in an accepted run without re-importing bytes:
+
+1. Call `GET /api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh-inputs`
+   to read the current `platformPolicy` pin, nullable `projectPolicy` pin, and
+   ordered `(skillId, revision, contentDigest, classification, refreshEligible)`
+   assignments. Unchanged `LegacyThirdParty` and revoked revisions report
+   `refreshEligible: false`.
+2. For each eligible assignment, call
+   `POST /api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh`
+   with both expected Policy pins and a fresh `idempotencyKey`.
+
+Both routes require an unbound Identity Broker token carrying
+`aw_actor_class = "human"` (issued from interactive Entra sign-in and preserved
+across `refresh_token` exchanges for that session), `api.read`, `projects.admin`,
+and current Project write authority. Both routes return `Cache-Control: no-store`,
+reject any query string (including bare `?`) with `400`, and are excluded from
+MCP tool discovery.
+
 The Skills content service scans every project candidate with the local pinned
 AGT evaluator. It scans canonical `SKILL.md` bytes rebuilt from the validated
 name, description, and instructions, plus each resource's exact bytes. It

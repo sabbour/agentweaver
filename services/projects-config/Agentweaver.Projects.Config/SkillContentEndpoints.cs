@@ -78,6 +78,27 @@ public sealed record RevokeSkillRevisionRequest
     public required string Reason { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RefreshAcceptedRunSkillPolicyPinRequest
+{
+    public required string PolicyId { get; init; }
+    public required long Revision { get; init; }
+    public required string ContentSha256 { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RefreshAcceptedRunSkillRequest
+{
+    public required string SkillId { get; init; }
+    public required long Revision { get; init; }
+    public required string ContentDigest { get; init; }
+    public required RefreshAcceptedRunSkillPolicyPinRequest ExpectedPlatformPolicy { get; init; }
+    public RefreshAcceptedRunSkillPolicyPinRequest? ExpectedProjectPolicy { get; init; }
+    public required string IdempotencyKey { get; init; }
+    public required string Reason { get; init; }
+    public required string CorrelationId { get; init; }
+}
+
 /// <summary>Maps the authenticated skill-content owner routes and applies request-size and no-store controls.</summary>
 public static class SkillContentEndpoints
 {
@@ -407,7 +428,143 @@ public static class SkillContentEndpoints
             .RequireAuthorization()
             .WithName("GetAcceptedRunSkills");
 
+        app.MapGet(
+            "/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh-inputs",
+            async (
+                string projectId,
+                string runId,
+                string agentId,
+                HttpContext context,
+                ProjectAuthorizationOwner authorizationOwner,
+                SkillContentService service,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                try
+                {
+                    EnsureNoQueryBadRequest(context);
+                    var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(await service.ReadRefreshInputsAsync(
+                        caller, projectId, runId, agentId, cancellationToken).ConfigureAwait(false));
+                }
+                catch (ProjectConfigException exception)
+                {
+                    return ToProblem(exception);
+                }
+                catch (SkillContentServiceException exception)
+                {
+                    return ToProblem(exception);
+                }
+            })
+            .RequireAuthorization()
+            .WithName("ReadAcceptedRunSkillRefreshInputs");
+
+        app.MapPost(
+            "/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh",
+            async (
+                string projectId,
+                string runId,
+                string agentId,
+                HttpContext context,
+                ProjectAuthorizationOwner authorizationOwner,
+                ProjectSkillTrustEvidenceService trustEvidence,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                try
+                {
+                    EnsureNoQueryBadRequest(context);
+                    var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                        .ConfigureAwait(false);
+                    caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+                    caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+                    caller.RequireHumanActor();
+                    if (!context.Request.HasJsonContentType())
+                        return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+                    if (context.Request.ContentLength > MaxRefreshRequestBytes)
+                        return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                    var body = await context.Request
+                        .ReadFromJsonAsync<RefreshAcceptedRunSkillRequest>(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (body is null ||
+                        body.ExpectedPlatformPolicy is null)
+                        throw SkillContentServiceException.Invalid(
+                            "A complete Skill refresh request is required.");
+                    var request = new ProjectSkillRefreshRequest(
+                        projectId,
+                        runId,
+                        agentId,
+                        body.SkillId,
+                        body.Revision,
+                        body.ContentDigest,
+                        new ProjectSkillRefreshPolicyPin(
+                            body.ExpectedPlatformPolicy.PolicyId,
+                            body.ExpectedPlatformPolicy.Revision,
+                            body.ExpectedPlatformPolicy.ContentSha256),
+                        body.ExpectedProjectPolicy is null
+                            ? null
+                            : new ProjectSkillRefreshPolicyPin(
+                                body.ExpectedProjectPolicy.PolicyId,
+                                body.ExpectedProjectPolicy.Revision,
+                                body.ExpectedProjectPolicy.ContentSha256),
+                        body.IdempotencyKey,
+                        body.Reason,
+                        body.CorrelationId);
+                    var receipt = await trustEvidence.RefreshAsync(caller, request, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(new AcceptedRunSkillRefreshReceipt(
+                        receipt.EvidenceId,
+                        receipt.AdmissionId,
+                        new AcceptedRunSkillRefreshPolicyPin(
+                            receipt.PlatformPolicy.PolicyId,
+                            receipt.PlatformPolicy.Revision,
+                            receipt.PlatformPolicy.ContentSha256),
+                        receipt.ProjectPolicy is null
+                            ? null
+                            : new AcceptedRunSkillRefreshPolicyPin(
+                                receipt.ProjectPolicy.PolicyId,
+                                receipt.ProjectPolicy.Revision,
+                                receipt.ProjectPolicy.ContentSha256),
+                        receipt.ObservedAt,
+                        receipt.Replayed));
+                }
+                catch (ProjectConfigException exception)
+                {
+                    return ToProblem(exception);
+                }
+                catch (SkillContentServiceException exception)
+                {
+                    return ToProblem(exception);
+                }
+                catch (SkillContentObjectStoreException exception)
+                {
+                    return ToProblem(exception);
+                }
+                catch (BadHttpRequestException exception)
+                {
+                    return Results.StatusCode(exception.StatusCode);
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    return ToProblem(SkillContentServiceException.Invalid(
+                        "The Skill refresh request body is malformed."));
+                }
+            })
+            .WithMetadata(new RequestSizeLimitAttribute(MaxRefreshRequestBytes))
+            .RequireAuthorization()
+            .WithName("RefreshAcceptedRunSkill");
+
         return app;
+    }
+
+    private const int MaxRefreshRequestBytes = 64 * 1024;
+
+    /// <summary>Rejects any query parameter or bare query marker with 400 Bad Request.</summary>
+    private static void EnsureNoQueryBadRequest(HttpContext context)
+    {
+        if (context.Request.Query.Count != 0 || context.Request.QueryString.HasValue)
+            throw SkillContentServiceException.Invalid("Skill refresh routes do not accept query parameters.");
     }
 
     /// <summary>Rejects query parameters on routes whose request contract is body-only.</summary>

@@ -877,6 +877,8 @@ Gateway prefix: `/api/v1/projects/{projectId}/skills`.
 | POST | `/api/skills/preview` | `api.read`; unbound request | Validate local skill files without saving. | `/api/v1/skills/preview` |
 | POST | `/api/skills/package` | `api.read`; unbound request | Group uploaded files, a ZIP archive, or draft fields into skill candidates without saving. | `/api/v1/skills/package` |
 | GET | `/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Selection; exact agent and accepted pins | Read effective run skills. | No |
+| GET | `/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh-inputs` | `api.read`, `projects.admin`, `aw_actor_class = "human"`; unbound request | Read current Policy pins and ordered Skill assignments with refresh eligibility for an accepted run and agent. | `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh-inputs` |
+| POST | `/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh` | `api.read`, `projects.admin`, `aw_actor_class = "human"`; unbound request | Refresh trust evidence and admission for one post-cutover accepted-run Skill revision under current Policy pins. | `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/skills/refresh` |
 
 Projects & Config creates scan reports locally. It requires a current passing
 scan before it returns project Skill previews or package results, imports

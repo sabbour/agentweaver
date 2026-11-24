@@ -73,6 +73,8 @@ internal static partial class GatewayOpenApi
             ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
             ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
             ["listProjectSkillInventory"] = C(null, "ProjectSkillInventoryPage", "200"),
+            ["readAcceptedRunSkillRefreshInputs"] = C(null, "AcceptedRunSkillRefreshInputsResponse", "200"),
+            ["refreshAcceptedRunSkill"] = C("RefreshAcceptedRunSkillRequest", "AcceptedRunSkillRefreshReceipt", "200"),
             // 201 when a new casting proposal is staged; 200 when there is nothing to propose.
             ["importProjectAgentSuite"] = C("ImportProjectAgentSuiteRequest", "ProjectAgentSuiteImportResult", "200", "201"),
             ["getProjectAgentSuiteImport"] = C(null, "ProjectAgentSuiteImport", "200"),
@@ -540,6 +542,7 @@ internal static partial class GatewayOpenApi
                         "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                         "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                         "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
+                        "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         route.OperationId is "getAuthorizationTargetContext" or
                             "readPlatformByokProviderCredentialOperation" or
@@ -587,6 +590,8 @@ internal static partial class GatewayOpenApi
                                             "listProjectNativeAcsPolicyRevisions" or
                                             "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" =>
                                                 "Project Policy responses are not cacheable.",
+                                            "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" =>
+                                                "Skill refresh responses are not cacheable.",
                                             _ when IsModelProviderDraftRoute(route.OperationId) =>
                                                 "Provider Draft responses are not cacheable.",
                                             _ => "Runtime evidence responses are not cacheable.",
@@ -928,6 +933,20 @@ else if (route.OperationId is
             if (route.OperationId == "writePlatformNativeAcsPolicy")
                 responses["409"] = ProblemResponse(
                     "The expected revision is stale, a concurrent write conflicted, or the idempotency key conflicts.");
+        }
+        else if (route.OperationId is "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill")
+        {
+            responses["400"] = ProblemResponse("The request has an unsupported query string or invalid refresh body.");
+            responses["403"] = ProblemResponse("The caller lacks verified human Project write authority.");
+            responses["404"] = ProblemResponse("The Project, run, agent, or assigned Skill revision does not exist.");
+            responses["409"] = ProblemResponse("A concurrent change, revocation, stale Policy pin, or idempotency conflict occurred.");
+            if (route.HasJsonBody)
+            {
+                responses["413"] = ProblemResponse(
+                    $"The request body exceeds the {route.MaximumRequestBodyBytes}-byte route limit.");
+                responses["422"] = ProblemResponse("The Skill revision is not eligible for refresh or failed current policy.");
+            }
+            responses["503"] = ProblemResponse("Skill admission is inactive or a required dependency is unavailable.");
         }
         else if (IsModelProviderDraftRoute(route.OperationId))
         {
@@ -2256,6 +2275,31 @@ else if (route.OperationId is
         ["SkillContentPackageResult"] = Obj(["skills"],
             ("skills", Arr(Ref("SkillContentPackage")))),
         ["RevokeSkillRevisionRequest"] = StrictObj(["reason"], ("reason", Str())),
+        ["AcceptedRunSkillRefreshPolicyPin"] = StrictObj(
+            ["policyId", "revision", "contentSha256"],
+            ("policyId", Str()), ("revision", Int()), ("contentSha256", Str())),
+        ["AcceptedRunSkillRefreshAssignment"] = Obj(
+            ["skillId", "revision", "contentDigest", "classification", "refreshEligible"],
+            ("skillId", Str()), ("revision", Int()), ("contentDigest", Str()),
+            ("classification", Str()), ("refreshEligible", Bool())),
+        ["AcceptedRunSkillRefreshInputsResponse"] = Obj(
+            ["platformPolicy", "projectPolicy", "assignments"],
+            ("platformPolicy", Ref("AcceptedRunSkillRefreshPolicyPin")),
+            ("projectPolicy", NullableRef("AcceptedRunSkillRefreshPolicyPin")),
+            ("assignments", Arr(Ref("AcceptedRunSkillRefreshAssignment")))),
+        ["RefreshAcceptedRunSkillRequest"] = StrictObj(
+            ["skillId", "revision", "contentDigest", "expectedPlatformPolicy",
+             "idempotencyKey", "reason", "correlationId"],
+            ("skillId", Str()), ("revision", Int()), ("contentDigest", Str()),
+            ("expectedPlatformPolicy", Ref("AcceptedRunSkillRefreshPolicyPin")),
+            ("expectedProjectPolicy", NullableRef("AcceptedRunSkillRefreshPolicyPin")),
+            ("idempotencyKey", Str()), ("reason", Str()), ("correlationId", Str())),
+        ["AcceptedRunSkillRefreshReceipt"] = Obj(
+            ["evidenceId", "admissionId", "platformPolicy", "projectPolicy", "observedAt", "replayed"],
+            ("evidenceId", Str()), ("admissionId", Str()),
+            ("platformPolicy", Ref("AcceptedRunSkillRefreshPolicyPin")),
+            ("projectPolicy", NullableRef("AcceptedRunSkillRefreshPolicyPin")),
+            ("observedAt", Date()), ("replayed", Bool())),
         ["SkillContentSourceSelection"] = StrictObj(
             ["sourceId", "sourceRevision", "requestedRef", "resolvedCommitSha", "selectedPath"],
             ("sourceId", Str()), ("sourceRevision", Str()), ("requestedRef", Str()),
