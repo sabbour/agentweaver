@@ -1084,12 +1084,7 @@ public static class IdentityBrokerEndpoints
             (selectionPayloadClaims.Length == 0) != (selectionIntentHashClaims.Length == 0))
             return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
 
-        var actorClassClaims = result.Principal.FindAll(ActorClassClaim).Take(2).ToArray();
-        if (actorClassClaims.Length > 1 ||
-            (actorClassClaims.Length == 1 &&
-             (!string.Equals(actorClassClaims[0].Value, HumanActorClass, StringComparison.Ordinal) ||
-              authorizationBinding is not null ||
-              selectionPayloadClaims.Length > 0)))
+        if (!HasValidActorClassClaims(result.Principal, authorizationBinding, selectionPayloadClaims.Length > 0))
             return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
 
         AuthenticationProperties? properties = null;
@@ -1213,6 +1208,20 @@ public static class IdentityBrokerEndpoints
         }
         principal.SetResources(await scopes.ListResourcesAsync(requestedScopes, ct).ToListAsync(ct));
         return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+    }
+
+    internal static bool HasValidActorClassClaims(
+        ClaimsPrincipal principal,
+        RequestedProjectBinding? authorizationBinding,
+        bool hasSelectionTicket)
+    {
+        var actorClassClaims = principal.FindAll(ActorClassClaim).Take(2).ToArray();
+        if (actorClassClaims.Length == 0)
+            return true;
+        return actorClassClaims.Length == 1 &&
+            string.Equals(actorClassClaims[0].Value, HumanActorClass, StringComparison.Ordinal) &&
+            authorizationBinding is null &&
+            !hasSelectionTicket;
     }
 
     private static bool HasExactNativeSelectionScopes(IEnumerable<string> scopes)

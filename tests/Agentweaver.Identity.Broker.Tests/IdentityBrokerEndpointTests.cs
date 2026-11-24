@@ -192,47 +192,33 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("unknown")]
-    [InlineData("duplicate")]
-    [InlineData("bound")]
-    public async Task TokenExchangeRejectsInvalidOrBoundActorClassClaims(string mode)
+    [InlineData("unknown", false, false, false)]
+    [InlineData("duplicate", false, false, false)]
+    [InlineData("bound", true, false, false)]
+    [InlineData("selection", false, true, false)]
+    [InlineData("valid", false, false, true)]
+    public void TokenExchangeRejectsInvalidOrBoundActorClassClaims(
+        string mode,
+        bool hasBinding,
+        bool hasSelectionTicket,
+        bool expectedValid)
     {
-        var (code, verifier) = await RunHappyPathAuthorizeAsync();
-        using var scope = _factory.Services.CreateScope();
-        var tokens = scope.ServiceProvider.GetRequiredService<OpenIddict.Abstractions.IOpenIddictTokenManager>();
-        await foreach (var token in tokens.ListAsync())
+        var claims = mode switch
         {
-            var payload = await tokens.GetPayloadAsync(token);
-            if (string.IsNullOrEmpty(payload))
-                continue;
-            var doc = System.Text.Json.Nodes.JsonNode.Parse(payload)?.AsObject();
-            if (doc is null || !doc.ContainsKey("claims"))
-                continue;
-            var claims = doc["claims"]!.AsObject();
-            if (mode == "unknown")
-                claims["aw_actor_class"] = "service";
-            else if (mode == "duplicate")
-                claims["aw_actor_class"] = new System.Text.Json.Nodes.JsonArray("human", "human");
-            else if (mode == "bound")
-                claims["project_id"] = "project-1";
-            var descriptor = new OpenIddict.Abstractions.OpenIddictTokenDescriptor();
-            await tokens.PopulateAsync(descriptor, token);
-            descriptor.Payload = doc.ToJsonString();
-            await tokens.UpdateAsync(token, descriptor);
-        }
+            "unknown" => new[] { new Claim(IdentityBrokerEndpoints.ActorClassClaim, "service") },
+            "duplicate" => new[]
+            {
+                new Claim(IdentityBrokerEndpoints.ActorClassClaim, IdentityBrokerEndpoints.HumanActorClass),
+                new Claim(IdentityBrokerEndpoints.ActorClassClaim, IdentityBrokerEndpoints.HumanActorClass),
+            },
+            _ => new[] { new Claim(IdentityBrokerEndpoints.ActorClassClaim, IdentityBrokerEndpoints.HumanActorClass) },
+        };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+        var binding = hasBinding ? new RequestedProjectBinding("project-1", null) : null;
 
-        var response = await _broker.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["grant_type"] = "authorization_code",
-            ["client_id"] = IdentityBrokerWebApplicationFactory.TestClientId,
-            ["redirect_uri"] = IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
-            ["code"] = code,
-            ["code_verifier"] = verifier,
-        }));
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("invalid_grant", body);
-        Assert.DoesNotContain("access_token", body);
+        Assert.Equal(
+            expectedValid,
+            IdentityBrokerEndpoints.HasValidActorClassClaims(principal, binding, hasSelectionTicket));
     }
 
     [Fact]

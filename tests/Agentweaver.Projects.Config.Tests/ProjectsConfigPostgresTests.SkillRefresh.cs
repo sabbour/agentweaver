@@ -447,22 +447,28 @@ public sealed partial class ProjectsConfigPostgresTests
                 "A sufficiently long Skill instruction without an admission row.",
                 "# No Admission\n");
             var noAdmissionDigest = service.Preview(noAdmissionCandidate).ContentDigest;
-            db.SkillContentRevisions.Add(new ProjectSkillContentRevisionRecord
+            await using (var admissionTx = await db.Database.BeginTransactionAsync())
             {
-                ProjectId = setup.Request.ProjectId,
-                SkillId = "no-admission-skill",
-                Revision = 1,
-                Name = "no-admission-skill",
-                Description = "A sufficiently long Skill instruction without an admission row.",
-                ContentDigest = noAdmissionDigest,
-                ObjectKey = "unused-object-key",
-                ResourceCount = 0,
-                TotalBytes = noAdmissionCandidate.SkillMarkdown.Length,
-                CreatedByActorId = setup.Project.Owner.ActorId,
-                CreatedAt = TimeProvider.System.GetUtcNow(),
-                AdmissionClassification = ProjectSkillAdmissionClassification.ThirdParty,
-                SourceAuthorityKind = ProjectSkillSourceAuthorityKind.CallerClaimed,
-            });
+                await db.Database.ExecuteSqlRawAsync("SET LOCAL agentweaver.skill_admission_v1 = '1'");
+                db.SkillContentRevisions.Add(new ProjectSkillContentRevisionRecord
+                {
+                    ProjectId = setup.Request.ProjectId,
+                    SkillId = "no-admission-skill",
+                    Revision = 1,
+                    Name = "no-admission-skill",
+                    Description = "A sufficiently long Skill instruction without an admission row.",
+                    ContentDigest = noAdmissionDigest,
+                    ObjectKey = "unused-object-key",
+                    ResourceCount = 0,
+                    TotalBytes = noAdmissionCandidate.SkillMarkdown.Length,
+                    CreatedByActorId = setup.Project.Owner.ActorId,
+                    CreatedAt = TimeProvider.System.GetUtcNow(),
+                    AdmissionClassification = ProjectSkillAdmissionClassification.ThirdParty,
+                    SourceAuthorityKind = ProjectSkillSourceAuthorityKind.CallerClaimed,
+                });
+                await db.SaveChangesAsync();
+                await admissionTx.CommitAsync();
+            }
             var noAdmissionConfig = ProjectSettings() with
             {
                 AgentCharters = [new ProjectAgentCharter("agent-one", "Refresh Agent", "assistant", "Refresh test agent.")],
