@@ -382,9 +382,11 @@ public sealed partial class ProjectsConfigPostgresTests
             var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
                 CreateDbContextOptions(), TimeProvider.System);
             var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            var objectStore = new SkillContentObjectStore(setup.Objects);
             var configService = new ProjectsConfigService(
-                db, CreateProviderCatalog(), TimeProvider.System,
-                skillContentObjects: new SkillContentObjectStore(setup.Objects));
+                db, CreateProviderCatalog(), TimeProvider.System, skillContentObjects: objectStore);
+            var skills = new SkillContentService(
+                db, objectStore, configService, TimeProvider.System);
 
             await SeedSkillsPolicyAsync(
                 db,
@@ -411,7 +413,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     Casting = [new ProjectAgentCast(agentId, "assistant", 0)],
                 },
                 CancellationToken.None);
-            var updatedConfig = await setup.Skills.UpdateAsync(
+            var updatedConfig = await skills.UpdateAsync(
                 setup.Project.Owner,
                 setup.Project.Project.ProjectId,
                 new SkillAssignmentUpdateRequest(
@@ -514,7 +516,7 @@ public sealed partial class ProjectsConfigPostgresTests
             Assert.Equal(StatusCodes.Status409Conflict, runtimeRevoked.StatusCode);
 
             await Assert.ThrowsAsync<SkillContentServiceException>(() =>
-                setup.Skills.UpdateAsync(
+                skills.UpdateAsync(
                     setup.Project.Owner,
                     setup.Project.Project.ProjectId,
                     new SkillAssignmentUpdateRequest(
@@ -565,7 +567,7 @@ public sealed partial class ProjectsConfigPostgresTests
                 ContentDigest = validated.ContentDigest,
                 ObjectKey = objectKey.Value,
                 ResourceCount = validated.Resources.Length,
-                TotalBytes = malicious.SkillMarkdown.Length,
+                TotalBytes = SkillContentService.SemanticByteCount(validated),
                 CreatedByActorId = setup.Project.Owner.ActorId,
                 CreatedAt = TimeProvider.System.GetUtcNow(),
                 AdmissionClassification = ProjectSkillAdmissionClassification.LegacyThirdParty,
