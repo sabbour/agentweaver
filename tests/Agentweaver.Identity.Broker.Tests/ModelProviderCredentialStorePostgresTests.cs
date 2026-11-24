@@ -1657,8 +1657,10 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         await using (var downDb = CreateDb(connectionString))
         {
             var migrator = downDb.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
-            var rollbackError = await Assert.ThrowsAsync<PostgresException>(() =>
+            var thrown = await Assert.ThrowsAnyAsync<Exception>(() =>
                 migrator.MigrateAsync("20261120231929_AddCredentialLifecycleDispatchAndCancel"));
+            var rollbackError = thrown as PostgresException ?? thrown.InnerException as PostgresException;
+            Assert.NotNull(rollbackError);
             Assert.Equal("55000", rollbackError.SqlState);
             Assert.Contains("credential_disable_claims_rollback_blocked", rollbackError.MessageText);
         }
