@@ -1486,7 +1486,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
                     new Claim("tid", Tenant),
                     new Claim("aud", "orchestrator"),
                     new Claim("aud", "projects"),
-                    new Claim("scope", "api.read projects.admin")
+                    new Claim("scope", "api.read projects.orchestrator projects.admin")
                 ], Scheme.Name)),
                 "Bearer reader-token" => new ClaimsPrincipal(new ClaimsIdentity(
                 [
