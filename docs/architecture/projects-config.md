@@ -422,6 +422,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
 | `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
 | `GET /api/policies/platform` | Read the current canonical ACS Policy artifact as a complete, hash-verified source. Requires `api.read` and a current unbound PlatformAdmin; it does not require `projects.admin`. |
+| `GET /api/policies/platform/decisions?resourceType={type}&resourceId={id}&pageSize={n}&beforeSequence={seq}` | List newest-first redacted governance decision history for one Platform resource stream. Requires `api.read`, an unbound token, and current PlatformAdmin authority. |
 | `GET /internal/policy-source/platform` | Environment source read on the shared Projects HTTPS listener. Requires native TLS 1.2/1.3, the exact Environment DNS SAN, a current pinned clientAuth leaf, the pinned backend CA, and valid online revocation status. Accepts no authorization header, query or body and returns the complete artifact with Pending admission state and `Cache-Control: no-store`. |
 | `GET /api/policies/platform/revisions?pageSize={n}&cursor={token}` | Read newest-first revision metadata for the stable Platform lineage. `pageSize` defaults to 20 and ranges from 1 to 100. Every page rechecks current PlatformAdmin authority. |
 | `GET /api/policies/platform/revisions/{revision}` | Read the complete, hash-verified artifact and its original creation time from the exact retained revision. The revision is a canonical positive decimal Int64. |
@@ -429,6 +430,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/policies/projects/{projectId}` | Read the current hash-verified Project Policy artifact. Requires current TenantAdmin or project Owner, Contributor, or Viewer authority and accepts only an unbound token or a token bound to this project. |
 | `GET /api/policies/projects/{projectId}/revisions?pageSize={n}&cursor={token}` | Read newest-first Project revision metadata. An authorized project with no head returns an empty page. |
 | `GET /api/policies/projects/{projectId}/revisions/{revision}` | Read the complete, hash-verified artifact from the exact retained Project revision. |
+| `GET /api/policies/projects/{projectId}/decisions?resourceType={type}&resourceId={id}&pageSize={n}&beforeSequence={seq}` | List newest-first redacted governance decision history for one Project resource stream. Requires `api.read`, an unbound or exact project-bound token, and current TenantAdmin or project Owner, Contributor, or Viewer authority. |
 | `POST /api/policies/projects/{projectId}/validate` | Validate a Project artifact with current unbound Owner or TenantAdmin authority. The artifact omits Platform network data. |
 | `POST /api/policies/platform/validate` | Validate a complete Platform Policy artifact without changing stored policy state. |
 | `PUT /api/policies/platform` | Store a validated complete Platform Policy preparation at an expected revision. Requires `api.read`, `projects.admin`, and a current unbound PlatformAdmin. Off by default: returns `503` unless `NativeAcsPolicy:HeadWritesEnabled` is true. Exact retries return the saved preparation after current authority and head checks. |
@@ -1191,6 +1193,18 @@ Projects writes the decision record and outbox event with the head update in one
 serializable transaction. A failure leaves no partial append. The outbox event
 references the decision ID, sequence, and hash. A1 adds durable dispatch intent;
 it does not add a relay or connect domain receipts to the chain.
+
+`GET /api/policies/platform/decisions` and
+`GET /api/policies/projects/{projectId}/decisions` return newest-first redacted
+decision pages for one `(scopeType, scopeId, resourceType, resourceId)` stream,
+using `pageSize` (1–100, default 20) and `beforeSequence` (positive `Int64`).
+Each page validates canonical round-tripping, `recorded_at`, sequence-1 genesis,
+and adjacent-row hash links within that page; it does not verify the full
+cross-page chain or a retained checkpoint. Platform reads require `api.read`,
+an unbound token, and current `PlatformAdmin` authority. Project reads require
+`api.read`, an unbound or exact project-bound token, and current `TenantAdmin`
+or project `Owner`, `Contributor`, or `Viewer` authority (returning `404` for
+missing, cross-tenant, or unauthorized projects to prevent enumeration).
 
 Decision records and outbox rows reject update, delete, and truncate operations.
 Insert triggers stamp the transaction ID on each row. The head can advance only

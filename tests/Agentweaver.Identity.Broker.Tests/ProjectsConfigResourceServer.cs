@@ -196,6 +196,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 configureServices?.Invoke(services);
                 services.AddScoped<ProjectRoleAssignmentService>();
                 services.AddScoped<ProjectSetupAuthorityAuditService>();
+                services.AddScoped<ProjectGovernanceDecisionStore>();
                 // Preserve service binding while failing fast if the test host reaches a remote Knowledge owner.
                 services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
                     client.BaseAddress = new Uri("https://knowledge.test/"))
@@ -450,6 +451,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT UPDATE (delivery_state, attempt_count, next_attempt_at, lease_owner, lease_token, lease_expires_at, environment_destination_id, delivered_at, failure_code, last_attempt_at, updated_at) ON projects_config.model_provider_host_requests TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.installation_identity TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.project_governance_decisions TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[]) TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_credential_publication_authority(uuid, text, text, text, bigint, uuid, bigint, text, text) TO \"{runtimeRole}\"",

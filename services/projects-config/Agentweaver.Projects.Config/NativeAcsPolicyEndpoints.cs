@@ -99,6 +99,46 @@ public static class NativeAcsPolicyEndpoints
             }
         }).WithName("ReadPlatformNativeAcsPolicy");
 
+        platform.MapGet("/decisions", async (
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] ProjectGovernanceDecisionStore decisionStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var (resourceType, resourceId, pageSize, beforeSequence) =
+                    ParseGovernanceDecisionHistoryQuery(context);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
+                    .ConfigureAwait(false);
+                var page = await decisionStore.ReadHistoryAsync(
+                    NativeAcsPolicyScopeType.Platform,
+                    ProjectAuthorizationOwner.PlatformResourceId,
+                    resourceType,
+                    resourceId,
+                    pageSize,
+                    beforeSequence,
+                    cancellationToken).ConfigureAwait(false);
+                await projectsService.EnsurePlatformPolicyReaderAsync(caller, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(page);
+            }
+            catch (ProjectConfigException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ToProblem(exception);
+            }
+            catch (Exception exception) when (IsPlatformHeadSourceFailure(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return GovernanceSourceUnavailable();
+            }
+        }).WithName("ListPlatformGovernanceDecisions");
+
         platform.MapGet("/revisions", async (
             HttpContext context,
             [FromServices] ProjectsConfigService projectsService,
@@ -537,7 +577,70 @@ public static class NativeAcsPolicyEndpoints
             }
         }).WithName("ReadProjectNativeAcsPolicyRevision");
 
+        projects.MapGet("/{projectId}/decisions", async (
+            string projectId,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] ProjectGovernanceDecisionStore decisionStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var (resourceType, resourceId, pageSize, beforeSequence) =
+                    ParseGovernanceDecisionHistoryQuery(context);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                var page = await decisionStore.ReadHistoryAsync(
+                    NativeAcsPolicyScopeType.Project,
+                    projectId,
+                    resourceType,
+                    resourceId,
+                    pageSize,
+                    beforeSequence,
+                    cancellationToken).ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyReaderAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(page);
+            }
+            catch (ProjectConfigException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ToProblem(exception);
+            }
+            catch (Exception exception) when (IsPlatformHeadSourceFailure(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return GovernanceSourceUnavailable();
+            }
+        }).WithName("ListProjectGovernanceDecisions");
+
         return app;
+    }
+
+    private static (string ResourceType, string ResourceId, int PageSize, long? BeforeSequence)
+        ParseGovernanceDecisionHistoryQuery(HttpContext context)
+    {
+        if (context.Request.Query.Keys.Any(key =>
+                key is not ("resourceType" or "resourceId" or "pageSize" or "beforeSequence")) ||
+            context.Request.Query["resourceType"].Count != 1 ||
+            context.Request.Query["resourceId"].Count != 1 ||
+            context.Request.Query["pageSize"].Count > 1 ||
+            context.Request.Query["beforeSequence"].Count > 1)
+            throw ProjectGovernanceDecisionStore.HistoryRequestInvalid();
+        EnsureNoReadBody(context, ProjectGovernanceDecisionStore.HistoryRequestInvalid);
+        var resourceType = ProjectGovernanceDecisionStore.ParseRequiredResourceFilter(
+            context.Request.Query["resourceType"][0], 64);
+        var resourceId = ProjectGovernanceDecisionStore.ParseRequiredResourceFilter(
+            context.Request.Query["resourceId"][0], 256);
+        var pageSize = ProjectGovernanceDecisionStore.ParseHistoryPageSize(
+            context.Request.Query.TryGetValue("pageSize", out var sizes) ? sizes[0] : null);
+        var beforeSequence = ProjectGovernanceDecisionStore.ParseBeforeSequence(
+            context.Request.Query.TryGetValue("beforeSequence", out var cursors) ? cursors[0] : null);
+        return (resourceType, resourceId, pageSize, beforeSequence);
     }
 
     private static bool HasAmbiguousProperties(JsonElement element)
@@ -666,6 +769,16 @@ public static class NativeAcsPolicyEndpoints
             extensions: new Dictionary<string, object?>
             {
                 ["code"] = "native_acs_policy_source_unavailable",
+            });
+
+    private static IResult GovernanceSourceUnavailable() =>
+        Results.Problem(
+            title: "governance_decision_source_unavailable",
+            detail: "The governance decision source is unavailable.",
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            extensions: new Dictionary<string, object?>
+            {
+                ["code"] = "governance_decision_source_unavailable",
             });
 
     internal static bool IsSourceUnavailable(InvalidOperationException exception) =>

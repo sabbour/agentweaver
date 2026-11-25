@@ -596,6 +596,11 @@ public static class GatewayRouteCatalog
             "readPlatformNativeAcsPolicy", "Read the current canonical Platform Policy",
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/platform/decisions", "/api/policies/platform/decisions",
+            "listPlatformGovernanceDecisions", "List Platform governance decision history",
+            ["resourceType", "resourceId", "pageSize", "beforeSequence"],
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/policies/platform/revisions", "/api/policies/platform/revisions",
             "listPlatformNativeAcsPolicyRevisions", "List Platform Policy revision history",
             ["pageSize", "cursor"], forwardTenantSelector: true,
@@ -640,6 +645,12 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/policies/projects/{projectId}/revisions/{revision}",
             "/api/policies/projects/{projectId}/revisions/{revision}",
             "readProjectNativeAcsPolicyRevision", "Read an exact Project Policy revision",
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/policies/projects/{projectId}/decisions",
+            "/api/policies/projects/{projectId}/decisions",
+            "listProjectGovernanceDecisions", "List Project governance decision history",
+            ["resourceType", "resourceId", "pageSize", "beforeSequence"],
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
 

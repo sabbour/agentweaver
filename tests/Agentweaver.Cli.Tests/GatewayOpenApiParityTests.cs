@@ -163,6 +163,23 @@ public sealed class GatewayOpenApiParityTests
         Assert.Equal("#/components/schemas/VersionedProjectConfiguration",
             getProjectConfig["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
                 .GetValue<string>());
+
+        var platformDecisions = FindOperation(discovered, "listPlatformGovernanceDecisions");
+        Assert.Equal("#/components/schemas/GovernanceDecisionHistoryPage",
+            platformDecisions["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                .GetValue<string>());
+        Assert.DoesNotContain("404", Assert.IsType<JsonObject>(platformDecisions["responses"]).Select(item => item.Key));
+        var platformParams = Assert.IsType<JsonArray>(platformDecisions["parameters"]).OfType<JsonObject>().ToArray();
+        Assert.True(platformParams.Single(p => p["name"]?.GetValue<string>() == "resourceType")["required"]?.GetValue<bool>());
+        Assert.True(platformParams.Single(p => p["name"]?.GetValue<string>() == "resourceId")["required"]?.GetValue<bool>());
+        Assert.Equal(100, platformParams.Single(p => p["name"]?.GetValue<string>() == "pageSize")["schema"]?["maximum"]?.GetValue<int>());
+        Assert.Equal(1, platformParams.Single(p => p["name"]?.GetValue<string>() == "beforeSequence")["schema"]?["minimum"]?.GetValue<int>());
+
+        var projectDecisions = FindOperation(discovered, "listProjectGovernanceDecisions");
+        Assert.Equal("#/components/schemas/GovernanceDecisionHistoryPage",
+            projectDecisions["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                .GetValue<string>());
+        Assert.Contains("404", Assert.IsType<JsonObject>(projectDecisions["responses"]).Select(item => item.Key));
         Assert.Null(schemas["VersionedProjectConfiguration"]?["properties"]?["charterScan"]);
 
         JsonObject updateProjectConfig = FindOperation(discovered, "updateProjectConfiguration");

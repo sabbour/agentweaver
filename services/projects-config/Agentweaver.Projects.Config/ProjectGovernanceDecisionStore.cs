@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Data;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -291,4 +293,204 @@ internal sealed class ProjectGovernanceDecisionStore(
             !ProjectGovernanceDecisionCanonicalJson.IsSha256(request.ExpectedHeadHash))
             throw new ArgumentException("Governance decision stream identity, fence, or idempotency key is invalid.", nameof(request));
     }
+
+    internal static ProjectConfigException HistoryRequestInvalid() =>
+        ProjectConfigException.Invalid(
+            "governance_decision_history_request_invalid",
+            "The governance decision history request is invalid.");
+
+    internal static string ParseRequiredResourceFilter(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length > maxLength ||
+            value.Trim().Length != value.Length)
+            throw HistoryRequestInvalid();
+        return value;
+    }
+
+    internal static int ParseHistoryPageSize(string? value)
+    {
+        if (value is null)
+            return 20;
+        if (value.Length == 0 ||
+            (value.Length > 1 && value[0] == '0') ||
+            value.Any(character => character is < '0' or > '9') ||
+            !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var pageSize) ||
+            pageSize is < 1 or > 100)
+            throw HistoryRequestInvalid();
+        return pageSize;
+    }
+
+    internal static long? ParseBeforeSequence(string? value)
+    {
+        if (value is null)
+            return null;
+        if (value.Length == 0 ||
+            (value.Length > 1 && value[0] == '0') ||
+            value.Any(character => character is < '0' or > '9') ||
+            !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) ||
+            sequence <= 0)
+            throw HistoryRequestInvalid();
+        return sequence;
+    }
+
+    internal async Task<ProjectGovernanceDecisionHistoryPage> ReadHistoryAsync(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId,
+        int pageSize,
+        long? beforeSequence,
+        CancellationToken cancellationToken)
+    {
+        if (!Enum.IsDefined(scopeType) ||
+            string.IsNullOrWhiteSpace(scopeId) || scopeId.Length > 256 ||
+            (scopeType == NativeAcsPolicyScopeType.Platform &&
+             scopeId != ProjectAuthorizationOwner.PlatformResourceId))
+            throw HistoryRequestInvalid();
+        resourceType = ParseRequiredResourceFilter(resourceType, 64);
+        resourceId = ParseRequiredResourceFilter(resourceId, 256);
+        if (pageSize is < 1 or > 100 || beforeSequence is <= 0)
+            throw HistoryRequestInvalid();
+
+        if (beforeSequence == 1)
+            return new ProjectGovernanceDecisionHistoryPage(
+                scopeType, scopeId, resourceType, resourceId, [], null);
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            var sql = beforeSequence.HasValue
+                ? """
+                  SELECT sequence, decision_id, previous_hash, record_hash, recorded_at, canonical_record
+                  FROM projects_config.project_governance_decisions
+                  WHERE scope_type = @scope_type
+                    AND scope_id = @scope_id
+                    AND resource_type = @resource_type
+                    AND resource_id = @resource_id
+                    AND sequence < @before_sequence
+                  ORDER BY sequence DESC
+                  LIMIT @limit
+                  """
+                : """
+                  SELECT sequence, decision_id, previous_hash, record_hash, recorded_at, canonical_record
+                  FROM projects_config.project_governance_decisions
+                  WHERE scope_type = @scope_type
+                    AND scope_id = @scope_id
+                    AND resource_type = @resource_type
+                    AND resource_id = @resource_id
+                  ORDER BY sequence DESC
+                  LIMIT @limit
+                  """;
+
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("scope_type", scopeType.ToString());
+            command.Parameters.AddWithValue("scope_id", scopeId);
+            command.Parameters.AddWithValue("resource_type", resourceType);
+            command.Parameters.AddWithValue("resource_id", resourceId);
+            if (beforeSequence.HasValue)
+                command.Parameters.Add("before_sequence", NpgsqlDbType.Bigint).Value = beforeSequence.Value;
+            command.Parameters.Add("limit", NpgsqlDbType.Integer).Value = checked(pageSize + 1);
+
+            var items = ImmutableArray.CreateBuilder<ProjectGovernanceDecisionHistoryItem>(pageSize);
+            var hasMore = false;
+            ProjectGovernanceDecisionHistoryItem? previousInPage = null;
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (items.Count == pageSize)
+                {
+                    hasMore = true;
+                    break;
+                }
+
+                var sequence = reader.GetInt64(0);
+                var decisionId = reader.GetGuid(1);
+                var previousHash = reader.GetString(2);
+                var recordHash = reader.GetString(3);
+                var recordedAt = reader.GetFieldValue<DateTimeOffset>(4).ToUniversalTime();
+                var canonicalRecord = reader.GetFieldValue<byte[]>(5);
+
+                if (sequence <= 0 ||
+                    !ProjectGovernanceDecisionCanonicalJson.IsSha256(previousHash) ||
+                    !ProjectGovernanceDecisionCanonicalJson.IsSha256(recordHash) ||
+                    (sequence == 1 && !string.Equals(previousHash, GenesisHash, StringComparison.Ordinal)) ||
+                    !ProjectGovernanceDecisionCanonicalJson.TryDeserializeRecord(canonicalRecord, out var record) ||
+                    record is null ||
+                    record.SchemaVersion != 1 ||
+                    !string.Equals(record.ScopeType, scopeType.ToString(), StringComparison.Ordinal) ||
+                    !string.Equals(record.ScopeId, scopeId, StringComparison.Ordinal) ||
+                    !string.Equals(record.ResourceType, resourceType, StringComparison.Ordinal) ||
+                    !string.Equals(record.ResourceId, resourceId, StringComparison.Ordinal) ||
+                    record.Sequence != sequence ||
+                    record.DecisionId != decisionId ||
+                    !string.Equals(record.PreviousHash, previousHash, StringComparison.Ordinal) ||
+                    Math.Abs((record.RecordedAt.ToUniversalTime() - recordedAt).Ticks) > TimeSpan.TicksPerMicrosecond ||
+                    !string.Equals(
+                        ProjectGovernanceDecisionCanonicalJson.ChainHash(previousHash, canonicalRecord),
+                        recordHash,
+                        StringComparison.Ordinal))
+                    throw CorruptRecord();
+
+                if (previousInPage is not null &&
+                    (previousInPage.Sequence != sequence + 1 ||
+                     !string.Equals(previousInPage.PreviousHash, recordHash, StringComparison.Ordinal)))
+                    throw CorruptRecord();
+
+                var item = new ProjectGovernanceDecisionHistoryItem(
+                    decisionId,
+                    sequence,
+                    previousHash,
+                    recordHash,
+                    recordedAt,
+                    new ProjectGovernanceDecisionDetailView(
+                        record.Decision.DecisionType,
+                        record.Decision.Outcome,
+                        record.Decision.ApprovalState,
+                        record.Decision.PolicyRevision,
+                        record.Decision.PolicyArtifactSha256,
+                        record.Decision.SelectedRule,
+                        record.Decision.InterventionPoint,
+                        record.Decision.RequestId,
+                        record.Decision.ActionId,
+                        record.Decision.RunId,
+                        record.Decision.AgentId,
+                        record.Decision.RoleId,
+                        record.Decision.HumanEntraOid,
+                        record.Decision.TenantId,
+                        record.Decision.BrokerIssuer,
+                        record.Decision.BrokerSubject,
+                        record.Decision.EffectiveRoleRevisions,
+                        record.Decision.OwnerReceiptId,
+                        record.Decision.OwnerReceiptPosition,
+                        record.Decision.CompilerGeneration,
+                        record.Decision.ApplicationGeneration,
+                        record.Decision.CorrelationId,
+                        record.Decision.DecidedAt));
+                items.Add(item);
+                previousInPage = item;
+            }
+
+            return new ProjectGovernanceDecisionHistoryPage(
+                scopeType,
+                scopeId,
+                resourceType,
+                resourceId,
+                items.ToImmutable(),
+                hasMore ? items[^1].Sequence : null);
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static ProjectConfigException CorruptRecord() =>
+        new(
+            "governance_decision_corrupt",
+            "A stored governance decision record failed its integrity check.",
+            StatusCodes.Status500InternalServerError);
 }

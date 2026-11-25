@@ -96,6 +96,7 @@ public sealed partial class GatewayOwnerClient(
         {
             if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup" or
                     "readPlatformNativeAcsPolicy" or "readRunEgress" ||
+                route.OperationId is "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions" ||
                 IsRateCardWriteRoute(route) ||
                 IsCredentialPutRoute(route) ||
                 IsModelProviderDraftRoute(route))
@@ -155,6 +156,17 @@ public sealed partial class GatewayOwnerClient(
                         .ConfigureAwait(false);
                     return;
                 }
+            }
+            if (route.OperationId is ("listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions") &&
+                (context.Request.ContentLength is > 0 ||
+                 context.Request.ContentType is not null ||
+                 context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+                 context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true))
+            {
+                await WriteProblemAsync(
+                    context, "governance_decision_history_request_invalid", StatusCodes.Status400BadRequest)
+                    .ConfigureAwait(false);
+                return;
             }
             // The setup routes take no body or query. The Transfer-Encoding check rejects an HTTP/1.1 chunked
             // body. An HTTP/2 or HTTP/3 body can have neither header, so when CanHaveBody is true,

@@ -96,10 +96,12 @@ internal static partial class GatewayOpenApi
             ["updatePlatformRuntimeDefaults"] = C("UpdatePlatformRuntimeDefaultsRequest", "VersionedPlatformRuntimeDefaults", "200"),
             ["getPlatformComponents"] = C(null, "PlatformComponentReport", "200"),
             ["readPlatformNativeAcsPolicy"] = C(null, "NativeAcsPolicyReadResult", "200"),
+            ["listPlatformGovernanceDecisions"] = C(null, "GovernanceDecisionHistoryPage", "200"),
             ["listPlatformNativeAcsPolicyRevisions"] = C(null, "NativeAcsPolicyRevisionPage", "200"),
             ["readPlatformNativeAcsPolicyRevision"] = C(null, "NativeAcsPolicyRevisionReadResult", "200"),
             ["listProjectNativeAcsPolicies"] = C(null, "NativeAcsPolicyScopePage", "200"),
             ["readProjectNativeAcsPolicy"] = C(null, "NativeAcsPolicyReadResult", "200"),
+            ["listProjectGovernanceDecisions"] = C(null, "GovernanceDecisionHistoryPage", "200"),
             ["listProjectNativeAcsPolicyRevisions"] = C(null, "NativeAcsPolicyRevisionPage", "200"),
             ["readProjectNativeAcsPolicyRevision"] = C(null, "NativeAcsPolicyRevisionReadResult", "200"),
             ["validatePlatformNativeAcsPolicy"] = C(
@@ -540,8 +542,10 @@ internal static partial class GatewayOpenApi
                         "searchProjectAzureRetailPrices" or "savePlatformManualRuntimeRateCard" or
                         "readProjectTeamSync" or "commitProjectTeamSync" or "readPlatformNativeAcsPolicy" or
                         "listPlatformNativeAcsPolicyRevisions" or "readPlatformNativeAcsPolicyRevision" or
+                        "listPlatformGovernanceDecisions" or
                         "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                         "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
+                        "listProjectGovernanceDecisions" or
                         "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
                         "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
@@ -585,11 +589,12 @@ internal static partial class GatewayOpenApi
                                                 "Azure Retail runtime price-card responses are not cacheable.",
                                             "readPlatformNativeAcsPolicy" or "validatePlatformNativeAcsPolicy" or
                                             "writePlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
-                                            "readPlatformNativeAcsPolicyRevision" =>
+                                            "readPlatformNativeAcsPolicyRevision" or "listPlatformGovernanceDecisions" =>
                                                 "Platform Policy responses are not cacheable.",
                                             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                                             "listProjectNativeAcsPolicyRevisions" or
-                                            "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" =>
+                                            "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" or
+                                            "listProjectGovernanceDecisions" =>
                                                 "Project Policy responses are not cacheable.",
                                             "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" =>
                                                 "Skill refresh responses are not cacheable.",
@@ -892,33 +897,46 @@ else if (route.OperationId is
                 "Project role assignment is not enabled because the runtime database grants are not applied.");
         }
         else if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
-            "readPlatformNativeAcsPolicyRevision" or "validatePlatformNativeAcsPolicy" or
-            "writePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
-            "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision")
+            "readPlatformNativeAcsPolicyRevision" or "listPlatformGovernanceDecisions" or
+            "validatePlatformNativeAcsPolicy" or
+            "writePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "listProjectNativeAcsPolicies" or
+            "readProjectNativeAcsPolicy" or
+            "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
+            "listProjectGovernanceDecisions")
         {
             responses["400"] = ProblemResponse(route.OperationId == "readPlatformNativeAcsPolicy"
                 ? "The request includes a query, body, content type, or transfer encoding."
                 : "The request includes an undeclared query value or invalid policy selector.");
             var isProjectPolicyRead = route.OperationId is
                 "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
-                "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
+                "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
+                "listProjectGovernanceDecisions";
             responses["403"] = ProblemResponse(route.OperationId == "validateProjectNativeAcsPolicy"
                 ? "The caller lacks current Project Policy author authority."
                 : isProjectPolicyRead
                     ? "The caller lacks current Project Policy read authority."
                     : "The caller lacks current Platform administrator authority.");
             if (route.OperationId is "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
-                "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy")
-                responses["404"] = ProblemResponse(route.OperationId == "validateProjectNativeAcsPolicy"
-                    ? "The Project does not exist in the selected tenant."
+                "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" or
+                "listProjectGovernanceDecisions")
+                responses["404"] = ProblemResponse(route.OperationId is "validateProjectNativeAcsPolicy" or
+                    "listProjectGovernanceDecisions"
+                    ? "The Project does not exist in the selected tenant or is not visible to the caller."
                     : "No current or requested Policy revision exists.");
             if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
-                "readPlatformNativeAcsPolicyRevision" or "listProjectNativeAcsPolicies" or
+                "readPlatformNativeAcsPolicyRevision" or "listPlatformGovernanceDecisions" or
+                "listProjectNativeAcsPolicies" or
                 "readProjectNativeAcsPolicy" or "listProjectNativeAcsPolicyRevisions" or
-                "readProjectNativeAcsPolicyRevision")
+                "readProjectNativeAcsPolicyRevision" or "listProjectGovernanceDecisions")
             {
-                responses["500"] = ProblemResponse("The stored Policy source failed its integrity check.");
-                responses["503"] = ProblemResponse("The Policy source is unavailable.");
+                responses["500"] = ProblemResponse(route.OperationId is "listPlatformGovernanceDecisions" or
+                    "listProjectGovernanceDecisions"
+                    ? "A stored governance decision record failed its integrity check."
+                    : "The stored Policy source failed its integrity check.");
+                responses["503"] = ProblemResponse(route.OperationId is "listPlatformGovernanceDecisions" or
+                    "listProjectGovernanceDecisions"
+                    ? "The governance decision source is unavailable."
+                    : "The Policy source is unavailable.");
             }
             if (route.HasJsonBody)
             {
@@ -1124,6 +1142,25 @@ else if (route.OperationId is
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId == "listPlatformGovernanceDecisions")
+        {
+            description +=
+                " Requires api.read, active membership, an unbound request, and current PlatformAdmin authority. " +
+                "Returns newest-first redacted governance decision records for one Platform resource stream. " +
+                "pageSize defaults to 20 and ranges from 1 to 100; beforeSequence is a positive Int64 sequence " +
+                "cursor. Page reads validate integrity only within the returned page; they do not verify the full " +
+                "cross-page chain or a retained checkpoint. The response is no-store.";
+        }
+        else if (route.OperationId == "listProjectGovernanceDecisions")
+        {
+            description +=
+                " Requires api.read, active membership, an unbound token or a token bound to this Project, and " +
+                "current TenantAdmin or project Owner, Contributor, or Viewer authority. Returns newest-first " +
+                "redacted governance decision records for one Project resource stream. pageSize defaults to 20 " +
+                "and ranges from 1 to 100; beforeSequence is a positive Int64 sequence cursor. Page reads validate " +
+                "integrity only within the returned page; they do not verify the full cross-page chain or a " +
+                "retained checkpoint. The response is no-store.";
         }
         else if (route.OperationId == "listPlatformNativeAcsPolicyRevisions")
         {
@@ -1528,7 +1565,9 @@ else if (route.OperationId is
         operationId == "readSourceControlOutputCaptureFile" && name == "path" ||
         (operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref" ||
         operationId == "previewBacklogWorkPlanPromotion" && name == "rootSessionId" ||
-        operationId == "readEnvironmentSandbox" && name == "networkPolicyGeneration";
+        operationId == "readEnvironmentSandbox" && name == "networkPolicyGeneration" ||
+        (operationId is "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions") &&
+            name is "resourceType" or "resourceId";
 
     private static object QuerySchema(string operationId, string name)
     {
@@ -1536,6 +1575,15 @@ else if (route.OperationId is
             return name == "limit"
                 ? new { type = "integer", minimum = 1, maximum = 100, @default = 50 }
                 : new { type = "string", minLength = 1, maxLength = 2048 };
+        if (operationId is "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions")
+            return name switch
+            {
+                "resourceType" => new { type = "string", minLength = 1, maxLength = 64 },
+                "resourceId" => new { type = "string", minLength = 1, maxLength = 256 },
+                "pageSize" => new { type = "integer", minimum = 1, maximum = 100, @default = 20 },
+                "beforeSequence" => new { type = "integer", format = "int64", minimum = 1 },
+                _ => new { type = "string", minLength = 1, maxLength = 256 },
+            };
         if (operationId == "readCheckpointRecoveryEvents")
             return name == "limit"
                 ? new { type = "integer", minimum = 1, maximum = 200, @default = 100 }
@@ -2582,6 +2630,51 @@ else if (route.OperationId is
         ["NativeAcsPolicyScopePage"] = StrictObj(
             ["items", "nextCursor"],
             ("items", Arr(Ref("NativeAcsPolicyScopeSummary"))), ("nextCursor", NullableStr())),
+        ["GovernanceDecisionRoleRevision"] = StrictObj(
+            ["assignmentId", "revision"],
+            ("assignmentId", Uuid()),
+            ("revision", new { type = "integer", format = "int64", minimum = 1 })),
+        ["GovernanceDecisionDetail"] = StrictObj(
+            ["decisionType", "outcome", "approvalState", "effectiveRoleRevisions", "correlationId", "decidedAt"],
+            ("decisionType", Str()),
+            ("outcome", Enum("allow", "deny", "approve", "reject", "pending")),
+            ("approvalState", Enum("notRequired", "pending", "approved", "rejected")),
+            ("policyRevision", Nullable(new { type = "integer", format = "int64", minimum = 1 })),
+            ("policyArtifactSha256", Nullable(new { type = "string", pattern = "^[0-9a-f]{64}$" })),
+            ("selectedRule", NullableStr()),
+            ("interventionPoint", NullableStr()),
+            ("requestId", NullableStr()),
+            ("actionId", NullableStr()),
+            ("runId", NullableStr()),
+            ("agentId", NullableStr()),
+            ("roleId", NullableStr()),
+            ("humanEntraOid", NullableUuid()),
+            ("tenantId", NullableUuid()),
+            ("brokerIssuer", NullableStr()),
+            ("brokerSubject", NullableStr()),
+            ("effectiveRoleRevisions", Arr(Ref("GovernanceDecisionRoleRevision"))),
+            ("ownerReceiptId", NullableStr()),
+            ("ownerReceiptPosition", Nullable(new { type = "integer", format = "int64", minimum = 1 })),
+            ("compilerGeneration", NullableStr()),
+            ("applicationGeneration", NullableStr()),
+            ("correlationId", Str()),
+            ("decidedAt", Date())),
+        ["GovernanceDecisionHistoryItem"] = StrictObj(
+            ["decisionId", "sequence", "previousHash", "recordHash", "recordedAt", "decision"],
+            ("decisionId", Uuid()),
+            ("sequence", new { type = "integer", format = "int64", minimum = 1 }),
+            ("previousHash", new { type = "string", pattern = "^[0-9a-f]{64}$" }),
+            ("recordHash", new { type = "string", pattern = "^[0-9a-f]{64}$" }),
+            ("recordedAt", Date()),
+            ("decision", Ref("GovernanceDecisionDetail"))),
+        ["GovernanceDecisionHistoryPage"] = StrictObj(
+            ["scopeType", "scopeId", "resourceType", "resourceId", "items", "nextBeforeSequence"],
+            ("scopeType", Ref("NativeAcsPolicyScopeType")),
+            ("scopeId", Str()),
+            ("resourceType", Str()),
+            ("resourceId", Str()),
+            ("items", Arr(Ref("GovernanceDecisionHistoryItem"))),
+            ("nextBeforeSequence", Nullable(new { type = "integer", format = "int64", minimum = 1 }))),
         ["NativeAcsPolicyWriteReceipt"] = Obj(
             ["scopeType", "scopeId", "policyId", "revision", "contentSha256", "auditId", "outboxId", "replayed"],
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),

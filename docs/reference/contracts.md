@@ -584,6 +584,31 @@ describes the source tests. The
 [ACS runtime asset guide](https://github.com/sabbour/agentweaver/blob/v1/eng/acs/README.md)
 describes the pinned package and OPA assets.
 
+### Governance decision history reads
+
+`GET /api/v1/policies/platform/decisions` and
+`GET /api/v1/policies/projects/{projectId}/decisions` return newest-first
+redacted governance decision pages (`Cache-Control: no-store`) for one
+`(resourceType, resourceId)` stream.
+
+- **Query parameters:** `resourceType` (required, 1–64 chars), `resourceId`
+  (required, 1–256 chars), `pageSize` (optional, 1–100, default `20`), and
+  `beforeSequence` (optional, positive `Int64`). Unknown or repeated query keys
+  and GET request bodies return `400 governance_decision_history_request_invalid`.
+- **Authorization:** Platform reads require `api.read`, an unbound token, and
+  current `PlatformAdmin` authority (`403` otherwise). Project reads require
+  `api.read`, an unbound or exact `projectId`-bound token, and current
+  `TenantAdmin` or project `Owner`, `Contributor`, or `Viewer` authority
+  (`403` for missing scope, wrong binding, or revoked tenant; `404` for
+  missing, cross-tenant, or unauthorized projects). Both routes recheck
+  authority after reading PostgreSQL.
+- **Integrity and failures:** Page reads validate canonical JSON, `recorded_at`,
+  sequence-1 genesis, and adjacent-row hash links within the returned page
+  (`500 governance_decision_corrupt` on mismatch; `503 governance_decision_source_unavailable`
+  on database or timeout failures). Page reads do not verify the full
+  cross-page chain or a retained checkpoint, and SHA-256 digests are not
+  signatures.
+
 ## Current Environment egress verification
 
 `POST /api/network-egress/verify` is a read-only Environment owner request. It
