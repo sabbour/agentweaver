@@ -18,7 +18,9 @@ function fixture(t) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(path.join(parent, 'v1-plan-'));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => rmSync(root, {
+    recursive: true, force: true, maxRetries: 10, retryDelay: 50,
+  }));
   mkdirSync(path.join(root, 'packages', 'Pkg'), { recursive: true });
   mkdirSync(path.join(root, '.changeset'), { recursive: true });
   mkdirSync(path.join(root, 'releases'), { recursive: true });
@@ -72,6 +74,17 @@ function readFixtureManifest(root) {
   return JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
 }
 
+function commitAll(root, message) {
+  git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', message);
+}
+
+function sizedChangeset(size) {
+  const prefix = '---\n"Pkg": patch\n---\n\n';
+  assert.ok(size > Buffer.byteLength(prefix) + 1);
+  return prefix + 'x'.repeat(size - Buffer.byteLength(prefix) - 1) + '\n';
+}
+
 test('bumps the stable semver core and discards prerelease or build metadata', () => {
   assert.equal(bumpVersion('1.2.3', 'patch'), '1.2.4');
   assert.equal(bumpVersion('1.2.3', 'minor'), '1.3.0');
@@ -102,6 +115,270 @@ test('plans the highest pending bump for a component from a manifest file', (t) 
     changesets: ['.changeset/feature.md', '.changeset/fix.md'],
   }]);
   assert.equal(plan.checksum, planChecksum(plan));
+});
+
+test('batches 129 changeset reads at a 128-record boundary with parity to the legacy reader', (t) => {
+  const root = fixture(t);
+  for (let index = 0; index < 127; index += 1) {
+    writeFileSync(path.join(root, '.changeset', `batch-${String(index).padStart(3, '0')}.md`),
+      '---\n"Pkg": patch\n---\n\nBatch boundary record.\n');
+  }
+  commitAll(root, 'batch boundary');
+  const calls = [];
+  const legacyCalls = [];
+  const batched = createPlan(readFixtureManifest(root), {
+    root,
+    batchSpawnSync: (command, args, options) => {
+      assert.equal(command, 'git');
+      assert.deepEqual(args, ['cat-file', '--batch']);
+      assert.equal(options.shell, false);
+      calls.push(options.input);
+      return spawnSync(command, args, options);
+    },
+    readLegacySource: (sourceSha, file) => {
+      legacyCalls.push(file);
+      return execFileSync('git', ['show', `${sourceSha}:${file}`], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    },
+  });
+  const legacy = createPlan(readFixtureManifest(root), {
+    root,
+    readSource: (sourceSha, file) => execFileSync('git', ['show', `${sourceSha}:${file}`], {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  });
+
+  assert.deepEqual(calls.map((input) => input.trimEnd().split('\n').length), [128, 1]);
+  assert.deepEqual(legacyCalls, []);
+  assert.deepEqual(batched.components, legacy.components);
+  assert.equal(batched.checksum, legacy.checksum);
+});
+
+test('preserves UTF-8 decoding, invalid-byte replacement, and mixed line endings', (t) => {
+  const root = fixture(t);
+  const file = '.changeset/fix.md';
+  const bytes = Buffer.concat([
+    Buffer.from('---\r\n"Pkg": patch\n---\r\n\r\nRésumé — 東京 '),
+    Buffer.from([0xff]),
+    Buffer.from('\r\n'),
+  ]);
+  writeFileSync(path.join(root, file), bytes);
+  commitAll(root, 'utf8 and line endings');
+
+  const plan = createPlan(readFixtureManifest(root), { root });
+  assert.equal(plan.components[0].changesets.length, 2);
+
+  writeFileSync(path.join(root, file),
+    Buffer.from(bytes.toString('latin1').replaceAll('\r\n', '\n'), 'latin1'));
+  assert.throws(() => createPlan(readFixtureManifest(root), { root }),
+    /changeset bytes differ from source HEAD/);
+});
+
+test('uses an explicit historical source SHA instead of the current HEAD', (t) => {
+  const root = fixture(t);
+  const changesetPath = path.join(root, '.changeset', 'fix.md');
+  const historicalText = readFileSync(changesetPath, 'utf8');
+  const historicalSha = git(root, 'rev-parse', 'HEAD');
+  writeFileSync(changesetPath, historicalText.replace('Fix a defect.', 'Different at HEAD.'));
+  commitAll(root, 'later changeset edit');
+  const currentSha = git(root, 'rev-parse', 'HEAD');
+  assert.notEqual(historicalSha, currentSha);
+  writeFileSync(changesetPath, historicalText);
+  const inputs = [];
+  const legacyCalls = [];
+
+  const plan = createPlan(readFixtureManifest(root), {
+    root,
+    git: (command, ...args) => command === 'rev-parse' && args[0] === 'HEAD'
+      ? historicalSha
+      : git(root, command, ...args),
+    batchSpawnSync: (command, args, options) => {
+      inputs.push(options.input);
+      return spawnSync(command, args, options);
+    },
+    readLegacySource: (sourceSha, file) => {
+      legacyCalls.push(file);
+      return execFileSync('git', ['show', `${sourceSha}:${file}`], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    },
+  });
+  assert.equal(plan.sourceSha, historicalSha);
+  assert.equal(plan.checksum, planChecksum(plan));
+  assert.ok(inputs.length > 0);
+  assert.ok(inputs.every((input) => input.split('\n').filter(Boolean)
+    .every((expression) => expression.startsWith(`${historicalSha}:`))));
+  assert.deepEqual(legacyCalls, []);
+});
+
+test('keeps supplied source readers in the original order and skips batching', (t) => {
+  const root = fixture(t);
+  const expected = ['.changeset/feature.md', '.changeset/fix.md'];
+  const calls = [];
+  const plan = createPlan(readFixtureManifest(root), {
+    root,
+    readdirSync: () => ['feature.md', 'fix.md'],
+    readSource: (sourceSha, file) => {
+      calls.push(file);
+      return execFileSync('git', ['show', `${sourceSha}:${file}`], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    },
+    batchSpawnSync: () => {
+      throw new Error('batching must not run for a supplied source reader');
+    },
+  });
+  assert.deepEqual(calls, expected);
+  assert.equal(plan.components[0].changesets.length, 2);
+});
+
+test('falls back to legacy reads for failed and truncated batch output', async (t) => {
+  const root = fixture(t);
+  const sha = git(root, 'rev-parse', 'HEAD');
+  const firstPayload = execFileSync('git', ['show', `${sha}:.changeset/feature.md`], { cwd: root });
+  const secondPayload = execFileSync('git', ['show', `${sha}:.changeset/fix.md`], { cwd: root });
+  for (const [name, response] of [
+    ['failure', { status: 1, signal: null, error: new Error('batch failed'), stdout: Buffer.alloc(0), stderr: Buffer.from('failed') }],
+    ['incomplete payload', {
+      status: 0,
+      signal: null,
+      stdout: Buffer.concat([
+        Buffer.from(`${sha} blob 4\n`),
+        Buffer.from('abc'),
+      ]),
+      stderr: Buffer.alloc(0),
+    }],
+    ['missing payload delimiter', {
+      status: 0,
+      signal: null,
+      stdout: Buffer.concat([
+        Buffer.from(`${sha} blob ${firstPayload.length}\n`),
+        firstPayload,
+        Buffer.from('!'),
+        Buffer.from(`${sha} blob ${secondPayload.length}\n`),
+        secondPayload,
+        Buffer.from('\n'),
+      ]),
+      stderr: Buffer.alloc(0),
+    }],
+  ]) {
+    await t.test(name, () => {
+      const legacyCalls = [];
+      const plan = createPlan(readFixtureManifest(root), {
+        root,
+        batchSpawnSync: () => response,
+        readLegacySource: (sourceSha, file) => {
+          legacyCalls.push(file);
+          return execFileSync('git', ['show', `${sourceSha}:${file}`], {
+            cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+          });
+        },
+      });
+      assert.equal(plan.components[0].changesets.length, 2);
+      assert.deepEqual(legacyCalls, ['.changeset/feature.md', '.changeset/fix.md']);
+    });
+  }
+});
+
+test('rejects high-bit batch headers that ascii decoding would turn into valid syntax', (t) => {
+  const root = fixture(t);
+  const sourceSha = git(root, 'rev-parse', 'HEAD');
+  const legacyCalls = [];
+  const feature = execFileSync('git', ['show', `${sourceSha}:.changeset/feature.md`], { cwd: root });
+  const fix = execFileSync('git', ['show', `${sourceSha}:.changeset/fix.md`], { cwd: root });
+  const invalidHeader = Buffer.concat([
+    Buffer.from(`${sourceSha} `),
+    Buffer.from([0xe2]),
+    Buffer.from(`lob ${feature.length}\n`),
+    feature,
+    Buffer.from('\n'),
+    Buffer.from(`${sourceSha} blob ${fix.length}\n`),
+    fix,
+    Buffer.from('\n'),
+  ]);
+
+  const plan = createPlan(readFixtureManifest(root), {
+    root,
+    batchSpawnSync: () => ({
+      status: 0,
+      signal: null,
+      stdout: invalidHeader,
+      stderr: Buffer.alloc(0),
+    }),
+    readLegacySource: (sha, file) => {
+      legacyCalls.push(file);
+      return execFileSync('git', ['show', `${sha}:${file}`], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    },
+  });
+
+  assert.equal(plan.components[0].changesets.length, 2);
+  assert.deepEqual(legacyCalls, ['.changeset/feature.md', '.changeset/fix.md']);
+});
+
+test('reports an uncommitted source record through the original missing-source error', (t) => {
+  const root = fixture(t);
+  writeFileSync(path.join(root, '.changeset', 'new.md'),
+    '---\n"Pkg": patch\n---\n\nNot committed.\n');
+  assert.throws(() => createPlan(readFixtureManifest(root), { root }),
+    /\.changeset\/new\.md: missing committed source changeset: /);
+});
+
+test('reports an earlier local mismatch before a later oversized source failure', (t) => {
+  const root = fixture(t);
+  const first = '.changeset/a-first.md';
+  const large = '.changeset/z-large.md';
+  writeFileSync(path.join(root, first), '---\n"Pkg": patch\n---\n\nFirst.\n');
+  writeFileSync(path.join(root, large), sizedChangeset(1258291));
+  commitAll(root, 'oversized source fallback order');
+  writeFileSync(path.join(root, first), '---\n"Pkg": patch\n---\n\nEdited first.\n');
+
+  assert.throws(() => createPlan(readFixtureManifest(root), {
+    root,
+    readdirSync: () => ['a-first.md', 'z-large.md'],
+  }), /a-first\.md: changeset bytes differ from source HEAD/);
+});
+
+test('rejects a committed 1.2 MiB changeset with the original ENOBUFS diagnostic', (t) => {
+  const root = fixture(t);
+  writeFileSync(path.join(root, '.changeset', 'large.md'), sizedChangeset(1258291));
+  commitAll(root, 'oversized changeset');
+
+  assert.throws(() => createPlan(readFixtureManifest(root), { root }), (error) =>
+    /\.changeset\/large\.md: missing committed source changeset: /.test(error.message) &&
+    /ENOBUFS/.test(error.message));
+});
+
+test('falls back after framing exceeds the cap for an exact 1 MiB committed changeset', (t) => {
+  const root = fixture(t);
+  writeFileSync(path.join(root, '.changeset', 'one-mib.md'), sizedChangeset(1024 * 1024));
+  commitAll(root, 'exact one MiB changeset');
+
+  const plan = createPlan(readFixtureManifest(root), { root });
+  assert.ok(plan.components[0].changesets.includes('.changeset/one-mib.md'));
+});
+
+test('skips batching for empty discovery and rejects unsafe discovered names before Git', (t) => {
+  const root = fixture(t);
+  for (const name of ['feature.md', 'fix.md']) rmSync(path.join(root, '.changeset', name));
+  commitAll(root, 'empty changesets');
+  const plan = createPlan(readFixtureManifest(root), {
+    root,
+    batchSpawnSync: () => {
+      throw new Error('batching must not run for empty discovery');
+    },
+  });
+  assert.deepEqual(plan.components, []);
+
+  assert.throws(() => createPlan(readFixtureManifest(root), {
+    root,
+    readdirSync: () => ['../escape.md'],
+    batchSpawnSync: () => {
+      throw new Error('Git must not receive an unsafe path');
+    },
+  }), /expected a safe \.changeset\/\*\.md record name/);
 });
 
 test('binds a committed initial baseline record to the plan and still plans other pending bumps', (t) => {
@@ -157,7 +434,9 @@ test('the planning CLI writes the same source-bound plan as the library for the 
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const outDir = mkdtempSync(path.join(parent, 'v1-plan-cli-'));
-  t.after(() => rmSync(outDir, { recursive: true, force: true }));
+  t.after(() => rmSync(outDir, {
+    recursive: true, force: true, maxRetries: 10, retryDelay: 50,
+  }));
   const out = path.join(outDir, 'nested', 'plan.json');
 
   const expected = createPlanFromFile(path.join(repositoryRoot, 'releases', 'foundation.json'), { root: repositoryRoot });

@@ -16,8 +16,10 @@ npm run release:apply
 ```
 
 The plan/apply commands update the tracked component versions and preserve the
-existing package-versioning behavior. Review the manifest and generated changes
-before merging.
+existing package-versioning behavior. Planning compares each pending top-level
+`.changeset/*.md` file with its committed Git object and fails if the working
+tree differs. Applying a reviewed plan updates tracked versions and archives the
+consumed changesets. Review the manifest and generated changes before merging.
 
 Changes to `releases/foundation.json` on `v1` run
 `.github/workflows/v1-release-pack.yml`. It packs manifest components whose
