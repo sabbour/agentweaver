@@ -176,34 +176,49 @@ export function ProjectModelProviderDrafts({
     actorId: string | null;
     issuer: string | null;
   } | null>(null);
-
-  activeViewRef.current = view;
-  activeProviderIdRef.current = selectedProviderId;
-  authSessionEpochRef.current = authSessionEpoch;
+  const [confirmedScope, setConfirmedScope] = useState<{
+    projectId: string;
+    tenantId: string | null;
+    actorId: string | null;
+    issuer: string | null;
+  } | null>(null);
 
   const projectSessionActive = session?.binding?.projectId === projectId && !session.binding.runId;
+  const scopeMatchesConfirmed = confirmedScope !== null &&
+    confirmedScope.projectId === projectId &&
+    (selectedTenant == null || confirmedScope.tenantId === selectedTenant) &&
+    (!authorizationContext || (
+      confirmedScope.tenantId === authorizationContext.tenantId &&
+      confirmedScope.actorId === (authorizationContext.actorId ?? null) &&
+      confirmedScope.issuer === (authorizationContext.issuer ?? null)
+    ));
   const projectContextReady = projectSessionActive &&
     authorizationContext !== null &&
-    (selectedTenant == null || authorizationContext.tenantId === selectedTenant);
-  const actorId = authorizationContext?.actorId ?? lastConfirmedIdentityRef.current?.actorId ?? null;
-  const issuer = authorizationContext?.issuer ?? lastConfirmedIdentityRef.current?.issuer ?? null;
+    (selectedTenant == null || authorizationContext.tenantId === selectedTenant) &&
+    scopeMatchesConfirmed;
 
   const currentScopeRef = useRef<ScopeSnapshot>({
     projectId,
     tenantId: selectedTenant ?? null,
-    actorId,
-    issuer,
+    actorId: null,
+    issuer: null,
     authSessionEpoch,
-    scopeGeneration: scopeGeneration.current,
+    scopeGeneration: 0,
   });
-  currentScopeRef.current = {
-    projectId,
-    tenantId: selectedTenant ?? null,
-    actorId,
-    issuer,
-    authSessionEpoch,
-    scopeGeneration: scopeGeneration.current,
-  };
+
+  useEffect(() => {
+    activeViewRef.current = view;
+    activeProviderIdRef.current = selectedProviderId;
+    authSessionEpochRef.current = authSessionEpoch;
+    currentScopeRef.current = {
+      projectId,
+      tenantId: selectedTenant ?? null,
+      actorId: authorizationContext?.actorId ?? lastConfirmedIdentityRef.current?.actorId ?? null,
+      issuer: authorizationContext?.issuer ?? lastConfirmedIdentityRef.current?.issuer ?? null,
+      authSessionEpoch,
+      scopeGeneration: scopeGeneration.current,
+    };
+  }, [authSessionEpoch, authorizationContext, projectId, selectedProviderId, selectedTenant, view]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -253,16 +268,18 @@ export function ProjectModelProviderDrafts({
     setSavedMessage(null);
   }, []);
 
-  const resetScopeState = useCallback(() => {
+  const invalidateScopeGenerations = useCallback(() => {
     scopeGeneration.current += 1;
     currentScopeRef.current = {
       ...currentScopeRef.current,
       scopeGeneration: scopeGeneration.current,
     };
+    listGeneration.current += 1;
+    detailGeneration.current += 1;
+    saveGeneration.current += 1;
     accessCheckGeneration.current += 1;
     pendingSave.current = null;
-    clearUiStateForAccessLoss();
-  }, [clearUiStateForAccessLoss]);
+  }, []);
 
   const handleAccessFailure = useCallback((reason: unknown): boolean => {
     if (!(reason instanceof GatewayError) || (reason.status !== 401 && reason.status !== 403))
@@ -369,6 +386,12 @@ export function ProjectModelProviderDrafts({
         actorId: confirmedActor,
         issuer: confirmedIssuer,
       };
+      setConfirmedScope({
+        projectId: startProjectId,
+        tenantId: context.tenantId,
+        actorId: confirmedActor,
+        issuer: confirmedIssuer,
+      });
       currentScopeRef.current = {
         ...currentScopeRef.current,
         tenantId: context.tenantId,
@@ -431,31 +454,41 @@ export function ProjectModelProviderDrafts({
       lastProjectIdRef.current = projectId;
       lastTenantSelectorRef.current = nextTenantSelector;
       lastConfirmedIdentityRef.current = null;
-      setResolvedTenant(null);
-      resetScopeState();
+      invalidateScopeGenerations();
       currentScopeRef.current = {
         ...currentScopeRef.current,
         projectId,
         tenantId: nextTenantSelector,
       };
-      setAccessError(null);
-      setAccessState('checking');
-      void initialize(nextTenantSelector);
+      queueMicrotask(() => {
+        if (!mountedRef.current || lastProjectIdRef.current !== projectId) return;
+        clearUiStateForAccessLoss();
+        setConfirmedScope(null);
+        setResolvedTenant(null);
+        setAccessError(null);
+        setAccessState('checking');
+        void initialize(nextTenantSelector);
+      });
       return;
     }
 
     if (tenantSelectorChanged) {
       lastTenantSelectorRef.current = nextTenantSelector;
       lastConfirmedIdentityRef.current = null;
-      resetScopeState();
+      invalidateScopeGenerations();
       currentScopeRef.current = {
         ...currentScopeRef.current,
         tenantId: nextTenantSelector,
       };
-      setResolvedTenant(nextTenantSelector);
-      setAccessError(null);
-      setAccessState('checking');
-      void initialize(nextTenantSelector);
+      queueMicrotask(() => {
+        if (!mountedRef.current || lastProjectIdRef.current !== projectId) return;
+        clearUiStateForAccessLoss();
+        setConfirmedScope(null);
+        setResolvedTenant(nextTenantSelector);
+        setAccessError(null);
+        setAccessState('checking');
+        void initialize(nextTenantSelector);
+      });
       return;
     }
 
@@ -468,30 +501,41 @@ export function ProjectModelProviderDrafts({
         actorId: confirmedActor,
         issuer: confirmedIssuer,
       };
-      resetScopeState();
+      invalidateScopeGenerations();
       currentScopeRef.current = {
         ...currentScopeRef.current,
         tenantId: authorizationContext.tenantId,
         actorId: confirmedActor,
         issuer: confirmedIssuer,
       };
-      setResolvedTenant(authorizationContext.tenantId);
-      setAccessError(null);
-      if (projectSessionActive) {
-        setAccessState('ready');
-        void loadPage(null, false, authorizationContext.tenantId);
-      } else {
-        setAccessState('checking');
-        void initialize(authorizationContext.tenantId);
-      }
+      queueMicrotask(() => {
+        if (!mountedRef.current || lastProjectIdRef.current !== projectId) return;
+        clearUiStateForAccessLoss();
+        setConfirmedScope({
+          projectId,
+          tenantId: authorizationContext.tenantId,
+          actorId: confirmedActor,
+          issuer: confirmedIssuer,
+        });
+        setResolvedTenant(authorizationContext.tenantId);
+        setAccessError(null);
+        if (projectSessionActive) {
+          setAccessState('ready');
+          void loadPage(null, false, authorizationContext.tenantId);
+        } else {
+          setAccessState('checking');
+          void initialize(authorizationContext.tenantId);
+        }
+      });
     }
   }, [
     authorizationContext,
+    clearUiStateForAccessLoss,
     initialize,
+    invalidateScopeGenerations,
     loadPage,
     projectId,
     projectSessionActive,
-    resetScopeState,
     resolvedTenant,
     tenantSelector,
   ]);
@@ -511,21 +555,29 @@ export function ProjectModelProviderDrafts({
         };
         return;
       }
-      resetScopeState();
+      invalidateScopeGenerations();
       currentScopeRef.current = {
         ...currentScopeRef.current,
         authSessionEpoch,
       };
-      setAccessError(null);
-      setAccessState('checking');
-      void initialize(selectedTenant);
+      queueMicrotask(() => {
+        if (!mountedRef.current) return;
+        clearUiStateForAccessLoss();
+        setConfirmedScope(null);
+        setAccessError(null);
+        setAccessState('checking');
+        void initialize(selectedTenant);
+      });
       return;
     }
 
     if (!projectSessionActive) {
-      clearUiStateForAccessLoss();
-      if (!authorizationContextLoading)
-        void initialize(selectedTenant);
+      queueMicrotask(() => {
+        if (!mountedRef.current) return;
+        clearUiStateForAccessLoss();
+        if (!authorizationContextLoading)
+          void initialize(selectedTenant);
+      });
       return;
     }
 
@@ -533,7 +585,10 @@ export function ProjectModelProviderDrafts({
       return;
 
     // Same-session token renewal: reconfirm the tenant without invalidating active detail/save work.
-    void prepareAccess(false, selectedTenant);
+    queueMicrotask(() => {
+      if (!mountedRef.current) return;
+      void prepareAccess(false, selectedTenant);
+    });
   }, [
     accessState,
     authSessionEpoch,
@@ -541,10 +596,10 @@ export function ProjectModelProviderDrafts({
     authorizationContextLoading,
     clearUiStateForAccessLoss,
     initialize,
+    invalidateScopeGenerations,
     prepareAccess,
     projectContextReady,
     projectSessionActive,
-    resetScopeState,
     selectedTenant,
   ]);
 
