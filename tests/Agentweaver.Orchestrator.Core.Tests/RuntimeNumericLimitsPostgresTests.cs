@@ -1220,9 +1220,47 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Equal(2, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
         Assert.Equal(0, await CountFixedCreditEventsAsync("orchestrator.workflow_generation.fixed_credit_no_send"));
 
-        // 3. Conflicting job proof event rolls back the entire transaction so no_send is not committed either.
+        // 3. Conflicting job proof event for a distinct job rolls back the entire transaction so no_send is not committed either.
+        var conflictJob = (await jobStore.CreateOrGetAsync(new WorkflowGenerationJobCreate(
+            Guid.NewGuid(), Guid.NewGuid(), binding.ProjectId, binding.RunId, binding.SessionId,
+            binding.TenantId, binding.ActorIssuer, binding.ActorId, "conflict-job",
+            WorkflowGenerationJobStore.Hash("conflict-job"), purposePrompt, promptHash,
+            1, binding.ProjectConfigurationRevision, binding.AcceptedSelectionHash,
+            binding.ExecutionFence, registration.RuntimeInstanceId, registration.Revision,
+            binding.ModelSelectionReference!), CancellationToken.None)).Job;
+        await jobStore.TryBeginExecutionAsync(binding.ProjectId, conflictJob.JobId, CancellationToken.None);
+        Assert.True(await jobStore.MarkSendAdmittedAsync(binding.ProjectId, conflictJob.JobId, CancellationToken.None));
+        var conflictDecisionId = Guid.NewGuid();
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var cmd = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
+                 execution_fence, state_version, action_kind, idempotency_key, command_hash, decision_state, decision)
+            VALUES (@project, @run, @session, 'wf-gen-conflict-job', @decision, @issuer, @actor,
+                    @fence, 1, 'proof', 'wf-gen-conflict-job', repeat('a', 64), 'accepted', jsonb_build_object());
+            INSERT INTO "{_schema}".maf_root_model_turn_admissions
+                (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
+                 accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
+            VALUES (@project, @run, @session, @request, @issuer, @actor, @tenant,
+                    @selection, @prompt, @fence, @decision, 1)
+            """, connection))
+        {
+            cmd.Parameters.AddWithValue("project", binding.ProjectId);
+            cmd.Parameters.AddWithValue("run", binding.RunId);
+            cmd.Parameters.AddWithValue("session", binding.SessionId);
+            cmd.Parameters.AddWithValue("request", conflictJob.NativeRequestId);
+            cmd.Parameters.AddWithValue("decision", conflictDecisionId);
+            cmd.Parameters.AddWithValue("issuer", binding.ActorIssuer);
+            cmd.Parameters.AddWithValue("actor", binding.ActorId);
+            cmd.Parameters.AddWithValue("tenant", binding.TenantId);
+            cmd.Parameters.AddWithValue("selection", binding.AcceptedSelectionHash);
+            cmd.Parameters.AddWithValue("prompt", promptHash);
+            cmd.Parameters.AddWithValue("fence", binding.ExecutionFence);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
         var conflictEventId = WorkflowGenerationZeroCreditNoSendProof.EventId(
-            wrongHashJob.JobId, wrongHashJob.NativeRequestId);
+            conflictJob.JobId, conflictJob.NativeRequestId);
         var outbox = new Agentweaver.Persistence.Postgres.PostgresOutbox(fixture.DataSource, _schema);
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var transaction = await connection.BeginTransactionAsync())
@@ -1238,18 +1276,18 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             await transaction.CommitAsync();
         }
         var exactRequestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
-            "message", wrongHashJob.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
+            "message", conflictJob.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
             "user", [new RuntimeA2ATextPart("text", purposePrompt)],
             registration, RuntimeCredentialPurpose.Observe, AddressedMessageDeliveryMode.Immediate);
         var conflictGuard = RuntimeFixedCreditGuardContract.Seal(missingAdmissionGuard with
         {
-            RequestId = wrongHashJob.NativeRequestId,
+            RequestId = conflictJob.NativeRequestId,
             RequestHash = exactRequestHash,
             CanonicalPayloadHash = string.Empty
         });
         var conflictEvidence = RuntimeFixedCreditGuardContract.Seal(missingAdmissionEvidence with
         {
-            RequestId = wrongHashJob.NativeRequestId,
+            RequestId = conflictJob.NativeRequestId,
             GuardReceiptHash = conflictGuard.CanonicalPayloadHash,
             CanonicalPayloadHash = string.Empty
         });

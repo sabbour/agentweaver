@@ -47,6 +47,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
     private CoordinatorDecisionOwnerStore _decisions = null!;
     private RuntimeRegistrationOwner _registrationOwner = null!;
     private RuntimeRegistration _registration = null!;
+    private EnvironmentRuntimeBootstrapContext _placement = null!;
     private ProjectsRunSelectionClient _projects = null!;
     private ProjectsHandler _projectsHandler = null!;
     private string _projectWriterToken = null!;
@@ -145,7 +146,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         expires = new DateTimeOffset(expires.UtcTicks - expires.UtcTicks % 10, TimeSpan.Zero);
         var registrations = new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System);
         var registration = await registrations.RegisterAsync(binding, expires, CancellationToken.None);
-        var placement = new EnvironmentRuntimeBootstrapContext(
+        _placement = new EnvironmentRuntimeBootstrapContext(
             1, Tenant, Project, Run, binding.EnvironmentId, 1, 1, 1, 1, registration.ExpiresAt,
             new(ProviderSeam.Sandbox, "sandbox", "placement", 1),
             new(Guid.NewGuid()), new("placement"), "profile", binding.ConfigureEndpoint, binding.ObservationEndpoint)
@@ -156,7 +157,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         var registrationOwner = new RuntimeRegistrationOwner(
             options, projects, sessions, decisions, contexts, checkpoints, registrations,
             new RuntimeEnvironmentContextClient(
-                Client(new FixedHandler(request => Response(request, placement))),
+                Client(new FixedHandler(request => Response(request, _placement))),
                 new RuntimeRegistrationOwnerOptions(new Uri("https://environment.test/"))),
             TimeProvider.System);
         _registrationOwner = registrationOwner;
@@ -960,7 +961,16 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         ServiceProvider Services,
         RuntimeGrantReceipt Grant)> PrepareZeroCreditRuntimeAsync()
     {
-        var zeroBinding = _registration.Binding with { CopilotHardCreditLimit = 0m };
+        var zeroBinding = _registration.Binding with
+        {
+            CopilotHardCreditLimit = 0m,
+            ObservationEndpoint = new("https://runtime.test/internal/runtime/observations")
+        };
+        _placement = _placement with
+        {
+            ObservationEndpoint = zeroBinding.ObservationEndpoint,
+            RuntimeOwnerContext = _placement.RuntimeOwnerContext! with { CopilotHardCreditLimit = 0m }
+        };
         var registrations = new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System);
         var zeroRegistration = await registrations.RegisterAsync(
             zeroBinding, DateTimeOffset.UtcNow.AddMinutes(10), CancellationToken.None);
