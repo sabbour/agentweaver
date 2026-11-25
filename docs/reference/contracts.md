@@ -2372,6 +2372,34 @@ The pinned Python evaluator at AGT commit
 `48f04e5ad1efd4f2e5692d4b67def2e0f99a6870` remains separate. It has 17 vectors
 and a 100,000-character input limit; its output is not part of the .NET report.
 
+### Optional charter scan on configuration save
+
+`PUT /api/v1/projects/{projectId}/configuration` (and the Projects owner
+`PUT /api/projects/{projectId}/configuration`) accepts an optional nullable
+`scanCharterAgentId`. Omitting the field or sending `null` skips the scan and
+omits `charterScan` from the response. `GET` configuration responses and other
+configuration update routes remain unchanged.
+
+After authorization, project lifecycle, expected-revision, and configuration
+validation checks pass, the owner requires an exact ordinal match in
+`configuration.agentCharters`. Blank or unmatched selectors return
+`400 invalid_charter_selection` without echoing the selector.
+
+After the configuration revision commits, the owner scans the selected charter
+from the exact serialized JSON of that committed revision, encoded as strict
+UTF-8 without a byte-order mark or normalization. The source uses
+`ProjectConfiguration`, the committed revision, `Authored` provenance, and the
+logical path `agent-charters/by-id-sha256/<lowercase SHA-256 of agentId>/charter`.
+
+- When the scan completes with `PromptContentScanStatus.Completed`, the response
+  includes `charterScan` with `agentId`, `status: "completed"`, and `report`.
+  Low coverage scores still return `completed`.
+- When post-commit decoding, strict UTF-8 encoding, or evaluation fails, or
+  when `report.Status` is not `Completed`, the save remains committed and the
+  response includes `charterScan` with `agentId`, `status: "unavailable"`, and
+  `code: "charter_scan_unavailable"`, with no `report`, digest, findings, or
+  charter text.
+
 ## Skill trust evidence
 
 The internal Projects & Config trust-evidence service scans one stored,

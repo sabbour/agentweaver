@@ -158,6 +158,30 @@ public sealed class GatewayOpenApiParityTests
         Assert.Equal(1, runEgressLimit["schema"]?["minimum"]?.GetValue<int>());
         Assert.Equal(100, runEgressLimit["schema"]?["maximum"]?.GetValue<int>());
         Assert.Equal(50, runEgressLimit["schema"]?["default"]?.GetValue<int>());
+
+        JsonObject getProjectConfig = FindOperation(discovered, "getProjectConfiguration");
+        Assert.Equal("#/components/schemas/VersionedProjectConfiguration",
+            getProjectConfig["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                .GetValue<string>());
+        Assert.Null(schemas["VersionedProjectConfiguration"]?["properties"]?["charterScan"]);
+
+        JsonObject updateProjectConfig = FindOperation(discovered, "updateProjectConfiguration");
+        Assert.Equal("#/components/schemas/UpdateProjectConfigurationRequest",
+            updateProjectConfig["requestBody"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                .GetValue<string>());
+        Assert.Equal("#/components/schemas/UpdateProjectConfigurationResponse",
+            updateProjectConfig["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                .GetValue<string>());
+        JsonObject updateConfigRequest = Assert.IsType<JsonObject>(schemas["UpdateProjectConfigurationRequest"]);
+        Assert.Equal("string", updateConfigRequest["properties"]?["scanCharterAgentId"]?["anyOf"]?[0]?["type"]?.GetValue<string>());
+        Assert.Equal("null", updateConfigRequest["properties"]?["scanCharterAgentId"]?["anyOf"]?[1]?["type"]?.GetValue<string>());
+        Assert.DoesNotContain("scanCharterAgentId",
+            Assert.IsType<JsonArray>(updateConfigRequest["required"]).Select(value => value!.GetValue<string>()));
+        JsonObject updateConfigResponse = Assert.IsType<JsonObject>(schemas["UpdateProjectConfigurationResponse"]);
+        Assert.Equal("#/components/schemas/ProjectCharterScanResultV1",
+            updateConfigResponse["properties"]?["charterScan"]?["$ref"]?.GetValue<string>());
+        Assert.DoesNotContain("charterScan",
+            Assert.IsType<JsonArray>(updateConfigResponse["required"]).Select(value => value!.GetValue<string>()));
         Assert.Equal(2048, CursorMaximum(runEgress));
 
         JsonObject executionPlanSchema =

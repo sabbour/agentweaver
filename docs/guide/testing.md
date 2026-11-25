@@ -401,16 +401,22 @@ uv sync --project scripts\acs-lint --locked
 Then run the focused tests:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PromptContentScannerTests|FullyQualifiedName~SkillContentScanAdmissionTests|FullyQualifiedName~SkillContentEndpointValidationTests|FullyQualifiedName~GenericPackageBlocksUnsafeSkillContent|FullyQualifiedName~ImportsPinnedSkillContentAndReadsOnlyForItsAcceptedActiveAgent|FullyQualifiedName~RejectsUnsafeSkillsAtConfigurationCastingConfirmationAssignmentAndRunSelection"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PromptContentScannerTests|FullyQualifiedName~CharterScanTests|FullyQualifiedName~SkillContentScanAdmissionTests|FullyQualifiedName~SkillContentEndpointValidationTests|FullyQualifiedName~GenericPackageBlocksUnsafeSkillContent|FullyQualifiedName~ImportsPinnedSkillContentAndReadsOnlyForItsAcceptedActiveAgent|FullyQualifiedName~RejectsUnsafeSkillsAtConfigurationCastingConfirmationAssignmentAndRunSelection"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayCharterScanContractTests"
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayOpenApiParityTests"
 uv run --project scripts\acs-lint --locked --offline --no-sync --no-python-downloads python scripts\acs-lint\test_prompt_defense_compatibility.py
 ```
 
 The .NET tests check exact-byte hashing, owner and source provenance, input
 bounds, invalid UTF-8, evaluator errors, current report validation, blocked
-content, forged client reports, generic packaging, and import rejection before
-storage writes. The Python check confirms the pinned evaluator's separate
-17-vector set and 100,000-character limit; it does not feed results into the
-.NET report.
+content, forged client reports, generic packaging, import rejection before
+storage writes, and optional post-commit charter scans (`CharterScanTests`,
+`GatewayCharterScanContractTests`, and `GatewayOpenApiParityTests`).
+PostgreSQL integration tests in `ProjectsConfigPostgresTests.CharterScan` cover
+selector precedence (`invalid_charter_selection` vs auth, lifecycle, revision,
+and configuration errors) and concurrent saves during an in-flight scan. The
+Python check confirms the pinned evaluator's separate 17-vector set and
+100,000-character limit; it does not feed results into the .NET report.
 
 Run the PostgreSQL regressions for persisted Skill trust evidence:
 

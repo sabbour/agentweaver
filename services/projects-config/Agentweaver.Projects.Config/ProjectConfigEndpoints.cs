@@ -26,6 +26,7 @@ public sealed record UpdateProjectConfigurationRequest
 {
     public required long ExpectedRevision { get; init; }
     public required ProjectConfiguration Configuration { get; init; }
+    public string? ScanCharterAgentId { get; init; }
 }
 
 /// <summary>Strict JSON request for appending platform runtime defaults at an expected revision.</summary>
@@ -439,6 +440,7 @@ public static class ProjectConfigEndpoints
                     projectId,
                     request.ExpectedRevision,
                     request.Configuration,
+                    request.ScanCharterAgentId,
                     cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)

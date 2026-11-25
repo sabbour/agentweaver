@@ -68,6 +68,33 @@ public sealed record PromptContentScanReportV1(
     ImmutableArray<PromptContentScanFindingV1> Findings,
     string? ErrorCode);
 
+/// <summary>Optional local charter scan outcome returned with a committed project configuration save.</summary>
+public sealed record ProjectCharterScanResultV1(
+    string AgentId,
+    string Status,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    PromptContentScanReportV1? Report = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Code = null)
+{
+    public const string CompletedStatus = "completed";
+    public const string UnavailableStatus = "unavailable";
+    public const string UnavailableCode = "charter_scan_unavailable";
+
+    public static ProjectCharterScanResultV1 Completed(string agentId, PromptContentScanReportV1 report)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ArgumentNullException.ThrowIfNull(report);
+        return new(agentId, CompletedStatus, Report: report);
+    }
+
+    public static ProjectCharterScanResultV1 Unavailable(string agentId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        return new(agentId, UnavailableStatus, Code: UnavailableCode);
+    }
+}
+
 /// <summary>Validates report identity and its binding to the exact source bytes.</summary>
 public static class PromptContentScanContract
 {
