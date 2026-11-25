@@ -1379,4 +1379,82 @@ describe('Project BYOK provider drafts', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Provider A' }));
     expect(await screen.findByText(opId)).toBeTruthy();
   });
+
+  it('lists available platform providers for project readers even when project drafts need sign-in or return 403', async () => {
+    mocks.ensureSession.mockResolvedValue(false);
+    mocks.list.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+
+    render(
+      <ProjectModelProviderDrafts
+        projectId="project-1"
+        tenantSelector="tenant-1"
+        platformProviders={[
+          {
+            id: 'plat-1',
+            name: 'Platform OpenAI',
+            type: 'openai',
+            model: 'gpt-4o',
+            reasoningEfforts: ['low', 'high'],
+            isActive: true,
+            reference: 'byok:openai',
+          },
+          {
+            id: 'plat-2',
+            name: 'Platform Anthropic',
+            type: 'anthropic',
+            model: 'claude-sonnet',
+            reasoningEfforts: [],
+            isActive: false,
+            reference: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('Available platform providers')).toBeTruthy();
+    expect(screen.getByText('Platform OpenAI')).toBeTruthy();
+    expect(screen.getByText('openai · gpt-4o')).toBeTruthy();
+    expect(screen.getByText('low, high')).toBeTruthy();
+    expect(screen.getByText('byok:openai')).toBeTruthy();
+    expect(screen.getByText('Active default')).toBeTruthy();
+    expect(screen.getByText('Platform Anthropic')).toBeTruthy();
+    expect(screen.getByText('anthropic · claude-sonnet')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Sign in for project access' })).toBeTruthy();
+  });
+
+  it('shows distinct loading, empty, and error states for available platform providers', () => {
+    const view = render(
+      <ProjectModelProviderDrafts
+        projectId="project-1"
+        tenantSelector="tenant-1"
+        platformProviders={null}
+        platformProvidersLoading
+        platformProvidersError={false}
+      />,
+    );
+    expect(screen.getByText('Loading platform providers…')).toBeTruthy();
+
+    view.rerender(
+      <ProjectModelProviderDrafts
+        projectId="project-1"
+        tenantSelector="tenant-1"
+        platformProviders={null}
+        platformProvidersLoading={false}
+        platformProvidersError={false}
+      />,
+    );
+    expect(screen.getByText('Platform BYOK providers could not be loaded.')).toBeTruthy();
+    expect(screen.queryByText('No platform BYOK providers are available.')).toBeNull();
+
+    view.rerender(
+      <ProjectModelProviderDrafts
+        projectId="project-1"
+        tenantSelector="tenant-1"
+        platformProviders={[]}
+        platformProvidersLoading={false}
+        platformProvidersError={false}
+      />,
+    );
+    expect(screen.getByText('No platform BYOK providers are available.')).toBeTruthy();
+  });
 });

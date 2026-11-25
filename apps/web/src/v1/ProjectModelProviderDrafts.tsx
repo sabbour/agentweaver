@@ -4,6 +4,7 @@ import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
 import type {
+  AvailablePlatformProvider,
   ModelProviderCredentialOperationStatusResponse,
   ModelProviderCredentialResponse,
   ModelProviderEgressStatus,
@@ -157,13 +158,19 @@ function hostRequestPortText(egress?: ModelProviderEgressStatus | null): string 
     : 'Unavailable';
 }
 
-/** Lists and edits project provider metadata through the exact project-only Broker session. */
+/** Lists available platform providers and edits project provider metadata through the exact project-only Broker session. */
 export function ProjectModelProviderDrafts({
   projectId,
   tenantSelector,
+  platformProviders,
+  platformProvidersLoading = false,
+  platformProvidersError = false,
 }: {
   projectId: string;
   tenantSelector?: string | null;
+  platformProviders?: AvailablePlatformProvider[] | null;
+  platformProvidersLoading?: boolean;
+  platformProvidersError?: boolean;
 }) {
   const {
     apiCall,
@@ -1439,11 +1446,48 @@ export function ProjectModelProviderDrafts({
     </>
   );
 
+  const showPlatformProviders =
+    platformProviders !== undefined || platformProvidersLoading || platformProvidersError;
+
   return (
-    <PageSection
-      title="BYOK provider drafts"
-      description="Manage provider metadata and add an initial API key for this project."
-    >
+    <>
+      {showPlatformProviders && (
+        <PageSection
+          title="Available platform providers"
+          description="Platform administrators manage these BYOK providers. Run start still checks project model selection, policy, and egress rules."
+        >
+          {platformProvidersLoading && <Loading label="Loading platform providers…" />}
+          {!platformProvidersLoading && (platformProvidersError || platformProviders == null) && (
+            <Text role="status">Platform BYOK providers could not be loaded.</Text>
+          )}
+          {!platformProvidersLoading && !platformProvidersError && platformProviders != null &&
+            platformProviders.length === 0 && (
+              <Text role="status">No platform BYOK providers are available.</Text>
+            )}
+          {!platformProvidersLoading && !platformProvidersError && platformProviders != null &&
+            platformProviders.length > 0 && (
+              <ul className="v1-permission-list" aria-label="Available platform providers">
+                {platformProviders.map((provider) => (
+                  <li key={provider.id}>
+                    <strong>{provider.name}</strong>
+                    <span>{provider.type} · {provider.model}</span>
+                    {provider.reasoningEfforts.length > 0 && (
+                      <span>{provider.reasoningEfforts.join(', ')}</span>
+                    )}
+                    {provider.reference && <span>{provider.reference}</span>}
+                    {provider.isActive && (
+                      <Badge appearance="tint" color="success">Active default</Badge>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+        </PageSection>
+      )}
+      <PageSection
+        title="BYOK provider drafts"
+        description="Manage provider metadata and add an initial API key for this project."
+      >
       {accessState === 'checking' || (accessState === 'ready' && !projectContextReady)
         ? <Loading label="Checking project access…" />
         : null}
@@ -1747,6 +1791,7 @@ export function ProjectModelProviderDrafts({
           )}
         </div>
       )}
-    </PageSection>
+      </PageSection>
+    </>
   );
 }

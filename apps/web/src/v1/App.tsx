@@ -730,6 +730,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     authorizationContext?.tenantId ?? null,
     authorizationContext?.membershipRevision ?? null,
     projectId,
+    view,
   ]);
   const activeScope = useRef(requestScope);
   const loadGeneration = useRef(0);
@@ -778,6 +779,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       setError(reason);
       setErrorScope(scope);
       setVersioned(null);
+      setConfigurationChoices(null);
+      setConfigurationChoicesError(view === 'settings');
       setLoadedScope(scope);
     } finally {
       if (activeScope.current === scope && loadGeneration.current === generation)
@@ -1078,6 +1081,9 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
                 key={projectId}
                 projectId={projectId}
                 tenantSelector={authorizationContext?.tenantId}
+                platformProviders={configurationChoices?.availablePlatformProviders ?? null}
+                platformProvidersLoading={currentLoading}
+                platformProvidersError={configurationChoicesError}
               />
               <RemoteMcpConnectionPanel key={requestScope} projectId={projectId} configurationRevision={currentConfiguration?.revision ?? null} />
             </>

@@ -47,6 +47,7 @@ function ownerChoices(): ProjectConfigurationChoices {
       }],
       ignoredProjectOverrides: ['memory', 'tools'],
     },
+    availablePlatformProviders: [],
   };
 }
 

@@ -334,6 +334,7 @@ function projectConfigurationChoices(projectId: string): ProjectConfigurationCho
       }],
       ignoredProjectOverrides: [],
     },
+    availablePlatformProviders: [],
   };
 }
 
@@ -2656,6 +2657,121 @@ describe('v1 web project scoping', () => {
       expect.objectContaining({ projectMarker: 'p2' }),
       'tenant-1',
     );
+  });
+
+  it('shows unavailable platform providers when getProjectConfiguration rejects on Connections', async () => {
+    mocks.getProjectConfiguration.mockRejectedValueOnce(new Error('Configuration load failed.'));
+    mocks.getProjectConfigurationChoices.mockResolvedValueOnce({
+      ...projectConfigurationChoices('p1'),
+      availablePlatformProviders: [{
+        id: 'plat-1',
+        name: 'Platform OpenAI',
+        type: 'openai',
+        model: 'gpt-4o',
+        reasoningEfforts: ['high'],
+        isActive: true,
+        reference: 'byok:openai',
+      }],
+    });
+    window.history.replaceState({}, '', '/projects/p1/settings?section=connections');
+    render(<App />);
+
+    expect(await screen.findByText('Platform BYOK providers could not be loaded.')).toBeTruthy();
+    expect(screen.queryByText('No platform BYOK providers are available.')).toBeNull();
+    expect(screen.queryByText('Platform OpenAI')).toBeNull();
+  });
+
+  it('ignores stale configuration choices for available platform providers after navigation', async () => {
+    const staleChoices = deferred<ReturnType<typeof projectConfigurationChoices>>();
+    mocks.getProjectConfiguration.mockImplementation((_token: string, projectId: string) =>
+      Promise.resolve(projectConfiguration(projectId, projectId === 'p1' ? 1 : 2)));
+    mocks.getProjectConfigurationChoices.mockImplementation((_token: string, projectId: string) =>
+      projectId === 'p1'
+        ? staleChoices.promise
+        : Promise.resolve({
+          ...projectConfigurationChoices('p2'),
+          availablePlatformProviders: [{
+            id: 'plat-2',
+            name: 'Current Platform Provider',
+            type: 'anthropic',
+            model: 'claude-sonnet',
+            reasoningEfforts: ['medium'],
+            isActive: false,
+            reference: null,
+          }],
+        }));
+
+    window.history.replaceState({}, '', '/projects/p1/settings?section=connections');
+    render(<App />);
+    await waitFor(() => expect(mocks.getProjectConfigurationChoices).toHaveBeenCalledWith(
+      'broker-token', 'p1', 'tenant-1',
+    ));
+
+    act(() => {
+      window.history.pushState({}, '', '/projects/p2/settings?section=connections');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(await screen.findByText('Current Platform Provider')).toBeTruthy();
+
+    await act(async () => {
+      staleChoices.resolve({
+        ...projectConfigurationChoices('p1'),
+        availablePlatformProviders: [{
+          id: 'plat-1',
+          name: 'Stale Platform Provider',
+          type: 'openai',
+          model: 'gpt-4o',
+          reasoningEfforts: ['high'],
+          isActive: true,
+          reference: null,
+        }],
+      });
+      await staleChoices.promise;
+    });
+
+    expect(screen.getByText('Current Platform Provider')).toBeTruthy();
+    expect(screen.queryByText('Stale Platform Provider')).toBeNull();
+  });
+
+  it('shows loading instead of a false error when switching from Skills to Settings Connections on the same project', async () => {
+    const settingsChoices = deferred<ReturnType<typeof projectConfigurationChoices>>();
+    const settingsConfig = deferred<ReturnType<typeof projectConfiguration>>();
+    mocks.getProjectConfiguration.mockImplementationOnce(() =>
+      Promise.resolve(projectConfiguration('p1', 1)));
+    mocks.getProjectConfiguration.mockImplementationOnce(() => settingsConfig.promise);
+    mocks.getProjectConfigurationChoices.mockImplementationOnce(() => settingsChoices.promise);
+
+    window.history.replaceState({}, '', '/projects/p1/skills');
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Skills' });
+
+    act(() => {
+      window.history.pushState({}, '', '/projects/p1/settings?section=connections');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(screen.getByText('Loading platform providers…')).toBeTruthy();
+    expect(screen.queryByText('Platform BYOK providers could not be loaded.')).toBeNull();
+
+    await act(async () => {
+      settingsConfig.resolve(projectConfiguration('p1', 1));
+      settingsChoices.resolve({
+        ...projectConfigurationChoices('p1'),
+        availablePlatformProviders: [{
+          id: 'plat-1',
+          name: 'Platform OpenAI',
+          type: 'openai',
+          model: 'gpt-4o',
+          reasoningEfforts: ['high'],
+          isActive: true,
+          reference: 'byok:openai',
+        }],
+      });
+      await Promise.all([settingsConfig.promise, settingsChoices.promise]);
+    });
+
+    expect(await screen.findByText('Platform OpenAI')).toBeTruthy();
   });
 
   it('loads marketplace sources through the selected project with the current tenant', async () => {
