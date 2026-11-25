@@ -71,6 +71,7 @@ import {
   PlatformPoliciesControllerProvider,
   usePlatformPoliciesController,
 } from './PlatformPoliciesController';
+import { findPlatformPolicyDiagnosticDraftFile } from './platformPolicyDraftNavigation';
 
 const hash = 'a'.repeat(64);
 const policyText = '<img src=x onerror=alert(1)>';
@@ -159,6 +160,13 @@ let projectAuthority: boolean;
 let unauthorizedProjectValidationOnce: boolean;
 let abortProjectValidationOnce: boolean;
 let resolveProjectValidation: ((response: Response) => void) | null;
+let validationDiagnostics: Array<{
+  code: string;
+  message: string;
+  relativePath: string | null;
+  line: number | null;
+  column: number | null;
+}>;
 
 async function completeSignIn(code = 'code-1'): Promise<void> {
   await waitFor(() => expect(fetch).toHaveBeenCalled());
@@ -262,6 +270,13 @@ describe('Platform Policies served route', () => {
     unauthorizedProjectValidationOnce = false;
     abortProjectValidationOnce = false;
     resolveProjectValidation = null;
+    validationDiagnostics = [{
+      code: 'yaml.invalid',
+      message: 'The manifest is invalid.',
+      relativePath: null,
+      line: 2,
+      column: 1,
+    }];
     omitSnapshotHead = false;
     delayHistory = false;
     unauthorizedTenantOnce = null;
@@ -349,13 +364,7 @@ describe('Platform Policies served route', () => {
               title: 'native_acs_policy_invalid',
               status: 422,
               code: 'native_acs_policy_invalid',
-              diagnostics: [{
-                code: 'yaml.invalid',
-                message: 'The manifest is invalid.',
-                relativePath: null,
-                line: 2,
-                column: 1,
-              }],
+              diagnostics: validationDiagnostics,
             }, 422)
           : validationStatus === 200
             ? jsonResponse({ isValid: true, diagnostics: [] })
@@ -1014,6 +1023,177 @@ describe('Platform Policies served route', () => {
     expect(document.body.textContent).not.toContain('private server detail');
   });
 
+  it('focuses the exact current draft file by keyboard without changing bytes or requests', async () => {
+    const user = userEvent.setup();
+    validationStatus = 422;
+    validationDiagnostics = [
+      {
+        code: 'yaml.invalid',
+        message: 'The example file is invalid.',
+        relativePath: 'rules/example.yaml',
+        line: null,
+        column: null,
+      },
+      {
+        code: 'yaml.invalid',
+        message: 'The defaults file is invalid.',
+        relativePath: 'rules/defaults.yaml',
+        line: null,
+        column: null,
+      },
+    ];
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: 'rules/example.yaml' },
+    });
+    fireEvent.change(document.querySelector<HTMLTextAreaElement>(
+      '[data-platform-policy-draft-file-id]',
+    )!, {
+      target: { value: 'allow: false\r\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    const pathInputs = screen.getAllByRole('textbox', { name: 'Relative path' });
+    const fileContents = document.querySelectorAll<HTMLTextAreaElement>(
+      '[data-platform-policy-draft-file-id]',
+    );
+    fireEvent.change(pathInputs[1], {
+      target: { value: 'rules/defaults.yaml' },
+    });
+    fireEvent.change(fileContents[1], {
+      target: { value: 'enabled: false\r\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByRole('alert', { name: 'Validation diagnostics' });
+
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      '[data-platform-policy-draft-file-id]',
+    )!;
+    const manifest = screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement;
+    const beforeManifest = manifest.value;
+    const beforeContent = textarea.value;
+    const requestCount = requests.length;
+    const action = screen.getByRole('button', {
+      name: 'Go to draft file: rules/example.yaml',
+    });
+    expect(screen.getByRole('button', {
+      name: 'Go to draft file: rules/defaults.yaml',
+    })).toBeTruthy();
+    action.focus();
+
+    await user.keyboard('{Enter}');
+
+    expect(document.activeElement).toBe(textarea);
+    expect(document.activeElement).toBeInstanceOf(HTMLTextAreaElement);
+    expect(textarea.value).toBe(beforeContent);
+    expect(manifest.value).toBe(beforeManifest);
+    expect(requests).toHaveLength(requestCount);
+
+    const firstBody = JSON.parse(String(policyValidationRequests().at(-1)?.init?.body));
+    const validationRequestCount = policyValidationRequests().length;
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(policyValidationRequests()).toHaveLength(
+      validationRequestCount + 1,
+    ));
+    const secondBody = JSON.parse(String(policyValidationRequests().at(-1)?.init?.body));
+    expect(secondBody.artifact.files[0].bytes)
+      .toEqual(firstBody.artifact.files[0].bytes);
+    expect(secondBody.artifact.files[1].bytes)
+      .toEqual(firstBody.artifact.files[1].bytes);
+  });
+
+  it('keeps unmatched and pathless diagnostics as text', async () => {
+    validationStatus = 422;
+    validationDiagnostics = [
+      {
+        code: 'path.missing',
+        message: 'No draft file has this path.',
+        relativePath: 'rules/missing.yaml',
+        line: null,
+        column: null,
+      },
+      {
+        code: 'manifest.invalid',
+        message: 'The manifest has no file path.',
+        relativePath: null,
+        line: null,
+        column: null,
+      },
+    ];
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    const diagnostics = await screen.findByRole('alert', {
+      name: 'Validation diagnostics',
+    });
+
+    expect(diagnostics.textContent).toContain('rules/missing.yaml');
+    expect(diagnostics.textContent).toContain('The manifest has no file path.');
+    expect(screen.queryByRole('button', { name: /Go to draft file/ })).toBeNull();
+  });
+
+  it('does not resolve an ambiguous diagnostic path', () => {
+    const content = createPlatformPolicyTextBuffer('');
+    const match = findPlatformPolicyDiagnosticDraftFile('rules/duplicate.yaml', [
+      { id: 1, relativePath: 'rules/duplicate.yaml', content },
+      { id: 2, relativePath: 'rules/duplicate.yaml', content },
+    ]);
+
+    expect(match).toBeNull();
+  });
+
+  it('clears a matching diagnostic action after edits and access loss', async () => {
+    validationStatus = 422;
+    validationDiagnostics = [{
+      code: 'yaml.invalid',
+      message: 'The file is invalid.',
+      relativePath: 'rules/example.yaml',
+      line: null,
+      column: null,
+    }];
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: 'rules/example.yaml' },
+    });
+    const content = document.querySelector<HTMLTextAreaElement>(
+      '[data-platform-policy-draft-file-id]',
+    )!;
+    fireEvent.change(content, { target: { value: 'invalid' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByRole('button', {
+      name: 'Go to draft file: rules/example.yaml',
+    });
+
+    fireEvent.change(content, { target: { value: 'edited' } });
+    expect(screen.queryByRole('alert', { name: 'Validation diagnostics' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Go to draft file/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByRole('button', {
+      name: 'Go to draft file: rules/example.yaml',
+    });
+    policyStatus = 403;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByText('You do not have permission to access Platform Policies.');
+    expect(screen.queryByRole('alert', { name: 'Validation diagnostics' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Go to draft file/ })).toBeNull();
+  });
+
   it('refreshes policy access after a validation 401 and requires validation again', async () => {
     unauthorizedValidationTenantOnce = 'tenant-1';
     render(<App />);
@@ -1248,6 +1428,48 @@ describe('Platform Policies served route', () => {
     expect((retry as HTMLButtonElement).disabled).toBe(false);
     expect([retry, screen.getByRole('main', { name: 'Main content' })])
       .toContain(document.activeElement);
+  });
+
+  it('moves focus from a removed diagnostic action during a background access recheck', async () => {
+    const intervalHandlers: (() => void)[] = [];
+    const setInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+      if (delay === 60_000 && typeof handler === 'function')
+        intervalHandlers.push(handler as () => void);
+      return setInterval(handler, delay);
+    }) as typeof window.setInterval);
+    validationStatus = 422;
+    validationDiagnostics = [{
+      code: 'yaml.invalid',
+      message: 'The file is invalid.',
+      relativePath: 'rules/example.yaml',
+      line: null,
+      column: null,
+    }];
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: 'rules/example.yaml' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    const action = await screen.findByRole('button', {
+      name: 'Go to draft file: rules/example.yaml',
+    });
+    action.focus();
+    expect(document.activeElement).toBe(action);
+
+    policyStatus = 403;
+    act(() => intervalHandlers.at(-1)?.());
+
+    await screen.findByText('You do not have permission to access Platform Policies.');
+    expect(screen.queryByRole('button', { name: /Go to draft file/ })).toBeNull();
+    expect([
+      screen.getByRole('button', { name: 'Retry' }),
+      screen.getByRole('main', { name: 'Main content' }),
+    ]).toContain(document.activeElement);
   });
 
   it.each(['timer', 'visibility'] as const)(

@@ -9,6 +9,7 @@ import type {
 } from './platformPolicyContracts';
 
 interface PlatformPolicyTextareaProps {
+  draftFileId?: number;
   label: string;
   buffer: PlatformPolicyTextBuffer;
   rows: number;
@@ -62,6 +63,7 @@ function editRange(
 }
 
 export function PlatformPolicyTextarea({
+  draftFileId,
   label,
   buffer,
   rows,
@@ -108,6 +110,7 @@ export function PlatformPolicyTextarea({
 
   return (
     <Textarea
+      data-platform-policy-draft-file-id={draftFileId}
       ref={textareaRef}
       aria-label={label}
       value={buffer.value}
