@@ -61,7 +61,7 @@ first, and load more rows with **Load more**.
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
 | `/platform-settings` | Read the status of the 16 platform component areas as a tenant or platform administrator. Read [provider host requests across tenants](../guide/web-client.md#read-provider-host-requests) as a platform administrator. |
-| `/policies` | Read saved Platform Policy source and revisions, compare a local draft with the viewed revision, and validate without saving. |
+| `/policies` | Read saved Platform Policy source and revisions, compare a local draft with the viewed revision, validate without saving, and raise the Project Skill minimum trust score in a validated Project draft. |
 | `/projects/:projectId/runs/:runId` | Use the Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings tabs. |
 
 The run page's `view` query accepts `chat`, `topology`, `approvals`,

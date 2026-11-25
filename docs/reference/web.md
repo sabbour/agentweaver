@@ -26,7 +26,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/api.ts` | Gateway HTTP client, structured errors, project BYOK Draft operations, explicit-tenant Platform Policy reads with response bounds, header forwarding, and server-sent events (SSE) parsing. |
 | `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including project BYOK Draft contracts and the project issue and pull request list pages used by the Priority picker. |
 | `src/v1/platformPolicyContracts.ts` | Bounds and validates Policy history, revision metadata, UTF-8 manifest bytes, source files, validation requests, canonical hashes, and local draft comparisons. |
-| `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only Platform history, exact-revision draft comparison, and local Project validation. |
+| `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx`, `src/v1/projectSkillTrustPolicy.ts` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only Platform history, exact-revision draft comparison, local Project validation, and the validated Project Skill trust-score form. |
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client, callback messages, and the actionable setup message for `github_repo_app_not_configured`. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
@@ -91,7 +91,7 @@ data hooks are not mounted.
 | `/sessions` | `SessionsPage`. |
 | `/assistant` | `NewSessionPage`; `project` or `projectId` preselects the project. |
 | `/platform-settings` | `PlatformSettingsPage`; includes the platform-wide host request list for platform administrators. |
-| `/policies` | `PlatformPoliciesPage`; Platform mode reads saved history and compares an in-memory draft with the exact viewed revision, while Project mode validates an in-memory local artifact for one authorized Project. |
+| `/policies` | `PlatformPoliciesPage`; Platform mode reads saved history and compares an in-memory draft with the exact viewed revision, while Project mode validates an in-memory local artifact for one authorized Project and offers the **Project Skill trust score** form after validation passes. |
 | `/projects/:projectId/team/cast` | `CastTeamPage`. |
 | `/projects/:projectId/runs/:runId/history` | Project-authorized Session tree, Activity, or Egress history for the selected run. `view` selects `sessions`, `activity`, or `egress`. Egress uses an exact project credential and a confirmed tenant while Session tree and Activity keep their unbound credential. |
 | `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `chat`, `topology`, `approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**). Missing or unknown values open `chat`. |

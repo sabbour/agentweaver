@@ -1,5 +1,5 @@
 import { Badge, Button, Checkbox, Field, Input, Text } from '@fluentui/react-components';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePlatformPoliciesController } from './PlatformPoliciesController';
 import { PlatformPolicyTextarea } from './PlatformPolicyTextarea';
 import { PageHeading } from './pageParts';
@@ -8,12 +8,20 @@ import {
   escapePlatformPolicyInvisibleCharacters,
 } from './platformPolicyContracts';
 import { findPlatformPolicyDiagnosticDraftFile } from './platformPolicyDraftNavigation';
+import {
+  applyProjectSkillTrustScoreUpdate,
+  findProjectSkillTrustTarget,
+  MAX_PROJECT_SKILL_TRUST_SCORE,
+  validateNextSkillTrustScore,
+} from './projectSkillTrustPolicy';
 import type {
   PlatformPolicyComparison,
   PlatformPolicyComparisonItem,
   PlatformPolicyRevisionReadResult,
+  PlatformPolicyTextBuffer,
 } from './platformPolicyContracts';
 import type { PlatformPoliciesControllerValue } from './PlatformPoliciesController';
+import type { ProjectSkillTrustTarget } from './projectSkillTrustPolicy';
 
 function createdAtLabel(value: string): string {
   return new Date(value).toLocaleString();
@@ -164,6 +172,74 @@ function PlatformPolicyComparisonControls({
   );
 }
 
+function ProjectSkillTrustScoreForm({
+  target,
+  fileBuffer,
+  onUpdateDraft,
+}: {
+  target: ProjectSkillTrustTarget;
+  fileBuffer: PlatformPolicyTextBuffer | undefined;
+  onUpdateDraft: (buffer: PlatformPolicyTextBuffer) => void;
+}) {
+  const [scoreInput, setScoreInput] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const atMaximum = target.minimumScore >= MAX_PROJECT_SKILL_TRUST_SCORE;
+
+  const handleUpdate = () => {
+    if (!fileBuffer) return;
+    const result = validateNextSkillTrustScore(scoreInput, target.minimumScore);
+    if (!result.ok) {
+      setFormError(result.message);
+      return;
+    }
+    onUpdateDraft(applyProjectSkillTrustScoreUpdate(fileBuffer, target, result.token));
+  };
+
+  return (
+    <section aria-label="Project Skill trust score" data-project-skill-trust-form>
+      <h3>Project Skill trust score</h3>
+      <p>
+        Raise the minimum trust score for third-party Skills in{' '}
+        <code>policy/skills/data.json</code>. The Platform minimum and built-in
+        Skill exemption stay unchanged. Updating the draft does not save or
+        apply it.
+      </p>
+      <p>
+        <strong>Current minimum score:</strong> {target.minimumScore}
+        {' · '}
+        <strong>Require completed evidence:</strong>{' '}
+        {target.requireCompletedEvidence ? 'true' : 'false'}
+      </p>
+      {atMaximum ? (
+        <p role="status">
+          The minimum trust score is already {MAX_PROJECT_SKILL_TRUST_SCORE}.
+        </p>
+      ) : (
+        <>
+          <Field label="New minimum trust score">
+            <Input
+              type="text"
+              inputMode="numeric"
+              value={scoreInput}
+              onChange={(_, data) => {
+                setScoreInput(data.value);
+                setFormError(null);
+              }}
+              autoComplete="off"
+            />
+          </Field>
+          {formError && <p role="alert">{formError}</p>}
+          <div className="v1-actions">
+            <Button appearance="secondary" onClick={handleUpdate}>
+              Update draft
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function PlatformPoliciesPage() {
   const policy = usePlatformPoliciesController();
   const page = policy.history;
@@ -171,6 +247,27 @@ export function PlatformPoliciesPage() {
   const scopeName = policy.scope === 'platform' ? 'Platform' : 'Project';
   const selectedProjectMissing = policy.projectId &&
     !policy.projects.some((project) => project.projectId === policy.projectId);
+  const validateDraftButtonRef = useRef<HTMLButtonElement>(null);
+  const focusValidateDraftRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusValidateDraftRef.current) return;
+    if (policy.authorized && policy.status === 'ready' && policy.validation === null) {
+      focusValidateDraftRef.current = false;
+      validateDraftButtonRef.current?.focus();
+    } else if (!policy.authorized) {
+      focusValidateDraftRef.current = false;
+    }
+  }, [policy.authorized, policy.status, policy.validation]);
+
+  const skillTrustTarget =
+    policy.scope === 'project' &&
+    policy.authorized &&
+    policy.status === 'ready' &&
+    !policy.validationLoading &&
+    policy.validation?.isValid === true
+      ? findProjectSkillTrustTarget(policy.draftFiles)
+      : null;
 
   return (
     <>
@@ -336,6 +433,7 @@ export function PlatformPoliciesPage() {
           <div className="v1-actions">
             <Button appearance="secondary" onClick={policy.addDraftFile}>Add file</Button>
             <Button
+              ref={validateDraftButtonRef}
               appearance="primary"
               disabled={policy.status !== 'ready' || policy.validationLoading}
               onClick={policy.validateDraft}
@@ -345,6 +443,17 @@ export function PlatformPoliciesPage() {
           </div>
           {policy.validation?.isValid && (
             <p role="status">The {scopeName} Policy draft is valid.</p>
+          )}
+          {skillTrustTarget && (
+            <ProjectSkillTrustScoreForm
+              key={`${policy.tenantId}:${policy.projectId}:${policy.draftGeneration}`}
+              target={skillTrustTarget}
+              fileBuffer={policy.draftFiles.find((file) => file.id === skillTrustTarget.fileId)?.content}
+              onUpdateDraft={(nextBuffer) => {
+                focusValidateDraftRef.current = true;
+                policy.setDraftFileContent(skillTrustTarget.fileId, nextBuffer);
+              }}
+            />
           )}
           {policy.validation && !policy.validation.isValid && (
             <section aria-label="Validation diagnostics" role="alert">

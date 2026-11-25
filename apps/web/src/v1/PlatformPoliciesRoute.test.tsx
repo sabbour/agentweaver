@@ -1813,4 +1813,169 @@ describe('Platform Policies served route', () => {
     expect(screen.queryByText('Saved Platform Policy revisions')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Platform Policies' })).toBeNull();
   });
+
+  it('shows the Project Skill trust form only after Project validation and preserves exact bytes on update', async () => {
+    projectAuthority = true;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    // Platform scope never shows the Project Skill trust form even after validation passes.
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    const platformPathInput = screen.getByRole('textbox', { name: 'Relative path' });
+    fireEvent.change(platformPathInput, { target: { value: 'policy/skills/data.json' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Content for policy/skills/data.json' }), {
+      target: { value: '{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByText('The Platform Policy draft is valid.');
+    expect(screen.queryByRole('heading', { name: 'Project Skill trust score' })).toBeNull();
+
+    // Switch to Project scope and import a draft with BOM and mixed line endings.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+
+    const manifestText = 'name: project-skills\r\n';
+    const skillsRaw =
+      '\uFEFF{\r\n' +
+      '  "schemaVersion": 1,\n' +
+      '  "minimumScore": 500,\r' +
+      '  "requireCompletedEvidence": true\r\n' +
+      '}\n';
+    const actionsRaw = 'package agentweaver.actions\r\ndefault allow := false\r\n';
+    const importedArtifact = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer(manifestText),
+      [
+        { relativePath: 'policy/actions.rego', content: createPlatformPolicyTextBuffer(actionsRaw) },
+        { relativePath: 'policy/skills/data.json', content: createPlatformPolicyTextBuffer(skillsRaw) },
+      ],
+    );
+    const importFile = new File(
+      [JSON.stringify({ artifact: importedArtifact })],
+      'project-skills.json',
+      { type: 'application/json' },
+    );
+    fireEvent.change(screen.getByLabelText('Project Policy validation request'), {
+      target: { files: [importFile] },
+    });
+    await waitFor(() => expect(
+      (screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value,
+    ).toBe('name: project-skills\n'));
+
+    // Before validation, the form is not shown.
+    expect(screen.queryByRole('heading', { name: 'Project Skill trust score' })).toBeNull();
+
+    // Validate the Project draft.
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByText('The Project Policy draft is valid.');
+    expect(await screen.findByRole('heading', { name: 'Project Skill trust score' })).toBeTruthy();
+
+    // Rejects invalid bounds without sending any request or clearing validation.
+    const requestsBeforeInvalid = requests.length;
+    const scoreInput = screen.getByRole('textbox', { name: 'New minimum trust score' });
+    for (const invalidValue of ['500', '499', '1001', '-0', '600.0', '6e2']) {
+      fireEvent.change(scoreInput, { target: { value: invalidValue } });
+      fireEvent.click(screen.getByRole('button', { name: 'Update draft' }));
+      expect(screen.getByRole('alert').textContent).toContain('greater than 500');
+      expect(screen.getByText('The Project Policy draft is valid.')).toBeTruthy();
+      expect(requests).toHaveLength(requestsBeforeInvalid);
+    }
+
+    // Valid update replaces only the score token, sends no request, clears validation, and focuses Validate draft.
+    fireEvent.change(scoreInput, { target: { value: '650' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update draft' }));
+
+    expect(requests).toHaveLength(requestsBeforeInvalid);
+    expect(screen.queryByText('The Project Policy draft is valid.')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Project Skill trust score' })).toBeNull();
+    const validateButton = screen.getByRole('button', { name: 'Validate draft' });
+    expect(document.activeElement).toBe(validateButton);
+
+    // Re-validate and verify the exact serialized bytes sent to the Gateway.
+    fireEvent.click(validateButton);
+    await screen.findByText('The Project Policy draft is valid.');
+    const validateRequests = requests.filter(({ url }) =>
+      url.endsWith('/policies/projects/project-1/validate'));
+    expect(validateRequests).toHaveLength(2);
+    const secondBody = JSON.parse(String(validateRequests[1]?.init?.body ?? '{}')) as {
+      artifact?: {
+        manifestBytes?: number[];
+        files?: { relativePath: string; bytes: number[] }[];
+      };
+    };
+    expect(secondBody.artifact?.manifestBytes).toEqual(bytes(manifestText));
+    const sentActions = secondBody.artifact?.files?.find((f) => f.relativePath === 'policy/actions.rego');
+    const sentSkills = secondBody.artifact?.files?.find((f) => f.relativePath === 'policy/skills/data.json');
+    expect(sentActions?.bytes).toEqual(bytes(actionsRaw));
+    expect(sentSkills?.bytes).toEqual(bytes(skillsRaw.replace('500', '650')));
+  });
+
+  it('keeps unsupported or ambiguous skills JSON in the raw editor and recovers focus on access loss', async () => {
+    projectAuthority = true;
+    const intervalHandlers: (() => void)[] = [];
+    const setInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+      if (delay === 60_000 && typeof handler === 'function')
+        intervalHandlers.push(handler as () => void);
+      return setInterval(handler, delay);
+    }) as typeof window.setInterval);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+
+    // Duplicate key JSON stays in raw editor after validation passes.
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: 'policy/skills/data.json' },
+    });
+    const skillsEditor = screen.getByRole('textbox', { name: 'Content for policy/skills/data.json' });
+    fireEvent.change(skillsEditor, {
+      target: { value: '{"schemaVersion":1,"minimumScore":500,"minimumScore":600,"requireCompletedEvidence":true}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByText('The Project Policy draft is valid.');
+    expect(screen.queryByRole('heading', { name: 'Project Skill trust score' })).toBeNull();
+
+    // Fix to supported JSON and re-validate; form appears.
+    fireEvent.change(skillsEditor, {
+      target: { value: '{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}' },
+    });
+    expect(screen.queryByText('The Project Policy draft is valid.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByRole('heading', { name: 'Project Skill trust score' });
+
+    // Focus inside the form; timer access loss hides the form and moves focus to a safe control.
+    const scoreInput = screen.getByRole('textbox', { name: 'New minimum trust score' });
+    scoreInput.focus();
+    expect(document.activeElement).toBe(scoreInput);
+    projectAuthority = false;
+    act(() => intervalHandlers.at(-1)?.());
+    expect(await screen.findByText(
+      'You do not have permission to access this Project Policy.',
+    )).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Project Skill trust score' })).toBeNull();
+    expect([
+      screen.getByRole('button', { name: 'Retry' }),
+      screen.getByRole('main', { name: 'Main content' }),
+    ]).toContain(document.activeElement);
+  });
 });
