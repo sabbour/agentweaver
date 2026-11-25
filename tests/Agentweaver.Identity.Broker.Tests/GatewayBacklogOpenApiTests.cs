@@ -443,6 +443,23 @@ public sealed class GatewayBacklogOpenApiTests
             schemas.GetProperty("RuntimeModelBindingPin").GetProperty("properties")
                 .GetProperty("reasoningEffort").GetProperty("enum").EnumerateArray()
                 .Select(item => item.GetString()).ToArray());
+
+        var choicesSchema = schemas.GetProperty("ProjectConfigurationChoices");
+        Assert.Contains("availablePlatformProviders",
+            choicesSchema.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal("#/components/schemas/ProjectAvailablePlatformProvider",
+            choicesSchema.GetProperty("properties").GetProperty("availablePlatformProviders")
+                .GetProperty("items").GetProperty("$ref").GetString());
+        var platformProviderSchema = schemas.GetProperty("ProjectAvailablePlatformProvider").GetProperty("properties");
+        Assert.Equal(new string?[] { "openai", "azure", "anthropic" },
+            platformProviderSchema.GetProperty("type").GetProperty("enum").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        Assert.Equal(supportedReasoningEfforts,
+            platformProviderSchema.GetProperty("reasoningEfforts").GetProperty("items").GetProperty("enum")
+                .EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Contains("null",
+            platformProviderSchema.GetProperty("reference").GetProperty("anyOf").EnumerateArray()
+                .Select(item => item.GetProperty("type").GetString()));
         Assert.Equal(supportedReasoningEfforts,
             schemas.GetProperty("ModelTaskSelectionReference").GetProperty("properties")
                 .GetProperty("reasoningEffort").GetProperty("enum").EnumerateArray()

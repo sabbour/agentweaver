@@ -1941,6 +1941,16 @@ export interface VersionedProjectConfiguration {
   createdAt: string;
 }
 
+export interface AvailablePlatformProvider {
+  id: string;
+  name: string;
+  type: 'openai' | 'azure' | 'anthropic';
+  model: string;
+  reasoningEfforts: ReasoningEffort[];
+  isActive: boolean;
+  reference: string | null;
+}
+
 /** Read-only choices describing model eligibility and platform-selected provider seams. */
 export interface ProjectConfigurationChoices {
   projectId: string;
@@ -1970,6 +1980,7 @@ export interface ProjectConfigurationChoices {
     }>;
     ignoredProjectOverrides: string[];
   };
+  availablePlatformProviders: AvailablePlatformProvider[];
 }
 
 /**

@@ -380,6 +380,10 @@ Without the copy, `models` is `unavailable` with reason
 eligibility is checked against the runtime binding when a run starts, and
 accepted run selections remain immutable. Project overrides remain available
 for model configuration; non-model provider selections are platform-owned.
+`availablePlatformProviders` lists platform BYOK providers in `Available` state
+(omitting endpoints, credentials, and actor identities) and marks the active
+platform default with `isActive`. Run start still enforces project model
+selection, policy, and egress checks.
 Writes must send empty `providerOverrides` and `orderedProviderOverrides`
 arrays (non-empty values return `400 project_provider_override_unsupported`).
 Legacy stored values are kept on new revisions but are ignored for new

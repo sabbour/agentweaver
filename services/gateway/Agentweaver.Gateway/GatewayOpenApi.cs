@@ -2020,10 +2020,20 @@ else if (route.OperationId is
             ("owaspCategory", Str())),
         ["ProjectConfigurationChoices"] = Obj(
             ["projectId", "projectConfigurationRevision", "platformRuntimeRevision", "models", "providers",
-                "effectiveFallbackReferences"],
+                "effectiveFallbackReferences", "availablePlatformProviders"],
             ("projectId", Str()), ("projectConfigurationRevision", Int()), ("platformRuntimeRevision", Int()),
             ("models", Ref("ProjectModelChoices")), ("providers", Ref("ProjectProviderChoices")),
-            ("effectiveFallbackReferences", Arr(Str()))),
+            ("effectiveFallbackReferences", Arr(Str())),
+            ("availablePlatformProviders", Arr(Ref("ProjectAvailablePlatformProvider")))),
+        ["ProjectAvailablePlatformProvider"] = Obj(
+            ["id", "name", "type", "model", "reasoningEfforts", "isActive", "reference"],
+            ("id", Str()),
+            ("name", Str()),
+            ("type", Enum("openai", "azure", "anthropic")),
+            ("model", Str()),
+            ("reasoningEfforts", Arr(Enum(ReasoningEffortValues))),
+            ("isActive", Bool()),
+            ("reference", NullableStr())),
         ["HostedModelReasoningCatalogV1"] = Obj(
             ["contractVersion", "projectId", "projectConfigurationRevision", "bindingsRevision", "state",
                 "unavailableReason", "models"],

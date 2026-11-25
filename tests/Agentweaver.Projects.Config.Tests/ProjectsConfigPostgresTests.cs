@@ -348,6 +348,204 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task GetProjectConfigurationChoicesProjectsOnlyAvailablePlatformProviders()
+    {
+        var isolated = new ProjectsConfigPostgresFixture();
+        await isolated.InitializeAsync();
+        try
+        {
+            await new ProjectsConfigPostgresTests(isolated).AssertAvailablePlatformProvidersProjectionAsync();
+        }
+        finally
+        {
+            await isolated.DisposeAsync();
+        }
+    }
+
+    private async Task AssertAvailablePlatformProvidersProjectionAsync()
+    {
+        await using var db = CreateDbContext();
+        var admin = await CreateReferenceAdminAsync(db);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "platform-providers-tenant-" + suffix;
+        var otherTenantId = "platform-providers-other-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "owner-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var foreignOwner = await SeedCallerAsync(
+            db, authorityStore, "foreign-" + suffix, otherTenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, otherTenantId, ProjectAuthorityRole.TenantAdmin);
+        var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var platformHead = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+        var platform = await service.UpdatePlatformRuntimeDefaultsAsync(
+            admin, platformHead.Revision, PlatformDefaults(), CancellationToken.None);
+        var project = await service.CreateProjectAsync(owner, "Platform providers view", CancellationToken.None);
+        var otherProject = await service.CreateProjectAsync(foreignOwner, "Other project", CancellationToken.None);
+
+        var now = TimeProvider.System.GetUtcNow();
+        var availableId = "plat-avail-" + suffix;
+        var reservedOpId = Guid.NewGuid();
+        var availableWithRefId = "byok-" + reservedOpId.ToString("N");
+        var reservedReference = "byok-ref-" + suffix;
+        var draftId = "plat-draft-" + suffix;
+        var otherProjectProviderId = "proj-avail-" + suffix;
+
+        var platformAdmin = await SeedCallerAsync(
+            db, authorityStore, "plat-admin-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var draftService = new ModelProviderDraftService(db, TimeProvider.System);
+        var reservedDraftService = ReferenceService(db);
+        await draftService.SaveAsync(
+            platformAdmin,
+            ModelProviderBindingScope.Platform,
+            null,
+            availableId,
+            new SaveModelProviderDraftRequest(
+                Guid.NewGuid(),
+                0,
+                "Platform OpenAI",
+                "openai",
+                "https://secret-platform-endpoint.example.invalid/v1",
+                "gpt-4o",
+                WireApi: "responses",
+                ReasoningEfforts: ["low", "high"],
+                RateCardId: AvailabilityCardId,
+                RateCardVersion: AvailabilityCardVersion),
+            CancellationToken.None);
+        await reservedDraftService.SaveAsync(
+            platformAdmin,
+            ModelProviderBindingScope.Platform,
+            null,
+            availableWithRefId,
+            new SaveModelProviderDraftRequest(
+                reservedOpId,
+                0,
+                "Platform Azure",
+                "azure",
+                "https://secret-azure-endpoint.example.invalid",
+                "gpt-4.1",
+                AzureApiVersion: "2024-06-01",
+                ReasoningEfforts: ["medium"],
+                RateCardId: AvailabilityCardId,
+                RateCardVersion: AvailabilityCardVersion)
+            {
+                Reference = reservedReference,
+                TargetInstallationId = fixture.InstallationId,
+            },
+            CancellationToken.None);
+        await draftService.SaveAsync(
+            platformAdmin,
+            ModelProviderBindingScope.Platform,
+            null,
+            draftId,
+            new SaveModelProviderDraftRequest(
+                Guid.NewGuid(),
+                0,
+                "Platform Draft",
+                "anthropic",
+                "https://draft-endpoint.example.invalid/v1",
+                "claude-sonnet",
+                ReasoningEfforts: ["medium"]),
+            CancellationToken.None);
+
+        var foreignMembership = await SeedMembershipAsync(authorityStore, "foreign-proj-" + suffix, otherTenantId);
+        await authorityStore.AssignRoleAsync(
+            foreignMembership, ProjectAuthorityResourceType.Project, otherProject.ProjectId,
+            ProjectAuthorityRole.Owner, "fixture");
+        var foreignProjectCaller = await ResolveCallerAsync(
+            db, "foreign-proj-" + suffix, otherTenantId, ["api.read", "projects.admin"],
+            boundProjectId: otherProject.ProjectId);
+        await draftService.SaveAsync(
+            foreignProjectCaller,
+            ModelProviderBindingScope.Project,
+            otherProject.ProjectId,
+            otherProjectProviderId,
+            new SaveModelProviderDraftRequest(
+                Guid.NewGuid(),
+                0,
+                "Other Project Provider",
+                "azure",
+                "https://other-project.example.invalid",
+                "gpt-4o-mini",
+                AzureApiVersion: "2024-06-01",
+                ReasoningEfforts: ["high"]),
+            CancellationToken.None);
+
+        var payload = CanonicalManualRateCard(AvailabilityCardId, AvailabilityCardVersion);
+        var credVersion = new string('a', 32);
+
+        async Task<long> PublishPlatformProviderAsync(string providerId)
+        {
+            using var eventsHttp = new HttpClient(new DelegateRateCardHandler((_, _) =>
+                Task.FromResult(RateCardOkResponse(payload))));
+            var pubService = new ModelProviderCredentialPublicationV2Service(
+                db, TimeProvider.System, CreateRateCardOwnerClient(eventsHttp, TimeSpan.FromSeconds(2)));
+            var opId = Guid.NewGuid();
+            var preflight = await pubService.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opId, ModelProviderBindingScope.Platform, null, providerId,
+                    platformAdmin.Issuer, platformAdmin.ActorId, tenantId, null, null, "draft-snapshot"),
+                CancellationToken.None);
+            var receipt = await pubService.PublishAsync(
+                new ModelProviderCredentialPublicationV2Request(
+                    opId, preflight.PreflightId, 1, ModelProviderBindingScope.Platform, null, providerId,
+                    credVersion, new ModelCredentialIdentity(Guid.NewGuid(), ModelProviderBindingScope.Platform, null, providerId),
+                    new SecretRef($"byok-platform-{providerId}", credVersion), platformAdmin.Issuer,
+                    platformAdmin.ActorId, tenantId, preflight.MembershipId, preflight.MembershipRevision,
+                    tenantId, null),
+                CancellationToken.None);
+            Assert.Equal("Available", receipt.ProviderState);
+            return receipt.ProviderRevision;
+        }
+
+        var availableRevision = await PublishPlatformProviderAsync(availableId);
+        _ = await PublishPlatformProviderAsync(availableWithRefId);
+
+        await service.ActivatePlatformModelProviderAsync(
+            admin, availableId, platform.Revision, availableRevision, CancellationToken.None);
+
+        var viewerMembership = await SeedMembershipAsync(authorityStore, "plat-viewer-" + suffix, tenantId);
+        await authorityStore.AssignRoleAsync(
+            viewerMembership, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorityRole.Viewer, "fixture");
+        var viewer = await ResolveCallerAsync(db, "plat-viewer-" + suffix, tenantId, ["api.read"]);
+
+        var choices = await service.GetProjectConfigurationChoicesAsync(
+            viewer, project.ProjectId, CancellationToken.None);
+        Assert.Equal(2, choices.AvailablePlatformProviders.Length);
+        var activeProjected = Assert.Single(choices.AvailablePlatformProviders, item => item.Id == availableId);
+        Assert.Equal("Platform OpenAI", activeProjected.Name);
+        Assert.Equal("openai", activeProjected.Type);
+        Assert.Equal("gpt-4o", activeProjected.Model);
+        Assert.Equal(["high", "low"], activeProjected.ReasoningEfforts.ToArray());
+        Assert.True(activeProjected.IsActive);
+        Assert.Null(activeProjected.Reference);
+
+        var inactiveProjected = Assert.Single(choices.AvailablePlatformProviders, item => item.Id == availableWithRefId);
+        Assert.Equal("Platform Azure", inactiveProjected.Name);
+        Assert.Equal("azure", inactiveProjected.Type);
+        Assert.Equal("gpt-4.1", inactiveProjected.Model);
+        Assert.Equal(["medium"], inactiveProjected.ReasoningEfforts.ToArray());
+        Assert.False(inactiveProjected.IsActive);
+        Assert.Equal(reservedReference, inactiveProjected.Reference);
+
+        var json = JsonSerializer.Serialize(choices, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.DoesNotContain("secret-platform-endpoint", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-azure-endpoint", json, StringComparison.Ordinal);
+        Assert.DoesNotContain(platformAdmin.ActorId, json, StringComparison.Ordinal);
+        Assert.DoesNotContain(credVersion, json, StringComparison.Ordinal);
+        Assert.DoesNotContain("byok-platform-", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("Platform Draft", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("Other Project Provider", json, StringComparison.Ordinal);
+
+        await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.GetProjectConfigurationChoicesAsync(foreignOwner, project.ProjectId, CancellationToken.None));
+    }
+
+    [Fact]
     public Task RunAcceptanceRejectsAChangedProviderCredentialSlotOrSecretReference() =>
         RunWithIsolatedProjectsAsync(
             test => test.RunAcceptanceWithLegacyProviderAsync(),

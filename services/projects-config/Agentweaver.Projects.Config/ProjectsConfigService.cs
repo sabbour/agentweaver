@@ -64,7 +64,18 @@ public sealed record ProjectConfigurationChoices(
     long PlatformRuntimeRevision,
     ProjectModelChoices Models,
     ProjectProviderChoices Providers,
-    ImmutableArray<string> EffectiveFallbackReferences);
+    ImmutableArray<string> EffectiveFallbackReferences,
+    ImmutableArray<ProjectAvailablePlatformProvider> AvailablePlatformProviders);
+
+/// <summary>Read-only projection of one platform BYOK provider in Available state.</summary>
+public sealed record ProjectAvailablePlatformProvider(
+    string Id,
+    string Name,
+    string Type,
+    string Model,
+    ImmutableArray<string> ReasoningEfforts,
+    bool IsActive,
+    string? Reference);
 
 /// <summary>
 /// Model references and reasoning choices that may be selected for future runs. <see cref="Choices"/> lists only
@@ -229,6 +240,39 @@ public sealed partial class ProjectsConfigService
                 StringComparer.Ordinal);
         }
         var modelChoices = BuildModelChoices(configuration, platform, modelBindings, hostedReasoningEfforts);
+        var activePlatformProviderId =
+            platform.Defaults?.ModelDefaultSwitch.Mode == PlatformModelDefaultSwitchMode.Active
+                ? platform.Defaults.ModelDefaultSwitch.ActiveProviderId
+                : null;
+        var availablePlatformProviders = (await (
+                from head in db.ModelProviderDrafts.AsNoTracking()
+                join reservation in db.ModelProviderReferenceReservations.AsNoTracking()
+                    on head.ProviderId equals reservation.ProviderId into reservations
+                from reservation in reservations.DefaultIfEmpty()
+                where head.Scope == ModelProviderBindingScope.Platform &&
+                    head.ProjectId == null &&
+                    head.State == ModelProviderDraftState.Available
+                orderby head.ProviderId
+                select new
+                {
+                    head.ProviderId,
+                    head.DisplayName,
+                    head.ProviderType,
+                    head.Deployment,
+                    head.ReasoningEfforts,
+                    Reference = reservation == null ? null : reservation.Reference,
+                })
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false))
+            .Select(item => new ProjectAvailablePlatformProvider(
+                item.ProviderId,
+                item.DisplayName,
+                item.ProviderType,
+                item.Deployment,
+                [.. item.ReasoningEfforts],
+                string.Equals(item.ProviderId, activePlatformProviderId, StringComparison.Ordinal),
+                item.Reference))
+            .ToImmutableArray();
 
         return new ProjectConfigurationChoices(
             project.ProjectId,
@@ -236,7 +280,8 @@ public sealed partial class ProjectsConfigService
             platform.Revision,
             modelChoices,
             BuildProviderChoices(configuration),
-            BuildEffectiveFallbackReferences(configuration, platform.Defaults));
+            BuildEffectiveFallbackReferences(configuration, platform.Defaults),
+            availablePlatformProviders);
     }
 
     /// <summary>Loads a project after checking current read or write authority for marketplace operations.</summary>

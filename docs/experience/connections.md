@@ -11,6 +11,18 @@ provider metadata for a project. These settings use separate owner services.
 - For GitHub Copilot, open the app over HTTPS and use a Gateway on the same
   origin as the web app.
 
+## View available platform BYOK providers
+
+Open **Project settings** > **Connections** and find **Available platform
+providers**. Any project reader sees platform BYOK providers in `Available`
+state from `GET /api/v1/projects/{projectId}/configuration/choices` without
+signing in for project-bound draft management.
+
+Each row shows the provider name, type, model, supported reasoning efforts,
+optional model reference, and an **Active default** badge when it is the
+platform default. Platform administrators manage these providers; run start still
+enforces project model selection, policy, and egress rules.
+
 ## Manage project BYOK provider drafts
 
 Open **Project settings** > **Connections** and find **BYOK provider drafts**.
