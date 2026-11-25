@@ -3,6 +3,21 @@ import { AgentweaverGatewayClient, copilotGatewayBaseUrl } from './api';
 import type { KnowledgeRecordTransferBundle, ProjectConfiguration } from './contracts';
 
 describe('Gateway API client', () => {
+  it('reads the platform-wide request queue with an opaque cursor and the confirmed tenant header', async () => {
+    const page = { destinations: [], nextCursor: 'next-page' };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(page));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.listPlatformEgressDestinations('token', 'tenant-1', 'next+/=')).resolves.toEqual(page);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe('https://gateway.example.test/api/v1/platform/egress/destinations?pageSize=50&state=requested&cursor=next%2B%2F%3D');
+    expect(init?.method ?? 'GET').toBe('GET');
+    expect(init?.body).toBeUndefined();
+    expect(init?.cache).toBe('no-store');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
   it('sends platform BYOK pricing decimals as the exact JSON body', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('{"runtimeRateCardSchemaVersion":1}', {

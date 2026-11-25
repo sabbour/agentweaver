@@ -20,6 +20,7 @@ import { ErrorNotice, Loading, PageHeading } from './pageParts';
 import { WebAppVersionLine, useWebAppVersion } from './appVersion';
 import { DeploymentByokBindings } from './DeploymentByokBindings';
 import { PlatformModelProviders } from './PlatformModelProviders';
+import { PlatformProviderHostRequests } from './PlatformProviderHostRequests';
 
 const READINESS: Record<PlatformComponentReadiness, { label: string; color: 'success' | 'warning' | 'danger' | 'informative' | 'subtle' }> = {
   ready: { label: 'Ready', color: 'success' },
@@ -235,6 +236,7 @@ export function PlatformSettingsPage() {
       {/* Any signed-in user can see the web version, even when the component report is admin-only. */}
       <WebAppVersionLine version={appVersion} />
       <PlatformModelProviders />
+      <PlatformProviderHostRequests />
       <PlatformComponentsSection state={state} />
       <DeploymentByokBindings />
     </>
