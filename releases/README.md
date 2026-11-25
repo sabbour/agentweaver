@@ -117,6 +117,10 @@ Include these checks in the tracker:
 - The representative integration project for the release. Use the checked-in
   read-only CLI API case for its limited scope, and keep known gaps or unrun
   checks visible.
+- Supplemental governance verifier (`agt --json verify --evidence <evidence-file>`).
+  Record the actual result for this release, including when the verifier did
+  not run. Keep failed and unsupported checks visible. Track native policy
+  enforcement separately.
 - A focused API and/or UI scenario for every new feature, including features
   whose implementation issues are already closed.
 - A focused regression scenario for each repair, based on its actual risk.
