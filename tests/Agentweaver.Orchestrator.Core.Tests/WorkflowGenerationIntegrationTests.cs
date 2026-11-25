@@ -1157,12 +1157,12 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             Assert.Equal(0, environmentCalls);
             Assert.Equal(0, workQueue.PendingCount);
 
-            // Status read while locked reports pending cleanup and enqueues nothing.
+            // Status read while locked reports pending cleanup (1 owned intent + 1 unresolved job) and enqueues nothing.
             var lockedStatus = await GetRunStatusAsync();
             Assert.Equal("cancelled", lockedStatus.ExecutionState);
             Assert.Equal("pending", lockedStatus.RuntimeCleanup?.State);
-            Assert.Equal(1, lockedStatus.RuntimeCleanup?.Total);
-            Assert.Equal(1, lockedStatus.RuntimeCleanup?.Pending);
+            Assert.Equal(2, lockedStatus.RuntimeCleanup?.Total);
+            Assert.Equal(2, lockedStatus.RuntimeCleanup?.Pending);
             Assert.Equal(0, lockedStatus.RuntimeCleanup?.Complete);
             Assert.Equal(0, workQueue.PendingCount);
 
@@ -1172,6 +1172,9 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
 
             var unlockedStatus = await GetRunStatusAsync();
             Assert.Equal("pending", unlockedStatus.RuntimeCleanup?.State);
+            Assert.Equal(2, unlockedStatus.RuntimeCleanup?.Total);
+            Assert.Equal(2, unlockedStatus.RuntimeCleanup?.Pending);
+            Assert.Equal(0, unlockedStatus.RuntimeCleanup?.Complete);
             Assert.Equal(lockedStatus.ExecutionFence, unlockedStatus.ExecutionFence);
             Assert.Equal(lockedStatus.StateVersion, unlockedStatus.StateVersion);
             Assert.Equal(0, workQueue.PendingCount);
