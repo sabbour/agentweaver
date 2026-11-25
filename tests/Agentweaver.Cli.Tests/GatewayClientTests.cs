@@ -1,7 +1,11 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using Agentweaver.Abstractions;
 using Agentweaver.Cli;
 using Agentweaver.Cli.Auth;
 using Agentweaver.Cli.Api;
@@ -65,6 +69,207 @@ public sealed class GatewayClientTests
             request.Authorization == "Bearer run-bearer" &&
             request.ProjectAuthorization == "Bearer writer-bearer" &&
             request.Tenant == "tenant-1");
+    }
+
+    private const string TurnEventId = "c57eb1b9-6e32-4a0e-aa77-0770989753e5";
+    private const string TurnRequestPath = "/api/v1/projects/project-1/runs/run-1/sessions/child-1/turns/" + TurnEventId;
+    private const string PrivateTurnText = "private sentinel apiKey=not-for-output e\u0301 🌍 \uFFFD\r\n  ";
+    private static readonly SessionTurnContent OwnerTurn = new(
+        Guid.Parse(TurnEventId), new SessionIdentity("project-1", "run-1", "child-1"), PrivateTurnText);
+
+    [Fact]
+    public async Task TurnDigestDescribeIncludesInheritedRequirementsAndOwnerResponse()
+    {
+        const string path = "/api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}";
+        var catalog = JsonNode.Parse(await ReadEmittedCatalogAsync())!.AsObject();
+        catalog["paths"]![path]!["parameters"] = JsonNode.Parse(
+            """[{"name":"partition","in":"query","required":true,"schema":{"type":"string"}}]""");
+        var handler = new TestGatewayHandler { EmittedCatalog = catalog.ToJsonString() };
+        using var http = new HttpClient(handler);
+        using var output = new StringWriter();
+        var code = await CliApplication.RunAsync(
+            ["api", "describe", "readSessionTurnContent", "--gateway-url", "https://gateway.example/"],
+            new CliRuntimeOptions(HttpClient: http, Output: output));
+
+        Assert.Equal(0, code);
+        var description = JsonNode.Parse(output.ToString())!;
+        Assert.Equal(path, description["path"]!.GetValue<string>());
+        Assert.Equal("GET", description["method"]!.GetValue<string>());
+        Assert.Equal("#/components/schemas/SessionTurnContent",
+            description["responses"]!["200"]!["content"]!["application/json"]!["schema"]!["$ref"]!.GetValue<string>());
+        Assert.Contains(description["parameters"]!.AsArray(), parameter =>
+            parameter?["name"]?.GetValue<string>() == "partition" &&
+            parameter["in"]?.GetValue<string>() == "query" &&
+            parameter["required"]?.GetValue<bool>() == true);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task TurnDigestHashesOwnerTextAndNeverRecordsTheRead()
+    {
+        var catalog = await ReadEmittedCatalogAsync();
+        foreach (var options in new JsonSerializerOptions[]
+        {
+            new(JsonSerializerDefaults.Web),
+            new(JsonSerializerDefaults.Web) { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping },
+        })
+        foreach (var text in new[] { PrivateTurnText, PrivateTurnText.Normalize(),
+            PrivateTurnText.Replace("\r\n", "\n"), PrivateTurnText.TrimEnd() })
+        {
+            var handler = new TestGatewayHandler
+            {
+                EmittedCatalog = catalog,
+                TurnResponse = () => TurnJson(JsonSerializer.Serialize(OwnerTurn with { Text = text }, options)),
+            };
+            var (code, output, error, client) = await RunTurnDigestAsync(handler);
+            Assert.Equal(0, code);
+            Assert.Empty(error);
+            Assert.Empty(client.Calls);
+            var result = JsonNode.Parse(output)!.AsObject();
+            Assert.Equal(5, result.Count);
+            Assert.Equal("project-1", result["projectId"]!.GetValue<string>());
+            Assert.Equal("run-1", result["runId"]!.GetValue<string>());
+            Assert.Equal("child-1", result["sessionId"]!.GetValue<string>());
+            Assert.Equal(TurnEventId, result["eventId"]!.GetValue<string>());
+            Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text))),
+                result["contentSha256"]!.GetValue<string>());
+            Assert.DoesNotContain("private sentinel", output, StringComparison.Ordinal);
+            Assert.Equal(3, handler.Requests.Count);
+            Assert.Equal("/api/v1/authorization/context", handler.Requests[1].Path);
+            foreach (var request in handler.Requests.Skip(1))
+            {
+                Assert.Equal("GET", request.Method);
+                Assert.Equal("Bearer run-bearer", request.Authorization);
+                Assert.Equal("tenant-1", request.Tenant);
+                Assert.Empty(request.Query);
+                Assert.Null(request.ProjectAuthorization);
+            }
+            Assert.Equal(TurnRequestPath, handler.Requests[2].Path);
+        }
+    }
+
+    [Fact]
+    public async Task TurnDigestRejectsInvalidOwnerResponsesWithNoOutputOrEvidence()
+    {
+        var catalog = await ReadEmittedCatalogAsync();
+        var json = JsonSerializer.Serialize(OwnerTurn, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var badUtf8 = Encoding.UTF8.GetBytes(json);
+        badUtf8[json.IndexOf("private sentinel", StringComparison.Ordinal)] = 0xff;
+        foreach (var response in new Func<HttpResponseMessage>[]
+        {
+            () => TurnJson(json.Replace("\"project-1\"", "\"private project sentinel\"")),
+            () => TurnJson(json.Replace("\"run-1\"", "\"private run sentinel\"")),
+            () => TurnJson(json.Replace("\"child-1\"", "\"private session sentinel\"")),
+            () => TurnJson(json.Replace(TurnEventId, "b51fcc38-c02b-4b4a-a36e-349f7cfe577b")),
+            () => TurnJson(json[..^1]),
+            () => TurnJson(json[..^1] + ""","text":"private duplicate sentinel"}"""),
+            () => TurnJson(json.Replace("private sentinel", @"\uD800private sentinel")),
+            () => TurnJson(json.Replace("private sentinel", @"\uDC00private sentinel")),
+            () => TurnBytes(new ByteArrayContent(badUtf8)),
+            () => TurnJson(json, HttpStatusCode.Forbidden),
+            () => TurnJson(json, HttpStatusCode.NotFound),
+            () => TurnJson(json, HttpStatusCode.Accepted),
+            () => TurnBytes(new StreamContent(new BlockingReadStream(["data: private sentinel\n\n"])), "text/event-stream"),
+            () => TurnBytes(new StreamContent(new BlockingReadStream([json[..^1]]))),
+        })
+        {
+            var handler = new TestGatewayHandler { EmittedCatalog = catalog, TurnResponse = response };
+            var (code, output, error, client) = await RunTurnDigestAsync(handler);
+            Assert.Equal(TurnRequestPath, handler.Requests.Last().Path);
+            Assert.Equal(1, code);
+            Assert.Empty(output);
+            Assert.Equal("Could not read the turn content digest.", error.TrimEnd());
+            Assert.Empty(client.Calls);
+        }
+    }
+
+    [Fact]
+    public async Task TurnDigestRejectsUnsuitableArgumentsBeforeDiscoveryAndFixesPreflightErrors()
+    {
+        foreach (var args in new string[][]
+        {
+            ["--body", "private sentinel"], ["--query", "private=sentinel"],
+            ["--header", "X-Private=sentinel"], ["--output", "private sentinel"],
+            ["--path", "projectId=private sentinel"], ["private sentinel"],
+            ["--turn-content-sha256"],
+        })
+        {
+            var handler = new TestGatewayHandler();
+            var (code, output, error, client) = await RunTurnDigestAsync(handler, args);
+            Assert.Equal(1, code);
+            Assert.Empty(output);
+            Assert.Equal("Could not read the turn content digest.", error.TrimEnd());
+            Assert.Empty(handler.Requests);
+            Assert.Empty(client.Calls);
+        }
+        foreach (var selectors in new[] { ("other-project", "run-1"), ("project-1", "other-run") })
+        {
+            var handler = new TestGatewayHandler();
+            var result = await RunTurnDigestAsync(handler, projectPath: selectors.Item1, runPath: selectors.Item2);
+            Assert.Equal(1, result.Code);
+            Assert.Empty(result.Output);
+            Assert.Equal("Could not read the turn content digest.", result.Error.TrimEnd());
+            Assert.Empty(handler.Requests);
+        }
+        var catalog = await ReadEmittedCatalogAsync();
+        var denied = new TestGatewayHandler { EmittedCatalog = catalog, DenyTurnPreflight = true };
+        var rejected = await RunTurnDigestAsync(denied);
+        Assert.Equal(1, rejected.Code);
+        Assert.Empty(rejected.Output);
+        Assert.Equal("Could not read the turn content digest.", rejected.Error.TrimEnd());
+        Assert.Empty(rejected.Client.Calls);
+        Assert.DoesNotContain(denied.Requests, item => item.Path == TurnRequestPath);
+    }
+
+    private static async Task<string> ReadEmittedCatalogAsync()
+    {
+        await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+        using var http = new HttpClient();
+        return await http.GetStringAsync(new Uri(new Uri(gateway.Urls.Single()), "/openapi/v1.json"));
+    }
+
+    private static HttpResponseMessage TurnJson(string json, HttpStatusCode status = HttpStatusCode.OK) =>
+        new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+
+    private static HttpResponseMessage TurnBytes(HttpContent content, string mediaType = "application/json")
+    {
+        content.Headers.ContentType = new MediaTypeHeaderValue(mediaType);
+        return new(HttpStatusCode.OK) { Content = content };
+    }
+
+    private static async Task<(int Code, string Output, string Error, GatewayClient Client)> RunTurnDigestAsync(
+        TestGatewayHandler handler, string[]? extra = null, string projectPath = "project-1", string runPath = "run-1")
+    {
+        using var http = new HttpClient(handler);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var client = new GatewayClient(http, RunIdentity, new TestAuthentication(), TimeSpan.FromSeconds(1));
+        var code = await CliApplication.RunAsync(
+        [
+            "api", "invoke", "readSessionTurnContent", "--turn-content-sha256",
+            "--scope", "projects.orchestrator",
+            "--gateway-url", "https://gateway.example/",
+            "--broker-issuer", "https://identity.example/",
+            "--client-id", "agentweaver-cli",
+            "--api-audience", "https://gateway.example/",
+            "--tenant-id", "tenant-1", "--project-id", "project-1", "--run-id", "run-1",
+            "--path", "projectId=" + projectPath, "--path", "runId=" + runPath,
+            "--path", "sessionId=child-1", "--path", "eventId=" + TurnEventId,
+            .. extra ?? [],
+        ], new CliRuntimeOptions(HttpClient: http, GatewayClientFactory: new TurnClientFactory(client),
+            Output: output, Error: error));
+        return (code, output.ToString(), error.ToString(), client);
+    }
+
+    private sealed class TurnClientFactory(GatewayClient client) : IGatewayClientFactory
+    {
+        public IGatewayClient Create(CliIdentity identity)
+        {
+            Assert.Equal(client.Identity.Target, identity.Target);
+            Assert.Equal(client.Identity.ProjectId, identity.ProjectId);
+            Assert.Equal(client.Identity.RunId, identity.RunId);
+            return client;
+        }
     }
 
     [Theory]
@@ -907,6 +1112,9 @@ public sealed class GatewayClientTests
 
     private sealed class TestGatewayHandler : HttpMessageHandler
     {
+        public string? EmittedCatalog { get; init; }
+        public Func<HttpResponseMessage>? TurnResponse { get; init; }
+        public bool DenyTurnPreflight { get; init; }
         public List<RequestSnapshot> Requests { get; } = [];
         public bool DuplicateOperationId { get; init; }
         public bool LowercaseBearerScheme { get; init; }
@@ -950,6 +1158,8 @@ public sealed class GatewayClientTests
 
             if (request.RequestUri.AbsolutePath == "/openapi/v1.json")
             {
+                if (EmittedCatalog is not null)
+                    return Json(HttpStatusCode.OK, EmittedCatalog);
                 var openApi = OpenApi.Replace(
                     "\"operationId\":\"streamEvents\"",
                     $"\"operationId\":\"{(DuplicateOperationId ? "formulateCastingProposal" : "streamEvents")}\"",
@@ -985,11 +1195,15 @@ public sealed class GatewayClientTests
 
             if (request.RequestUri.AbsolutePath == "/api/v1/authorization/context")
             {
+                if (DenyTurnPreflight)
+                    return Json(HttpStatusCode.Forbidden, """{"detail":"private preflight sentinel"}""");
                 var isAdmin = request.Headers.Authorization?.Parameter == "writer-bearer";
                 return Json(HttpStatusCode.OK, OwnerPermission is null
                     ? AuthorizationContext(isAdmin)
                     : AuthorizationContext(OwnerPermission));
             }
+            if (request.RequestUri.AbsolutePath == TurnRequestPath && TurnResponse is not null)
+                return TurnResponse();
 
             if (request.RequestUri.AbsolutePath.EndsWith("/source-control/files/README.md", StringComparison.Ordinal))
                 return Json(HttpStatusCode.OK, ResponseBody);

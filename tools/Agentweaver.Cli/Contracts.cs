@@ -100,6 +100,11 @@ public interface IGatewayClient
         GatewayInvocation invocation,
         CancellationToken ct);
 
+    Task<JsonObject> ReadTurnContentDigestAsync(
+        IReadOnlyDictionary<string, string> path,
+        CancellationToken ct) =>
+        throw new NotSupportedException("Turn content digests are not supported by this Gateway client.");
+
     /// <summary>Sends an explicit same-origin request without OpenAPI dispatch or dual-credential escalation.</summary>
     Task<GatewayResponse> InvokeRawAsync(
         string method,
