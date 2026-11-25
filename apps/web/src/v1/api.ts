@@ -82,6 +82,7 @@ import type {
   ProjectModelProviderDraftSaveRequest,
   PlatformModelProviderDraft,
   PlatformModelProviderDraftPage,
+  ModelProviderCredentialOperationStatusResponse,
   ModelProviderCredentialRequest,
   ModelProviderCredentialResponse,
   PlatformModelDefaultSwitchRequest,
@@ -708,6 +709,48 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'byok-providers', providerId)}`,
       { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Sets or recovers a project BYOK provider credential without caching or cookies. */
+  setProjectByokProviderCredential(
+    token: string,
+    projectId: string,
+    providerId: string,
+    request: ModelProviderCredentialRequest,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers', providerId, 'credential')}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(request),
+        credentials: 'omit',
+        cache: 'no-store',
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads the status of a project BYOK provider credential operation without caching or cookies. */
+  getProjectByokProviderCredentialOperation(
+    token: string,
+    projectId: string,
+    providerId: string,
+    operationId: string,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialOperationStatusResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers', providerId, 'credential', 'operations', operationId)}`,
+      {
+        credentials: 'omit',
+        cache: 'no-store',
+      },
       this.baseUrl,
       tenantSelector,
     );

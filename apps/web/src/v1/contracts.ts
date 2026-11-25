@@ -313,6 +313,23 @@ export interface ModelProviderCredentialResponse {
   providerState: 'Draft' | 'Available' | null;
 }
 
+export interface ModelProviderCredentialOperationStatusResponse {
+  operationId: string;
+  scope: 'platform' | 'project';
+  projectId: string | null;
+  providerId: string;
+  status:
+    | 'pending'
+    | 'publication_pending'
+    | 'published'
+    | 'quarantined'
+    | 'cancelled'
+    | 'disable_pending'
+    | 'disabled';
+  providerRevision?: number | null;
+  hasCredential?: boolean | null;
+}
+
 export interface PlatformModelDefaultSwitchRequest {
   expectedSettingsRevision: number;
   expectedProviderRevision?: number;

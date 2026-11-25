@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AgentweaverGatewayClient, gatewayClient, GatewayError } from './api';
 import type { AuthorizationCallbackMessage, AuthorizationTransaction } from './authProtocol';
 import type { PlatformEgressDestinationPage } from './contracts';
@@ -1524,5 +1524,161 @@ describe('Broker refresh coordination', () => {
     expect(updateDraft.mock.calls[1][0]).toBe('project-access-3');
     expect(updateDraft.mock.calls[1][3].operationId).toBe(updateDraft.mock.calls[0][3].operationId);
     expect(mocks.refreshBrokerToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('apiCallOnce pre-refreshes, reconfirms context, checks identity after await, and never auto-retries on 401', async () => {
+    vi.spyOn(gatewayClient, 'getAuthorizationContext')
+      .mockResolvedValueOnce({
+        contractVersion: 1,
+        issuer: 'broker',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: 'project-1',
+        boundRunId: null,
+        effectiveAuthority: [],
+      })
+      .mockResolvedValueOnce({
+        contractVersion: 1,
+        issuer: 'broker',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 2,
+        boundProjectId: 'project-1',
+        boundRunId: null,
+        effectiveAuthority: [],
+      });
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce({
+      ...token('expiring-access', 'refresh-1'),
+      expires_in: 1,
+    });
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('refreshed-access', 'refresh-2'));
+
+    let authValue: ReturnType<typeof useAuth> | null = null;
+    function Probe() {
+      const auth = useAuth();
+      useEffect(() => {
+        authValue = auth;
+      }, [auth]);
+      return null;
+    }
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+
+    const authorizePromise = authValue!.authorize({ projectId: 'project-1' }, authPopup);
+    await completePopupSignIn('code-1');
+    await authorizePromise;
+    await waitFor(() => expect(authValue!.authorizationContext?.tenantId).toBe('tenant-1'));
+
+    // Pre-refresh + context reconfirmation + no 401 retry when operation returns 401.
+    const operation = vi.fn().mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'Expired'));
+    await expect(
+      authValue!.apiCallOnce(operation, { projectId: 'project-1' }, {
+        tenantId: 'tenant-1',
+        actorId: 'actor-1',
+        issuer: 'broker',
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+
+    expect(mocks.refreshBrokerToken).toHaveBeenCalledTimes(1);
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(operation).toHaveBeenCalledWith('refreshed-access', 'tenant-1');
+
+    // Expected identity mismatch fails closed before dispatching operation.
+    const blockedOp = vi.fn();
+    await expect(
+      authValue!.apiCallOnce(blockedOp, { projectId: 'project-1' }, {
+        tenantId: 'tenant-2',
+        actorId: 'actor-1',
+        issuer: 'broker',
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(blockedOp).not.toHaveBeenCalled();
+
+    // Run-bound or unbound binding is rejected before dispatching operation.
+    await expect(
+      authValue!.apiCallOnce(blockedOp, { projectId: 'project-1', runId: 'run-1' }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(blockedOp).not.toHaveBeenCalled();
+  });
+
+  it('retains projectCredentialOperations across same-identity reauth and clears on signOut or different identity', async () => {
+    vi.spyOn(gatewayClient, 'getAuthorizationContext')
+      .mockResolvedValueOnce({
+        contractVersion: 1,
+        issuer: 'broker',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: 'project-1',
+        boundRunId: null,
+        effectiveAuthority: [],
+      })
+      .mockResolvedValueOnce({
+        contractVersion: 1,
+        issuer: 'broker',
+        actorId: 'actor-2',
+        tenantId: 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: 'project-1',
+        boundRunId: null,
+        effectiveAuthority: [],
+      });
+
+    let authValue: ReturnType<typeof useAuth> | null = null;
+    function Probe() {
+      const auth = useAuth();
+      useEffect(() => {
+        authValue = auth;
+      }, [auth]);
+      return null;
+    }
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+
+    const opKey = {
+      issuer: 'broker',
+      actorId: 'actor-1',
+      tenantId: 'tenant-1',
+      projectId: 'project-1',
+      providerId: 'provider-1',
+    };
+    authValue!.projectCredentialOperations!.set(opKey, {
+      operationId: 'op-1',
+      expectedProviderRevision: 1,
+      status: 'publication_pending',
+    });
+
+    // Same-identity sign-in preserves operation.
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('access-1', 'refresh-1'));
+    const authorizePromise = authValue!.authorize({ projectId: 'project-1' }, authPopup);
+    await completePopupSignIn('code-1');
+    await authorizePromise;
+    await waitFor(() => expect(authValue!.authorizationContext?.actorId).toBe('actor-1'));
+    expect(authValue!.projectCredentialOperations!.get(opKey)).toEqual({
+      operationId: 'op-1',
+      expectedProviderRevision: 1,
+      status: 'publication_pending',
+    });
+
+    // Different-identity confirmation clears operation.
+    await authValue!.resolveAuthorizationContext('tenant-1');
+    expect(authValue!.projectCredentialOperations!.get(opKey)).toBeNull();
+
+    // signOut clears operation.
+    authValue!.projectCredentialOperations!.set(opKey, {
+      operationId: 'op-2',
+      expectedProviderRevision: 1,
+      status: 'pending',
+    });
+    authValue!.signOut();
+    expect(authValue!.projectCredentialOperations!.get(opKey)).toBeNull();
   });
 });

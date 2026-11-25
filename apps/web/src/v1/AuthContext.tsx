@@ -40,6 +40,10 @@ import type {
 } from './contracts';
 import { gatewayClient, GatewayError } from './api';
 import { clearRecentRuns } from './recentRuns';
+import {
+  createProjectCredentialOperationStore,
+  type ProjectCredentialOperationStore,
+} from './projectCredentialOperations';
 import type {
   PlatformPolicyArtifactRequest,
   PlatformPolicyRevisionPage,
@@ -112,6 +116,16 @@ interface AuthContextValue {
     operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
     binding?: AuthorizationBinding | null,
   ) => Promise<T>;
+  apiCallOnce: <T>(
+    operation: (accessToken: string, tenantSelector: string) => Promise<T>,
+    binding: AuthorizationBinding,
+    expectedIdentity?: {
+      tenantId: string;
+      actorId: string | null;
+      issuer: string | null;
+    },
+  ) => Promise<T>;
+  projectCredentialOperations?: ProjectCredentialOperationStore;
   establishPlatformPolicyAccess: (
     tenantSelector: string,
     signal?: AbortSignal,
@@ -304,6 +318,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const policySilentAttemptRef = useRef<PlatformPolicySilentAttempt | null>(null);
   const policySilentPromiseRef = useRef<Promise<boolean> | null>(null);
+  const projectCredentialOperations = useMemo(
+    () => createProjectCredentialOperationStore(),
+    [],
+  );
 
   const configurationError = useMemo(() => {
     const missing = missingAuthConfiguration();
@@ -1098,6 +1116,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         binding: identity.binding,
         sessionGeneration: identity.sessionGeneration,
       };
+      projectCredentialOperations.retainIdentity({
+        issuer: confirmedContext.issuer,
+        actorId: confirmedContext.actorId,
+        tenantId: confirmedContext.tenantId,
+      });
       setAuthorizationContextState(confirmedContext);
       return confirmedContext;
     } catch (reason) {
@@ -1112,7 +1135,102 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (requestGeneration === authorizationContextRequestRef.current)
         setAuthorizationContextLoading(false);
     }
-  }, [apiCall]);
+  }, [apiCall, projectCredentialOperations]);
+
+  const apiCallOnce = useCallback(async <T,>(
+    operation: (accessToken: string, tenantSelector: string) => Promise<T>,
+    requestedBinding: AuthorizationBinding,
+    expectedIdentity?: {
+      tenantId: string;
+      actorId: string | null;
+      issuer: string | null;
+    },
+  ): Promise<T> => {
+    if (!requestedBinding?.projectId || requestedBinding.runId) {
+      throw new GatewayError(
+        403,
+        { code: 'forbidden' },
+        'A project-only session is required for this action.',
+      );
+    }
+    let current = sessionsRef.current.get(bindingKey(requestedBinding)) ?? null;
+    if (!current ||
+        !sameBinding(current.binding, requestedBinding) ||
+        current.binding?.runId) {
+      throw new GatewayError(
+        401,
+        { code: 'unauthorized' },
+        'Sign in for this exact project before continuing.',
+      );
+    }
+    if (current.expiresAt <= Date.now() + 5_000) {
+      current = await refresh(current);
+      if (!current) {
+        throw new GatewayError(401, { code: 'unauthorized' }, 'Your Broker session expired.');
+      }
+    }
+
+    const existingConfirmed = authorizationContextRef.current;
+    const needsContextConfirmation =
+      !existingConfirmed ||
+      existingConfirmed.accessToken !== current.accessToken ||
+      existingConfirmed.sessionGeneration !== sessionGenerationRef.current ||
+      !sameBinding(existingConfirmed.binding, current.binding) ||
+      !sameBinding(current.binding, requestedBinding);
+
+    if (needsContextConfirmation) {
+      if (sessionRef.current !== current) {
+        throw new GatewayError(
+          401,
+          { code: 'unauthorized' },
+          'Your project session changed before the request was sent.',
+        );
+      }
+      const targetTenant = expectedIdentity?.tenantId ?? existingConfirmed?.value.tenantId;
+      const reconfirmed = await resolveAuthorizationContext(targetTenant);
+      if (!reconfirmed) {
+        const contextError = authorizationContextErrorRef.current;
+        if (contextError instanceof GatewayError) throw contextError;
+        throw new GatewayError(
+          401,
+          { code: 'unauthorized' },
+          'Could not confirm project authorization context.',
+        );
+      }
+    }
+
+    const active = sessionsRef.current.get(bindingKey(requestedBinding)) ?? null;
+    const confirmed = authorizationContextRef.current;
+    if (!active ||
+        active.accessToken !== current.accessToken ||
+        !sameBinding(active.binding, requestedBinding) ||
+        active.binding?.runId ||
+        sessionRef.current !== active ||
+        !confirmed ||
+        confirmed.accessToken !== active.accessToken ||
+        confirmed.sessionGeneration !== sessionGenerationRef.current ||
+        !sameBinding(confirmed.binding, active.binding) ||
+        !confirmed.value.tenantId) {
+      throw new GatewayError(
+        401,
+        { code: 'unauthorized' },
+        'Your project session changed before the request was sent.',
+      );
+    }
+    if (expectedIdentity && (
+      confirmed.value.tenantId !== expectedIdentity.tenantId ||
+      (expectedIdentity.actorId !== null && confirmed.value.actorId !== expectedIdentity.actorId) ||
+      (expectedIdentity.issuer !== null && confirmed.value.issuer !== expectedIdentity.issuer)
+    )) {
+      throw new GatewayError(
+        403,
+        { code: 'forbidden' },
+        'Your signed-in account or tenant changed before the request was sent.',
+      );
+    }
+
+    return await operation(active.accessToken, confirmed.value.tenantId);
+  }, [refresh, resolveAuthorizationContext]);
 
   const establishPlatformPolicyAccess = useCallback(async (
     tenantSelector: string,
@@ -1424,12 +1542,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearAuthorizationTransaction();
     transactionRef.current = null;
     setSession(null);
+    projectCredentialOperations.clear();
     setConsent(null);
     setError(null);
     forgetSignIn();
     clearRecentRuns();
     setRestoringSession(false);
-  }, [setSession]);
+  }, [projectCredentialOperations, setSession]);
 
   const getAuthorizationContextError = useCallback(() => authorizationContextErrorRef.current, []);
 
@@ -1449,6 +1568,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     decideConsent,
     signOut,
     apiCall,
+    apiCallOnce,
+    projectCredentialOperations,
     establishPlatformPolicyAccess,
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
@@ -1463,6 +1584,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resolveAuthorizationContext,
   }), [
     apiCall,
+    apiCallOnce,
+    projectCredentialOperations,
     authSessionGeneration,
     authSessionEpoch,
     authorizationContext,

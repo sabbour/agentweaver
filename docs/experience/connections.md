@@ -23,10 +23,31 @@ Select **Create draft** to save. The owner creates the provider ID. Use that ID
 to find the provider later; you can change its name.
 
 To edit a provider, open it and select **Edit metadata**. The page shows the
-provider ID, state, revision, host-request status, host, and port from the
-server response. Select **Refresh status** to reload the current detail and
-host-request status without saving the provider. Select **Save metadata** to
-save changes. The form does not accept or store API keys or other credentials.
+provider ID, state, revision, credential status (**Key saved** or **No key
+saved**), host-request status, host, and port from the server response. Select
+**Refresh status** to reload the current detail and host-request status without
+saving the provider. Select **Save metadata** to save changes. The create and
+edit metadata forms do not accept or store API keys or other credentials.
+
+When a provider shows **No key saved** on the detail view, you can enter its
+first API key in **Add API key** and select **Save key**. The browser clears the
+key field before sending the request once without automatic retry. It does not
+save the key in browser storage. Key rotation and key removal are not available
+in this view.
+
+If a key save returns an incomplete or pending state, the page keeps the
+operation ID in memory for your current signed-in account, tenant, and project:
+
+- Select **Check key status** to query the operation status without re-entering
+  the key.
+- If publication is pending, select **Retry publication** to recheck
+  publication without re-entering the key. If the provider changed before
+  publication finished, share the shown operation ID with an operator.
+- If a write is quarantined, share the shown operation ID with an operator.
+
+In-memory operation tracking survives navigation between providers, settings
+sections, and same-account re-authentication, but a full browser reload or tab
+close clears it.
 
 | Host-request status label | Meaning |
 | --- | --- |

@@ -1,15 +1,22 @@
-import { Button, Field, Input, Text } from '@fluentui/react-components';
+import { Badge, Button, Field, Input, Text } from '@fluentui/react-components';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
 import type {
+  ModelProviderCredentialOperationStatusResponse,
+  ModelProviderCredentialResponse,
   ModelProviderEgressStatus,
   ProjectModelProviderDraft,
   ProjectModelProviderDraftSaveRequest,
 } from './contracts';
 import { errorMessage } from './errors';
-import { ErrorNotice, Loading } from './pageParts';
+import { Loading, ErrorNotice } from './pageParts';
+import {
+  createProjectCredentialOperationStore,
+  type ProjectCredentialOperation,
+  type ProjectCredentialOperationKey,
+} from './projectCredentialOperations';
 
 type ProviderEditor = {
   name: string;
@@ -88,6 +95,45 @@ function requireProjectDraft(
   return provider;
 }
 
+function requireProjectCredentialResponse(
+  response: ModelProviderCredentialResponse,
+  projectId: string,
+  providerId: string,
+  expectedOperationId?: string,
+): ModelProviderCredentialResponse {
+  if (response.scope !== 'project' ||
+      response.projectId !== projectId ||
+      response.providerId !== providerId ||
+      (expectedOperationId !== undefined && response.operationId !== expectedOperationId)) {
+    throw new Error('The service returned a credential response for a different scope or provider.');
+  }
+  return response;
+}
+
+function requireProjectCredentialOperationStatus(
+  response: ModelProviderCredentialOperationStatusResponse,
+  projectId: string,
+  providerId: string,
+  expectedOperationId: string,
+): ModelProviderCredentialOperationStatusResponse {
+  if (response.scope !== 'project' ||
+      response.projectId !== projectId ||
+      response.providerId !== providerId ||
+      response.operationId !== expectedOperationId) {
+    throw new Error('The service returned a credential operation status for a different scope or provider.');
+  }
+  return response;
+}
+
+function isPreClaimCredentialRejection(reason: unknown): boolean {
+  if (!(reason instanceof GatewayError)) return false;
+  if (reason.status === 400 || reason.status === 413 || reason.status === 415) return true;
+  if (reason.status === 404 && reason.code === 'model_provider_draft_not_found') return true;
+  if (reason.status === 409 && reason.code === 'credential_slot_conflict') return true;
+  if (reason.status === 503 && reason.code === 'credential_vault_unavailable') return true;
+  return false;
+}
+
 function hostRequestStatusLabel(egress?: ModelProviderEgressStatus | null): string {
   if (!egress) return 'Host request status unavailable';
   if (egress.deliveryStatus === 'pending' && egress.destinationState === null)
@@ -121,6 +167,8 @@ export function ProjectModelProviderDrafts({
 }) {
   const {
     apiCall,
+    apiCallOnce,
+    projectCredentialOperations,
     session,
     authSessionGeneration,
     authSessionEpoch = 0,
@@ -134,6 +182,8 @@ export function ProjectModelProviderDrafts({
     busy,
     configurationError,
   } = useAuth();
+  const [fallbackOperationStore] = useState(() => createProjectCredentialOperationStore());
+  const operationStore = projectCredentialOperations ?? fallbackOperationStore;
   const binding = useMemo(() => ({ projectId }), [projectId]);
   const [resolvedTenant, setResolvedTenant] = useState<string | null>(null);
   const selectedTenant = tenantSelector ?? resolvedTenant;
@@ -153,6 +203,13 @@ export function ProjectModelProviderDrafts({
   const [saveError, setSaveError] = useState<unknown>(null);
   const [saveConflict, setSaveConflict] = useState(false);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [credentialBusy, setCredentialBusy] = useState(false);
+  const [credentialError, setCredentialError] = useState<unknown>(null);
+  const [credentialMessage, setCredentialMessage] = useState<string | null>(null);
+  const [confirmingOperationReset, setConfirmingOperationReset] = useState(false);
+  const [operationRevision, setOperationRevision] = useState(0);
 
   const mountedRef = useRef(true);
   const pendingSave = useRef<PendingSave | null>(null);
@@ -161,6 +218,7 @@ export function ProjectModelProviderDrafts({
   const listGeneration = useRef(0);
   const detailGeneration = useRef(0);
   const saveGeneration = useRef(0);
+  const credentialGeneration = useRef(0);
   const accessCheckGeneration = useRef(0);
   const activeViewRef = useRef<ProviderView>(view);
   const activeProviderIdRef = useRef<string | null>(selectedProviderId);
@@ -228,14 +286,14 @@ export function ProjectModelProviderDrafts({
       listGeneration.current += 1;
       detailGeneration.current += 1;
       saveGeneration.current += 1;
+      credentialGeneration.current += 1;
       accessCheckGeneration.current += 1;
     };
   }, []);
 
-  const isSameScope = useCallback((captured: ScopeSnapshot): boolean => {
+  const isSameConfirmedScope = useCallback((captured: ScopeSnapshot): boolean => {
     const current = currentScopeRef.current;
     return (
-      mountedRef.current &&
       current.scopeGeneration === captured.scopeGeneration &&
       current.projectId === captured.projectId &&
       current.tenantId === captured.tenantId &&
@@ -245,10 +303,15 @@ export function ProjectModelProviderDrafts({
     );
   }, []);
 
+  const isSameScope = useCallback((captured: ScopeSnapshot): boolean => {
+    return mountedRef.current && isSameConfirmedScope(captured);
+  }, [isSameConfirmedScope]);
+
   const clearUiStateForAccessLoss = useCallback(() => {
     listGeneration.current += 1;
     detailGeneration.current += 1;
     saveGeneration.current += 1;
+    credentialGeneration.current += 1;
     activeViewRef.current = 'list';
     activeProviderIdRef.current = null;
     listNeedsReload.current = false;
@@ -266,6 +329,12 @@ export function ProjectModelProviderDrafts({
     setSaveError(null);
     setSaveConflict(false);
     setSavedMessage(null);
+    setApiKeyInput('');
+    setShowKey(false);
+    setCredentialBusy(false);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
   }, []);
 
   const invalidateScopeGenerations = useCallback(() => {
@@ -277,6 +346,7 @@ export function ProjectModelProviderDrafts({
     listGeneration.current += 1;
     detailGeneration.current += 1;
     saveGeneration.current += 1;
+    credentialGeneration.current += 1;
     accessCheckGeneration.current += 1;
     pendingSave.current = null;
   }, []);
@@ -618,10 +688,11 @@ export function ProjectModelProviderDrafts({
 
   const openProvider = useCallback(async (
     providerId: string,
-    options?: { preserveSavedMessage?: boolean },
+    options?: { preserveSavedMessage?: boolean; preserveCredentialMessage?: boolean },
   ) => {
     const generation = ++detailGeneration.current;
     saveGeneration.current += 1;
+    credentialGeneration.current += 1;
     const capturedScope = currentScopeRef.current;
     activeViewRef.current = 'detail';
     activeProviderIdRef.current = providerId;
@@ -633,6 +704,12 @@ export function ProjectModelProviderDrafts({
     setSaving(false);
     setSaveError(null);
     setSaveConflict(false);
+    setApiKeyInput('');
+    setShowKey(false);
+    setCredentialBusy(false);
+    setCredentialError(null);
+    setConfirmingOperationReset(false);
+    if (!options?.preserveCredentialMessage) setCredentialMessage(null);
     if (!options?.preserveSavedMessage) setSavedMessage(null);
     try {
       const provider = await apiCall(
@@ -671,6 +748,7 @@ export function ProjectModelProviderDrafts({
   const goBackToList = () => {
     detailGeneration.current += 1;
     saveGeneration.current += 1;
+    credentialGeneration.current += 1;
     activeViewRef.current = 'list';
     activeProviderIdRef.current = null;
     setView('list');
@@ -682,6 +760,12 @@ export function ProjectModelProviderDrafts({
     setSaveError(null);
     setSaveConflict(false);
     setSavedMessage(null);
+    setApiKeyInput('');
+    setShowKey(false);
+    setCredentialBusy(false);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
     if (listNeedsReload.current) {
       listNeedsReload.current = false;
       void loadPage(null, false, selectedTenant);
@@ -691,10 +775,17 @@ export function ProjectModelProviderDrafts({
   const cancelEdit = () => {
     saveGeneration.current += 1;
     detailGeneration.current += 1;
+    credentialGeneration.current += 1;
     setSaving(false);
     setSaveError(null);
     setSaveConflict(false);
     setEditor(emptyEditor());
+    setApiKeyInput('');
+    setShowKey(false);
+    setCredentialBusy(false);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
     if (selectedProvider) {
       activeViewRef.current = 'detail';
       activeProviderIdRef.current = selectedProvider.id;
@@ -714,6 +805,7 @@ export function ProjectModelProviderDrafts({
   const startCreate = () => {
     detailGeneration.current += 1;
     saveGeneration.current += 1;
+    credentialGeneration.current += 1;
     activeViewRef.current = 'create';
     activeProviderIdRef.current = null;
     setSelectedProvider(null);
@@ -725,12 +817,19 @@ export function ProjectModelProviderDrafts({
     setSaveError(null);
     setSaveConflict(false);
     setSavedMessage(null);
+    setApiKeyInput('');
+    setShowKey(false);
+    setCredentialBusy(false);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
     setView('create');
   };
 
   const startEdit = () => {
     if (!selectedProvider || detailLoading) return;
     saveGeneration.current += 1;
+    credentialGeneration.current += 1;
     activeViewRef.current = 'edit';
     activeProviderIdRef.current = selectedProvider.id;
     setEditor(editorFromDraft(selectedProvider));
@@ -738,6 +837,12 @@ export function ProjectModelProviderDrafts({
     setSaveError(null);
     setSaveConflict(false);
     setSavedMessage(null);
+    setApiKeyInput('');
+    setShowKey(false);
+    setCredentialBusy(false);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
     setView('edit');
   };
 
@@ -851,6 +956,480 @@ export function ProjectModelProviderDrafts({
     setSaveError(null);
   };
 
+  const buildOperationKey = useCallback((
+    providerId: string,
+    scope: { tenantId: string | null; actorId: string | null; issuer: string | null } | null = confirmedScope,
+  ): ProjectCredentialOperationKey | null => {
+    if (!scope?.issuer || !scope.actorId || !scope.tenantId) return null;
+    return {
+      issuer: scope.issuer,
+      actorId: scope.actorId,
+      tenantId: scope.tenantId,
+      projectId,
+      providerId,
+    };
+  }, [confirmedScope, projectId]);
+
+  const setStoredOperation = useCallback((
+    key: ProjectCredentialOperationKey,
+    operation: ProjectCredentialOperation,
+  ) => {
+    operationStore.set(key, operation);
+    setOperationRevision((revision) => revision + 1);
+  }, [operationStore]);
+
+  const deleteStoredOperation = useCallback((key: ProjectCredentialOperationKey) => {
+    operationStore.delete(key);
+    setOperationRevision((revision) => revision + 1);
+  }, [operationStore]);
+
+  const activeOperationKey = useMemo(() => {
+    if (view !== 'detail' || !selectedProvider) return null;
+    return buildOperationKey(selectedProvider.id);
+  }, [buildOperationKey, selectedProvider, view]);
+
+  const activeCredentialOp = useMemo(() => {
+    if (!activeOperationKey) return null;
+    void operationRevision;
+    return operationStore.get(activeOperationKey);
+  }, [activeOperationKey, operationRevision, operationStore]);
+
+  const handleCredentialPutOutcome = useCallback((
+    opKey: ProjectCredentialOperationKey,
+    operationId: string,
+    expectedProviderRevision: number,
+    response: ModelProviderCredentialResponse,
+    updateUi: boolean,
+  ) => {
+    if (response.status === 'published' ||
+        response.status === 'cancelled' ||
+        response.status === 'disabled') {
+      operationStore.delete(opKey);
+      if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+      if (response.status === 'published' && mountedRef.current)
+        listNeedsReload.current = true;
+      if (!updateUi) return;
+      if (response.status === 'published') {
+        setCredentialMessage('API key saved.');
+      } else {
+        setCredentialMessage(`Key operation ${response.status}.`);
+      }
+      void openProvider(opKey.providerId, {
+        preserveSavedMessage: Boolean(savedMessage),
+        preserveCredentialMessage: true,
+      });
+      return;
+    }
+    if (response.status === 'publication_pending') {
+      operationStore.set(opKey, {
+        operationId,
+        expectedProviderRevision,
+        status: 'publication_pending',
+      });
+      if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+      if (updateUi) setCredentialMessage(null);
+      return;
+    }
+    if (response.status === 'quarantined') {
+      operationStore.set(opKey, {
+        operationId,
+        expectedProviderRevision,
+        status: 'quarantined',
+      });
+      if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+      if (updateUi) setCredentialMessage(null);
+    }
+  }, [openProvider, operationStore, savedMessage]);
+
+  const submitFirstKey = async (event: FormEvent) => {
+    event.preventDefault();
+    const submittedApiKey = apiKeyInput;
+    setApiKeyInput('');
+    setShowKey(false);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
+
+    if (!selectedProvider || selectedProvider.hasCredential || activeCredentialOp) return;
+    if (!submittedApiKey.trim()) {
+      setCredentialError(new Error('Enter an API key.'));
+      return;
+    }
+    const opKey = buildOperationKey(selectedProvider.id);
+    if (!opKey) {
+      setCredentialError(new GatewayError(
+        403,
+        { code: 'forbidden' },
+        'Confirm project access before saving an API key.',
+      ));
+      return;
+    }
+
+    const providerId = selectedProvider.id;
+    const expectedProviderRevision = selectedProvider.revision;
+    const operationId = crypto.randomUUID();
+    const capturedScope = currentScopeRef.current;
+    const generation = ++credentialGeneration.current;
+    let dispatched = false;
+
+    setCredentialBusy(true);
+    try {
+      const response = await apiCallOnce(
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              generation !== credentialGeneration.current ||
+              activeViewRef.current !== 'detail' ||
+              activeProviderIdRef.current !== providerId ||
+              liveTenant !== opKey.tenantId) {
+            return Promise.reject(new StaleRequestError());
+          }
+          dispatched = true;
+          return gatewayClient.setProjectByokProviderCredential(
+            token,
+            projectId,
+            providerId,
+            {
+              operationId,
+              expectedProviderRevision,
+              expectedCredentialRevision: 0,
+              apiKey: submittedApiKey,
+            },
+            liveTenant,
+          );
+        },
+        binding,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedScope(capturedScope)) return;
+      const checked = requireProjectCredentialResponse(response, projectId, providerId, operationId);
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === credentialGeneration.current &&
+        activeViewRef.current === 'detail' &&
+        activeProviderIdRef.current === providerId;
+      handleCredentialPutOutcome(opKey, operationId, expectedProviderRevision, checked, canUpdateUi);
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (!dispatched) {
+        if (isSameScope(capturedScope) && generation === credentialGeneration.current) {
+          if (!handleAccessFailure(reason))
+            setCredentialError(reason);
+        }
+        return;
+      }
+      if (!isSameConfirmedScope(capturedScope)) return;
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === credentialGeneration.current &&
+        activeViewRef.current === 'detail' &&
+        activeProviderIdRef.current === providerId;
+      if (isPreClaimCredentialRejection(reason)) {
+        if (canUpdateUi) {
+          if (reason instanceof GatewayError && reason.status === 409 &&
+              reason.code === 'credential_slot_conflict') {
+            setCredentialError(new Error(
+              'This provider already has an existing or disabled credential slot and cannot accept a first key from this form.',
+            ));
+          } else {
+            setCredentialError(reason);
+          }
+        }
+        return;
+      }
+      if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
+        if (isSameScope(capturedScope) && generation === credentialGeneration.current)
+          handleAccessFailure(reason);
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 503 &&
+          reason.code === 'credential_publication_pending') {
+        setStoredOperation(opKey, {
+          operationId,
+          expectedProviderRevision,
+          status: 'publication_pending',
+        });
+        return;
+      }
+      if (reason instanceof GatewayError && (
+        (reason.status === 409 && reason.code === 'credential_write_quarantined') ||
+        (reason.status === 503 && reason.code === 'credential_write_uncertain')
+      )) {
+        setStoredOperation(opKey, {
+          operationId,
+          expectedProviderRevision,
+          status: 'quarantined',
+        });
+        return;
+      }
+      // 409 model_provider_draft_conflict, network error, timeout, or unexpected 5xx:
+      setStoredOperation(opKey, {
+        operationId,
+        expectedProviderRevision,
+        status: 'uncertain',
+      });
+      if (canUpdateUi)
+        setCredentialError(reason);
+    } finally {
+      if (mountedRef.current && generation === credentialGeneration.current)
+        setCredentialBusy(false);
+    }
+  };
+
+  const checkKeyStatus = async () => {
+    if (!selectedProvider || !activeCredentialOp || !activeOperationKey) return;
+    const opKey = activeOperationKey;
+    const providerId = selectedProvider.id;
+    const { operationId, expectedProviderRevision } = activeCredentialOp;
+    const capturedScope = currentScopeRef.current;
+    const generation = ++credentialGeneration.current;
+
+    setCredentialBusy(true);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
+    try {
+      const status = await apiCallOnce(
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              generation !== credentialGeneration.current ||
+              activeViewRef.current !== 'detail' ||
+              activeProviderIdRef.current !== providerId ||
+              liveTenant !== opKey.tenantId) {
+            return Promise.reject(new StaleRequestError());
+          }
+          return gatewayClient.getProjectByokProviderCredentialOperation(
+            token,
+            projectId,
+            providerId,
+            operationId,
+            liveTenant,
+          );
+        },
+        binding,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedScope(capturedScope)) return;
+      const checked = requireProjectCredentialOperationStatus(
+        status,
+        projectId,
+        providerId,
+        operationId,
+      );
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === credentialGeneration.current &&
+        activeViewRef.current === 'detail' &&
+        activeProviderIdRef.current === providerId;
+      if (checked.status === 'published' ||
+          checked.status === 'cancelled' ||
+          checked.status === 'disabled') {
+        operationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (checked.status === 'published' && mountedRef.current)
+          listNeedsReload.current = true;
+        if (!canUpdateUi) return;
+        if (checked.status === 'published') {
+          setCredentialMessage('API key saved.');
+        } else {
+          setCredentialMessage(`Key operation ${checked.status}.`);
+        }
+        void openProvider(providerId, {
+          preserveSavedMessage: Boolean(savedMessage),
+          preserveCredentialMessage: true,
+        });
+        return;
+      }
+      operationStore.set(opKey, {
+        operationId,
+        expectedProviderRevision,
+        status: checked.status,
+      });
+      if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (!isSameConfirmedScope(capturedScope)) return;
+      if (reason instanceof GatewayError &&
+          reason.status === 404 &&
+          reason.code === 'credential_operation_not_found') {
+        // 404 credential_operation_not_found is always nonterminal because claim creation can lag.
+        operationStore.set(opKey, {
+          operationId,
+          expectedProviderRevision,
+          status: 'pending',
+        });
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        return;
+      }
+      if (isSameScope(capturedScope) && generation === credentialGeneration.current) {
+        if (!handleAccessFailure(reason))
+          setCredentialError(reason);
+      }
+    } finally {
+      if (mountedRef.current && generation === credentialGeneration.current)
+        setCredentialBusy(false);
+    }
+  };
+
+  const retryPublication = async () => {
+    if (!selectedProvider || !activeCredentialOp || !activeOperationKey ||
+        activeCredentialOp.status !== 'publication_pending' ||
+        activeCredentialOp.stalePublicationConflict)
+      return;
+    const opKey = activeOperationKey;
+    const providerId = selectedProvider.id;
+    const { operationId, expectedProviderRevision } = activeCredentialOp;
+    const capturedScope = currentScopeRef.current;
+    const generation = ++credentialGeneration.current;
+
+    setCredentialBusy(true);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    setConfirmingOperationReset(false);
+    try {
+      const response = await apiCallOnce(
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              generation !== credentialGeneration.current ||
+              activeViewRef.current !== 'detail' ||
+              activeProviderIdRef.current !== providerId ||
+              liveTenant !== opKey.tenantId) {
+            return Promise.reject(new StaleRequestError());
+          }
+          return gatewayClient.setProjectByokProviderCredential(
+            token,
+            projectId,
+            providerId,
+            {
+              operationId,
+              expectedProviderRevision,
+              expectedCredentialRevision: 0,
+              recheckExistingVersion: true,
+            },
+            liveTenant,
+          );
+        },
+        binding,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedScope(capturedScope)) return;
+      const checked = requireProjectCredentialResponse(response, projectId, providerId, operationId);
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === credentialGeneration.current &&
+        activeViewRef.current === 'detail' &&
+        activeProviderIdRef.current === providerId;
+      handleCredentialPutOutcome(opKey, operationId, expectedProviderRevision, checked, canUpdateUi);
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (!isSameConfirmedScope(capturedScope)) return;
+      if (reason instanceof GatewayError && reason.status === 409 &&
+          reason.code === 'model_provider_draft_conflict') {
+        operationStore.set(opKey, {
+          operationId,
+          expectedProviderRevision,
+          status: 'publication_pending',
+          stalePublicationConflict: true,
+        });
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 503 &&
+          reason.code === 'credential_publication_pending') {
+        operationStore.set(opKey, {
+          operationId,
+          expectedProviderRevision,
+          status: 'publication_pending',
+        });
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        return;
+      }
+      if (reason instanceof GatewayError && (
+        (reason.status === 409 && reason.code === 'credential_write_quarantined') ||
+        (reason.status === 503 && reason.code === 'credential_write_uncertain')
+      )) {
+        operationStore.set(opKey, {
+          operationId,
+          expectedProviderRevision,
+          status: 'quarantined',
+        });
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        return;
+      }
+      if (isSameScope(capturedScope) && generation === credentialGeneration.current) {
+        if (!handleAccessFailure(reason))
+          setCredentialError(reason);
+      }
+    } finally {
+      if (mountedRef.current && generation === credentialGeneration.current)
+        setCredentialBusy(false);
+    }
+  };
+
+  const confirmResetPendingOperation = async () => {
+    if (!selectedProvider || !activeCredentialOp || !activeOperationKey ||
+        (activeCredentialOp.status !== 'uncertain' && activeCredentialOp.status !== 'pending'))
+      return;
+    const opKey = activeOperationKey;
+    const providerId = selectedProvider.id;
+    const capturedScope = currentScopeRef.current;
+    const generation = ++credentialGeneration.current;
+
+    setCredentialBusy(true);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    try {
+      const latest = await apiCall(
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              generation !== credentialGeneration.current ||
+              activeViewRef.current !== 'detail' ||
+              activeProviderIdRef.current !== providerId ||
+              (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId)) {
+            return Promise.reject(new StaleRequestError());
+          }
+          return gatewayClient.getProjectByokProviderDraft(
+            token,
+            projectId,
+            providerId,
+            capturedScope.tenantId,
+          );
+        },
+        binding,
+      );
+      if (!isSameScope(capturedScope) ||
+          generation !== credentialGeneration.current ||
+          activeViewRef.current !== 'detail' ||
+          activeProviderIdRef.current !== providerId)
+        return;
+      const checked = requireProjectDraft(latest, projectId, providerId);
+      setSelectedProvider(checked);
+      setProviders((current) => current.map((item) => item.id === providerId ? checked : item));
+      deleteStoredOperation(opKey);
+      setConfirmingOperationReset(false);
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (isSameScope(capturedScope) && generation === credentialGeneration.current) {
+        if (!handleAccessFailure(reason))
+          setCredentialError(reason);
+      }
+    } finally {
+      if (mountedRef.current && generation === credentialGeneration.current)
+        setCredentialBusy(false);
+    }
+  };
+
   const accessFailure = accessState === 'error' && (
     <>
       <ErrorNotice>{errorMessage(accessError)}</ErrorNotice>
@@ -863,7 +1442,7 @@ export function ProjectModelProviderDrafts({
   return (
     <PageSection
       title="BYOK provider drafts"
-      description="Manage provider metadata for this project. This form does not accept or store API keys."
+      description="Manage provider metadata and add an initial API key for this project."
     >
       {accessState === 'checking' || (accessState === 'ready' && !projectContextReady)
         ? <Loading label="Checking project access…" />
@@ -905,6 +1484,9 @@ export function ProjectModelProviderDrafts({
                         {provider.name}
                       </Button>
                       <span>{provider.type} · {provider.state}</span>
+                      <Badge appearance="tint" color={provider.hasCredential ? 'success' : 'subtle'}>
+                        {provider.hasCredential ? 'Key saved' : 'No key saved'}
+                      </Badge>
                     </li>
                   ))}
                 </ul>
@@ -946,22 +1528,165 @@ export function ProjectModelProviderDrafts({
                 </>
               )}
               {selectedProvider && (
-                <dl className="v1-detail-list">
-                  <div><dt>Provider ID</dt><dd><code>{selectedProvider.id}</code></dd></div>
-                  <div><dt>Name</dt><dd>{selectedProvider.name}</dd></div>
-                  <div><dt>Type</dt><dd>{selectedProvider.type}</dd></div>
-                  <div><dt>Base URL</dt><dd>{selectedProvider.base_url}</dd></div>
-                  <div><dt>Model</dt><dd>{selectedProvider.model}</dd></div>
-                  <div><dt>Wire API</dt><dd>{selectedProvider.wire_api ?? 'Not set'}</dd></div>
-                  <div><dt>Azure API version</dt><dd>{selectedProvider.azure_api_version ?? 'Not set'}</dd></div>
-                  <div><dt>Reasoning efforts</dt><dd>{selectedProvider.reasoning_efforts.join(', ') || 'Not set'}</dd></div>
-                  <div><dt>Prompt capacity</dt><dd>{selectedProvider.prompt_capacity_tokens ?? 'Not set'}</dd></div>
-                  <div><dt>State</dt><dd>{selectedProvider.state}</dd></div>
-                  <div><dt>Revision</dt><dd>{selectedProvider.revision}</dd></div>
-                  <div><dt>Host request status</dt><dd>{hostRequestStatusLabel(selectedProvider.egress)}</dd></div>
-                  <div><dt>Host request host</dt><dd>{hostRequestHostText(selectedProvider.egress)}</dd></div>
-                  <div><dt>Host request port</dt><dd>{hostRequestPortText(selectedProvider.egress)}</dd></div>
-                </dl>
+                <>
+                  <dl className="v1-detail-list">
+                    <div><dt>Provider ID</dt><dd><code>{selectedProvider.id}</code></dd></div>
+                    <div><dt>Name</dt><dd>{selectedProvider.name}</dd></div>
+                    <div><dt>Type</dt><dd>{selectedProvider.type}</dd></div>
+                    <div><dt>Base URL</dt><dd>{selectedProvider.base_url}</dd></div>
+                    <div><dt>Model</dt><dd>{selectedProvider.model}</dd></div>
+                    <div><dt>Wire API</dt><dd>{selectedProvider.wire_api ?? 'Not set'}</dd></div>
+                    <div><dt>Azure API version</dt><dd>{selectedProvider.azure_api_version ?? 'Not set'}</dd></div>
+                    <div><dt>Reasoning efforts</dt><dd>{selectedProvider.reasoning_efforts.join(', ') || 'Not set'}</dd></div>
+                    <div><dt>Prompt capacity</dt><dd>{selectedProvider.prompt_capacity_tokens ?? 'Not set'}</dd></div>
+                    <div><dt>State</dt><dd>{selectedProvider.state}</dd></div>
+                    <div><dt>Revision</dt><dd>{selectedProvider.revision}</dd></div>
+                    <div>
+                      <dt>Credential</dt>
+                      <dd>
+                        <Badge appearance="tint" color={selectedProvider.hasCredential ? 'success' : 'subtle'}>
+                          {selectedProvider.hasCredential ? 'Key saved' : 'No key saved'}
+                        </Badge>
+                      </dd>
+                    </div>
+                    <div><dt>Host request status</dt><dd>{hostRequestStatusLabel(selectedProvider.egress)}</dd></div>
+                    <div><dt>Host request host</dt><dd>{hostRequestHostText(selectedProvider.egress)}</dd></div>
+                    <div><dt>Host request port</dt><dd>{hostRequestPortText(selectedProvider.egress)}</dd></div>
+                  </dl>
+                  {credentialMessage && <Text role="status">{credentialMessage}</Text>}
+                  {credentialError != null && <ErrorNotice>{errorMessage(credentialError)}</ErrorNotice>}
+                  {!selectedProvider.hasCredential && !activeCredentialOp && (
+                    <form className="v1-form" onSubmit={(event) => void submitFirstKey(event)}>
+                      <Field label="Add API key" required>
+                        <div className="v1-actions">
+                          <Input
+                            type={showKey ? 'text' : 'password'}
+                            autoComplete="new-password"
+                            value={apiKeyInput}
+                            onChange={(_, data) => {
+                              setApiKeyInput(data.value);
+                              setCredentialError(null);
+                              setCredentialMessage(null);
+                            }}
+                            disabled={credentialBusy}
+                          />
+                          <Button
+                            type="button"
+                            onClick={() => setShowKey((current) => !current)}
+                            disabled={credentialBusy}
+                          >
+                            {showKey ? 'Hide key' : 'Show key'}
+                          </Button>
+                        </div>
+                      </Field>
+                      <div className="v1-actions">
+                        <Button
+                          appearance="primary"
+                          type="submit"
+                          disabled={credentialBusy || !apiKeyInput.trim()}
+                        >
+                          {credentialBusy ? 'Saving key…' : 'Save key'}
+                        </Button>
+                      </div>
+                    </form>
+                  )}
+                  {!selectedProvider.hasCredential && activeCredentialOp && (
+                    <div className="v1-stack">
+                      {activeCredentialOp.status === 'uncertain' && (
+                        <Text role="status">
+                          The key write did not finish. Check key status before trying again. Operation ID:{' '}
+                          <code>{activeCredentialOp.operationId}</code>
+                        </Text>
+                      )}
+                      {activeCredentialOp.status === 'pending' && (
+                        <Text role="status">
+                          The key operation is still pending. Check key status again or share this operation ID with an operator:{' '}
+                          <code>{activeCredentialOp.operationId}</code>
+                        </Text>
+                      )}
+                      {activeCredentialOp.status === 'publication_pending' && !activeCredentialOp.stalePublicationConflict && (
+                        <Text role="status">
+                          The key was stored, but provider publication is pending. Retry publication without re-entering the key. Operation ID:{' '}
+                          <code>{activeCredentialOp.operationId}</code>
+                        </Text>
+                      )}
+                      {activeCredentialOp.status === 'publication_pending' && activeCredentialOp.stalePublicationConflict && (
+                        <Text role="status">
+                          The provider changed while publication was pending. Share this operation ID with an operator for recovery:{' '}
+                          <code>{activeCredentialOp.operationId}</code>
+                        </Text>
+                      )}
+                      {activeCredentialOp.status === 'disable_pending' && (
+                        <Text role="status">
+                          Credential disable is pending. Check key status until it finishes. Operation ID:{' '}
+                          <code>{activeCredentialOp.operationId}</code>
+                        </Text>
+                      )}
+                      {activeCredentialOp.status === 'quarantined' && (
+                        <Text role="status">
+                          The key write was quarantined. Share this operation ID with an operator for recovery:{' '}
+                          <code>{activeCredentialOp.operationId}</code>
+                        </Text>
+                      )}
+                      <div className="v1-actions">
+                        {activeCredentialOp.status === 'publication_pending' && !activeCredentialOp.stalePublicationConflict && (
+                          <Button
+                            appearance="primary"
+                            type="button"
+                            onClick={() => void retryPublication()}
+                            disabled={credentialBusy}
+                          >
+                            Retry publication
+                          </Button>
+                        )}
+                        {(activeCredentialOp.status === 'uncertain' ||
+                          activeCredentialOp.status === 'pending' ||
+                          (activeCredentialOp.status === 'publication_pending' && !activeCredentialOp.stalePublicationConflict) ||
+                          activeCredentialOp.status === 'disable_pending') && (
+                          <Button
+                            type="button"
+                            onClick={() => void checkKeyStatus()}
+                            disabled={credentialBusy}
+                          >
+                            Check key status
+                          </Button>
+                        )}
+                        {(activeCredentialOp.status === 'uncertain' || activeCredentialOp.status === 'pending') &&
+                          !confirmingOperationReset && (
+                          <Button
+                            type="button"
+                            onClick={() => setConfirmingOperationReset(true)}
+                            disabled={credentialBusy}
+                          >
+                            Reset pending check
+                          </Button>
+                        )}
+                      </div>
+                      {confirmingOperationReset && activeOperationKey &&
+                        (activeCredentialOp.status === 'uncertain' || activeCredentialOp.status === 'pending') && (
+                        <div className="v1-actions">
+                          <Text role="status">
+                            Do not reset unless an operator confirmed this attempt is closed. Resetting reloads the provider before allowing a new key.
+                          </Text>
+                          <Button
+                            type="button"
+                            onClick={() => void confirmResetPendingOperation()}
+                            disabled={credentialBusy}
+                          >
+                            Confirm reset
+                          </Button>
+                          <Button
+                            type="button"
+                            onClick={() => setConfirmingOperationReset(false)}
+                            disabled={credentialBusy}
+                          >
+                            Cancel reset
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}

@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
+import { createProjectCredentialOperationStore } from './projectCredentialOperations';
 
 const mocks = vi.hoisted(() => ({
   apiCall: vi.fn(),
+  apiCallOnce: vi.fn(),
   authorize: vi.fn(),
   ensureSession: vi.fn(),
   resolveAuthorizationContext: vi.fn(),
@@ -11,14 +13,22 @@ const mocks = vi.hoisted(() => ({
   read: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  setCredential: vi.fn(),
+  getCredentialOp: vi.fn(),
   auth: {
     apiCall: vi.fn(),
+    apiCallOnce: vi.fn(),
+    projectCredentialOperations: undefined as ReturnType<typeof createProjectCredentialOperationStore> | undefined,
     authorize: vi.fn(),
     ensureSession: vi.fn(),
     resolveAuthorizationContext: vi.fn(),
     session: { binding: { projectId: 'project-1' } },
     authSessionGeneration: 0,
-    authorizationContext: { tenantId: 'tenant-1' },
+    authorizationContext: { tenantId: 'tenant-1', actorId: 'actor-1', issuer: 'broker' } as {
+      tenantId: string;
+      actorId?: string;
+      issuer?: string;
+    },
     authorizationContextLoading: false,
     busy: false,
     configurationError: null,
@@ -33,6 +43,8 @@ vi.mock('./api', async (importOriginal) => ({
     getProjectByokProviderDraft: mocks.read,
     createProjectByokProviderDraft: mocks.create,
     updateProjectByokProviderDraft: mocks.update,
+    setProjectByokProviderCredential: mocks.setCredential,
+    getProjectByokProviderCredentialOperation: mocks.getCredentialOp,
   },
 }));
 
@@ -64,26 +76,60 @@ function provider(overrides: Record<string, unknown> = {}) {
 describe('Project BYOK provider drafts', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    const operationStore = createProjectCredentialOperationStore();
     mocks.apiCall.mockImplementation(
       (operation: (token: string, tenant: string | null) => Promise<unknown>) =>
         operation('project-access-token', mocks.auth.authorizationContext?.tenantId ?? null),
     );
+    mocks.apiCallOnce.mockImplementation(
+      (operation: (token: string, tenant: string) => Promise<unknown>) =>
+        operation('project-access-token', mocks.auth.authorizationContext?.tenantId ?? 'tenant-1'),
+    );
     mocks.authorize.mockResolvedValue(undefined);
     mocks.ensureSession.mockResolvedValue(true);
-    mocks.resolveAuthorizationContext.mockResolvedValue({ tenantId: 'tenant-1' });
+    mocks.resolveAuthorizationContext.mockResolvedValue({
+      tenantId: 'tenant-1',
+      actorId: 'actor-1',
+      issuer: 'broker',
+    });
     mocks.list.mockResolvedValue({ providers: [], nextAfterProviderId: null });
     mocks.read.mockResolvedValue(provider());
     mocks.create.mockResolvedValue(provider({ id: 'created-provider-id', revision: 1 }));
     mocks.update.mockResolvedValue(provider({ name: 'Renamed model', revision: 2 }));
+    mocks.setCredential.mockResolvedValue({
+      operationId: 'op-1',
+      status: 'published',
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      providerRevision: 2,
+      credentialRevision: 1,
+      credentialVersion: 'v1',
+      configurationHash: 'b'.repeat(64),
+      providerState: 'Draft',
+    });
+    mocks.getCredentialOp.mockResolvedValue({
+      operationId: 'op-1',
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'published',
+      providerRevision: 2,
+      hasCredential: true,
+    });
     Object.assign(mocks.auth, {
       apiCall: mocks.apiCall,
+      apiCallOnce: mocks.apiCallOnce,
+      projectCredentialOperations: operationStore,
       authorize: mocks.authorize,
       ensureSession: mocks.ensureSession,
       resolveAuthorizationContext: mocks.resolveAuthorizationContext,
       session: { binding: { projectId: 'project-1' } },
       authSessionGeneration: 0,
-      authorizationContext: { tenantId: 'tenant-1' },
+      authSessionEpoch: 0,
+      authorizationContext: { tenantId: 'tenant-1', actorId: 'actor-1', issuer: 'broker' },
       authorizationContextLoading: false,
+      getAuthorizationContextError: undefined,
     });
   });
 
@@ -778,5 +824,559 @@ describe('Project BYOK provider drafts', () => {
     render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
     expect(await screen.findByRole('button', { name: 'Sign in for project access' })).toBeTruthy();
     expect(screen.getByText('Token expired.')).toBeTruthy();
+  });
+
+  it('shows hasCredential badge in list and detail, hides Add API key when true, and submits first key with synchronous clearing', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [
+        provider({ id: 'p-no-key', name: 'No Key Provider', hasCredential: false }),
+        provider({ id: 'p-with-key', name: 'With Key Provider', hasCredential: true }),
+      ],
+      nextAfterProviderId: null,
+    });
+    let resolvePut!: (value: unknown) => void;
+    mocks.setCredential.mockImplementationOnce(() => new Promise((resolve) => { resolvePut = resolve; }));
+    mocks.read
+      .mockResolvedValueOnce(provider({ id: 'p-with-key', name: 'With Key Provider', hasCredential: true }))
+      .mockResolvedValueOnce(provider({ id: 'p-no-key', name: 'No Key Provider', hasCredential: false, revision: 1 }))
+      .mockResolvedValueOnce(provider({ id: 'p-no-key', name: 'No Key Provider', hasCredential: true, revision: 2 }));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    expect(await screen.findByText('No key saved')).toBeTruthy();
+    expect(screen.getByText('Key saved')).toBeTruthy();
+
+    // Detail with hasCredential: true hides Add API key form.
+    fireEvent.click(screen.getByRole('button', { name: 'With Key Provider' }));
+    expect(await screen.findByText('p-with-key')).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+
+    // Detail with hasCredential: false shows Add API key form.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'No Key Provider' }));
+    const keyInput = await screen.findByLabelText(/Add API key/i) as HTMLInputElement;
+    expect(keyInput.type).toBe('password');
+    expect(keyInput.autocomplete).toBe('new-password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show key' }));
+    expect(keyInput.type).toBe('text');
+    fireEvent.change(keyInput, { target: { value: 'sk-first-secret-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    // Synchronously cleared before PUT resolves.
+    expect(keyInput.value).toBe('');
+    expect(keyInput.type).toBe('password');
+    expect(mocks.apiCallOnce).toHaveBeenCalledTimes(1);
+    const [, , , putRequest] = mocks.setCredential.mock.calls[0];
+    expect(putRequest).toMatchObject({
+      expectedProviderRevision: 1,
+      expectedCredentialRevision: 0,
+      apiKey: 'sk-first-secret-key',
+    });
+
+    resolvePut({
+      operationId: putRequest.operationId,
+      status: 'published',
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'p-no-key',
+      providerRevision: 2,
+      credentialRevision: 1,
+      credentialVersion: 'v1',
+      configurationHash: 'b'.repeat(64),
+      providerState: 'Draft',
+    });
+
+    expect(await screen.findByText('API key saved.')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByLabelText(/Add API key/i)).toBeNull());
+  });
+
+  it('clears secret input on navigation and 401/403 access loss, and explains 409 credential_slot_conflict', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [provider({ hasCredential: false })],
+      nextAfterProviderId: null,
+    });
+    mocks.read.mockResolvedValue(provider({ hasCredential: false }));
+    mocks.setCredential.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'credential_slot_conflict' }, 'Slot already exists.'),
+    );
+
+    const rendered = render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    const keyInput = await screen.findByLabelText(/Add API key/i) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Show key' }));
+    fireEvent.change(keyInput, { target: { value: 'sk-unsent' } });
+
+    // Navigating away clears secret and showKey.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    const reloadedInput = await screen.findByLabelText(/Add API key/i) as HTMLInputElement;
+    expect(reloadedInput.value).toBe('');
+    expect(reloadedInput.type).toBe('password');
+
+    // 409 credential_slot_conflict explains slot conflict and leaves no pending op.
+    fireEvent.change(reloadedInput, { target: { value: 'sk-conflict' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    expect(await screen.findByText(/existing or disabled credential slot/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
+
+    // 401 clears keyInput and showKey.
+    fireEvent.click(screen.getByRole('button', { name: 'Show key' }));
+    fireEvent.change(screen.getByLabelText(/Add API key/i), { target: { value: 'sk-before-401' } });
+    mocks.setCredential.mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'Expired'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    expect(await screen.findByRole('button', { name: 'Sign in for project access' })).toBeTruthy();
+
+    // Re-render ready: input is empty.
+    mocks.read.mockResolvedValueOnce(provider({ hasCredential: false }));
+    mocks.ensureSession.mockResolvedValueOnce(true);
+    (mocks.auth as { authSessionEpoch?: number }).authSessionEpoch = 1;
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    expect((await screen.findByLabelText(/Add API key/i) as HTMLInputElement).value).toBe('');
+  });
+
+  it('handles 503 credential_publication_pending -> Retry publication without apiKey and stops retry on 409 conflict', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [provider({ hasCredential: false, revision: 1 })],
+      nextAfterProviderId: null,
+    });
+    mocks.read.mockResolvedValue(provider({ hasCredential: false, revision: 1 }));
+    mocks.setCredential
+      .mockRejectedValueOnce(new GatewayError(503, { code: 'credential_publication_pending' }, 'Pending pub'))
+      .mockRejectedValueOnce(new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'Draft changed'));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-pub-pending' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    expect(await screen.findByRole('button', { name: 'Retry publication' })).toBeTruthy();
+    const originalOpId = mocks.setCredential.mock.calls[0][3].operationId;
+    expect(screen.getByText(originalOpId)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry publication' }));
+    await waitFor(() => expect(mocks.setCredential).toHaveBeenCalledTimes(2));
+    const retryPayload = mocks.setCredential.mock.calls[1][3];
+    expect(retryPayload).toEqual({
+      operationId: originalOpId,
+      expectedProviderRevision: 1,
+      expectedCredentialRevision: 0,
+      recheckExistingVersion: true,
+    });
+    expect('apiKey' in retryPayload).toBe(false);
+
+    // 409 on retry stops offering Retry publication and keeps operationId for operator recovery.
+    expect(await screen.findByText(/provider changed while publication was pending/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry publication' })).toBeNull();
+    expect(screen.getByText(originalOpId)).toBeTruthy();
+  });
+
+  it('recovers from PUT 409/network error via Check key status across 404, pending, publication_pending, disable_pending, published, and quarantined', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [provider({ hasCredential: false, revision: 1 })],
+      nextAfterProviderId: null,
+    });
+    mocks.read
+      .mockResolvedValueOnce(provider({ hasCredential: false, revision: 1 }))
+      .mockResolvedValueOnce(provider({ hasCredential: true, revision: 2 }));
+    mocks.setCredential.mockRejectedValueOnce(new Error('Network timeout'));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-timeout' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    const checkBtn = await screen.findByRole('button', { name: 'Check key status' });
+    const opId = mocks.setCredential.mock.calls[0][3].operationId;
+
+    // 404 credential_operation_not_found is nonterminal.
+    mocks.getCredentialOp.mockRejectedValueOnce(
+      new GatewayError(404, { code: 'credential_operation_not_found' }, 'Not found yet'),
+    );
+    fireEvent.click(checkBtn);
+    expect(await screen.findByText(/still pending/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Check key status' })).toBeTruthy();
+
+    // 200 pending is nonterminal.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'pending',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    expect(await screen.findByText(/still pending/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Check key status' })).toBeTruthy();
+
+    // 200 disable_pending is nonterminal and blocks new key entry.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'disable_pending',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    expect(await screen.findByText(/disable is pending/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+
+    // 200 publication_pending offers Retry publication.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'publication_pending',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    expect(await screen.findByRole('button', { name: 'Retry publication' })).toBeTruthy();
+
+    // 200 published clears operation and reloads detail.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'published',
+      providerRevision: 2,
+      hasCredential: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    expect(await screen.findByText('API key saved.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
+  });
+
+  it('blocks new key entry on 200 quarantined and isolates operations across project switches and token renewal', async () => {
+    const p1 = provider({ id: 'provider-1', name: 'Project 1 provider', hasCredential: false, revision: 1 });
+    const p2 = provider({ id: 'provider-1', name: 'Project 2 provider', projectId: 'project-2', hasCredential: false, revision: 1 });
+    mocks.list.mockImplementation(async (_t, projectId) => ({
+      providers: [projectId === 'project-1' ? p1 : p2],
+      nextAfterProviderId: null,
+    }));
+    mocks.read.mockImplementation(async (_t, projectId) => (projectId === 'project-1' ? p1 : p2));
+    mocks.setCredential.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'Conflict'),
+    );
+
+    const rendered = render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Project 1 provider' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-q' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    const checkBtn = await screen.findByRole('button', { name: 'Check key status' });
+    const opId = mocks.setCredential.mock.calls[0][3].operationId;
+
+    // 200 quarantined shows operationId and blocks new key entry.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-1',
+      status: 'quarantined',
+    });
+    fireEvent.click(checkBtn);
+    expect(await screen.findByText(/write was quarantined/i)).toBeTruthy();
+    expect(screen.getByText(opId)).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+
+    // Switching to project-2 hides project-1's quarantined operation and allows project-2 key entry.
+    mocks.auth.session = { binding: { projectId: 'project-2' } };
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-2" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Project 2 provider' }));
+    expect(await screen.findByLabelText(/Add API key/i)).toBeTruthy();
+    expect(screen.queryByText(opId)).toBeNull();
+
+    // Switching back to project-1 restores project-1's quarantined operation.
+    mocks.auth.session = { binding: { projectId: 'project-1' } };
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Project 1 provider' }));
+    expect(await screen.findByText(opId)).toBeTruthy();
+
+    // Temporary null authorizationContext during token renewal pauses controls until reconfirmed.
+    mocks.auth.authorizationContext = null as unknown as { tenantId: string; actorId?: string; issuer?: string };
+    mocks.auth.authSessionGeneration = 1;
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector={undefined} />);
+    expect(await screen.findByText('Checking project access…')).toBeTruthy();
+    expect(screen.queryByText(opId)).toBeNull();
+
+    mocks.auth.authorizationContext = { tenantId: 'tenant-1', actorId: 'actor-1', issuer: 'broker' };
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    expect(await screen.findByText(opId)).toBeTruthy();
+  });
+
+  it('preserves operationId and blocks new key, check, and retry on PUT 409 credential_write_quarantined and 503 credential_write_uncertain', async () => {
+    const p1 = provider({ id: 'p-quarantined', name: 'Quarantined provider', hasCredential: false, revision: 1 });
+    const p2 = provider({ id: 'p-uncertain', name: 'Uncertain provider', hasCredential: false, revision: 1 });
+    mocks.list.mockResolvedValue({ providers: [p1, p2], nextAfterProviderId: null });
+    mocks.read.mockImplementation(async (_t, _p, id) => (id === 'p-quarantined' ? p1 : p2));
+    mocks.setCredential
+      .mockRejectedValueOnce(new GatewayError(409, { code: 'credential_write_quarantined' }, 'Quarantined'))
+      .mockRejectedValueOnce(new GatewayError(503, { code: 'credential_write_uncertain' }, 'Write uncertain'));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+
+    // 409 credential_write_quarantined
+    fireEvent.click(await screen.findByRole('button', { name: 'Quarantined provider' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-q1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    expect(await screen.findByText(/write was quarantined/i)).toBeTruthy();
+    const opQ = mocks.setCredential.mock.calls[0][3].operationId;
+    expect(screen.getByText(opQ)).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry publication' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset pending check' })).toBeNull();
+
+    // 503 credential_write_uncertain
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Uncertain provider' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-u1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    expect(await screen.findByText(/write was quarantined/i)).toBeTruthy();
+    const opU = mocks.setCredential.mock.calls[1][3].operationId;
+    expect(screen.getByText(opU)).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry publication' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset pending check' })).toBeNull();
+  });
+
+  it('clears operation and refreshes detail on GET terminal cancelled and disabled', async () => {
+    const p1 = provider({ id: 'p-cancel', name: 'Cancel provider', hasCredential: false, revision: 1 });
+    const p2 = provider({ id: 'p-disable', name: 'Disable provider', hasCredential: false, revision: 1 });
+    mocks.list.mockResolvedValue({ providers: [p1, p2], nextAfterProviderId: null });
+    mocks.read
+      .mockResolvedValueOnce(p1)
+      .mockResolvedValueOnce(provider({ ...p1, revision: 2 }))
+      .mockResolvedValueOnce(p2)
+      .mockResolvedValueOnce(provider({ ...p2, revision: 2 }));
+    mocks.setCredential
+      .mockRejectedValueOnce(new Error('Timeout 1'))
+      .mockRejectedValueOnce(new Error('Timeout 2'));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+
+    // Terminal cancelled
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel provider' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-c' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    await screen.findByRole('button', { name: 'Check key status' });
+    const opCancel = mocks.setCredential.mock.calls[0][3].operationId;
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opCancel,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'p-cancel',
+      status: 'cancelled',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    expect(await screen.findByText('Key operation cancelled.')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('2')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
+
+    // Terminal disabled
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable provider' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-d' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    await screen.findByRole('button', { name: 'Check key status' });
+    const opDisable = mocks.setCredential.mock.calls[1][3].operationId;
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opDisable,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'p-disable',
+      status: 'disabled',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    expect(await screen.findByText('Key operation disabled.')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('2')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
+  });
+
+  it('requires operator confirmation to reset pending check, reloads detail before showing Add API key, and blocks reset on publication_pending/disable_pending/quarantined', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [provider({ hasCredential: false, revision: 1 })],
+      nextAfterProviderId: null,
+    });
+    mocks.read
+      .mockResolvedValueOnce(provider({ hasCredential: false, revision: 1 }))
+      .mockResolvedValueOnce(provider({ hasCredential: true, revision: 2 }));
+    mocks.setCredential.mockRejectedValueOnce(new Error('Network blip'));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-reset' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    const resetBtn = await screen.findByRole('button', { name: 'Reset pending check' });
+    const opId = mocks.setCredential.mock.calls[0][3].operationId;
+
+    // Cancel reset preserves operation.
+    fireEvent.click(resetBtn);
+    expect(screen.getByText(/Do not reset unless an operator confirmed this attempt is closed/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel reset' }));
+    expect(screen.getByText(opId)).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+
+    // publication_pending and disable_pending do not offer Reset pending check.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'publication_pending',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    await screen.findByRole('button', { name: 'Retry publication' });
+    expect(screen.queryByRole('button', { name: 'Reset pending check' })).toBeNull();
+
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'disable_pending',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    await screen.findByText(/disable is pending/i);
+    expect(screen.queryByRole('button', { name: 'Reset pending check' })).toBeNull();
+
+    // Move back to pending, confirm reset -> reloads detail; if already published, Add API key stays hidden.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: opId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'pending',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset pending check' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm reset' }));
+
+    expect(await screen.findByText('Key saved')).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+    expect(screen.queryByText(opId)).toBeNull();
+  });
+
+  it('persists delayed PUT 200 publication_pending and quarantined across A -> B -> A without repeating write or exposing secret', async () => {
+    const pA = provider({ id: 'provider-a', name: 'Provider A', hasCredential: false, revision: 1 });
+    const pB = provider({ id: 'provider-b', name: 'Provider B', hasCredential: false, revision: 1 });
+    const pQ = provider({ id: 'provider-q', name: 'Provider Q', hasCredential: false, revision: 1 });
+    mocks.list.mockResolvedValue({ providers: [pA, pB, pQ], nextAfterProviderId: null });
+    mocks.read.mockImplementation(async (_t, _p, id) => (id === 'provider-a' ? pA : id === 'provider-q' ? pQ : pB));
+
+    let resolvePubPending!: (value: unknown) => void;
+    let resolveQuarantined!: (value: unknown) => void;
+    mocks.setCredential
+      .mockImplementationOnce(() => new Promise((resolve) => { resolvePubPending = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveQuarantined = resolve; }));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+
+    // Submit on A, then navigate A -> B before PUT resolves with 200 publication_pending.
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider A' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-delayed-a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    const opA = mocks.setCredential.mock.calls[0][3].operationId;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider B' }));
+
+    resolvePubPending({
+      operationId: opA,
+      status: 'publication_pending',
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-a',
+      providerRevision: 1,
+      credentialRevision: 1,
+      credentialVersion: 'v1',
+      configurationHash: 'b'.repeat(64),
+      providerState: 'Draft',
+    });
+
+    // Return B -> A: Retry publication and opA are shown; secret is not exposed; write was not repeated.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider A' }));
+    expect(await screen.findByRole('button', { name: 'Retry publication' })).toBeTruthy();
+    expect(screen.getByText(opA)).toBeTruthy();
+    expect(screen.queryByText(/sk-delayed-a/)).toBeNull();
+    expect(mocks.setCredential).toHaveBeenCalledTimes(1);
+
+    // Submit on Q, then navigate Q -> B before PUT resolves with 200 quarantined.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider Q' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-delayed-q' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    const opQ = mocks.setCredential.mock.calls[1][3].operationId;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider B' }));
+
+    resolveQuarantined({
+      operationId: opQ,
+      status: 'quarantined',
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-q',
+      providerRevision: 1,
+      credentialRevision: null,
+      credentialVersion: null,
+      configurationHash: null,
+      providerState: 'Draft',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider Q' }));
+    expect(await screen.findByText(/write was quarantined/i)).toBeTruthy();
+    expect(screen.getByText(opQ)).toBeTruthy();
+    expect(screen.queryByLabelText(/Add API key/i)).toBeNull();
+    expect(mocks.setCredential).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains operationId across A -> B -> A, unmount/remount, and 401 + same-identity reauth', async () => {
+    const pA = provider({ id: 'provider-a', name: 'Provider A', hasCredential: false, revision: 1 });
+    const pB = provider({ id: 'provider-b', name: 'Provider B', hasCredential: false, revision: 1 });
+    mocks.list.mockResolvedValue({ providers: [pA, pB], nextAfterProviderId: null });
+    mocks.read.mockImplementation(async (_t, _p, id) => (id === 'provider-a' ? pA : pB));
+    mocks.setCredential.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'Conflict'),
+    );
+
+    const rendered = render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider A' }));
+    fireEvent.change(await screen.findByLabelText(/Add API key/i), { target: { value: 'sk-a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    expect(await screen.findByRole('button', { name: 'Check key status' })).toBeTruthy();
+    const opId = mocks.setCredential.mock.calls[0][3].operationId;
+
+    // A -> B -> A retains operationId for A while B shows Add API key.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider B' }));
+    expect(await screen.findByLabelText(/Add API key/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider A' }));
+    expect(await screen.findByText(opId)).toBeTruthy();
+
+    // Unmount and remount (section switch) retains operationId.
+    rendered.unmount();
+    const remounted = render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider A' }));
+    expect(await screen.findByText(opId)).toBeTruthy();
+
+    // 401 hides data, same-identity reauth restores operationId.
+    mocks.getCredentialOp.mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'Expired'));
+    fireEvent.click(screen.getByRole('button', { name: 'Check key status' }));
+    expect(await screen.findByRole('button', { name: 'Sign in for project access' })).toBeTruthy();
+    expect(screen.queryByText(opId)).toBeNull();
+
+    (mocks.auth as { authSessionEpoch?: number }).authSessionEpoch = 1;
+    mocks.auth.authSessionGeneration = 1;
+    remounted.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider A' }));
+    expect(await screen.findByText(opId)).toBeTruthy();
   });
 });
