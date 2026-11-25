@@ -97,10 +97,18 @@ public sealed partial class ProjectsConfigPostgresTests
             Casting = [new ProjectAgentCast("planner", "planner", 0)],
         };
 
+        var missingScopeCaller = await SeedCallerAsync(
+            db, authorityStore, "charter-scan-prec-scope-" + suffix, tenantId, ["api.read"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var scopeError = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.UpdateProjectConfigurationAsync(
+                missingScopeCaller, project.ProjectId, project.ConfigurationRevision, validConfig, "unmatched", CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, scopeError.StatusCode);
+
         var authError = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.UpdateProjectConfigurationAsync(
                 viewer, project.ProjectId, project.ConfigurationRevision, validConfig, "unmatched", CancellationToken.None));
-        Assert.Equal(StatusCodes.Status403Forbidden, authError.StatusCode);
+        Assert.Equal(StatusCodes.Status404NotFound, authError.StatusCode);
 
         var staleError = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.UpdateProjectConfigurationAsync(
