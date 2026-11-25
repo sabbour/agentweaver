@@ -1001,7 +1001,8 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             var placement = new RuntimeRunStartPlacementReceipt(
                 1, environmentId, "profile", "volume-1", sandboxKey, 1, 1, 1,
                 sandboxOperationId, sandboxResource, 1, 1, 1, 1, _registration.ExpiresAt);
-            var receiptLinksJson = JsonSerializer.Serialize(new { placement }, JsonOptions);
+            var receiptLinksJson = JsonSerializer.Serialize(
+                new { placement }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             await using (var connection = await fixture.DataSource.OpenConnectionAsync())
             await using (var insert = new NpgsqlCommand($"""
                 INSERT INTO "{_schema}".runtime_run_start_intents
