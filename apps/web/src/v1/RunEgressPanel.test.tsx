@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectAuthorizationContextResponse, RunEgressPage } from './contracts';
 
@@ -115,6 +116,27 @@ beforeEach(() => {
 });
 
 describe('RunEgressPanel', () => {
+  it('finishes the first page read when Strict Mode replays effects', async () => {
+    mocks.readRunEgress.mockResolvedValue(page([record]));
+
+    render(
+      <StrictMode>
+        <RunEgressPanel projectId="project-1" runId="run-1" />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByText('api.example.test')).toBeTruthy();
+    expect(screen.queryByText('Loading stored egress')).toBeNull();
+    expect(mocks.readRunEgress).toHaveBeenCalledTimes(1);
+    expect(mocks.readRunEgress).toHaveBeenCalledWith(
+      'project-token',
+      'run-1',
+      { limit: 50, cursor: null, signal: expect.any(AbortSignal) },
+      'tenant-1',
+    );
+    expect(mocks.apiCall).toHaveBeenCalledWith(expect.any(Function), { projectId: 'project-1' });
+  });
+
   it('uses the exact project credential and shows coverage with a successful empty page', async () => {
     render(<RunEgressPanel projectId="project-1" runId="run-1" />);
 
