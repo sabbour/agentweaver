@@ -955,20 +955,277 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         }
     }
 
+    [Fact]
+    public async Task CancelEndpointAndDispatcherReplayAfterJobLockReleaseCompletesCleanupOnce()
+    {
+        var environmentId = RuntimeRunStartKeys.EnvironmentId(
+            Tenant, Project, Run, Root, _registration.Binding.AcceptedSelectionHash);
+        var sandboxResource = new ProviderResourceRef(ProviderSeam.Sandbox, "sandbox", "sandbox-resource-1", 1);
+        await _registrationOwner.RevokeAfterPlacementReleaseAsync(_registration, CancellationToken.None);
+        var (zeroRegistration, sourceOwner, sourceContext, sourceServices, grant) =
+            await PrepareZeroCreditRuntimeAsync(environmentId, sandboxResource.ResourceId);
+        _host.ZeroCreditRegistration = zeroRegistration;
+        try
+        {
+            var hostDenied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseHost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _host.OnSendAsync = async (send, _, token) =>
+            {
+                await RecordZeroCreditHostDenialAsync(
+                    sourceOwner, sourceContext, zeroRegistration, grant, send, token);
+                hostDenied.TrySetResult();
+                await releaseHost.Task.WaitAsync(token);
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Headers = { CacheControl = new() { NoStore = true } }
+                };
+            };
+
+            using var submit = await SubmitAsync("cancel-endpoint-replay-1");
+            Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+            var jobId = (await submit.Content.ReadFromJsonAsync<WorkflowGenerationJobEnvelope>(JsonOptions))!.JobId;
+
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await using var reader = _queue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+            Assert.True(await reader.MoveNextAsync());
+            var execution = ExecuteAsync(reader.Current);
+
+            await hostDenied.Task.WaitAsync(deadline.Token);
+
+            var startStore = new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema);
+            var intentId = Guid.NewGuid();
+            var bootstrapOperationId = Guid.NewGuid();
+            var sandboxOperationId = Guid.NewGuid();
+            var sandboxKey = RuntimeRunStartKeys.SandboxIdempotencyKey(
+                Tenant, Project, Run, Root, _registration.Binding.AcceptedSelectionHash, bootstrapOperationId);
+            var placement = new RuntimeRunStartPlacementReceipt(
+                1, environmentId, "profile", "volume-1", sandboxKey, 1, 1, 1,
+                sandboxOperationId, sandboxResource, 1, 1, 1, 1, _registration.ExpiresAt);
+            var receiptLinksJson = JsonSerializer.Serialize(new { placement }, JsonOptions);
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await using (var insert = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".runtime_run_start_intents
+                    (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                     execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                     exchange_operation_id, state, current_step, environment_id, runtime_instance_id,
+                     receipt_links, cleanup_obligation)
+                VALUES (@tenant, @project, @run, @root, @selection, 1,
+                        @intent, @bootstrap, @consume, @exchange, 'ready', 'ready',
+                        @environment, @runtime, @links::jsonb, false)
+                """, connection))
+            {
+                insert.Parameters.AddWithValue("tenant", Tenant);
+                insert.Parameters.AddWithValue("project", Project);
+                insert.Parameters.AddWithValue("run", Run);
+                insert.Parameters.AddWithValue("root", Root);
+                insert.Parameters.AddWithValue("selection", _registration.Binding.AcceptedSelectionHash);
+                insert.Parameters.AddWithValue("intent", intentId);
+                insert.Parameters.AddWithValue("bootstrap", bootstrapOperationId);
+                insert.Parameters.AddWithValue("consume", Guid.NewGuid());
+                insert.Parameters.AddWithValue("exchange", Guid.NewGuid());
+                insert.Parameters.AddWithValue("environment", environmentId);
+                insert.Parameters.AddWithValue("runtime", zeroRegistration.RuntimeInstanceId);
+                insert.Parameters.AddWithValue("links", receiptLinksJson);
+                await insert.ExecuteNonQueryAsync(deadline.Token);
+            }
+
+            var cancellation = CancellationSelection();
+            var readerAuthorization = new ProjectsAuthorizationContext(
+                1, Issuer, Subject, Tenant, 1, Project, Run,
+                [new ProjectsAuthority("project", Project,
+                    [new("acceptRunSelection", 1), new("readRunSelection", 1)])]);
+            var endpointProjects = new ProjectsRunSelectionClient(
+                Client(new FixedHandler(request =>
+                {
+                    if (request.RequestUri!.AbsolutePath == "/api/authorization/context")
+                    {
+                        return Response(
+                            request,
+                            request.Headers.Authorization?.Parameter == "admin-token"
+                                ? cancellation.Authorization
+                                : readerAuthorization);
+                    }
+                    return Response(request, _selection.Selection.Snapshot);
+                })),
+                _options,
+                new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
+            var environmentCalls = 0;
+            string? capturedReleaseBody = null;
+            var releaseHandler = new FixedHandler(request =>
+            {
+                environmentCalls++;
+                capturedReleaseBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+                return Response(request, new RuntimeRunStartCleanupReceipt(
+                    2, intentId, sandboxOperationId, 1, 1, sandboxKey, "released", "cleanup_complete")
+                {
+                    SandboxResource = sandboxResource
+                });
+            });
+            var cleanupContinuation = new RuntimeRunStartCleanupContinuation(
+                startStore, endpointProjects, _registrationOwner, _jobs,
+                new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+                new HostClientFactory(releaseHandler));
+            var workQueue = new RuntimeRunStartWorkQueue();
+            var startContinuation = new RuntimeRunStartContinuation(
+                startStore,
+                _registrationOwner,
+                null!,
+                new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+                new HostClientFactory(releaseHandler),
+                TimeProvider.System);
+            var catalog = ProviderCatalog.Create([], [], []).Value!;
+            var selectionContexts = new CoordinatorRunSelectionContextStore(
+                fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
+            var checkpoints = new PostgresMafCheckpointStore(fixture.DataSource, _schema, null);
+            var events = new EventsAddressedMessageClient(Client(_materials), _options, new HttpContextAccessor());
+            var dispatcher = new RuntimeRunStartDispatcher(
+                startStore, workQueue, startContinuation, endpointProjects, _sessions, _decisions,
+                selectionContexts, checkpoints, events, TimeProvider.System, _options);
+            var runReadStore = new ProjectRunReadStore(fixture.DataSource, _schema);
+            var actionGrants = new ExecutableActionGrantOwnerStore(
+                fixture.DataSource, _options, TimeProvider.System, endpointProjects, new HttpContextAccessor());
+
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            builder.Services.AddAuthentication("test").AddScheme<AuthenticationSchemeOptions, DualRoleTestAuthentication>(
+                "test", _ => { });
+            builder.Services.AddAuthorization();
+            builder.Services.AddSingleton(_options);
+            builder.Services.AddSingleton(endpointProjects);
+            builder.Services.AddSingleton(_sessions);
+            builder.Services.AddSingleton(_decisions);
+            builder.Services.AddSingleton(selectionContexts);
+            builder.Services.AddSingleton(checkpoints);
+            builder.Services.AddSingleton(events);
+            builder.Services.AddSingleton(startStore);
+            builder.Services.AddSingleton(dispatcher);
+            builder.Services.AddSingleton(runReadStore);
+            builder.Services.AddSingleton(actionGrants);
+            builder.Services.AddSingleton(TimeProvider.System);
+            await using var endpointApp = builder.Build();
+            endpointApp.UseAuthentication();
+            endpointApp.UseAuthorization();
+            endpointApp.MapProjectRunEndpoints();
+            endpointApp.MapCoordinationEndpoints();
+            await endpointApp.StartAsync(deadline.Token);
+
+            using var client = endpointApp.GetTestClient();
+            async Task<HttpResponseMessage> PostCancelAsync(string token = "admin-token")
+            {
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Post, $"/api/projects/{Project}/runs/{Run}/cancel")
+                {
+                    Content = JsonContent.Create(new CancelProjectRunRequest("credit-zero cleanup"))
+                };
+                request.Headers.Add("Authorization", $"Bearer {token}");
+                request.Headers.Add("X-Agentweaver-Tenant", Tenant);
+                request.Headers.Add("Idempotency-Key", "cancel-job-lock-replay");
+                return await client.SendAsync(request, deadline.Token);
+            }
+            async Task<OwnerRunStatus> GetRunStatusAsync()
+            {
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Get, $"/api/projects/{Project}/runs/{Run}/coordination/status");
+                request.Headers.Add("Authorization", "Bearer reader-token");
+                request.Headers.Add("X-Agentweaver-Tenant", Tenant);
+                using var response = await client.SendAsync(request, deadline.Token);
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                return (await response.Content.ReadFromJsonAsync<OwnerRunStatus>(JsonOptions))!;
+            }
+
+            // Run-bound reader cannot cancel; unbound admin cancels and enqueues cleanup while the worker holds the job lock.
+            using var deniedCancel = await PostCancelAsync("reader-token");
+            Assert.Equal(HttpStatusCode.Forbidden, deniedCancel.StatusCode);
+
+            using var firstCancel = await PostCancelAsync();
+            Assert.Equal(HttpStatusCode.OK, firstCancel.StatusCode);
+            var firstReceipt = (await firstCancel.Content.ReadFromJsonAsync<CancelProjectRunResponse>(JsonOptions))!;
+            Assert.Equal("cancelled", firstReceipt.State);
+            Assert.NotNull(firstReceipt.CancelledAt);
+            Assert.Equal(1, workQueue.PendingCount);
+
+            await using var workReader = workQueue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+            Assert.True(await workReader.MoveNextAsync());
+            var firstWork = Assert.IsType<RuntimeRunStartCleanupWork>(workReader.Current);
+            await cleanupContinuation.ContinueAsync(firstWork, deadline.Token);
+            Assert.Equal(0, environmentCalls);
+            Assert.Equal(0, workQueue.PendingCount);
+
+            // Status read while locked reports pending cleanup and enqueues nothing.
+            var lockedStatus = await GetRunStatusAsync();
+            Assert.Equal("cancelled", lockedStatus.ExecutionState);
+            Assert.Equal("pending", lockedStatus.RuntimeCleanup?.State);
+            Assert.Equal(1, lockedStatus.RuntimeCleanup?.Total);
+            Assert.Equal(1, lockedStatus.RuntimeCleanup?.Pending);
+            Assert.Equal(0, lockedStatus.RuntimeCleanup?.Complete);
+            Assert.Equal(0, workQueue.PendingCount);
+
+            // Release the worker job lock; status read still enqueues nothing and cleanup stays pending.
+            releaseHost.TrySetResult();
+            await execution.WaitAsync(deadline.Token);
+
+            var unlockedStatus = await GetRunStatusAsync();
+            Assert.Equal("pending", unlockedStatus.RuntimeCleanup?.State);
+            Assert.Equal(lockedStatus.ExecutionFence, unlockedStatus.ExecutionFence);
+            Assert.Equal(lockedStatus.StateVersion, unlockedStatus.StateVersion);
+            Assert.Equal(0, workQueue.PendingCount);
+
+            // Same-key replay through the real endpoint returns the saved receipt and requeues cleanup once.
+            using var replayCancel = await PostCancelAsync();
+            Assert.Equal(HttpStatusCode.OK, replayCancel.StatusCode);
+            var replayReceipt = (await replayCancel.Content.ReadFromJsonAsync<CancelProjectRunResponse>(JsonOptions))!;
+            Assert.Equal(firstReceipt, replayReceipt);
+            Assert.Equal(1, workQueue.PendingCount);
+
+            Assert.True(await workReader.MoveNextAsync());
+            var replayWork = Assert.IsType<RuntimeRunStartCleanupWork>(workReader.Current);
+            await cleanupContinuation.ContinueAsync(replayWork, deadline.Token);
+            Assert.Equal(1, environmentCalls);
+            Assert.NotNull(capturedReleaseBody);
+            Assert.Contains(sandboxResource.ResourceId, capturedReleaseBody, StringComparison.Ordinal);
+            Assert.Contains(intentId.ToString("D"), capturedReleaseBody, StringComparison.OrdinalIgnoreCase);
+
+            // Verify owned resource release and registration revocation without a second cancellation transition.
+            var registrationStore = new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System);
+            var revoked = await registrationStore.ReadAsync(zeroRegistration.RuntimeInstanceId, deadline.Token);
+            Assert.Equal(RuntimeRegistrationState.Revoked, revoked?.State);
+
+            var completedStatus = await GetRunStatusAsync();
+            Assert.Equal("cancelled", completedStatus.ExecutionState);
+            Assert.Equal(lockedStatus.ExecutionFence, completedStatus.ExecutionFence);
+            Assert.Equal(lockedStatus.StateVersion, completedStatus.StateVersion);
+            Assert.Equal("complete", completedStatus.RuntimeCleanup?.State);
+            Assert.Equal(1, completedStatus.RuntimeCleanup?.Total);
+            Assert.Equal(0, completedStatus.RuntimeCleanup?.Pending);
+            Assert.Equal(1, completedStatus.RuntimeCleanup?.Complete);
+        }
+        finally
+        {
+            await sourceServices.DisposeAsync();
+        }
+    }
+
     private async Task<(
         RuntimeRegistration Registration,
         RuntimeUsageSourceOwner Owner,
         HttpContext Context,
         ServiceProvider Services,
-        RuntimeGrantReceipt Grant)> PrepareZeroCreditRuntimeAsync()
+        RuntimeGrantReceipt Grant)> PrepareZeroCreditRuntimeAsync(
+        string? environmentId = null,
+        string? placementUid = null)
     {
         var zeroBinding = _registration.Binding with
         {
             CopilotHardCreditLimit = 0m,
+            EnvironmentId = environmentId ?? _registration.Binding.EnvironmentId,
+            PlacementUid = placementUid ?? _registration.Binding.PlacementUid,
             ObservationEndpoint = new("https://runtime.test/internal/runtime/observations")
         };
         _placement = _placement with
         {
+            EnvironmentId = zeroBinding.EnvironmentId,
+            Resource = new(ProviderSeam.Sandbox, "sandbox", zeroBinding.PlacementUid, zeroBinding.PlacementGeneration),
+            Placement = new(zeroBinding.PlacementUid),
             ObservationEndpoint = zeroBinding.ObservationEndpoint,
             RuntimeOwnerContext = _placement.RuntimeOwnerContext! with { CopilotHardCreditLimit = 0m }
         };
@@ -1205,6 +1462,46 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
                         Context.Request.Headers.Authorization == "Bearer short-expiry-run-token" ? 5 : 30)
                 },
                 Scheme.Name)));
+    }
+
+    private sealed class DualRoleTestAuthentication(
+        IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
+        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    {
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            var header = Context.Request.Headers.Authorization.ToString();
+            ClaimsPrincipal? principal = header switch
+            {
+                "Bearer admin-token" => new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("iss", Issuer),
+                    new Claim("sub", Subject),
+                    new Claim("tid", Tenant),
+                    new Claim("aud", "orchestrator"),
+                    new Claim("aud", "projects"),
+                    new Claim("scope", "api.read projects.admin")
+                ], Scheme.Name)),
+                "Bearer reader-token" => new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("iss", Issuer),
+                    new Claim("sub", Subject),
+                    new Claim("tid", Tenant),
+                    new Claim("aud", "orchestrator"),
+                    new Claim("aud", "projects"),
+                    new Claim("scope", "api.read projects.orchestrator"),
+                    new Claim("project_id", Project),
+                    new Claim("run_id", Run)
+                ], Scheme.Name)),
+                _ => null
+            };
+            return Task.FromResult(principal is null
+                ? AuthenticateResult.NoResult()
+                : AuthenticateResult.Success(new AuthenticationTicket(
+                    principal,
+                    new AuthenticationProperties { ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(30) },
+                    Scheme.Name)));
+        }
     }
 
     private sealed class FixedAuthentication : IAuthenticationService

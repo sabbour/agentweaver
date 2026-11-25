@@ -1497,6 +1497,23 @@ test('numeric matrix rejects missing and duplicate rows', () => {
   assert.equal(attemptedPromotion.complete, false);
   assert.equal(attemptedPromotion.rows.find(row => row.id === 'full-native-proof').status, 'blocked');
   assert.equal(attemptedPromotion.rows.find(row => row.id === 'credit-zero').status, 'blocked');
+  const otherNumericPromotion = buildNumericMatrix(
+    { 'credit-zero': 'passed' },
+    { sourceCaseId: 'numeric-hard-credit-no-send' },
+  );
+  assert.equal(otherNumericPromotion.rows.find(row => row.id === 'credit-zero').status, 'blocked');
+  const promotedCreditZero = matrix.rows.map(row => row.id === 'credit-zero'
+    ? { ...row, status: 'passed' }
+    : row);
+  assert.throws(
+    () => validateNumericMatrix(promotedCreditZero, { sourceCaseId: 'numeric-hard-credit-no-send' }),
+    /cannot claim passed/,
+  );
+  const dedicatedCreditZero = buildNumericMatrix(
+    { 'credit-zero': 'passed' },
+    { sourceCaseId: 'workflow-generation-credit-zero' },
+  );
+  assert.equal(dedicatedCreditZero.rows.find(row => row.id === 'credit-zero').status, 'passed');
   const promotedFixedRow = matrix.rows.map(row => row.id === 'full-native-proof'
     ? { ...row, status: 'passed' }
     : row);

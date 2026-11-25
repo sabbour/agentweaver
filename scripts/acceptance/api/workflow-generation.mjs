@@ -1,20 +1,27 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, stat } from 'node:fs/promises';
+import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from '../../harness-shared/safe-jsonl.mjs';
+import { buildNumericMatrix } from './numeric-case-matrix.mjs';
 import {
   TURN_READ_OPERATION, TURN_READ_ROUTE, buildTurnDigestCommand, hasTurnDigestHelp, supportsTurnDigest,
 } from './turn-digest.mjs';
 
 const CASE_ID = 'workflow-generation';
+const CREDIT_ZERO_CASE_ID = 'workflow-generation-credit-zero';
+const SUPPORTED_CASE_IDS = new Set([CASE_ID, CREDIT_ZERO_CASE_ID]);
 const CASE_SCRIPT_PATH = fileURLToPath(import.meta.url);
 const MAX_OUTPUT = 8 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 60_000;
 const JOB_DEADLINE_MS = 10 * 60_000;
 const JOB_POLL_INTERVAL_MS = 2_000;
+const CLEANUP_DEADLINE_MS = 90_000;
+const CLEANUP_REPLAY_INTERVAL_MS = 5_000;
+const CLEANUP_POLL_INTERVAL_MS = 1_000;
+const MAX_CLEANUP_REPLAYS = 2;
 const TARGET_KEYS = [
   'gatewayUrl', 'brokerIssuer', 'clientId', 'apiAudience', 'tenantId',
   'projectId', 'runId', 'sessionId',
@@ -26,6 +33,7 @@ const RUN_LIMIT_KEYS = [
   'maxModelTurns', 'maxToolCalls', 'maxChildren', 'maxConcurrentChildren',
   'maxWallTimeSeconds', 'maxPromptTokens',
 ];
+const CREDIT_ZERO_RUN_LIMIT_KEYS = [...RUN_LIMIT_KEYS, 'copilotHardCreditLimit'];
 const TARGET_OPTIONS = [
   ['--gateway-url', 'gatewayUrl'],
   ['--broker-issuer', 'brokerIssuer'],
@@ -52,6 +60,17 @@ const REQUIRED_OPERATIONS = [
   'cancelProjectRun',
   'readRunStatus',
 ];
+const CREDIT_ZERO_REQUIRED_OPERATIONS = [
+  'getAuthorizationContext',
+  'getRunSelection',
+  'readSessionStatus',
+  'readDecisions',
+  'generateProjectWorkflow',
+  'readProjectWorkflowGenerationJob',
+  'cancelProjectRun',
+  'readRunStatus',
+];
+const RUNTIME_START_QUEUE_FULL = 'runtime_start_queue_full';
 const USAGE = 'Use --input <case.json> --output <new-evidence-directory> [--dry-run].';
 
 class BlockedCaseError extends Error {}
@@ -119,8 +138,37 @@ function validateUrl(value, name, originOnly) {
   return originOnly ? url.origin : value;
 }
 
-function validateRunLimits(value) {
-  if (!exactKeys(value, RUN_LIMIT_KEYS)
+function isExplicitZeroToken(token) {
+  return typeof token === 'string' && /^0(?:\.0+)?(?:[eE][+-]?\d+)?$/.test(token);
+}
+
+function parseJsonWithCreditToken(text, step) {
+  const tokens = new WeakMap();
+  let value;
+  try {
+    value = JSON.parse(text, function captureCreditToken(key, item, context) {
+      if (key === 'copilotHardCreditLimit' && typeof item === 'number' && context && typeof context.source === 'string') {
+        let map = tokens.get(this);
+        if (!map) {
+          map = new Map();
+          tokens.set(this, map);
+        }
+        map.set(key, context.source);
+      }
+      return item;
+    });
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`${step} did not return valid JSON.`);
+    }
+    throw error;
+  }
+  return { value, tokens };
+}
+
+function validateRunLimits(value, creditZero = false, numberTokens = null) {
+  const keys = creditZero ? CREDIT_ZERO_RUN_LIMIT_KEYS : RUN_LIMIT_KEYS;
+  if (!exactKeys(value, keys)
     || !RUN_LIMIT_KEYS.every(key => Number.isSafeInteger(value[key]))
     || value.maxModelTurns < 1
     || value.maxToolCalls < 0
@@ -131,16 +179,26 @@ function validateRunLimits(value) {
     || value.maxPromptTokens < 1024) {
     throw new Error('The expected run limits must be finite, valid Copilot limits.');
   }
+  if (creditZero) {
+    if (value.copilotHardCreditLimit !== 0) {
+      throw new Error('The credit-zero case requires runLimits.copilotHardCreditLimit to be numeric 0.');
+    }
+    if (numberTokens !== null && !isExplicitZeroToken(numberTokens.get(value)?.get('copilotHardCreditLimit'))) {
+      throw new Error('The credit-zero case requires an explicit zero JSON number for copilotHardCreditLimit.');
+    }
+  }
   return { ...value };
 }
 
-export function validateInput(value) {
+export function validateInput(value, numberTokens = null) {
+  const isCreditZero = value?.caseId === CREDIT_ZERO_CASE_ID;
+  const limitKeys = isCreditZero ? CREDIT_ZERO_RUN_LIMIT_KEYS : RUN_LIMIT_KEYS;
   if (!exactKeys(value, [
     'caseId', 'sourceCommit', 'targetCommit', 'apphostSha256',
     'approvedNonProduction', 'approvedDisposableRun', 'expectedActorId',
     'expectedDecisionStateVersion', 'expectedSelection', 'prompt', 'target',
   ])
-    || value.caseId !== CASE_ID
+    || !SUPPORTED_CASE_IDS.has(value.caseId)
     || !/^[a-f0-9]{40}$/i.test(value.sourceCommit ?? '')
     || !/^[a-f0-9]{40}$/i.test(value.targetCommit ?? '')
     || !/^[a-f0-9]{64}$/i.test(value.apphostSha256 ?? '')
@@ -148,6 +206,7 @@ export function validateInput(value) {
     || value.approvedDisposableRun !== true
     || !nonEmpty(value.expectedActorId)
     || !positiveInteger(value.expectedDecisionStateVersion)
+    || (isCreditZero && value.expectedDecisionStateVersion !== 1)
     || !nonEmpty(value.prompt, 2048)
     || value.prompt.includes('\0')
     || [...value.prompt].some(character => /\p{Cc}/u.test(character) && !['\r', '\n', '\t'].includes(character))
@@ -159,7 +218,7 @@ export function validateInput(value) {
     || !exactKeys(value.expectedSelection, SELECTION_KEYS)
     || !positiveInteger(value.expectedSelection.projectConfigurationRevision)
     || !nonEmpty(value.expectedSelection.modelSelectionReference, 256)
-    || !exactKeys(value.expectedSelection.runLimits, RUN_LIMIT_KEYS)) {
+    || !exactKeys(value.expectedSelection.runLimits, limitKeys)) {
     throw new Error('The case input does not match the workflow-generation case schema.');
   }
   const target = {
@@ -168,7 +227,7 @@ export function validateInput(value) {
     brokerIssuer: validateUrl(value.target.brokerIssuer, 'Broker issuer', false),
   };
   return {
-    caseId: CASE_ID,
+    caseId: value.caseId,
     sourceCommit: value.sourceCommit.toLowerCase(),
     targetCommit: value.targetCommit.toLowerCase(),
     apphostSha256: value.apphostSha256.toLowerCase(),
@@ -179,7 +238,7 @@ export function validateInput(value) {
     expectedSelection: {
       projectConfigurationRevision: value.expectedSelection.projectConfigurationRevision,
       modelSelectionReference: value.expectedSelection.modelSelectionReference,
-      runLimits: validateRunLimits(value.expectedSelection.runLimits),
+      runLimits: validateRunLimits(value.expectedSelection.runLimits, isCreditZero, numberTokens),
     },
     prompt: value.prompt,
     target,
@@ -212,21 +271,29 @@ function runBoundArgs(input) {
 export function buildCommands(input) {
   const target = targetArgs(input);
   const run = runBoundArgs(input);
-  return [
+  const commands = [
     { id: 'version', args: ['--version'] },
-    { id: 'help', args: ['--help'], metadataOnly: true },
+    ...(input.caseId === CREDIT_ZERO_CASE_ID ? [] : [{ id: 'help', args: ['--help'], metadataOnly: true }]),
     { id: 'api-operations', args: ['api', 'operations', ...target] },
-    {
-      id: 'api-describe-turn-digest',
-      args: ['api', 'describe', TURN_READ_OPERATION, ...target],
-      metadataOnly: true,
-    },
+    ...(input.caseId === CREDIT_ZERO_CASE_ID
+      ? []
+      : [{
+          id: 'api-describe-turn-digest',
+          args: ['api', 'describe', TURN_READ_OPERATION, ...target],
+          metadataOnly: true,
+        }]),
     { id: 'auth-status-run', args: ['auth', 'status', ...target, ...run] },
     { id: 'auth-status-project-writer', args: ['auth', 'status', ...target, '--scope', 'projects.admin'] },
     {
       id: 'api-invoke-authorization-context',
       args: ['api', 'invoke', 'getAuthorizationContext', ...target, ...run],
     },
+    ...(input.caseId === CREDIT_ZERO_CASE_ID
+      ? [{
+          id: 'api-invoke-admin-authorization-context',
+          args: ['api', 'invoke', 'getAuthorizationContext', ...target, '--scope', 'projects.admin'],
+        }]
+      : []),
     {
       id: 'api-invoke-run-selection',
       args: [
@@ -237,6 +304,31 @@ export function buildCommands(input) {
       ],
     },
   ];
+  if (input.caseId === CREDIT_ZERO_CASE_ID) {
+    commands.push(
+      {
+        id: 'api-invoke-session-status',
+        args: [
+          'api', 'invoke', 'readSessionStatus', ...target,
+          '--path', `projectId=${input.target.projectId}`,
+          '--path', `runId=${input.target.runId}`,
+          '--path', `sessionId=${input.target.sessionId}`,
+          ...run,
+        ],
+      },
+      {
+        id: 'api-invoke-decisions',
+        args: [
+          'api', 'invoke', 'readDecisions', ...target,
+          '--path', `projectId=${input.target.projectId}`,
+          '--path', `runId=${input.target.runId}`,
+          '--path', `sessionId=${input.target.sessionId}`,
+          ...run,
+        ],
+      },
+    );
+  }
+  return commands;
 }
 
 export function buildGenerateCommand(input, idempotencyKey) {
@@ -284,7 +376,7 @@ export function buildJobResultCommand(input, jobId) {
   };
 }
 
-export function buildCleanupCommands(input, idempotencyKey) {
+export function buildCleanupCommands(input, idempotencyKey, body = { reason: 'workflow-generation acceptance cleanup' }) {
   return [
     {
       id: 'api-invoke-cancel-disposable-run',
@@ -295,7 +387,7 @@ export function buildCleanupCommands(input, idempotencyKey) {
         '--path', `runId=${input.target.runId}`,
         '--scope', 'projects.admin',
         '--header', `Idempotency-Key=${idempotencyKey}`,
-        '--body', JSON.stringify({ reason: 'workflow-generation acceptance cleanup' }),
+        '--body', JSON.stringify(body),
       ],
     },
     {
@@ -425,16 +517,20 @@ export function validateAuthStatus(status, input, bound) {
   return true;
 }
 
-export function validateCallerContext(context, input) {
-  if (context?.actorId !== input.expectedActorId
-    || context?.tenantId !== input.target.tenantId
-    || context?.boundProjectId !== input.target.projectId
-    || context?.boundRunId !== input.target.runId) {
-    throw new Error('The current caller context does not match the expected actor, tenant, project, and run.');
+export function validateCallerContext(context, input, bound = true) {
+  if (context?.actorId !== input.expectedActorId || context?.tenantId !== input.target.tenantId) {
+    throw new Error('The current caller context does not match the expected actor and tenant.');
   }
+  if (bound && (context?.boundProjectId !== input.target.projectId || context?.boundRunId !== input.target.runId)) {
+    throw new Error('The current caller context does not match the expected bound project and run.');
+  }
+  if (!bound && (context?.boundProjectId != null || context?.boundRunId != null)) {
+    throw new Error('The admin caller context must be unbound.');
+  }
+  return context;
 }
 
-export function validateAcceptedSelection(selection, input) {
+export function validateAcceptedSelection(selection, input, selectionTokens = null) {
   const expected = input.expectedSelection;
   const limits = selection?.runLimits;
   const mismatches = [];
@@ -444,11 +540,88 @@ export function validateAcceptedSelection(selection, input) {
     mismatches.push('project configuration revision');
   if (selection?.modelSelection?.reference !== expected.modelSelectionReference)
     mismatches.push('model selection');
+  if (input.caseId === CREDIT_ZERO_CASE_ID && selection?.modelSelection?.sourceMode !== 'hostedCopilot')
+    mismatches.push('model selection sourceMode');
   if (!limits || RUN_LIMIT_KEYS.some(key => limits[key] !== expected.runLimits[key]))
     mismatches.push('run limits');
+  if (input.caseId === CREDIT_ZERO_CASE_ID) {
+    if (limits?.copilotHardCreditLimit !== 0
+      || (selectionTokens !== null
+        && !isExplicitZeroToken(selectionTokens.get(limits)?.get('copilotHardCreditLimit')))) {
+      mismatches.push('copilotHardCreditLimit');
+    }
+  }
   if (mismatches.length > 0) {
     throw new Error(`The accepted ${mismatches.join(', ')} do not match the case input.`);
   }
+}
+
+export function validateReadyRootSession(sessionStatus, input) {
+  const startup = sessionStatus?.runtimeStartup;
+  const identity = sessionStatus?.identity;
+  if (identity?.projectId !== input.target.projectId
+    || identity?.runId !== input.target.runId
+    || identity?.sessionId !== input.target.sessionId
+    || sessionStatus?.parentSessionId != null
+    || sessionStatus?.rootSessionId !== input.target.sessionId
+    || sessionStatus?.kind !== 'coordinator'
+    || sessionStatus?.lifecycle !== 'active'
+    || !['idle', 'active', 'blocked'].includes(sessionStatus?.runExecution?.state)
+    || startup?.state !== 'ready'
+    || !isUuid(startup?.runtimeInstanceId)
+    || !positiveInteger(startup?.registrationRevision)
+    || !positiveInteger(sessionStatus?.executionFence)
+    || startup?.executionFence !== sessionStatus.executionFence) {
+    throw new Error('The session status does not identify a ready nonterminal coordinator root.');
+  }
+  return {
+    runtimeInstanceId: startup.runtimeInstanceId,
+    registrationRevision: startup.registrationRevision,
+    executionFence: sessionStatus.executionFence,
+  };
+}
+
+export function validateInitialDecisions(decisions, input, readySession) {
+  if (decisions?.executionFence !== readySession.executionFence
+    || decisions?.stateVersion !== 1
+    || decisions?.stateVersion !== input.expectedDecisionStateVersion) {
+    throw new Error('The coordinator decision state is not an initial version-1 state in the current fence.');
+  }
+}
+
+export function validateZeroCreditNoSend(proof, readySession) {
+  if (!proof
+    || proof.runtimeInstanceId?.toLowerCase() !== readySession.runtimeInstanceId.toLowerCase()
+    || proof.registrationRevision !== readySession.registrationRevision
+    || proof.executionFence !== readySession.executionFence
+    || !isUuid(proof.nativeRequestId)
+    || !isSha256(proof.receiptSha256)
+    || !isSha256(proof.beforeCursorSha256)
+    || !isSha256(proof.afterCursorSha256)
+    || proof.beforeCursorSha256.toLowerCase() !== proof.afterCursorSha256.toLowerCase()
+    || !Number.isFinite(Date.parse(proof.recordedAt))
+    || !Number.isFinite(Date.parse(proof.verifiedAt))
+    || proof.stage !== 'hostPreQueue'
+    || proof.code !== 'hardLimitZero'
+    || proof.observedEventCount !== 0
+    || proof.rangeComplete !== true) {
+    throw new Error('The zeroCreditNoSend proof does not match the ready runtime registration and no-send contract.');
+  }
+  return {
+    nativeRequestId: proof.nativeRequestId,
+    runtimeInstanceId: proof.runtimeInstanceId,
+    registrationRevision: proof.registrationRevision,
+    executionFence: proof.executionFence,
+    stage: proof.stage,
+    code: proof.code,
+    receiptSha256: proof.receiptSha256,
+    observedEventCount: proof.observedEventCount,
+    rangeComplete: proof.rangeComplete,
+    beforeCursorSha256: proof.beforeCursorSha256,
+    afterCursorSha256: proof.afterCursorSha256,
+    recordedAt: proof.recordedAt,
+    verifiedAt: proof.verifiedAt,
+  };
 }
 
 function isUuid(value) {
@@ -579,7 +752,9 @@ export function validateGenerationResult(result, envelope, input, selection) {
 
 async function readJsonInput(inputPath) {
   try {
-    return validateInput(JSON.parse(await readFile(inputPath, 'utf8')));
+    const raw = await readFile(inputPath, 'utf8');
+    const { value, tokens } = parseJsonWithCreditToken(raw, 'case input');
+    return validateInput(value, tokens);
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error('The case input file is missing or is not valid JSON.');
@@ -605,8 +780,168 @@ async function persistResult(handle, result) {
   await handle.sync();
 }
 
+function currentWindowsUserSid() {
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'],
+    { shell: false, windowsHide: true, encoding: 'utf8' },
+  );
+  const sid = result.status === 0 ? result.stdout.trim() : '';
+  if (!/^S-1-\d+(?:-\d+)+$/.test(sid)) {
+    throw new Error('Could not resolve the current Windows process token SID.');
+  }
+  return sid;
+}
+
+export async function createPrivateDirectory(outputPath) {
+  await mkdir(outputPath, { recursive: false, mode: 0o700 });
+  if (process.platform === 'win32') {
+    try {
+      const sid = currentWindowsUserSid();
+      const systemSid = 'S-1-5-18';
+      const acl = spawnSync(
+        'icacls',
+        [outputPath, '/inheritance:r', '/grant:r', `*${systemSid}:(OI)(CI)F`, '/grant:r', `*${sid}:(OI)(CI)F`],
+        { shell: false, windowsHide: true, encoding: 'utf8' },
+      );
+      if (acl.error || acl.status !== 0) {
+        throw new Error('Could not restrict Windows permissions on the evidence directory.');
+      }
+      const verifyScript = [
+        '$acl = [System.IO.DirectoryInfo]::new($env:AGENTWEAVER_ACL_PATH).GetAccessControl()',
+        'if ($acl.AreAccessRulesProtected -ne $true) { exit 2 }',
+        '$rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])',
+        '$sids = @($rules | ForEach-Object { $_.IdentityReference.Value })',
+        'if ($sids -notcontains $env:AGENTWEAVER_ACL_SYS -or $sids -notcontains $env:AGENTWEAVER_ACL_USR) { exit 3 }',
+        '$bad = @($sids | Where-Object { $_ -notin @($env:AGENTWEAVER_ACL_SYS, $env:AGENTWEAVER_ACL_USR) })',
+        'if ($bad.Count -gt 0) { exit 4 }',
+      ].join('; ');
+      const verify = spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(verifyScript, 'utf16le').toString('base64')],
+        {
+          shell: false,
+          windowsHide: true,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AGENTWEAVER_ACL_PATH: outputPath,
+            AGENTWEAVER_ACL_SYS: systemSid,
+            AGENTWEAVER_ACL_USR: sid,
+          },
+        },
+      );
+      if (verify.error || verify.status !== 0) {
+        throw new Error('Windows permissions on the evidence directory could not be verified as private.');
+      }
+    } catch (error) {
+      await rm(outputPath, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+  }
+}
+
+async function writeRestrictedJson(filePath, value) {
+  const handle = await open(filePath, 'wx', 0o600);
+  try {
+    await handle.writeFile(serializeRedactedJsonLine(value) + '\n', 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function isAuthorityDenialStderr(stderr) {
+  if (typeof stderr !== 'string' || !stderr.trim()) return false;
+  return /\b(?:401|403|unauthorized|forbidden)\b|not signed in|run login (?:first|again)|sign in with|authorization[- ]context request was denied|permission denied|do not belong to the same actor/i.test(stderr);
+}
+
+function classifyCancelRecord(record, input) {
+  if (record.error || record.signal || record.timedOut) {
+    return { kind: 'lost', failure: 'Run cancellation response was lost or timed out.' };
+  }
+  const stdout = typeof record.stdout === 'string' ? record.stdout.trim() : '';
+  if (!stdout) {
+    if (isAuthorityDenialStderr(record.stderr)) {
+      return { kind: 'stop', failure: 'Run cancellation was denied by authority.' };
+    }
+    return { kind: 'lost', failure: 'Run cancellation returned no response.' };
+  }
+  let response;
+  try {
+    response = JSON.parse(stdout);
+  } catch {
+    if (isAuthorityDenialStderr(record.stderr)) {
+      return { kind: 'stop', failure: 'Run cancellation was denied by authority.' };
+    }
+    return { kind: 'lost', failure: 'Run cancellation did not return valid JSON.' };
+  }
+  if (response?.status === 401 || response?.status === 403) {
+    return { kind: 'stop', failure: 'Run cancellation was denied by authority.' };
+  }
+  if (response?.status === 409) {
+    return { kind: 'stop', failure: 'Run cancellation conflicted with the current run state.' };
+  }
+  if (response?.status === 503 && response.body?.error === RUNTIME_START_QUEUE_FULL) {
+    return { kind: 'queue_full', failure: 'Run cancellation cleanup queue was full.' };
+  }
+  if (response?.status !== 200
+    || response.body?.runId !== input.target.runId
+    || response.body?.state !== 'cancelled') {
+    const statusText = typeof response?.status === 'number' ? `HTTP ${response.status}` : 'unexpected output';
+    return { kind: 'stop', failure: `Run cancellation failed with ${statusText}.` };
+  }
+  return { kind: 'ok', response: response.body };
+}
+
+function classifyRunStatusRecord(record, input) {
+  if (record.error || record.signal || record.timedOut) {
+    return { kind: 'transient', failure: 'Run status check did not complete.' };
+  }
+  const stdout = typeof record.stdout === 'string' ? record.stdout.trim() : '';
+  if (!stdout) {
+    if (isAuthorityDenialStderr(record.stderr)) {
+      return { kind: 'stop', failure: 'Run status check was denied by authority.' };
+    }
+    return { kind: 'transient', failure: 'Run status check returned no response.' };
+  }
+  let response;
+  try {
+    response = JSON.parse(stdout);
+  } catch {
+    if (isAuthorityDenialStderr(record.stderr)) {
+      return { kind: 'stop', failure: 'Run status check was denied by authority.' };
+    }
+    return { kind: 'transient', failure: 'Run status check did not return valid JSON.' };
+  }
+  if (response?.status === 401 || response?.status === 403) {
+    return { kind: 'stop', failure: 'Run status check was denied by authority.' };
+  }
+  if (response?.status === 409) {
+    return { kind: 'stop', failure: 'Run status check conflicted with the current run state.' };
+  }
+  if (typeof response?.status === 'number' && response.status >= 500) {
+    return { kind: 'transient', failure: `Run status check returned HTTP ${response.status}.` };
+  }
+  if (response?.status !== 200
+    || response.body?.projectId !== input.target.projectId
+    || response.body?.runId !== input.target.runId) {
+    return { kind: 'stop', failure: 'Run status output did not match the target project and run.' };
+  }
+  return { kind: 'ok', status: response.body };
+}
+
+function isCompleteRuntimeCleanup(cleanupSummary) {
+  return cleanupSummary?.state === 'complete'
+    && Number.isSafeInteger(cleanupSummary.total)
+    && cleanupSummary.total > 0
+    && cleanupSummary.pending === 0
+    && cleanupSummary.complete === cleanupSummary.total;
+}
+
 export async function runCase(options, env = process.env, dependencies = {}) {
   const input = await readJsonInput(path.resolve(options.inputPath));
+  const isCreditZero = input.caseId === CREDIT_ZERO_CASE_ID;
   const cliPath = resolveCliPath(env.AGENTWEAVER_CLI_PATH);
   const outputPath = await requireNewOutputDirectory(options.outputPath);
   const apphostStat = await stat(cliPath).catch(() => null);
@@ -619,7 +954,7 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   if (options.dryRun) {
     console.log(JSON.stringify({
       status: 'validated-not-run',
-      caseId: CASE_ID,
+      caseId: input.caseId,
       sourceCommit: input.sourceCommit,
       targetCommit: input.targetCommit,
       apphost: path.basename(cliPath),
@@ -632,7 +967,7 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   }
 
   const runId = randomUUID();
-  await mkdir(outputPath, { recursive: false, mode: 0o700 });
+  await createPrivateDirectory(outputPath);
   const commandsPath = path.join(outputPath, 'commands.jsonl');
   const commandsHandle = await open(commandsPath, 'wx', 0o600);
   await commandsHandle.close();
@@ -640,22 +975,34 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   await resultHandle.writeFile('{"status":"incomplete"}\n', 'utf8');
   const startedAt = new Date().toISOString();
   const generation = {
-    status: 'not-started', jobId: null, artifactId: null, definitionSha256: null, storedTurn: null, failure: null,
+    status: 'not-started',
+    jobId: null,
+    artifactId: null,
+    definitionSha256: null,
+    storedTurn: null,
+    ...(isCreditZero ? { zeroCreditNoSend: null } : {}),
+    failure: null,
   };
   const cleanup = { status: 'not-required', failure: null };
   let status = 'failed';
   let failure = null;
   let version = null;
   let runIdentityVerified = false;
+  let verifiedAdminActorId = null;
+  let preflightPassed = false;
+  let cancellationRequestPersisted = false;
+  let readySession = null;
   let selection = null;
   let commandCount = 0;
+  let cancellationKey = null;
+  let cancellationBody = null;
   const runCli = dependencies.runCommand ?? runCommand;
-  const now = dependencies.now ?? Date.now;
+  const now = dependencies.now ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   const sleep = dependencies.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
 
   async function logCommand(command, evidence) {
     await appendRedactedJsonLine(commandsPath, {
-      caseId: CASE_ID,
+      caseId: input.caseId,
       runId,
       stepId: command.id,
       executable: path.basename(cliPath),
@@ -664,21 +1011,26 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     commandCount += 1;
   }
 
-  async function execute(command) {
+  async function invokeLogged(command, timeoutMs = COMMAND_TIMEOUT_MS) {
     let record;
     try {
-      record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
+      record = runCli(cliPath, command.args, env, timeoutMs);
     } catch {
       throw new Error(`${command.id} could not start.`);
     }
     await logCommand(command, command.metadataOnly
       ? processMetadata(record)
       : { arguments: safeArguments(command.args), ...record });
+    return record;
+  }
+
+  async function execute(command) {
+    const record = await invokeLogged(command, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
     requireSuccess(record, command.id);
     return record;
   }
 
-  async function submitGeneration(command, attempt) {
+  async function submitGeneration(command, attempt, allowQueueFullRetry = true) {
     const record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
     const queueFull = isQueueFull(record);
     await logCommand(command, {
@@ -686,7 +1038,10 @@ export async function runCase(options, env = process.env, dependencies = {}) {
       ...processMetadata(record),
       ...(queueFull ? { code: QUEUE_FULL } : {}),
     });
-    if (attempt === 1 && queueFull) return null;
+    if (allowQueueFullRetry && attempt === 1 && queueFull) return null;
+    if (isCreditZero && (record.error || record.exitCode !== 0 || record.signal || record.timedOut)) {
+      throw new BlockedCaseError('Workflow generation submission did not return a job ID.');
+    }
     requireSuccess(record, command.id);
     return apiResponse(record, 'generateProjectWorkflow', 202);
   }
@@ -709,9 +1064,10 @@ export async function runCase(options, env = process.env, dependencies = {}) {
       } else if (command.id === 'api-operations') {
         const operations = parseJson(record.stdout, command.id);
         const available = Array.isArray(operations) ? operations : [];
-        if (REQUIRED_OPERATIONS.some(operation => !available.some(item => item?.operationId === operation))
-          || !available.some(item => item?.operationId === TURN_READ_OPERATION
-            && item.method === 'GET' && item.path === TURN_READ_ROUTE)) {
+        const requiredOps = isCreditZero ? CREDIT_ZERO_REQUIRED_OPERATIONS : REQUIRED_OPERATIONS;
+        const missingTurnOp = !isCreditZero && !available.some(item => item?.operationId === TURN_READ_OPERATION
+          && item.method === 'GET' && item.path === TURN_READ_ROUTE);
+        if (requiredOps.some(operation => !available.some(item => item?.operationId === operation)) || missingTurnOp) {
           throw new BlockedCaseError('The Gateway does not expose every operation required by this case.');
         }
       } else if (command.id === 'api-describe-turn-digest') {
@@ -730,76 +1086,274 @@ export async function runCase(options, env = process.env, dependencies = {}) {
         }
       } else if (command.id === 'api-invoke-authorization-context') {
         try {
-          validateCallerContext(apiResponse(record, command.id, 200), input);
+          validateCallerContext(apiResponse(record, command.id, 200), input, true);
         } catch (error) {
           throw new BlockedCaseError(error.message);
         }
         runIdentityVerified = true;
-      } else if (command.id === 'api-invoke-run-selection') {
-        selection = apiResponse(record, command.id, 200);
+      } else if (command.id === 'api-invoke-admin-authorization-context') {
+        const adminContext = apiResponse(record, command.id, 200);
         try {
-          validateAcceptedSelection(selection, input);
+          validateCallerContext(adminContext, input, false);
+        } catch (error) {
+          throw new BlockedCaseError(error.message);
+        }
+        verifiedAdminActorId = adminContext.actorId;
+      } else if (command.id === 'api-invoke-run-selection') {
+        const parsedSelection = parseJsonWithCreditToken(record.stdout, command.id);
+        const envelope = parsedSelection.value;
+        if (envelope?.status !== 200 || envelope.body === undefined || envelope.body === null) {
+          throw new Error(`${command.id} did not return HTTP 200.`);
+        }
+        selection = envelope.body;
+        try {
+          validateAcceptedSelection(selection, input, isCreditZero ? parsedSelection.tokens : null);
+        } catch (error) {
+          throw new BlockedCaseError(error.message);
+        }
+      } else if (command.id === 'api-invoke-session-status') {
+        const sessionStatus = apiResponse(record, command.id, 200);
+        try {
+          readySession = validateReadyRootSession(sessionStatus, input);
+        } catch (error) {
+          throw new BlockedCaseError(error.message);
+        }
+      } else if (command.id === 'api-invoke-decisions') {
+        const decisions = apiResponse(record, command.id, 200);
+        try {
+          validateInitialDecisions(decisions, input, readySession);
         } catch (error) {
           throw new BlockedCaseError(error.message);
         }
       }
     }
+    preflightPassed = true;
 
-    generation.status = 'running';
-    const submit = buildGenerateCommand(input, randomUUID());
-    const envelope = await submitGeneration(submit, 1) ?? await submitGeneration(submit, 2);
-    const jobId = validateJobEnvelope(envelope, input);
-    generation.jobId = jobId;
+    if (isCreditZero) {
+      cancellationKey = randomUUID();
+      cancellationBody = { reason: 'workflow-generation-credit-zero acceptance cleanup' };
+      const writeCancel = dependencies.writeCancellationRequest
+        ?? (filePath => writeRestrictedJson(filePath, {
+          gatewayUrl: input.target.gatewayUrl,
+          tenantId: input.target.tenantId,
+          projectId: input.target.projectId,
+          runId: input.target.runId,
+          expectedAdminActorId: verifiedAdminActorId,
+          idempotencyKey: cancellationKey,
+          body: cancellationBody,
+        }));
+      await writeCancel(path.join(outputPath, 'cancellation-request.json'));
+      cancellationRequestPersisted = true;
 
-    const deadline = now() + (dependencies.jobDeadlineMs ?? JOB_DEADLINE_MS);
-    let completedEnvelope = null;
-    while (now() <= deadline) {
-      const statusRecord = await execute(buildJobStatusCommand(input, jobId));
-      const current = apiResponse(statusRecord, 'readProjectWorkflowGenerationJob', 200);
-      validateJobEnvelope(current, input, jobId);
-      if (current.status === 'completed') {
-        completedEnvelope = current;
-        break;
+      generation.status = 'running';
+      const submit = buildGenerateCommand(input, randomUUID());
+      const envelope = await submitGeneration(submit, 1, false);
+      let jobId;
+      try {
+        jobId = validateJobEnvelope(envelope, input);
+      } catch (error) {
+        throw new BlockedCaseError(error.message);
       }
-      if (current.status === 'failed' || current.status === 'cancelled') {
-        const code = current.failure?.code ?? current.status;
-        throw new Error(`Workflow generation ended with ${code}.`);
-      }
-      await sleep(dependencies.pollIntervalMs ?? JOB_POLL_INTERVAL_MS);
-    }
-    if (completedEnvelope === null) throw new Error('Workflow generation did not complete before its deadline.');
+      generation.jobId = jobId;
 
-    const resultRecord = await execute(buildJobResultCommand(input, jobId));
-    const result = apiResponse(resultRecord, 'readProjectWorkflowGenerationResult', 200);
-    validateGenerationResult(result, completedEnvelope, input, selection);
-    generation.artifactId = result.artifactId;
-    generation.definitionSha256 = result.definitionSha256;
-    const { assistantMaterial, outputSha256 } = result.nativeCompletion;
-    if (assistantMaterial?.kind !== 'turnContent'
-      || !isUuid(assistantMaterial.eventId) || !isSha256(assistantMaterial.contentSha256)) {
-      throw new Error('The workflow result does not contain a valid assistant reply receipt.');
+      const deadline = now() + (dependencies.jobDeadlineMs ?? JOB_DEADLINE_MS);
+      let proofSaved = false;
+      while (now() <= deadline) {
+        const remainingForRead = deadline - now();
+        if (remainingForRead <= 0) break;
+        const jobCommand = buildJobStatusCommand(input, jobId);
+        const statusRecord = await invokeLogged(
+          jobCommand,
+          Math.min(COMMAND_TIMEOUT_MS, Math.max(1, remainingForRead)),
+        );
+        if (statusRecord.timedOut || now() > deadline) {
+          throw new BlockedCaseError('Workflow generation did not produce zeroCreditNoSend proof before its deadline.');
+        }
+        requireSuccess(statusRecord, jobCommand.id);
+        const current = apiResponse(statusRecord, 'readProjectWorkflowGenerationJob', 200);
+        validateJobEnvelope(current, input, jobId);
+        if (current.status === 'completed' || current.artifact != null) {
+          throw new Error('Workflow generation unexpectedly completed or produced an artifact under a zero-credit limit.');
+        }
+        if (['running', 'failed'].includes(current.status) && current.zeroCreditNoSend != null) {
+          const validatedProof = validateZeroCreditNoSend(current.zeroCreditNoSend, readySession);
+          await writeRestrictedJson(path.join(outputPath, 'zero-credit-proof.json'), {
+            projectId: input.target.projectId,
+            runId: input.target.runId,
+            sessionId: input.target.sessionId,
+            jobId,
+            zeroCreditNoSend: validatedProof,
+          });
+          generation.zeroCreditNoSend = validatedProof;
+          generation.status = 'passed';
+          proofSaved = true;
+          break;
+        }
+        if (current.status === 'failed' || current.status === 'cancelled') {
+          const code = current.failure?.code ?? current.status;
+          throw new BlockedCaseError(`Workflow generation ended with ${code} without zeroCreditNoSend proof.`);
+        }
+        const remainingForSleep = deadline - now();
+        if (remainingForSleep <= 0) break;
+        await sleep(Math.min(dependencies.pollIntervalMs ?? JOB_POLL_INTERVAL_MS, remainingForSleep));
+      }
+      if (!proofSaved) {
+        throw new BlockedCaseError('Workflow generation did not produce zeroCreditNoSend proof before its deadline.');
+      }
+    } else {
+      generation.status = 'running';
+      const submit = buildGenerateCommand(input, randomUUID());
+      const envelope = await submitGeneration(submit, 1, true) ?? await submitGeneration(submit, 2, true);
+      const jobId = validateJobEnvelope(envelope, input);
+      generation.jobId = jobId;
+
+      const deadline = now() + (dependencies.jobDeadlineMs ?? JOB_DEADLINE_MS);
+      let completedEnvelope = null;
+      while (now() <= deadline) {
+        const statusRecord = await execute(buildJobStatusCommand(input, jobId));
+        const current = apiResponse(statusRecord, 'readProjectWorkflowGenerationJob', 200);
+        validateJobEnvelope(current, input, jobId);
+        if (current.status === 'completed') {
+          completedEnvelope = current;
+          break;
+        }
+        if (current.status === 'failed' || current.status === 'cancelled') {
+          const code = current.failure?.code ?? current.status;
+          throw new Error(`Workflow generation ended with ${code}.`);
+        }
+        await sleep(dependencies.pollIntervalMs ?? JOB_POLL_INTERVAL_MS);
+      }
+      if (completedEnvelope === null) throw new Error('Workflow generation did not complete before its deadline.');
+
+      const resultRecord = await execute(buildJobResultCommand(input, jobId));
+      const result = apiResponse(resultRecord, 'readProjectWorkflowGenerationResult', 200);
+      validateGenerationResult(result, completedEnvelope, input, selection);
+      generation.artifactId = result.artifactId;
+      generation.definitionSha256 = result.definitionSha256;
+      const { assistantMaterial, outputSha256 } = result.nativeCompletion;
+      if (assistantMaterial?.kind !== 'turnContent'
+        || !isUuid(assistantMaterial.eventId) || !isSha256(assistantMaterial.contentSha256)) {
+        throw new Error('The workflow result does not contain a valid assistant reply receipt.');
+      }
+      const { projectId, runId: targetRunId, sessionId } = input.target;
+      const eventId = assistantMaterial.eventId;
+      const turnCommand = buildTurnDigestCommand([...targetArgs(input), ...runBoundArgs(input)], {
+        projectId, runId: targetRunId, sessionId, eventId,
+      });
+      const turn = parseJson((await execute({ ...turnCommand, metadataOnly: true })).stdout, turnCommand.id);
+      if (turn?.projectId !== projectId
+        || Object.keys(turn).length !== 5
+        || turn.runId !== targetRunId || turn.sessionId !== sessionId || turn.eventId !== eventId
+        || turn.contentSha256 !== assistantMaterial.contentSha256 || turn.contentSha256 !== outputSha256) {
+        throw new Error('The stored assistant reply does not match the workflow completion receipt.');
+      }
+      generation.storedTurn = { projectId, runId: targetRunId, sessionId, eventId, contentSha256: turn.contentSha256 };
+      generation.status = 'passed';
     }
-    const { projectId, runId: targetRunId, sessionId } = input.target;
-    const eventId = assistantMaterial.eventId;
-    const turnCommand = buildTurnDigestCommand([...targetArgs(input), ...runBoundArgs(input)], {
-      projectId, runId: targetRunId, sessionId, eventId,
-    });
-    const turn = parseJson((await execute({ ...turnCommand, metadataOnly: true })).stdout, turnCommand.id);
-    if (turn?.projectId !== projectId
-      || Object.keys(turn).length !== 5
-      || turn.runId !== targetRunId || turn.sessionId !== sessionId || turn.eventId !== eventId
-      || turn.contentSha256 !== assistantMaterial.contentSha256 || turn.contentSha256 !== outputSha256) {
-      throw new Error('The stored assistant reply does not match the workflow completion receipt.');
-    }
-    generation.storedTurn = { projectId, runId: targetRunId, sessionId, eventId, contentSha256: turn.contentSha256 };
-    generation.status = 'passed';
   } catch (error) {
     generation.status = error instanceof BlockedCaseError ? 'blocked' : 'failed';
     generation.failure = error.message;
     failure = error.message;
   }
 
-  if (runIdentityVerified && input.approvedDisposableRun) {
+  if (isCreditZero) {
+    if (preflightPassed && cancellationRequestPersisted && input.approvedDisposableRun) {
+      cleanup.status = 'running';
+      cleanup.replays = 0;
+      const cleanupDeadline = now() + (dependencies.cleanupDeadlineMs ?? CLEANUP_DEADLINE_MS);
+      const replayIntervalMs = dependencies.cleanupReplayIntervalMs ?? CLEANUP_REPLAY_INTERVAL_MS;
+      const pollIntervalMs = dependencies.cleanupPollIntervalMs ?? CLEANUP_POLL_INTERVAL_MS;
+      const [cancelCommand, verifyCommand] = buildCleanupCommands(input, cancellationKey, cancellationBody);
+      let replaysUsed = 0;
+      let lastCancelAt = now();
+      let cancelResponseUncertain = false;
+      let lastFailure = 'The disposable run cleanup did not complete before the 90-second deadline.';
+
+      try {
+        const remainingForInitial = Math.max(1, Math.min(COMMAND_TIMEOUT_MS, cleanupDeadline - now()));
+        const initialCancel = classifyCancelRecord(await invokeLogged(cancelCommand, remainingForInitial), input);
+        lastCancelAt = now();
+        if (initialCancel.kind === 'stop') throw new Error(initialCancel.failure);
+        if (initialCancel.kind === 'lost' || initialCancel.kind === 'queue_full') {
+          cancelResponseUncertain = true;
+          lastFailure = initialCancel.failure;
+        }
+
+        while (now() <= cleanupDeadline) {
+          const remainingForRead = cleanupDeadline - now();
+          if (remainingForRead <= 0) break;
+          let freshPending = false;
+          const statusOutcome = classifyRunStatusRecord(
+            await invokeLogged(verifyCommand, Math.min(COMMAND_TIMEOUT_MS, Math.max(1, remainingForRead))),
+            input,
+          );
+          if (statusOutcome.kind === 'stop') throw new Error(statusOutcome.failure);
+          if (statusOutcome.kind === 'ok') {
+            const runStatus = statusOutcome.status;
+            if (runStatus.executionState === 'cancelled' && isCompleteRuntimeCleanup(runStatus.runtimeCleanup)) {
+              cleanup.status = 'passed';
+              cleanup.runtimeCleanup = runStatus.runtimeCleanup;
+              cleanup.replays = replaysUsed;
+              break;
+            }
+            if (['completed', 'failed', 'indeterminate'].includes(runStatus.executionState)) {
+              throw new Error(`The disposable run ended in incompatible terminal state ${runStatus.executionState}.`);
+            }
+            if (runStatus.runtimeCleanup?.state === 'failed') {
+              throw new Error('The disposable run cleanup failed.');
+            }
+            if (runStatus.runtimeCleanup?.state === 'pending' || (runStatus.runtimeCleanup?.pending ?? 0) > 0) {
+              freshPending = true;
+              lastFailure = 'The disposable run cleanup remained pending.';
+            }
+          } else {
+            lastFailure = statusOutcome.failure;
+          }
+
+          const remainingAfterRead = cleanupDeadline - now();
+          if (remainingAfterRead <= 0) break;
+
+          if ((cancelResponseUncertain || freshPending)
+            && replaysUsed < MAX_CLEANUP_REPLAYS
+            && (now() - lastCancelAt) >= replayIntervalMs) {
+            replaysUsed += 1;
+            cleanup.replays = replaysUsed;
+            const replayOutcome = classifyCancelRecord(
+              await invokeLogged(cancelCommand, Math.min(COMMAND_TIMEOUT_MS, Math.max(1, remainingAfterRead))),
+              input,
+            );
+            lastCancelAt = now();
+            if (replayOutcome.kind === 'stop') throw new Error(replayOutcome.failure);
+            if (replayOutcome.kind === 'ok') {
+              cancelResponseUncertain = false;
+            } else {
+              cancelResponseUncertain = true;
+              lastFailure = replayOutcome.failure;
+            }
+          }
+
+          const remainingAfterReplay = cleanupDeadline - now();
+          if (remainingAfterReplay <= 0) break;
+          await sleep(Math.min(pollIntervalMs, remainingAfterReplay));
+        }
+
+        if (cleanup.status !== 'passed') {
+          throw new Error(lastFailure);
+        }
+      } catch (error) {
+        cleanup.status = 'failed';
+        cleanup.failure = error.message;
+        cleanup.replays = replaysUsed;
+        cleanup.cancellationRetained = cancellationRequestPersisted;
+      }
+    } else {
+      cleanup.status = 'not-attempted';
+      cleanup.failure = preflightPassed
+        ? 'Cancellation request record could not be saved.'
+        : 'Preflight did not complete.';
+      cleanup.cancellationRetained = false;
+    }
+  } else if (runIdentityVerified && input.approvedDisposableRun) {
     cleanup.status = 'running';
     try {
       const [cancelCommand, verifyCommand] = buildCleanupCommands(input, randomUUID());
@@ -839,9 +1393,11 @@ export async function runCase(options, env = process.env, dependencies = {}) {
 
   const result = {
     schemaVersion: 1,
-    caseId: CASE_ID,
+    caseId: input.caseId,
     runId,
-    scope: 'workflow generation through the public Gateway and verified disposable-run cancellation',
+    scope: isCreditZero
+      ? 'zero-credit workflow-generation no-send proof and bounded-replay cleanup through the public Gateway'
+      : 'workflow generation through the public Gateway and verified disposable-run cancellation',
     status,
     startedAt,
     completedAt: new Date().toISOString(),
@@ -863,11 +1419,19 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     commands: commandCount,
     generation,
     cleanup,
+    ...(isCreditZero
+      ? {
+          numericMatrix: buildNumericMatrix({
+            'credit-zero': status === 'passed' ? 'passed' : 'blocked',
+            ...(status === 'passed' ? {} : { 'credit-zero:reason': failure ?? 'Zero-credit proof or cleanup did not complete.' }),
+          }, { sourceCaseId: CREDIT_ZERO_CASE_ID }),
+        }
+      : {}),
     failure,
   };
   await persistResult(resultHandle, result);
   await resultHandle.close();
-  console.log(JSON.stringify({ status, caseId: CASE_ID, runId, evidence: outputPath, failure }));
+  console.log(JSON.stringify({ status, caseId: input.caseId, runId, evidence: outputPath, failure }));
   return status === 'passed' ? 0 : status === 'blocked' ? 2 : 1;
 }
 
