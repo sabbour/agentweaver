@@ -1391,7 +1391,10 @@ approved non-production target, and an approved disposable run. Follow
 for the input and retained evidence.
 
 This route-specific case checks workflow generation. It does not replace full
-P1 API acceptance.
+P1 API acceptance. For zero-credit workflow-generation denials, run the focused
+Orchestrator, Gateway, and CLI suites (`WorkflowGenerationContractTests`,
+`WorkflowGenerationJobStorePostgresTests`, `RuntimeNumericLimitsPostgresTests`,
+`GatewayWorkflowGenerationTests`, and `GatewayOpenApiParityTests`).
 
 ## Test task dispatch and completion through the Gateway
 

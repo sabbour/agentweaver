@@ -976,6 +976,298 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     }
 
     [Fact]
+    public async Task FixedCreditNoSendCommitsWorkflowGenerationProofAtomicallyAndRejectsGrantMismatch()
+    {
+        var binding = _registrations[0].Binding with
+        {
+            CopilotHardCreditLimit = 0m,
+            ObservationEndpoint = new("https://runtime.test/internal/runtime/observations")
+        };
+        await RegisterSourceAsync(0, binding);
+        var registration = _registrations[0];
+        var grant = _grants[0];
+        var jobStore = new WorkflowGenerationJobStore(fixture.DataSource, _schema);
+        const string prompt = "Create a workflow.";
+        var purposePrompt = WorkflowGenerationExecution.PurposeBoundPrompt(prompt);
+        var promptHash = RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(purposePrompt));
+        var create = new WorkflowGenerationJobCreate(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            binding.ProjectId,
+            binding.RunId,
+            binding.SessionId,
+            binding.TenantId,
+            binding.ActorIssuer,
+            binding.ActorId,
+            "zero-credit-atomic-1",
+            WorkflowGenerationJobStore.Hash("zero-credit-atomic-1"),
+            purposePrompt,
+            promptHash,
+            1,
+            binding.ProjectConfigurationRevision,
+            binding.AcceptedSelectionHash,
+            binding.ExecutionFence,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            binding.ModelSelectionReference!);
+        var job = (await jobStore.CreateOrGetAsync(create, CancellationToken.None)).Job;
+        await jobStore.TryBeginExecutionAsync(binding.ProjectId, job.JobId, CancellationToken.None);
+        Assert.True(await jobStore.MarkSendAdmittedAsync(binding.ProjectId, job.JobId, CancellationToken.None));
+
+        var decisionId = Guid.NewGuid();
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var cmd = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
+                 execution_fence, state_version, action_kind, idempotency_key, command_hash, decision_state, decision)
+            VALUES (@project, @run, @session, 'wf-gen-decision', @decision, @issuer, @actor,
+                    @fence, 1, 'proof', 'wf-gen-decision', repeat('a', 64), 'accepted', jsonb_build_object());
+            INSERT INTO "{_schema}".maf_root_model_turn_admissions
+                (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
+                 accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
+            VALUES (@project, @run, @session, @request, @issuer, @actor, @tenant,
+                    @selection, @prompt, @fence, @decision, 1)
+            """, connection))
+        {
+            cmd.Parameters.AddWithValue("project", binding.ProjectId);
+            cmd.Parameters.AddWithValue("run", binding.RunId);
+            cmd.Parameters.AddWithValue("session", binding.SessionId);
+            cmd.Parameters.AddWithValue("request", job.NativeRequestId);
+            cmd.Parameters.AddWithValue("decision", decisionId);
+            cmd.Parameters.AddWithValue("issuer", binding.ActorIssuer);
+            cmd.Parameters.AddWithValue("actor", binding.ActorId);
+            cmd.Parameters.AddWithValue("tenant", binding.TenantId);
+            cmd.Parameters.AddWithValue("selection", binding.AcceptedSelectionHash);
+            cmd.Parameters.AddWithValue("prompt", promptHash);
+            cmd.Parameters.AddWithValue("fence", binding.ExecutionFence);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        var (proof, _, _) = FixedCreditEvidence(registration, grant, _sources[0]);
+        var requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
+            "message", job.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
+            "user", [new RuntimeA2ATextPart("text", purposePrompt)],
+            registration, RuntimeCredentialPurpose.Observe, AddressedMessageDeliveryMode.Immediate);
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, grant.GrantId, _sources[0],
+            RuntimeUsageSourceReceiptContract.HashSource(registration, _sources[0]),
+            DateTimeOffset.UtcNow);
+        var receipt = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+            1, RuntimeFixedCreditGuardStage.HostPreQueue, RuntimeFixedCreditGuardCode.HardLimitZero,
+            registration, RuntimeContractValidation.RegistrationHash(registration),
+            job.NativeRequestId, requestHash, sourceReceipt.CanonicalPayloadHash,
+            grant.GrantId, grant.Revision, DateTimeOffset.UtcNow, string.Empty));
+        var cursorHash = new string('c', 64);
+        var evidence = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
+            1, registration.RuntimeInstanceId, registration.Revision, binding.ExecutionFence,
+            job.NativeRequestId, RuntimeFixedCreditGuardStage.HostPreQueue, receipt.CanonicalPayloadHash,
+            receipt.RegistrationHash, sourceReceipt.CanonicalPayloadHash, grant.GrantId, grant.Revision,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(_sources[0].SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+
+        // Grant rotation: a mismatched grant at write time must be rejected.
+        var rotatedGrant = grant with { Revision = grant.Revision + 1 };
+        using (var rotatedRig = CreateRuntimeUsageOwner(registration, rotatedGrant))
+        {
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                rotatedRig.Owner.RecordFixedCreditGuardAsync(
+                    rotatedRig.Context, new(SourceProof(rotatedGrant), receipt), CancellationToken.None));
+        }
+
+        using (var writeRig = CreateRuntimeUsageOwner(registration, grant))
+        {
+            Assert.Equal(receipt, await writeRig.Owner.RecordFixedCreditGuardAsync(
+                writeRig.Context, new(proof, receipt), CancellationToken.None));
+            Assert.Equal(evidence, await writeRig.Owner.RecordFixedCreditNoSendAsync(
+                writeRig.Context, new(proof, receipt, evidence), CancellationToken.None));
+        }
+
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.workflow_generation.fixed_credit_no_send"));
+        var status = await jobStore.ReadZeroCreditNoSendStatusAsync(job, CancellationToken.None);
+        Assert.NotNull(status);
+        Assert.Equal(job.NativeRequestId, status!.NativeRequestId);
+        Assert.Equal(evidence.CanonicalPayloadHash, status.ReceiptSha256);
+
+        // Exact replay returns stored evidence without duplicating the job proof.
+        using (var replayRig = CreateRuntimeUsageOwner(registration, grant))
+        {
+            Assert.Equal(evidence, await replayRig.Owner.RecordFixedCreditNoSendAsync(
+                replayRig.Context, new(proof, receipt, evidence), CancellationToken.None));
+        }
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.workflow_generation.fixed_credit_no_send"));
+    }
+
+    [Fact]
+    public async Task FixedCreditNoSendIgnoresMissingOrMismatchedAdmissionAndRollsBackOnConflict()
+    {
+        var binding = _registrations[0].Binding with
+        {
+            CopilotHardCreditLimit = 0m,
+            ObservationEndpoint = new("https://runtime.test/internal/runtime/observations")
+        };
+        await RegisterSourceAsync(0, binding);
+        var registration = _registrations[0];
+        var grant = _grants[0];
+        var jobStore = new WorkflowGenerationJobStore(fixture.DataSource, _schema);
+        const string prompt = "Create a workflow.";
+        var purposePrompt = WorkflowGenerationExecution.PurposeBoundPrompt(prompt);
+        var promptHash = RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(purposePrompt));
+
+        // 1. Job without maf_root_model_turn_admissions: ordinary fixed-credit handling succeeds, 0 job proofs written.
+        var missingAdmissionJob = (await jobStore.CreateOrGetAsync(new WorkflowGenerationJobCreate(
+            Guid.NewGuid(), Guid.NewGuid(), binding.ProjectId, binding.RunId, binding.SessionId,
+            binding.TenantId, binding.ActorIssuer, binding.ActorId, "missing-admission",
+            WorkflowGenerationJobStore.Hash("missing-admission"), purposePrompt, promptHash,
+            1, binding.ProjectConfigurationRevision, binding.AcceptedSelectionHash,
+            binding.ExecutionFence, registration.RuntimeInstanceId, registration.Revision,
+            binding.ModelSelectionReference!), CancellationToken.None)).Job;
+        await jobStore.TryBeginExecutionAsync(binding.ProjectId, missingAdmissionJob.JobId, CancellationToken.None);
+        Assert.True(await jobStore.MarkSendAdmittedAsync(binding.ProjectId, missingAdmissionJob.JobId, CancellationToken.None));
+
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, grant.GrantId, _sources[0],
+            RuntimeUsageSourceReceiptContract.HashSource(registration, _sources[0]), DateTimeOffset.UtcNow);
+        var (proof, _, _) = FixedCreditEvidence(registration, grant, _sources[0]);
+        var missingAdmissionRequestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
+            "message", missingAdmissionJob.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
+            "user", [new RuntimeA2ATextPart("text", purposePrompt)],
+            registration, RuntimeCredentialPurpose.Observe, AddressedMessageDeliveryMode.Immediate);
+        var missingAdmissionGuard = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+            1, RuntimeFixedCreditGuardStage.HostPreQueue, RuntimeFixedCreditGuardCode.HardLimitZero,
+            registration, RuntimeContractValidation.RegistrationHash(registration),
+            missingAdmissionJob.NativeRequestId, missingAdmissionRequestHash, sourceReceipt.CanonicalPayloadHash,
+            grant.GrantId, grant.Revision, DateTimeOffset.UtcNow, string.Empty));
+        var cursorHash = new string('c', 64);
+        var missingAdmissionEvidence = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
+            1, registration.RuntimeInstanceId, registration.Revision, binding.ExecutionFence,
+            missingAdmissionJob.NativeRequestId, RuntimeFixedCreditGuardStage.HostPreQueue,
+            missingAdmissionGuard.CanonicalPayloadHash, missingAdmissionGuard.RegistrationHash,
+            sourceReceipt.CanonicalPayloadHash, grant.GrantId, grant.Revision,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(_sources[0].SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+
+        using (var writeRig = CreateRuntimeUsageOwner(registration, grant))
+        {
+            await writeRig.Owner.RecordFixedCreditGuardAsync(
+                writeRig.Context, new(proof, missingAdmissionGuard), CancellationToken.None);
+            // Guard alone writes 0 job proofs.
+            Assert.Equal(0, await CountFixedCreditEventsAsync("orchestrator.workflow_generation.fixed_credit_no_send"));
+            await writeRig.Owner.RecordFixedCreditNoSendAsync(
+                writeRig.Context, new(proof, missingAdmissionGuard, missingAdmissionEvidence), CancellationToken.None);
+        }
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
+        Assert.Equal(0, await CountFixedCreditEventsAsync("orchestrator.workflow_generation.fixed_credit_no_send"));
+
+        // 2. Wrong requestHash even with matching admission: ordinary fixed-credit handling succeeds, 0 job proofs written.
+        var wrongHashJob = (await jobStore.CreateOrGetAsync(new WorkflowGenerationJobCreate(
+            Guid.NewGuid(), Guid.NewGuid(), binding.ProjectId, binding.RunId, binding.SessionId,
+            binding.TenantId, binding.ActorIssuer, binding.ActorId, "wrong-hash",
+            WorkflowGenerationJobStore.Hash("wrong-hash"), purposePrompt, promptHash,
+            1, binding.ProjectConfigurationRevision, binding.AcceptedSelectionHash,
+            binding.ExecutionFence, registration.RuntimeInstanceId, registration.Revision,
+            binding.ModelSelectionReference!), CancellationToken.None)).Job;
+        await jobStore.TryBeginExecutionAsync(binding.ProjectId, wrongHashJob.JobId, CancellationToken.None);
+        Assert.True(await jobStore.MarkSendAdmittedAsync(binding.ProjectId, wrongHashJob.JobId, CancellationToken.None));
+        var decisionId = Guid.NewGuid();
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var cmd = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
+                 execution_fence, state_version, action_kind, idempotency_key, command_hash, decision_state, decision)
+            VALUES (@project, @run, @session, 'wf-gen-wrong-hash', @decision, @issuer, @actor,
+                    @fence, 1, 'proof', 'wf-gen-wrong-hash', repeat('a', 64), 'accepted', jsonb_build_object());
+            INSERT INTO "{_schema}".maf_root_model_turn_admissions
+                (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
+                 accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
+            VALUES (@project, @run, @session, @request, @issuer, @actor, @tenant,
+                    @selection, @prompt, @fence, @decision, 1)
+            """, connection))
+        {
+            cmd.Parameters.AddWithValue("project", binding.ProjectId);
+            cmd.Parameters.AddWithValue("run", binding.RunId);
+            cmd.Parameters.AddWithValue("session", binding.SessionId);
+            cmd.Parameters.AddWithValue("request", wrongHashJob.NativeRequestId);
+            cmd.Parameters.AddWithValue("decision", decisionId);
+            cmd.Parameters.AddWithValue("issuer", binding.ActorIssuer);
+            cmd.Parameters.AddWithValue("actor", binding.ActorId);
+            cmd.Parameters.AddWithValue("tenant", binding.TenantId);
+            cmd.Parameters.AddWithValue("selection", binding.AcceptedSelectionHash);
+            cmd.Parameters.AddWithValue("prompt", promptHash);
+            cmd.Parameters.AddWithValue("fence", binding.ExecutionFence);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        var wrongRequestHash = new string('9', 64);
+        var wrongHashGuard = RuntimeFixedCreditGuardContract.Seal(missingAdmissionGuard with
+        {
+            RequestId = wrongHashJob.NativeRequestId,
+            RequestHash = wrongRequestHash,
+            CanonicalPayloadHash = string.Empty
+        });
+        var wrongHashEvidence = RuntimeFixedCreditGuardContract.Seal(missingAdmissionEvidence with
+        {
+            RequestId = wrongHashJob.NativeRequestId,
+            GuardReceiptHash = wrongHashGuard.CanonicalPayloadHash,
+            CanonicalPayloadHash = string.Empty
+        });
+        using (var writeRig = CreateRuntimeUsageOwner(registration, grant))
+        {
+            await writeRig.Owner.RecordFixedCreditGuardAsync(
+                writeRig.Context, new(proof, wrongHashGuard), CancellationToken.None);
+            await writeRig.Owner.RecordFixedCreditNoSendAsync(
+                writeRig.Context, new(proof, wrongHashGuard, wrongHashEvidence), CancellationToken.None);
+        }
+        Assert.Equal(2, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
+        Assert.Equal(0, await CountFixedCreditEventsAsync("orchestrator.workflow_generation.fixed_credit_no_send"));
+
+        // 3. Conflicting job proof event rolls back the entire transaction so no_send is not committed either.
+        var conflictEventId = WorkflowGenerationZeroCreditNoSendProof.EventId(
+            wrongHashJob.JobId, wrongHashJob.NativeRequestId);
+        var outbox = new Agentweaver.Persistence.Postgres.PostgresOutbox(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await outbox.EnqueueAsync(connection, transaction, new Agentweaver.Persistence.Postgres.OutboxEvent(
+                conflictEventId,
+                WorkflowGenerationZeroCreditNoSendProof.StreamId(binding.ProjectId, binding.RunId),
+                $"workflow-generation-fixed-credit-no-send/{conflictEventId:D}",
+                "orchestrator.workflow_generation.fixed_credit_no_send",
+                1,
+                JsonSerializer.SerializeToElement(new { conflicting = true }),
+                DateTimeOffset.UtcNow));
+            await transaction.CommitAsync();
+        }
+        var exactRequestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
+            "message", wrongHashJob.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
+            "user", [new RuntimeA2ATextPart("text", purposePrompt)],
+            registration, RuntimeCredentialPurpose.Observe, AddressedMessageDeliveryMode.Immediate);
+        var conflictGuard = RuntimeFixedCreditGuardContract.Seal(missingAdmissionGuard with
+        {
+            RequestId = wrongHashJob.NativeRequestId,
+            RequestHash = exactRequestHash,
+            CanonicalPayloadHash = string.Empty
+        });
+        var conflictEvidence = RuntimeFixedCreditGuardContract.Seal(missingAdmissionEvidence with
+        {
+            RequestId = wrongHashJob.NativeRequestId,
+            GuardReceiptHash = conflictGuard.CanonicalPayloadHash,
+            CanonicalPayloadHash = string.Empty
+        });
+        using (var conflictRig = CreateRuntimeUsageOwner(registration, grant))
+        {
+            await conflictRig.Owner.RecordFixedCreditGuardAsync(
+                conflictRig.Context, new(proof, conflictGuard), CancellationToken.None);
+            var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                conflictRig.Owner.RecordFixedCreditNoSendAsync(
+                    conflictRig.Context, new(proof, conflictGuard, conflictEvidence), CancellationToken.None));
+            Assert.Equal("runtime_fixed_credit_guard_conflict", error.Code);
+        }
+        // Transaction rolled back: fixed_credit_no_send count remains 2, and conflicting job proof was not replaced.
+        Assert.Equal(2, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.workflow_generation.fixed_credit_no_send"));
+    }
+
+    [Fact]
     public async Task FixedCreditOwnerRejectsStaleEvidenceAfterRegistrationFenceRotation()
     {
         var binding = _registrations[0].Binding with

@@ -782,9 +782,13 @@ public sealed partial class GatewayOwnerClient(
 
         if (route.OperationId is "generateProjectWorkflow" or "readProjectWorkflowGenerationJob")
         {
-            if (!HasExactPropertyNames(root,
-                    ["jobId", "status", "projectId", "runId", "sessionId", "createdAt", "updatedAt",
-                        "statusUrl", "resultUrl", "artifact", "failure"]) ||
+            var hasBaseProperties = HasExactPropertyNames(root,
+                ["jobId", "status", "projectId", "runId", "sessionId", "createdAt", "updatedAt",
+                    "statusUrl", "resultUrl", "artifact", "failure"]);
+            var hasStatusWithProof = !isSubmission && HasExactPropertyNames(root,
+                ["jobId", "status", "projectId", "runId", "sessionId", "createdAt", "updatedAt",
+                    "statusUrl", "resultUrl", "artifact", "failure", "zeroCreditNoSend"]);
+            if (!(hasBaseProperties || hasStatusWithProof) ||
                 !root.TryGetProperty("jobId", out var jobIdValue) ||
                 !TryGetWorkflowGuid(jobIdValue, out jobId) ||
                 !root.TryGetProperty("status", out var statusValue) || statusValue.ValueKind != JsonValueKind.String ||
@@ -793,7 +797,8 @@ public sealed partial class GatewayOwnerClient(
                 string.IsNullOrWhiteSpace(ReadString(root, "runId")) ||
                 string.IsNullOrWhiteSpace(ReadString(root, "sessionId")) ||
                 !IsWorkflowGenerationEnvelopePartValid(root, "artifact", ["artifactId", "workflowId", "definitionRevision"]) ||
-                !IsWorkflowGenerationEnvelopePartValid(root, "failure", ["code", "message"]))
+                !IsWorkflowGenerationEnvelopePartValid(root, "failure", ["code", "message"]) ||
+                (hasStatusWithProof && !IsWorkflowGenerationZeroCreditNoSendValid(root)))
                 throw OwnerContractFailure("workflow_generation_owner_contract_invalid");
 
             if (isSubmission &&
@@ -895,6 +900,51 @@ public sealed partial class GatewayOwnerClient(
             value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
                 ? property.GetString()
                 : null;
+    }
+
+    private static bool IsWorkflowGenerationZeroCreditNoSendValid(JsonElement envelope)
+    {
+        if (!envelope.TryGetProperty("zeroCreditNoSend", out var proof) ||
+            proof.ValueKind != JsonValueKind.Object ||
+            !HasExactPropertyNames(proof,
+                ["nativeRequestId", "runtimeInstanceId", "registrationRevision", "executionFence",
+                    "stage", "code", "receiptSha256", "observedEventCount", "rangeComplete",
+                    "beforeCursorSha256", "afterCursorSha256", "recordedAt", "verifiedAt"]) ||
+            !proof.TryGetProperty("nativeRequestId", out var nativeRequestId) ||
+            !TryGetWorkflowGuid(nativeRequestId, out var nativeRequestGuid) || nativeRequestGuid == Guid.Empty ||
+            !proof.TryGetProperty("runtimeInstanceId", out var runtimeInstanceId) ||
+            !TryGetWorkflowGuid(runtimeInstanceId, out var runtimeGuid) || runtimeGuid == Guid.Empty ||
+            !proof.TryGetProperty("registrationRevision", out var registrationRevision) ||
+            !TryGetWorkflowInt64(registrationRevision, out var registrationRevisionValue) || registrationRevisionValue < 1 ||
+            !proof.TryGetProperty("executionFence", out var executionFence) ||
+            !TryGetWorkflowInt64(executionFence, out var executionFenceValue) || executionFenceValue < 1 ||
+            ReadString(proof, "stage") != "hostPreQueue" ||
+            ReadString(proof, "code") != "hardLimitZero" ||
+            !IsSha256(ReadString(proof, "receiptSha256")) ||
+            !proof.TryGetProperty("observedEventCount", out var observedEventCount) ||
+            observedEventCount.ValueKind != JsonValueKind.Number ||
+            !observedEventCount.TryGetInt32(out var observedCountValue) || observedCountValue != 0 ||
+            !proof.TryGetProperty("rangeComplete", out var rangeComplete) ||
+            rangeComplete.ValueKind != JsonValueKind.True ||
+            !IsSha256(ReadString(proof, "beforeCursorSha256")) ||
+            !IsSha256(ReadString(proof, "afterCursorSha256")) ||
+            ReadString(proof, "beforeCursorSha256") != ReadString(proof, "afterCursorSha256") ||
+            !IsIsoDateTime(proof, "recordedAt") ||
+            !IsIsoDateTime(proof, "verifiedAt"))
+            return false;
+
+        return true;
+
+        static string? ReadString(JsonElement value, string name) =>
+            value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+
+        static bool IsIsoDateTime(JsonElement value, string name) =>
+            value.TryGetProperty(name, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            DateTimeOffset.TryParse(
+                property.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _);
     }
 
     private bool IsExpectedOwnerLocation(Uri? location, string expectedPath, GatewayOwner owner)

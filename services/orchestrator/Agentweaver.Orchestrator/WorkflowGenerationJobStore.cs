@@ -21,6 +21,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
     private readonly string _schema = $"\"{schema}\"";
     private readonly string _table = $"\"{schema}\".workflow_generation_jobs";
     private readonly string _evidenceTable = $"\"{schema}\".maf_runtime_evidence_receipts";
+    private readonly string _outboxEvents = $"\"{schema}\".outbox_events";
 
     internal async Task<bool> IsAvailableAsync(CancellationToken cancellationToken)
     {
@@ -467,7 +468,172 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
                 // Invalid evidence cannot authorize cleanup.
             }
         }
-        return false;
+        return await ReadZeroCreditNoSendProofAsync(job, cancellationToken).ConfigureAwait(false) is not null;
+    }
+
+    internal async Task<WorkflowGenerationZeroCreditNoSendStatus?> ReadZeroCreditNoSendStatusAsync(
+        WorkflowGenerationJob job,
+        CancellationToken cancellationToken)
+    {
+        var proof = await ReadZeroCreditNoSendProofAsync(job, cancellationToken).ConfigureAwait(false);
+        return proof?.ToStatus();
+    }
+
+    private async Task<WorkflowGenerationZeroCreditNoSendProof?> ReadZeroCreditNoSendProofAsync(
+        WorkflowGenerationJob job,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using (var available = new NpgsqlCommand("SELECT to_regclass(@outbox) IS NOT NULL", connection))
+        {
+            available.Parameters.AddWithValue("outbox", NpgsqlDbType.Text, $"{schema}.outbox_events");
+            if (!(bool)(await available.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+                return null;
+        }
+
+        var streamId = WorkflowGenerationZeroCreditNoSendProof.StreamId(job.ProjectId, job.RunId);
+        var eventId = WorkflowGenerationZeroCreditNoSendProof.EventId(job.JobId, job.NativeRequestId);
+        string? proofJson;
+        await using (var command = new NpgsqlCommand($"""
+            SELECT e.payload::text
+            FROM {_outboxEvents} e
+            JOIN {_schema}.maf_root_model_turn_admissions a
+              ON a.project_id = @project AND a.run_id = @run AND a.request_id = @request
+            WHERE e.id = @eventId
+              AND e.stream_id = @stream
+              AND e.event_type = 'orchestrator.workflow_generation.fixed_credit_no_send'
+              AND e.event_version = 1
+              AND a.root_session_id = @session AND a.tenant_id = @tenant
+              AND a.actor_issuer = @issuer AND a.actor_id = @actor
+              AND a.accepted_selection_hash = @selection AND a.prompt_hash = @prompt
+              AND a.execution_fence = @fence AND a.decision_state_version = @decision
+            """, connection))
+        {
+            command.Parameters.AddWithValue("eventId", NpgsqlDbType.Uuid, eventId);
+            command.Parameters.AddWithValue("stream", NpgsqlDbType.Text, streamId);
+            command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, job.ProjectId);
+            command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, job.RunId);
+            command.Parameters.AddWithValue("request", NpgsqlDbType.Uuid, job.NativeRequestId);
+            command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, job.SessionId);
+            command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, job.TenantId);
+            command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, job.ActorIssuer);
+            command.Parameters.AddWithValue("actor", NpgsqlDbType.Varchar, job.ActorId);
+            command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, job.AcceptedSelectionHash);
+            command.Parameters.AddWithValue("prompt", NpgsqlDbType.Char, job.PromptSha256);
+            command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, job.ExecutionFence);
+            command.Parameters.AddWithValue("decision", NpgsqlDbType.Bigint, job.ExpectedDecisionStateVersion);
+            proofJson = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        }
+        if (proofJson is null)
+            return null;
+
+        try
+        {
+            var proof = JsonSerializer.Deserialize<WorkflowGenerationZeroCreditNoSendProof>(proofJson, JsonOptions);
+            if (proof is null)
+                return null;
+            proof.Validate();
+            if (!proof.MatchesJob(job) ||
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(job.Prompt)) != job.PromptSha256)
+                return null;
+
+            var guardJson = await ReadUniqueOutboxPayloadAsync(
+                connection,
+                streamId,
+                "orchestrator.runtime.fixed_credit_denial",
+                "payload->>'canonicalPayloadHash' = @hash",
+                proof.GuardReceiptHash,
+                cancellationToken).ConfigureAwait(false);
+            if (guardJson is null)
+                return null;
+            var guard = JsonSerializer.Deserialize<RuntimeFixedCreditGuardReceipt>(guardJson, JsonOptions);
+            if (guard is null)
+                return null;
+            RuntimeFixedCreditGuardContract.ValidateReceipt(guard);
+            var binding = guard.Registration.Binding;
+            if (guard.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+                guard.Code != RuntimeFixedCreditGuardCode.HardLimitZero ||
+                guard.RequestId != job.NativeRequestId ||
+                guard.RequestHash != proof.RequestHash ||
+                guard.Registration.RuntimeInstanceId != job.RuntimeInstanceId ||
+                guard.Registration.Revision != job.RegistrationRevision ||
+                binding.ProjectId != job.ProjectId ||
+                binding.RunId != job.RunId ||
+                binding.SessionId != job.SessionId ||
+                binding.TenantId != job.TenantId ||
+                binding.ActorIssuer != job.ActorIssuer ||
+                binding.ActorId != job.ActorId ||
+                binding.ProjectConfigurationRevision != job.ConfigurationRevision ||
+                binding.AcceptedSelectionHash != job.AcceptedSelectionHash ||
+                binding.ExecutionFence != job.ExecutionFence ||
+                binding.ModelSelectionReference != job.ModelSelectionReference ||
+                guard.RecordedAt != proof.RecordedAt)
+                return null;
+
+            var noSendJson = await ReadUniqueOutboxPayloadAsync(
+                connection,
+                streamId,
+                "orchestrator.runtime.fixed_credit_no_send",
+                "payload->>'guardReceiptHash' = @hash",
+                proof.GuardReceiptHash,
+                cancellationToken).ConfigureAwait(false);
+            if (noSendJson is null)
+                return null;
+            var noSend = JsonSerializer.Deserialize<RuntimeFixedCreditNoSendReceipt>(noSendJson, JsonOptions);
+            if (noSend is null ||
+                noSend.ContractVersion != 1 ||
+                noSend.CanonicalPayloadHash != proof.NoSendReceiptHash ||
+                noSend.GuardReceiptHash != proof.GuardReceiptHash ||
+                noSend.RegistrationHash != guard.RegistrationHash ||
+                noSend.RuntimeInstanceId != job.RuntimeInstanceId ||
+                noSend.RegistrationRevision != job.RegistrationRevision ||
+                noSend.ExecutionFence != job.ExecutionFence ||
+                noSend.RequestId != job.NativeRequestId ||
+                noSend.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+                noSend.SourceHash != guard.SourceHash ||
+                noSend.SourceGrantId != guard.SourceGrantId ||
+                noSend.SourceGrantRevision != guard.SourceGrantRevision ||
+                noSend.BeforeCursorHash != proof.BeforeCursorHash ||
+                noSend.AfterCursorHash != proof.AfterCursorHash ||
+                noSend.BeforeCursorHash != noSend.AfterCursorHash ||
+                noSend.ObservedEventCount != 0 ||
+                !noSend.RangeComplete ||
+                noSend.VerifiedAt != proof.VerifiedAt)
+                return null;
+
+            return proof;
+        }
+        catch (Exception exception) when (exception is JsonException or RuntimeAuthorizationException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<string?> ReadUniqueOutboxPayloadAsync(
+        NpgsqlConnection connection,
+        string streamId,
+        string eventType,
+        string predicate,
+        string hash,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload::text
+            FROM {_outboxEvents}
+            WHERE stream_id = @stream
+              AND event_type = @eventType
+              AND event_version = 1
+              AND {predicate}
+            LIMIT 2
+            """, connection);
+        command.Parameters.AddWithValue("stream", NpgsqlDbType.Text, streamId);
+        command.Parameters.AddWithValue("eventType", NpgsqlDbType.Text, eventType);
+        command.Parameters.AddWithValue("hash", NpgsqlDbType.Text, hash);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        var payload = reader.GetString(0);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? null : payload;
     }
 
     internal async Task<bool> WithExecutionLockAsync(

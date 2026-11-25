@@ -267,6 +267,124 @@ public sealed class GatewayWorkflowGenerationTests
         Assert.Single(calls);
     }
 
+    [Fact]
+    public async Task StatusAcceptsOptionalZeroCreditNoSendAndRejectsMalformedOrSubmitProof()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var runBearer = CreateBearer(signingKey, bound: true);
+        var projectBearer = CreateBearer(signingKey, bound: false);
+        var jobId = Guid.NewGuid();
+        var nativeRequestId = Guid.NewGuid();
+        var runtimeInstanceId = Guid.NewGuid();
+        var validProof = new
+        {
+            nativeRequestId,
+            runtimeInstanceId,
+            registrationRevision = 2L,
+            executionFence = 1L,
+            stage = "hostPreQueue",
+            code = "hardLimitZero",
+            receiptSha256 = new string('a', 64),
+            observedEventCount = 0,
+            rangeComplete = true,
+            beforeCursorSha256 = new string('b', 64),
+            afterCursorSha256 = new string('b', 64),
+            recordedAt = "2026-11-25T01:00:00Z",
+            verifiedAt = "2026-11-25T01:00:01Z",
+        };
+
+        var validCalls = new List<ForwardedCall>();
+        await using (var validGateway = await StartGatewayAsync(
+            signingKey, runBearer, projectBearer, validCalls,
+            jobIdOverride: jobId, ownerZeroCreditNoSend: validProof))
+        {
+            using var statusRequest = new HttpRequestMessage(
+                HttpMethod.Get, $"/api/v1/projects/{ProjectId}/workflows/generation-jobs/{jobId:D}");
+            statusRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", runBearer);
+            using var statusResponse = await validGateway.Client.SendAsync(statusRequest);
+            Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+            using var statusJson = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync());
+            var proof = statusJson.RootElement.GetProperty("zeroCreditNoSend");
+            Assert.Equal(nativeRequestId, proof.GetProperty("nativeRequestId").GetGuid());
+            Assert.Equal("hostPreQueue", proof.GetProperty("stage").GetString());
+            Assert.Equal("hardLimitZero", proof.GetProperty("code").GetString());
+            Assert.Equal(0, proof.GetProperty("observedEventCount").GetInt32());
+            Assert.True(proof.GetProperty("rangeComplete").GetBoolean());
+
+            // Submit payload must still reject zeroCreditNoSend from the owner.
+            using var submitRequest = CreateSubmission(runBearer, projectBearer);
+            using var submitResponse = await validGateway.Client.SendAsync(submitRequest);
+            Assert.Equal(HttpStatusCode.BadGateway, submitResponse.StatusCode);
+        }
+
+        object[] invalidProofs =
+        [
+            new
+            {
+                nativeRequestId,
+                runtimeInstanceId,
+                registrationRevision = 2L,
+                executionFence = 1L,
+                stage = "hostPreQueue",
+                code = "hardLimitZero",
+                receiptSha256 = new string('a', 64),
+                observedEventCount = 1,
+                rangeComplete = true,
+                beforeCursorSha256 = new string('b', 64),
+                afterCursorSha256 = new string('b', 64),
+                recordedAt = "2026-11-25T01:00:00Z",
+                verifiedAt = "2026-11-25T01:00:01Z",
+            },
+            new
+            {
+                nativeRequestId,
+                runtimeInstanceId,
+                registrationRevision = 2L,
+                executionFence = 1L,
+                stage = "hostPreQueue",
+                code = "hardLimitZero",
+                receiptSha256 = new string('a', 64),
+                observedEventCount = 0,
+                rangeComplete = true,
+                beforeCursorSha256 = new string('b', 64),
+                afterCursorSha256 = new string('c', 64),
+                recordedAt = "2026-11-25T01:00:00Z",
+                verifiedAt = "2026-11-25T01:00:01Z",
+            },
+            new
+            {
+                nativeRequestId,
+                runtimeInstanceId,
+                registrationRevision = 2L,
+                executionFence = 1L,
+                stage = "hostPreQueue",
+                code = "hardLimitZero",
+                receiptSha256 = new string('a', 64),
+                observedEventCount = 0,
+                rangeComplete = true,
+                beforeCursorSha256 = new string('b', 64),
+                afterCursorSha256 = new string('b', 64),
+                recordedAt = "2026-11-25T01:00:00Z",
+                verifiedAt = "2026-11-25T01:00:01Z",
+                extraField = "unexpected",
+            },
+        ];
+
+        foreach (var invalidProof in invalidProofs)
+        {
+            var invalidCalls = new List<ForwardedCall>();
+            await using var invalidGateway = await StartGatewayAsync(
+                signingKey, runBearer, projectBearer, invalidCalls,
+                jobIdOverride: jobId, ownerZeroCreditNoSend: invalidProof);
+            using var statusRequest = new HttpRequestMessage(
+                HttpMethod.Get, $"/api/v1/projects/{ProjectId}/workflows/generation-jobs/{jobId:D}");
+            statusRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", runBearer);
+            using var statusResponse = await invalidGateway.Client.SendAsync(statusRequest);
+            Assert.Equal(HttpStatusCode.BadGateway, statusResponse.StatusCode);
+        }
+    }
+
     private static async Task<GatewayResourceServer> StartGatewayAsync(
         SecurityKey signingKey,
         string runBearer,
@@ -278,7 +396,8 @@ public sealed class GatewayWorkflowGenerationTests
         bool wrongOwnerRevisionType = false,
         string? ownerRunId = null,
         Guid? jobIdOverride = null,
-        Guid? artifactIdOverride = null)
+        Guid? artifactIdOverride = null,
+        object? ownerZeroCreditNoSend = null)
     {
         var jobId = jobIdOverride ?? Guid.NewGuid();
         var artifactId = artifactIdOverride ?? Guid.NewGuid();
@@ -347,7 +466,8 @@ public sealed class GatewayWorkflowGenerationTests
                     Assert.Equal(RunId, submitted.RootElement.GetProperty("runId").GetString());
                     Assert.Equal(SessionId, submitted.RootElement.GetProperty("sessionId").GetString());
                     var ownerUrl = $"/api/projects/{ProjectId}/workflows/generation-jobs/{jobId:D}";
-                    var response = JsonResponse(HttpStatusCode.Accepted, Envelope(jobId, "queued", null));
+                    var response = JsonResponse(HttpStatusCode.Accepted,
+                        Envelope(jobId, "queued", null, zeroCreditNoSend: ownerZeroCreditNoSend));
                     response.Headers.Location = new Uri(ownerUrl, UriKind.Relative);
                     return response;
                 }
@@ -394,13 +514,36 @@ public sealed class GatewayWorkflowGenerationTests
                         artifactId,
                         workflowId = "generated-workflow",
                         definitionRevision = "1",
-                    }, ownerRunId));
+                    }, ownerRunId, ownerZeroCreditNoSend));
             });
     }
 
-    private static object Envelope(Guid jobId, string status, object? artifact, string? runId = null)
+    private static object Envelope(
+        Guid jobId,
+        string status,
+        object? artifact,
+        string? runId = null,
+        object? zeroCreditNoSend = null)
     {
         var ownerUrl = $"/api/projects/{ProjectId}/workflows/generation-jobs/{jobId:D}";
+        if (zeroCreditNoSend is not null)
+        {
+            return new
+            {
+                jobId,
+                status,
+                projectId = ProjectId,
+                runId = runId ?? RunId,
+                sessionId = SessionId,
+                createdAt = "2026-11-17T00:00:00Z",
+                updatedAt = "2026-11-17T00:00:01Z",
+                statusUrl = ownerUrl,
+                resultUrl = ownerUrl + "/result",
+                artifact,
+                failure = (object?)null,
+                zeroCreditNoSend,
+            };
+        }
         return new
         {
             jobId,

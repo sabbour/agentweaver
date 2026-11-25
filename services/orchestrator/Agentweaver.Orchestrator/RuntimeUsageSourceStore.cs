@@ -1741,7 +1741,160 @@ internal sealed class RuntimeUsageSourceStore(
             "orchestrator.runtime.fixed_credit_no_send", 1,
             JsonSerializer.SerializeToElement(request.Evidence, JsonOptions),
             request.Evidence.VerifiedAt), cancellationToken).ConfigureAwait(false);
+        await TryRecordWorkflowGenerationZeroCreditNoSendProofWithinTransactionAsync(
+            connection, transaction, registration, stored, request.Evidence, cancellationToken)
+            .ConfigureAwait(false);
         return request.Evidence;
+    }
+
+    private async Task TryRecordWorkflowGenerationZeroCreditNoSendProofWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeFixedCreditGuardReceipt guard, RuntimeFixedCreditNoSendReceipt evidence,
+        CancellationToken cancellationToken)
+    {
+        if (guard.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+            guard.Code != RuntimeFixedCreditGuardCode.HardLimitZero)
+            return;
+
+        await using var available = new NpgsqlCommand(
+            $"SELECT to_regclass(@jobsTable) IS NOT NULL AND to_regclass(@admissionsTable) IS NOT NULL",
+            connection, transaction);
+        available.Parameters.AddWithValue("jobsTable", NpgsqlDbType.Text, $"{options.Schema}.workflow_generation_jobs");
+        available.Parameters.AddWithValue("admissionsTable", NpgsqlDbType.Text, $"{options.Schema}.maf_root_model_turn_admissions");
+        if (!(bool)(await available.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+            return;
+
+        var binding = registration.Binding;
+        Guid jobId = Guid.Empty;
+        string prompt = string.Empty;
+        string promptSha256 = string.Empty;
+        long expectedDecisionStateVersion = 0;
+        long configurationRevision = 0;
+        string modelSelectionReference = string.Empty;
+        var matchCount = 0;
+
+        // Read the committed job and root admission without taking the job execution lock.
+        await using (var query = new NpgsqlCommand($"""
+            SELECT j.job_id, j.prompt, j.prompt_sha256, j.expected_decision_state_version,
+                   j.configuration_revision, j.model_selection_reference
+            FROM {_schema}.workflow_generation_jobs j
+            JOIN {_schema}.maf_root_model_turn_admissions a
+              ON a.project_id = j.project_id
+             AND a.run_id = j.run_id
+             AND a.request_id = j.native_request_id
+            WHERE j.native_request_id = @requestId
+              AND j.project_id = @projectId
+              AND j.run_id = @runId
+              AND j.session_id = @sessionId
+              AND j.tenant_id = @tenantId
+              AND j.actor_issuer = @actorIssuer
+              AND j.actor_id = @actorId
+              AND j.accepted_selection_hash = @selectionHash
+              AND j.runtime_instance_id = @runtimeInstanceId
+              AND j.registration_revision = @registrationRevision
+              AND j.execution_fence = @executionFence
+              AND j.execution_phase = 'send-admitted'
+              AND a.root_session_id = j.session_id
+              AND a.tenant_id = j.tenant_id
+              AND a.actor_issuer = j.actor_issuer
+              AND a.actor_id = j.actor_id
+              AND a.accepted_selection_hash = j.accepted_selection_hash
+              AND a.prompt_hash = j.prompt_sha256
+              AND a.execution_fence = j.execution_fence
+              AND a.decision_state_version = j.expected_decision_state_version
+            LIMIT 2
+            """, connection, transaction))
+        {
+            query.Parameters.AddWithValue("requestId", NpgsqlDbType.Uuid, guard.RequestId);
+            query.Parameters.AddWithValue("projectId", NpgsqlDbType.Varchar, binding.ProjectId);
+            query.Parameters.AddWithValue("runId", NpgsqlDbType.Varchar, binding.RunId);
+            query.Parameters.AddWithValue("sessionId", NpgsqlDbType.Varchar, binding.SessionId);
+            query.Parameters.AddWithValue("tenantId", NpgsqlDbType.Varchar, binding.TenantId);
+            query.Parameters.AddWithValue("actorIssuer", NpgsqlDbType.Varchar, binding.ActorIssuer);
+            query.Parameters.AddWithValue("actorId", NpgsqlDbType.Varchar, binding.ActorId);
+            query.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
+            query.Parameters.AddWithValue("runtimeInstanceId", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
+            query.Parameters.AddWithValue("registrationRevision", NpgsqlDbType.Bigint, registration.Revision);
+            query.Parameters.AddWithValue("executionFence", NpgsqlDbType.Bigint, binding.ExecutionFence);
+            await using var reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                matchCount++;
+                if (matchCount > 1)
+                    return;
+                jobId = reader.GetGuid(0);
+                prompt = reader.GetString(1);
+                promptSha256 = reader.GetString(2);
+                expectedDecisionStateVersion = reader.GetInt64(3);
+                configurationRevision = reader.GetInt64(4);
+                modelSelectionReference = reader.GetString(5);
+            }
+        }
+
+        if (matchCount != 1 ||
+            configurationRevision != binding.ProjectConfigurationRevision ||
+            modelSelectionReference != binding.ModelSelectionReference ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) != promptSha256)
+            return;
+
+        var expectedRequestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
+            "message",
+            guard.RequestId,
+            RuntimeContractValidation.NativeSessionId(binding),
+            "user",
+            [new RuntimeA2ATextPart("text", prompt)],
+            registration,
+            RuntimeCredentialPurpose.Observe,
+            AddressedMessageDeliveryMode.Immediate);
+        if (expectedRequestHash != guard.RequestHash)
+            return;
+
+        var proof = WorkflowGenerationZeroCreditNoSendProof.Seal(new WorkflowGenerationZeroCreditNoSendProof(
+            1,
+            jobId,
+            guard.RequestId,
+            binding.ProjectId,
+            binding.RunId,
+            binding.SessionId,
+            binding.TenantId,
+            binding.ActorIssuer,
+            binding.ActorId,
+            expectedDecisionStateVersion,
+            configurationRevision,
+            binding.AcceptedSelectionHash,
+            binding.ExecutionFence,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            modelSelectionReference,
+            promptSha256,
+            guard.RequestHash,
+            guard.CanonicalPayloadHash,
+            evidence.CanonicalPayloadHash,
+            "hostPreQueue",
+            "hardLimitZero",
+            evidence.ObservedEventCount,
+            evidence.RangeComplete,
+            evidence.BeforeCursorHash,
+            evidence.AfterCursorHash,
+            guard.RecordedAt,
+            evidence.VerifiedAt,
+            string.Empty)).Validate();
+
+        var proofEventId = WorkflowGenerationZeroCreditNoSendProof.EventId(jobId, guard.RequestId);
+        try
+        {
+            await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+                proofEventId,
+                WorkflowGenerationZeroCreditNoSendProof.StreamId(binding.ProjectId, binding.RunId),
+                $"workflow-generation-fixed-credit-no-send/{proofEventId:D}",
+                "orchestrator.workflow_generation.fixed_credit_no_send", 1,
+                JsonSerializer.SerializeToElement(proof, JsonOptions),
+                evidence.VerifiedAt), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OutboxConflictException exception)
+        {
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict", null, exception);
+        }
     }
 
     /// <summary>
