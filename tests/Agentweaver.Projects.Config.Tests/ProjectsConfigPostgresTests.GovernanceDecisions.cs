@@ -466,6 +466,160 @@ public sealed partial class ProjectsConfigPostgresTests
             CorrelationId: "correlation-1",
             DecidedAt: new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero));
 
+    [Fact]
+    public async Task GovernanceDecisionHistoryPagesNewestFirstIsolatesScopesAndRedacts()
+    {
+        var store = CreateGovernanceDecisionStore();
+        var projectA = "proj-" + Guid.NewGuid().ToString("N");
+        var projectB = "proj-" + Guid.NewGuid().ToString("N");
+        var r1 = await store.AppendWithCurrentHeadAsync(
+            NativeAcsPolicyScopeType.Project, projectA, "skill", "skill-1", "k1", SampleDecision(), CancellationToken.None);
+        var r2 = await store.AppendWithCurrentHeadAsync(
+            NativeAcsPolicyScopeType.Project, projectA, "skill", "skill-1", "k2",
+            SampleDecision() with { SelectedRule = "rule-2" }, CancellationToken.None);
+        var r3 = await store.AppendWithCurrentHeadAsync(
+            NativeAcsPolicyScopeType.Project, projectA, "skill", "skill-1", "k3",
+            SampleDecision() with { SelectedRule = "rule-3" }, CancellationToken.None);
+        await store.AppendWithCurrentHeadAsync(
+            NativeAcsPolicyScopeType.Project, projectB, "skill", "skill-1", "kb", SampleDecision(), CancellationToken.None);
+        await store.AppendWithCurrentHeadAsync(
+            NativeAcsPolicyScopeType.Platform, "default", "skill", "skill-1", "kp", SampleDecision(), CancellationToken.None);
+
+        var page1 = await store.ReadHistoryAsync(
+            NativeAcsPolicyScopeType.Project, projectA, "skill", "skill-1", pageSize: 2, beforeSequence: null, CancellationToken.None);
+        Assert.Equal([r3.Sequence, r2.Sequence], page1.Items.Select(item => item.Sequence).ToArray());
+        Assert.Equal(r2.Sequence, page1.NextBeforeSequence);
+
+        var page2 = await store.ReadHistoryAsync(
+            NativeAcsPolicyScopeType.Project, projectA, "skill", "skill-1", pageSize: 2, beforeSequence: page1.NextBeforeSequence, CancellationToken.None);
+        Assert.Equal([r1.Sequence], page2.Items.Select(item => item.Sequence).ToArray());
+        Assert.Null(page2.NextBeforeSequence);
+
+        var empty = await store.ReadHistoryAsync(
+            NativeAcsPolicyScopeType.Project, projectA, "skill", "missing", pageSize: 20, beforeSequence: null, CancellationToken.None);
+        Assert.Empty(empty.Items);
+        Assert.Null(empty.NextBeforeSequence);
+
+        var serialized = System.Text.Json.JsonSerializer.Serialize(page1);
+        Assert.DoesNotContain("idempotencyKey", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("requestDigest", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("writeTransactionId", serialized, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("previous_hash_format")]
+    [InlineData("record_hash_mismatch")]
+    [InlineData("canonical_record_tampered")]
+    [InlineData("recorded_at")]
+    [InlineData("sequence1_genesis")]
+    [InlineData("adjacent_gap")]
+    public async Task GovernanceDecisionHistoryRejectsCorruptChainRowsWith500(string corruptionKind)
+    {
+        var store = CreateGovernanceDecisionStore();
+        var projectId = "corrupt-" + Guid.NewGuid().ToString("N");
+        await store.AppendWithCurrentHeadAsync(
+            NativeAcsPolicyScopeType.Project, projectId, "skill", "s1", "k1", SampleDecision(), CancellationToken.None);
+        if (corruptionKind == "adjacent_gap")
+        {
+            await store.AppendWithCurrentHeadAsync(
+                NativeAcsPolicyScopeType.Project, projectId, "skill", "s1", "k2", SampleDecision(), CancellationToken.None);
+            await store.AppendWithCurrentHeadAsync(
+                NativeAcsPolicyScopeType.Project, projectId, "skill", "s1", "k3", SampleDecision(), CancellationToken.None);
+        }
+
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var disable = new NpgsqlCommand("""
+            ALTER TABLE projects_config.project_governance_decisions DISABLE TRIGGER project_governance_decisions_immutable;
+            ALTER TABLE projects_config.project_governance_decision_outbox DISABLE TRIGGER project_governance_decision_outbox_immutable;
+            """, connection))
+        {
+            await disable.ExecuteNonQueryAsync();
+        }
+        if (corruptionKind == "previous_hash_format")
+        {
+            await using var dropCheck = new NpgsqlCommand(
+                "ALTER TABLE projects_config.project_governance_decisions DROP CONSTRAINT ck_project_governance_decisions_hash;",
+                connection);
+            await dropCheck.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var sql = corruptionKind switch
+            {
+                "previous_hash_format" => """
+                    UPDATE projects_config.project_governance_decisions
+                    SET previous_hash = 'not-sha256'
+                    WHERE scope_id = @scope_id AND sequence = 1
+                    """,
+                "record_hash_mismatch" => """
+                    UPDATE projects_config.project_governance_decisions
+                    SET record_hash = @bad_hash
+                    WHERE scope_id = @scope_id AND sequence = 1
+                    """,
+                "canonical_record_tampered" => """
+                    UPDATE projects_config.project_governance_decisions
+                    SET canonical_record = convert_to('{"tampered":true}', 'UTF8')
+                    WHERE scope_id = @scope_id AND sequence = 1
+                    """,
+                "recorded_at" => """
+                    UPDATE projects_config.project_governance_decisions
+                    SET recorded_at = recorded_at + interval '5 seconds'
+                    WHERE scope_id = @scope_id AND sequence = 1
+                    """,
+                "sequence1_genesis" => """
+                    UPDATE projects_config.project_governance_decisions
+                    SET previous_hash = @bad_hash
+                    WHERE scope_id = @scope_id AND sequence = 1
+                    """,
+                _ => """
+                    DELETE FROM projects_config.project_governance_decision_outbox
+                    WHERE decision_id IN (
+                        SELECT decision_id FROM projects_config.project_governance_decisions
+                        WHERE scope_id = @scope_id AND sequence = 2
+                    );
+                    DELETE FROM projects_config.project_governance_decisions
+                    WHERE scope_id = @scope_id AND sequence = 2;
+                    """,
+            };
+            await using var mutate = new NpgsqlCommand(sql, connection);
+            mutate.Parameters.AddWithValue("scope_id", projectId);
+            mutate.Parameters.AddWithValue("bad_hash", new string('1', 64));
+            await mutate.ExecuteNonQueryAsync();
+
+            var exception = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                store.ReadHistoryAsync(
+                    NativeAcsPolicyScopeType.Project, projectId, "skill", "s1", 20, null, CancellationToken.None));
+            Assert.Equal("governance_decision_corrupt", exception.Code);
+            Assert.Equal(500, exception.StatusCode);
+        }
+        finally
+        {
+            if (corruptionKind == "previous_hash_format")
+            {
+                await using var cleanup = new NpgsqlCommand("""
+                    DELETE FROM projects_config.project_governance_decision_outbox
+                    WHERE decision_id IN (
+                        SELECT decision_id FROM projects_config.project_governance_decisions
+                        WHERE scope_id = @scope_id
+                    );
+                    DELETE FROM projects_config.project_governance_decisions
+                    WHERE scope_id = @scope_id;
+                    ALTER TABLE projects_config.project_governance_decisions
+                        ADD CONSTRAINT ck_project_governance_decisions_hash
+                        CHECK (request_digest ~ '^[0-9a-f]{64}$' AND previous_hash ~ '^[0-9a-f]{64}$' AND record_hash ~ '^[0-9a-f]{64}$');
+                    """, connection);
+                cleanup.Parameters.AddWithValue("scope_id", projectId);
+                await cleanup.ExecuteNonQueryAsync();
+            }
+            await using var enable = new NpgsqlCommand("""
+                ALTER TABLE projects_config.project_governance_decisions ENABLE TRIGGER project_governance_decisions_immutable;
+                ALTER TABLE projects_config.project_governance_decision_outbox ENABLE TRIGGER project_governance_decision_outbox_immutable;
+                """, connection);
+            await enable.ExecuteNonQueryAsync();
+        }
+    }
+
     private async Task<(ProjectGovernanceDecisionReceipt? Receipt, bool Conflict)> AppendOutcomeAsync(
         ProjectGovernanceDecisionAppendRequest request)
     {

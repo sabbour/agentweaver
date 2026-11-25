@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Projects.Config;
 
-internal enum ProjectGovernanceOutcome
+public enum ProjectGovernanceOutcome
 {
     Allow,
     Deny,
@@ -11,7 +11,7 @@ internal enum ProjectGovernanceOutcome
     Pending,
 }
 
-internal enum ProjectGovernanceApprovalState
+public enum ProjectGovernanceApprovalState
 {
     NotRequired,
     Pending,
@@ -19,7 +19,7 @@ internal enum ProjectGovernanceApprovalState
     Rejected,
 }
 
-internal sealed record ProjectGovernanceRoleRevision(Guid AssignmentId, long Revision);
+public sealed record ProjectGovernanceRoleRevision(Guid AssignmentId, long Revision);
 
 internal sealed record ProjectGovernanceDecisionInput(
     string DecisionType,
@@ -123,3 +123,44 @@ internal sealed record ProjectGovernanceDecisionStreamHeadSnapshot(
     long Sequence,
     long FenceGeneration,
     string HeadHash);
+
+public sealed record ProjectGovernanceDecisionDetailView(
+    string DecisionType,
+    ProjectGovernanceOutcome Outcome,
+    ProjectGovernanceApprovalState ApprovalState,
+    long? PolicyRevision,
+    string? PolicyArtifactSha256,
+    string? SelectedRule,
+    string? InterventionPoint,
+    string? RequestId,
+    string? ActionId,
+    string? RunId,
+    string? AgentId,
+    string? RoleId,
+    Guid? HumanEntraOid,
+    Guid? TenantId,
+    string? BrokerIssuer,
+    string? BrokerSubject,
+    ImmutableArray<ProjectGovernanceRoleRevision> EffectiveRoleRevisions,
+    string? OwnerReceiptId,
+    long? OwnerReceiptPosition,
+    string? CompilerGeneration,
+    string? ApplicationGeneration,
+    string CorrelationId,
+    DateTimeOffset DecidedAt);
+
+public sealed record ProjectGovernanceDecisionHistoryItem(
+    Guid DecisionId,
+    long Sequence,
+    string PreviousHash,
+    string RecordHash,
+    DateTimeOffset RecordedAt,
+    ProjectGovernanceDecisionDetailView Decision);
+
+public sealed record ProjectGovernanceDecisionHistoryPage(
+    NativeAcsPolicyScopeType ScopeType,
+    string ScopeId,
+    string ResourceType,
+    string ResourceId,
+    ImmutableArray<ProjectGovernanceDecisionHistoryItem> Items,
+    long? NextBeforeSequence);
