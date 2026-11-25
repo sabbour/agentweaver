@@ -63,10 +63,10 @@ close clears it.
 
 | Host-request status label | Meaning |
 | --- | --- |
-| **Waiting to send host request** | The request is queued and has not reached Environment yet. |
-| **Waiting for platform admin approval** | Environment received the request for the shown host and port. |
-| **Host request delivery failed** | Delivery to Environment failed. |
-| **Host request status unavailable** | The response did not include a matching status. |
+| **Waiting to send** | The request is queued and has not reached Environment yet. |
+| **Received by Environment** | Environment received the request for the shown host and port. |
+| **Delivery failed** | Delivery to Environment failed. |
+| **Status unavailable** | The response did not include a matching status. |
 
 This status describes the host request only. It does not approve the host,
 enforce network policy, or show that the provider is ready for runs.

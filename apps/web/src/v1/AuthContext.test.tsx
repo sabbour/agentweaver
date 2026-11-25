@@ -1495,11 +1495,11 @@ describe('Broker refresh coordination', () => {
     );
     await completeSilentSignIn({ code: 'project-code' });
     fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
-    expect(await screen.findByText('Waiting to send host request')).toBeTruthy();
+    expect(await screen.findByText('Waiting to send')).toBeTruthy();
 
     // Detail Refresh status hits 401 -> real AuthContext token refresh -> retries with new token.
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    expect(await screen.findByText('Waiting for platform admin approval')).toBeTruthy();
+    expect(await screen.findByText('Received by Environment')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Refresh status' }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole('button', { name: 'Edit metadata' }) as HTMLButtonElement).disabled).toBe(false);
     expect(readDraft.mock.calls.slice(1, 3).map(([access]) => access)).toEqual([

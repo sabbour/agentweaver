@@ -93,7 +93,7 @@ The client uses these routes:
 | `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. The header links to stored run Egress. |
 | `/projects/:projectId/runs/:runId/history?view=egress` | Read server-ordered stored outbound network flows for the run with exact project authority. The page shows Session tree, Activity, and Egress tabs. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
-| `/platform-settings` | Read platform components as a tenant or platform administrator. Read provider host requests across tenants as a platform administrator. |
+| `/platform-settings` | Manage platform model providers and read host-request delivery, platform components, and provider host requests across tenants. |
 | `/policies` | Read saved Platform Policy source or validate an in-memory Project Policy draft. |
 
 ## Navigate the client
@@ -360,6 +360,17 @@ service, its readiness, and the active and available implementations. The
 page shows each status exactly as the owner reported it. If an owner didn't
 report, the area reads **Status not reported**. Other users get a permission
 message.
+
+### Read provider host-request delivery
+
+Open **Platform settings** > **Model providers**. Each card shows the returned
+host and port and one delivery status: **Waiting to send**,
+**Received by Environment**, **Delivery failed**, or **Status unavailable**.
+Select **Refresh** to read the current provider response.
+
+The page uses the host-request fields in that response. It does not derive the
+host from the provider base URL. Receipt by Environment does not approve the
+host or make the provider ready for runs.
 
 ### Read provider host requests
 

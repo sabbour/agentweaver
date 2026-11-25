@@ -7,7 +7,6 @@ import type {
   AvailablePlatformProvider,
   ModelProviderCredentialOperationStatusResponse,
   ModelProviderCredentialResponse,
-  ModelProviderEgressStatus,
   ProjectModelProviderDraft,
   ProjectModelProviderDraftSaveRequest,
 } from './contracts';
@@ -18,6 +17,11 @@ import {
   type ProjectCredentialOperation,
   type ProjectCredentialOperationKey,
 } from './projectCredentialOperations';
+import {
+  hostRequestHostText,
+  hostRequestPortText,
+  hostRequestStatusLabel,
+} from './modelProviderEgress';
 
 type ProviderEditor = {
   name: string;
@@ -133,29 +137,6 @@ function isPreClaimCredentialRejection(reason: unknown): boolean {
   if (reason.status === 409 && reason.code === 'credential_slot_conflict') return true;
   if (reason.status === 503 && reason.code === 'credential_vault_unavailable') return true;
   return false;
-}
-
-function hostRequestStatusLabel(egress?: ModelProviderEgressStatus | null): string {
-  if (!egress) return 'Host request status unavailable';
-  if (egress.deliveryStatus === 'pending' && egress.destinationState === null)
-    return 'Waiting to send host request';
-  if (egress.deliveryStatus === 'delivered' && egress.destinationState === 'requested')
-    return 'Waiting for platform admin approval';
-  if (egress.deliveryStatus === 'failed' && egress.destinationState === null)
-    return 'Host request delivery failed';
-  return 'Host request status unavailable';
-}
-
-function hostRequestHostText(egress?: ModelProviderEgressStatus | null): string {
-  return egress && typeof egress.host === 'string' && egress.host.trim().length > 0
-    ? egress.host
-    : 'Unavailable';
-}
-
-function hostRequestPortText(egress?: ModelProviderEgressStatus | null): string {
-  return egress && Number.isSafeInteger(egress.port) && egress.port > 0
-    ? String(egress.port)
-    : 'Unavailable';
 }
 
 /** Lists available platform providers and edits project provider metadata through the exact project-only Broker session. */

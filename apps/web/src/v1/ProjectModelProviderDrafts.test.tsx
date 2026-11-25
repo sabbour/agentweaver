@@ -469,12 +469,12 @@ describe('Project BYOK provider drafts', () => {
     render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
 
-    expect(await screen.findByText('Waiting to send host request')).toBeTruthy();
+    expect(await screen.findByText('Waiting to send')).toBeTruthy();
     expect(screen.getByText('egress.override.example')).toBeTruthy();
     expect(screen.getByText('8443')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    expect(await screen.findByText('Waiting for platform admin approval')).toBeTruthy();
+    expect(await screen.findByText('Received by Environment')).toBeTruthy();
     expect(mocks.read).toHaveBeenCalledTimes(2);
     expect(mocks.read.mock.calls[1]).toEqual([
       'project-access-token',
@@ -531,29 +531,29 @@ describe('Project BYOK provider drafts', () => {
 
     render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
-    expect(await screen.findByText('Host request delivery failed')).toBeTruthy();
+    expect(await screen.findByText('Delivery failed')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+    expect(await screen.findByText('Status unavailable')).toBeTruthy();
     expect(screen.queryByText('provider.example')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+    expect(await screen.findByText('Status unavailable')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+    expect(await screen.findByText('Status unavailable')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+    expect(await screen.findByText('Status unavailable')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    expect(screen.queryByText('Host request status unavailable')).toBeNull();
+    expect(screen.queryByText('Status unavailable')).toBeNull();
     failRefresh(new Error('Gateway read failed.'));
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('Gateway read failed.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
-    expect(screen.queryByText('Host request status unavailable')).toBeNull();
+    expect(screen.queryByText('Status unavailable')).toBeNull();
     expect(mocks.update).not.toHaveBeenCalled();
   });
 

@@ -57,7 +57,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
 | `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, explicit repository sync preview and commit, and digest-checked AgentSuite export and import. |
 | `src/v1/CastTeamPage.tsx`, `src/v1/castingData.ts` | Formulate roles from a project goal, analyze read-only repository signals, or start from a template. Choose a server-supported universe, review and edit the pending proposal, then confirm or reject it. |
-| `src/v1/PlatformSettingsPage.tsx` | Read-only status of the 16 platform component areas for tenant and platform administrators. |
+| `src/v1/PlatformSettingsPage.tsx` | Platform BYOK provider cards with host-request delivery status, plus read-only status of the 16 platform component areas for tenant and platform administrators. |
 | `src/v1/ProjectSettingsSections.tsx`, `src/v1/settingsSections.ts`, `src/v1/projectReadiness.ts` | Project settings rail, General, Access, Repository, Run limits, and Danger zone sections. |
 | `src/v1/ProjectMembers.tsx` | Access > Members on the project role-assignment API. Only tenant administrators see add and remove. |
 | `src/v1/ConfigurationFields.tsx` | Readable model, reasoning, credential, per-task model, and platform component implementation fields for project configuration. |

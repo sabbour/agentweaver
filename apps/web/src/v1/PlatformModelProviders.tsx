@@ -39,6 +39,11 @@ import {
   type ProjectCredentialOperation,
   type ProjectCredentialOperationKey,
 } from './projectCredentialOperations';
+import {
+  hostRequestHostText,
+  hostRequestPortText,
+  hostRequestStatusLabel,
+} from './modelProviderEgress';
 
 type ProviderType = 'openai' | 'azure' | 'anthropic';
 type PricingChoice = '' | 'manual' | 'saved' | 'clear';
@@ -1384,6 +1389,14 @@ export function PlatformModelProviders() {
                           Rate card: {provider.rate_card_id} / {provider.rate_card_version}
                         </Text>
                       )}
+                      <dl className="v1-detail-list">
+                        <div><dt>Host request status</dt><dd>{hostRequestStatusLabel(provider.egress)}</dd></div>
+                        <div><dt>Host</dt><dd>{hostRequestHostText(provider.egress)}</dd></div>
+                        <div><dt>Port</dt><dd>{hostRequestPortText(provider.egress)}</dd></div>
+                      </dl>
+                      <Text className="v1-muted">
+                        Receiving a request does not approve the host or make the provider ready.
+                      </Text>
                       {op && (
                         <div className="v1-stack">
                           {op.status === 'uncertain' && (
