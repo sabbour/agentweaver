@@ -631,3 +631,893 @@ test('dry-run validates the apphost and input without a command or evidence writ
     await assert.rejects(access(context.outputPath), { code: 'ENOENT' });
   });
 });
+
+const creditZeroExamplePath = path.resolve(directory, '..', 'examples', 'workflow-generation-credit-zero.json');
+const creditZeroExample = JSON.parse(await readFile(creditZeroExamplePath, 'utf8'));
+
+async function withCreditZeroScratch(callback) {
+  const scratch = path.join(directory, `credit-zero-case-${randomUUID()}`);
+  await mkdir(scratch);
+  try {
+    const cliPath = path.join(scratch, apphostName);
+    await writeFile(cliPath, 'controlled native apphost');
+    const apphostSha256 = createHash('sha256').update(await readFile(cliPath)).digest('hex');
+    const caseInput = validateInput({ ...creditZeroExample, apphostSha256 });
+    const casePath = path.join(scratch, 'case.json');
+    await writeFile(casePath, JSON.stringify({ ...creditZeroExample, apphostSha256 }));
+    await callback({
+      scratch,
+      cliPath,
+      casePath,
+      caseInput,
+      outputPath: path.join(scratch, 'evidence'),
+      env: { PATH: process.env.PATH, AGENTWEAVER_CLI_PATH: cliPath, AGENTWEAVER_RUN_ID: 'stale-run' },
+    });
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+function creditZeroOperations() {
+  return [
+    'getAuthorizationContext',
+    'getRunSelection',
+    'readSessionStatus',
+    'readDecisions',
+    'generateProjectWorkflow',
+    'readProjectWorkflowGenerationJob',
+    'cancelProjectRun',
+    'readRunStatus',
+  ].map(operationId => ({ operationId }));
+}
+
+function creditZeroSelection(input, overrides = {}) {
+  return {
+    projectId: input.target.projectId,
+    runId: input.target.runId,
+    projectConfigurationRevision: input.expectedSelection.projectConfigurationRevision,
+    modelSelection: {
+      reference: input.expectedSelection.modelSelectionReference,
+      sourceMode: 'hostedCopilot',
+      ...overrides.modelSelection,
+    },
+    runLimits: {
+      ...input.expectedSelection.runLimits,
+      ...overrides.runLimits,
+    },
+  };
+}
+
+function creditZeroSessionStatus(input, overrides = {}) {
+  const runtimeInstanceId = overrides.runtimeInstanceId ?? randomUUID();
+  return {
+    identity: {
+      projectId: input.target.projectId,
+      runId: input.target.runId,
+      sessionId: input.target.sessionId,
+      ...overrides.identity,
+    },
+    parentSessionId: overrides.parentSessionId ?? null,
+    rootSessionId: overrides.rootSessionId ?? input.target.sessionId,
+    kind: overrides.kind ?? 'coordinator',
+    lifecycle: overrides.lifecycle ?? 'active',
+    executionFence: overrides.executionFence ?? 3,
+    stateVersion: 1,
+    runExecution: {
+      state: overrides.runState ?? 'active',
+      stateVersion: 1,
+    },
+    runtimeStartup: {
+      state: overrides.startupState ?? 'ready',
+      step: 'ready',
+      runtimeInstanceId,
+      registrationRevision: overrides.registrationRevision ?? 2,
+      executionFence: overrides.startupFence ?? overrides.executionFence ?? 3,
+    },
+  };
+}
+
+function creditZeroProof(sessionStatus, overrides = {}) {
+  return {
+    nativeRequestId: randomUUID(),
+    runtimeInstanceId: overrides.runtimeInstanceId ?? sessionStatus.runtimeStartup.runtimeInstanceId,
+    registrationRevision: overrides.registrationRevision ?? sessionStatus.runtimeStartup.registrationRevision,
+    executionFence: overrides.executionFence ?? sessionStatus.executionFence,
+    stage: 'hostPreQueue',
+    code: 'hardLimitZero',
+    receiptSha256: hash,
+    observedEventCount: 0,
+    rangeComplete: true,
+    beforeCursorSha256: hash,
+    afterCursorSha256: hash,
+    recordedAt: '2026-11-25T09:00:00Z',
+    verifiedAt: '2026-11-25T09:00:01Z',
+  };
+}
+
+async function runCreditZeroFake(context, scenario = {}) {
+  const input = context.caseInput;
+  const sessionStatus = scenario.sessionStatus ?? creditZeroSessionStatus(input);
+  const jobId = randomUUID();
+  const invocations = [];
+  const cancelCalls = [];
+  let currentTime = 1_000_000;
+  let generateCount = 0;
+  let cancelCount = 0;
+  let statusReadCount = 0;
+
+  const exitCode = await runCase(
+    { inputPath: context.casePath, outputPath: context.outputPath, dryRun: false },
+    context.env,
+    {
+      now: () => currentTime,
+      sleep: async ms => {
+        currentTime += ms;
+      },
+      cleanupDeadlineMs: scenario.cleanupDeadlineMs ?? 90_000,
+      cleanupReplayIntervalMs: scenario.cleanupReplayIntervalMs ?? 5_000,
+      cleanupPollIntervalMs: scenario.cleanupPollIntervalMs ?? 1_000,
+      jobDeadlineMs: scenario.jobDeadlineMs ?? 10_000,
+      pollIntervalMs: scenario.pollIntervalMs ?? 100,
+      runCommand: (_cliPath, args) => {
+        const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : args[0];
+        invocations.push(operation);
+        if (args[0] === '--version') return plain('1.0.0-test\n');
+        if (args[0] === 'api' && args[1] === 'operations') return plain(creditZeroOperations());
+        if (args[0] === 'auth' && args[1] === 'status') {
+          const bound = args.includes('--project-id');
+          return plain(bound
+            ? { isSignedIn: true, tenantId: input.target.tenantId, projectId: input.target.projectId, runId: input.target.runId }
+            : { isSignedIn: true, tenantId: input.target.tenantId });
+        }
+        switch (operation) {
+          case 'getAuthorizationContext':
+            if (args.includes('projects.admin')) {
+              return ok(scenario.adminContext ?? {
+                actorId: input.expectedActorId,
+                tenantId: input.target.tenantId,
+                boundProjectId: null,
+                boundRunId: null,
+              });
+            }
+            return ok({
+              actorId: input.expectedActorId,
+              tenantId: input.target.tenantId,
+              boundProjectId: input.target.projectId,
+              boundRunId: input.target.runId,
+            });
+          case 'getRunSelection': {
+            if (scenario.rawSelectionText) {
+              return { exitCode: 0, signal: null, stdout: scenario.rawSelectionText, stderr: '', timedOut: false, error: null };
+            }
+            return ok(scenario.selection ?? creditZeroSelection(input));
+          }
+          case 'readSessionStatus':
+            return ok(sessionStatus);
+          case 'readDecisions':
+            return ok(scenario.decisions ?? { executionFence: sessionStatus.executionFence, stateVersion: 1 });
+          case 'generateProjectWorkflow': {
+            generateCount += 1;
+            if (scenario.onGenerate) return scenario.onGenerate(generateCount);
+            const statusUrl = `/api/v1/projects/${input.target.projectId}/workflows/generation-jobs/${jobId}`;
+            return ok({
+              jobId,
+              status: 'queued',
+              projectId: input.target.projectId,
+              runId: input.target.runId,
+              sessionId: input.target.sessionId,
+              createdAt: '2026-11-25T09:00:00Z',
+              updatedAt: '2026-11-25T09:00:00Z',
+              statusUrl,
+              resultUrl: `${statusUrl}/result`,
+              artifact: null,
+              failure: null,
+            }, 202);
+          }
+          case 'readProjectWorkflowGenerationJob': {
+            const statusUrl = `/api/v1/projects/${input.target.projectId}/workflows/generation-jobs/${jobId}`;
+            if (scenario.onJobStatus) return ok(scenario.onJobStatus(jobId, statusUrl, sessionStatus));
+            return ok({
+              jobId,
+              status: 'running',
+              projectId: input.target.projectId,
+              runId: input.target.runId,
+              sessionId: input.target.sessionId,
+              createdAt: '2026-11-25T09:00:00Z',
+              updatedAt: '2026-11-25T09:00:01Z',
+              statusUrl,
+              resultUrl: `${statusUrl}/result`,
+              artifact: null,
+              failure: null,
+              zeroCreditNoSend: creditZeroProof(sessionStatus),
+            });
+          }
+          case 'cancelProjectRun': {
+            cancelCount += 1;
+            const keyHeader = args[args.indexOf('--header') + 1];
+            const bodyArg = args[args.indexOf('--body') + 1];
+            cancelCalls.push({ attempt: cancelCount, keyHeader, bodyArg });
+            if (scenario.onCancel) return scenario.onCancel(cancelCount, context.outputPath);
+            return ok({ runId: input.target.runId, state: 'cancelled', cancelledAt: '2026-11-25T09:00:02Z' });
+          }
+          case 'readRunStatus': {
+            statusReadCount += 1;
+            if (scenario.onRunStatus) return scenario.onRunStatus(statusReadCount, cancelCount);
+            return ok({
+              projectId: input.target.projectId,
+              runId: input.target.runId,
+              rootSessionId: input.target.sessionId,
+              executionFence: sessionStatus.executionFence,
+              logicalTurnOrdinal: 0,
+              executionState: 'cancelled',
+              stateVersion: 2,
+              runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+            });
+          }
+          default:
+            throw new Error(`Unexpected operation ${operation}`);
+        }
+      },
+    },
+  );
+  const result = JSON.parse(await readFile(path.join(context.outputPath, 'result.json'), 'utf8'));
+  return { exitCode, result, invocations, cancelCalls, generateCount, cancelCount, statusReadCount };
+}
+
+test('credit-zero input rejects nonzero, rounded-to-zero, or non-v1 decision version', async () => {
+  validateInput({ ...creditZeroExample, apphostSha256: hash });
+  assert.throws(
+    () => validateInput({
+      ...creditZeroExample,
+      apphostSha256: hash,
+      expectedDecisionStateVersion: 2,
+    }),
+    /case schema/,
+  );
+  assert.throws(
+    () => validateInput({
+      ...creditZeroExample,
+      apphostSha256: hash,
+      expectedSelection: {
+        ...creditZeroExample.expectedSelection,
+        runLimits: { ...creditZeroExample.expectedSelection.runLimits, copilotHardCreditLimit: 1 },
+      },
+    }),
+    /copilotHardCreditLimit/,
+  );
+  await withCreditZeroScratch(async context => {
+    const roundedText = JSON.stringify({ ...creditZeroExample, apphostSha256: context.caseInput.apphostSha256 })
+      .replace('"copilotHardCreditLimit":0', '"copilotHardCreditLimit":1e-400');
+    await writeFile(context.casePath, roundedText);
+    await assert.rejects(
+      runCase({ inputPath: context.casePath, outputPath: context.outputPath, dryRun: true }, context.env),
+      /explicit zero JSON number/,
+    );
+  });
+});
+
+test('credit-zero child and stale preflight fail closed with neither submission nor cancellation', async () => {
+  await withCreditZeroScratch(async context => {
+    const child = await runCreditZeroFake(context, {
+      sessionStatus: creditZeroSessionStatus(context.caseInput, {
+        parentSessionId: 'parent-root',
+        kind: 'childWork',
+      }),
+    });
+    assert.equal(child.exitCode, 2);
+    assert.equal(child.generateCount, 0);
+    assert.equal(child.cancelCount, 0);
+    assert.equal(child.result.cleanup.status, 'not-attempted');
+  });
+
+  await withCreditZeroScratch(async context => {
+    const staleStartup = await runCreditZeroFake(context, {
+      sessionStatus: creditZeroSessionStatus(context.caseInput, { startupState: 'pending' }),
+    });
+    assert.equal(staleStartup.exitCode, 2);
+    assert.equal(staleStartup.generateCount, 0);
+    assert.equal(staleStartup.cancelCount, 0);
+  });
+
+  await withCreditZeroScratch(async context => {
+    const staleDecision = await runCreditZeroFake(context, {
+      decisions: { executionFence: 3, stateVersion: 2 },
+    });
+    assert.equal(staleDecision.exitCode, 2);
+    assert.equal(staleDecision.generateCount, 0);
+    assert.equal(staleDecision.cancelCount, 0);
+  });
+
+  await withCreditZeroScratch(async context => {
+    const roundedSelection = JSON.stringify({
+      status: 200,
+      body: creditZeroSelection(context.caseInput),
+    }).replace('"copilotHardCreditLimit":0', '"copilotHardCreditLimit":1e-400');
+    const rounded = await runCreditZeroFake(context, { rawSelectionText: roundedSelection });
+    assert.equal(rounded.exitCode, 2);
+    assert.equal(rounded.generateCount, 0);
+    assert.equal(rounded.cancelCount, 0);
+  });
+});
+
+test('credit-zero submits once, saves proof before cancellation, and passes on verified cleanup', async () => {
+  await withCreditZeroScratch(async context => {
+    let proofSavedBeforeCancel = false;
+    let cancelRequestSavedBeforeCancel = false;
+    const outcome = await runCreditZeroFake(context, {
+      onCancel: async (_count, outputDir) => {
+        await access(path.join(outputDir, 'zero-credit-proof.json'));
+        proofSavedBeforeCancel = true;
+        await access(path.join(outputDir, 'cancellation-request.json'));
+        cancelRequestSavedBeforeCancel = true;
+        return ok({ runId: context.caseInput.target.runId, state: 'cancelled', cancelledAt: '2026-11-25T09:00:02Z' });
+      },
+    });
+    assert.equal(outcome.exitCode, 0);
+    assert.equal(outcome.generateCount, 1);
+    assert.equal(proofSavedBeforeCancel, true);
+    assert.equal(cancelRequestSavedBeforeCancel, true);
+    assert.equal(outcome.invocations.includes('readProjectWorkflowGenerationResult'), false);
+    assert.equal(outcome.result.numericMatrix.rows.find(row => row.id === 'credit-zero').status, 'passed');
+  });
+});
+
+test('credit-zero never retries generation on queue-full and leaves credit-zero blocked', async () => {
+  await withCreditZeroScratch(async context => {
+    const outcome = await runCreditZeroFake(context, {
+      onGenerate: () => queueFull(),
+    });
+    assert.equal(outcome.exitCode, 2);
+    assert.equal(outcome.generateCount, 1);
+    assert.equal(outcome.cancelCount, 1);
+    assert.equal(outcome.result.generation.status, 'blocked');
+    assert.equal(outcome.result.cleanup.status, 'passed');
+    assert.equal(outcome.result.numericMatrix.rows.find(row => row.id === 'credit-zero').status, 'blocked');
+  });
+});
+
+test('credit-zero rejects same-fence proof with different runtimeInstanceId or registrationRevision', async () => {
+  await withCreditZeroScratch(async context => {
+    const wrongInstance = await runCreditZeroFake(context, {
+      onJobStatus: (jobId, statusUrl, sessionStatus) => ({
+        jobId,
+        status: 'running',
+        projectId: context.caseInput.target.projectId,
+        runId: context.caseInput.target.runId,
+        sessionId: context.caseInput.target.sessionId,
+        createdAt: '2026-11-25T09:00:00Z',
+        updatedAt: '2026-11-25T09:00:01Z',
+        statusUrl,
+        resultUrl: `${statusUrl}/result`,
+        artifact: null,
+        failure: null,
+        zeroCreditNoSend: creditZeroProof(sessionStatus, { runtimeInstanceId: randomUUID() }),
+      }),
+    });
+    assert.equal(wrongInstance.exitCode, 1);
+    assert.equal(wrongInstance.result.generation.status, 'failed');
+    await assert.rejects(access(path.join(context.outputPath, 'zero-credit-proof.json')), { code: 'ENOENT' });
+  });
+
+  await withCreditZeroScratch(async context => {
+    const wrongRevision = await runCreditZeroFake(context, {
+      onJobStatus: (jobId, statusUrl, sessionStatus) => ({
+        jobId,
+        status: 'failed',
+        projectId: context.caseInput.target.projectId,
+        runId: context.caseInput.target.runId,
+        sessionId: context.caseInput.target.sessionId,
+        createdAt: '2026-11-25T09:00:00Z',
+        updatedAt: '2026-11-25T09:00:01Z',
+        statusUrl,
+        resultUrl: `${statusUrl}/result`,
+        artifact: null,
+        failure: { code: 'hard_credit_limit_reached', message: 'Zero credit.' },
+        zeroCreditNoSend: creditZeroProof(sessionStatus, { registrationRevision: 99 }),
+      }),
+    });
+    assert.equal(wrongRevision.exitCode, 1);
+    assert.equal(wrongRevision.result.generation.status, 'failed');
+  });
+});
+
+test('credit-zero fails on unexpected job completion without fetching a draft', async () => {
+  await withCreditZeroScratch(async context => {
+    const outcome = await runCreditZeroFake(context, {
+      onJobStatus: (jobId, statusUrl) => completedEnvelope(context.caseInput, jobId, 'completed'),
+    });
+    assert.equal(outcome.exitCode, 1);
+    assert.equal(outcome.result.generation.status, 'failed');
+    assert.equal(outcome.invocations.includes('readProjectWorkflowGenerationResult'), false);
+    assert.equal(outcome.result.cleanup.status, 'passed');
+  });
+});
+
+test('credit-zero replays cancellation with the same key and body on lost response, 503 queue-full, and pending cleanup', async () => {
+  for (const mode of ['lost', 'queue-full', 'pending']) {
+    await withCreditZeroScratch(async context => {
+      const outcome = await runCreditZeroFake(context, {
+        onCancel: attempt => {
+          if (attempt === 1 && mode === 'lost') {
+            return { exitCode: 1, signal: null, stdout: '', stderr: '', timedOut: true, error: 'ETIMEDOUT' };
+          }
+          if (attempt === 1 && mode === 'queue-full') {
+            return queueFull('runtime_start_queue_full');
+          }
+          return ok({ runId: context.caseInput.target.runId, state: 'cancelled', cancelledAt: '2026-11-25T09:00:02Z' });
+        },
+        onRunStatus: (_readCount, cancels) => ok({
+          projectId: context.caseInput.target.projectId,
+          runId: context.caseInput.target.runId,
+          rootSessionId: context.caseInput.target.sessionId,
+          executionFence: 3,
+          logicalTurnOrdinal: 0,
+          executionState: 'cancelled',
+          stateVersion: 2,
+          runtimeCleanup: cancels >= 2
+            ? { state: 'complete', total: 1, pending: 0, complete: 1 }
+            : { state: 'pending', total: 1, pending: 1, complete: 0 },
+        }),
+      });
+      assert.equal(outcome.exitCode, 0);
+      assert.equal(outcome.cancelCount, 2);
+      assert.equal(outcome.cancelCalls[0].keyHeader, outcome.cancelCalls[1].keyHeader);
+      assert.equal(outcome.cancelCalls[0].bodyArg, outcome.cancelCalls[1].bodyArg);
+      assert.equal(outcome.result.cleanup.replays, 1);
+    });
+  }
+});
+
+test('credit-zero stops on authority denial and fails while retaining cancellation details on deadline exhaustion', async () => {
+  await withCreditZeroScratch(async context => {
+    const denied = await runCreditZeroFake(context, {
+      onCancel: () => ok({ error: 'forbidden' }, 403),
+    });
+    assert.equal(denied.exitCode, 1);
+    assert.equal(denied.cancelCount, 1);
+    assert.equal(denied.result.cleanup.status, 'failed');
+  });
+
+  await withCreditZeroScratch(async context => {
+    const exhausted = await runCreditZeroFake(context, {
+      onRunStatus: () => ok({
+        projectId: context.caseInput.target.projectId,
+        runId: context.caseInput.target.runId,
+        rootSessionId: context.caseInput.target.sessionId,
+        executionFence: 3,
+        logicalTurnOrdinal: 0,
+        executionState: 'cancelled',
+        stateVersion: 2,
+        runtimeCleanup: { state: 'pending', total: 1, pending: 1, complete: 0 },
+      }),
+    });
+    assert.equal(exhausted.exitCode, 1);
+    assert.equal(exhausted.cancelCount, 3);
+    assert.equal(exhausted.result.cleanup.replays, 2);
+    assert.equal(exhausted.result.cleanup.cancellationRetained, true);
+    await access(path.join(context.outputPath, 'cancellation-request.json'));
+  });
+});
+
+test('normal workflow-generation allows nullable copilotHardCreditLimit and credit-zero rejects null without mutations', async () => {
+  await withScratch(async context => {
+    const selectionWithNull = {
+      ...acceptedSelection(context.caseInput),
+      runLimits: { ...context.caseInput.expectedSelection.runLimits, copilotHardCreditLimit: null },
+    };
+    const { exitCode, result } = await runFake(context, { selection: selectionWithNull });
+    assert.equal(exitCode, 0);
+    assert.equal(result.generation.status, 'passed');
+    assert.equal(result.cleanup.status, 'passed');
+  });
+
+  await withCreditZeroScratch(async context => {
+    const outcome = await runCreditZeroFake(context, {
+      selection: creditZeroSelection(context.caseInput, { runLimits: { copilotHardCreditLimit: null } }),
+    });
+    assert.equal(outcome.exitCode, 2);
+    assert.equal(outcome.generateCount, 0);
+    assert.equal(outcome.cancelCount, 0);
+    assert.equal(outcome.result.cleanup.status, 'not-attempted');
+  });
+});
+
+test('credit-zero gates generation and cancellation on persisted cancellation-request record', async () => {
+  await withCreditZeroScratch(async context => {
+    let generateCount = 0;
+    let cancelCount = 0;
+    const exitCode = await runCase(
+      { inputPath: context.casePath, outputPath: context.outputPath, dryRun: false },
+      context.env,
+      {
+        writeCancellationRequest: async () => {
+          throw new Error('disk full');
+        },
+        runCommand: (_cliPath, args) => {
+          const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : args[0];
+          if (args[0] === '--version') return plain('1.0.0-test\n');
+          if (args[0] === 'api' && args[1] === 'operations') return plain(creditZeroOperations());
+          if (args[0] === 'auth' && args[1] === 'status') {
+            const bound = args.includes('--project-id');
+            return plain(bound
+              ? { isSignedIn: true, tenantId: context.caseInput.target.tenantId, projectId: context.caseInput.target.projectId, runId: context.caseInput.target.runId }
+              : { isSignedIn: true, tenantId: context.caseInput.target.tenantId });
+          }
+          if (operation === 'getAuthorizationContext') {
+            if (args.includes('projects.admin')) {
+              return ok({
+                actorId: context.caseInput.expectedActorId,
+                tenantId: context.caseInput.target.tenantId,
+                boundProjectId: null,
+                boundRunId: null,
+              });
+            }
+            return ok({
+              actorId: context.caseInput.expectedActorId,
+              tenantId: context.caseInput.target.tenantId,
+              boundProjectId: context.caseInput.target.projectId,
+              boundRunId: context.caseInput.target.runId,
+            });
+          }
+          if (operation === 'getRunSelection') return ok(creditZeroSelection(context.caseInput));
+          if (operation === 'readSessionStatus') return ok(creditZeroSessionStatus(context.caseInput));
+          if (operation === 'readDecisions') return ok({ executionFence: 3, stateVersion: 1 });
+          if (operation === 'generateProjectWorkflow') generateCount += 1;
+          if (operation === 'cancelProjectRun') cancelCount += 1;
+          throw new Error(`Unexpected operation ${operation}`);
+        },
+      },
+    );
+    const result = JSON.parse(await readFile(path.join(context.outputPath, 'result.json'), 'utf8'));
+    assert.equal(exitCode, 1);
+    assert.equal(generateCount, 0);
+    assert.equal(cancelCount, 0);
+    assert.equal(result.cleanup.status, 'not-attempted');
+    assert.equal(result.cleanup.cancellationRetained, false);
+  });
+
+  await withCreditZeroScratch(async context => {
+    const outcome = await runCreditZeroFake(context);
+    assert.equal(outcome.exitCode, 0);
+    const savedCancel = JSON.parse(await readFile(path.join(context.outputPath, 'cancellation-request.json'), 'utf8'));
+    assert.equal(new URL(savedCancel.gatewayUrl).origin, context.caseInput.target.gatewayUrl);
+    assert.equal(savedCancel.tenantId, context.caseInput.target.tenantId);
+    assert.equal(savedCancel.projectId, context.caseInput.target.projectId);
+    assert.equal(savedCancel.runId, context.caseInput.target.runId);
+    assert.equal(savedCancel.expectedAdminActorId, context.caseInput.expectedActorId);
+    assert.equal(typeof savedCancel.idempotencyKey, 'string');
+    assert.deepEqual(savedCancel.body, { reason: 'workflow-generation-credit-zero acceptance cleanup' });
+  });
+});
+
+test('credit-zero stops on CLI stderr auth denial and arbitrary 5xx without polling or replaying', async () => {
+  await withCreditZeroScratch(async context => {
+    const stderrDenied = await runCreditZeroFake(context, {
+      onCancel: () => ({
+        exitCode: 1,
+        signal: null,
+        stdout: '',
+        stderr: 'The Gateway authorization-context request was denied or invalid.\n',
+        timedOut: false,
+        error: null,
+      }),
+    });
+    assert.equal(stderrDenied.exitCode, 1);
+    assert.equal(stderrDenied.cancelCount, 1);
+    assert.equal(stderrDenied.statusReadCount, 0);
+    assert.match(stderrDenied.result.cleanup.failure, /denied by authority/);
+  });
+
+  await withCreditZeroScratch(async context => {
+    const server500 = await runCreditZeroFake(context, {
+      onCancel: () => ok({ error: 'internal_server_error' }, 500),
+    });
+    assert.equal(server500.exitCode, 1);
+    assert.equal(server500.cancelCount, 1);
+    assert.equal(server500.statusReadCount, 0);
+    assert.match(server500.result.cleanup.failure, /HTTP 500/);
+  });
+});
+
+test('credit-zero caps job read timeout and rejects proof returned after polling deadline', async () => {
+  await withCreditZeroScratch(async context => {
+    const jobId = randomUUID();
+    const sessionStatus = creditZeroSessionStatus(context.caseInput);
+    let currentTime = 1_000_000;
+    const jobTimeouts = [];
+    const exitCode = await runCase(
+      { inputPath: context.casePath, outputPath: context.outputPath, dryRun: false },
+      context.env,
+      {
+        now: () => currentTime,
+        sleep: async ms => {
+          currentTime += ms;
+        },
+        jobDeadlineMs: 1_500,
+        pollIntervalMs: 1_000,
+        cleanupDeadlineMs: 10_000,
+        runCommand: (_cliPath, args, _env, timeoutMs) => {
+          const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : args[0];
+          if (args[0] === '--version') return plain('1.0.0-test\n');
+          if (args[0] === 'api' && args[1] === 'operations') return plain(creditZeroOperations());
+          if (args[0] === 'auth' && args[1] === 'status') {
+            const bound = args.includes('--project-id');
+            return plain(bound
+              ? { isSignedIn: true, tenantId: context.caseInput.target.tenantId, projectId: context.caseInput.target.projectId, runId: context.caseInput.target.runId }
+              : { isSignedIn: true, tenantId: context.caseInput.target.tenantId });
+          }
+          if (operation === 'getAuthorizationContext') {
+            if (args.includes('projects.admin')) {
+              return ok({
+                actorId: context.caseInput.expectedActorId,
+                tenantId: context.caseInput.target.tenantId,
+                boundProjectId: null,
+                boundRunId: null,
+              });
+            }
+            return ok({
+              actorId: context.caseInput.expectedActorId,
+              tenantId: context.caseInput.target.tenantId,
+              boundProjectId: context.caseInput.target.projectId,
+              boundRunId: context.caseInput.target.runId,
+            });
+          }
+          if (operation === 'getRunSelection') return ok(creditZeroSelection(context.caseInput));
+          if (operation === 'readSessionStatus') return ok(sessionStatus);
+          if (operation === 'readDecisions') return ok({ executionFence: sessionStatus.executionFence, stateVersion: 1 });
+          if (operation === 'generateProjectWorkflow') {
+            const statusUrl = `/api/v1/projects/${context.caseInput.target.projectId}/workflows/generation-jobs/${jobId}`;
+            return ok({
+              jobId,
+              status: 'queued',
+              projectId: context.caseInput.target.projectId,
+              runId: context.caseInput.target.runId,
+              sessionId: context.caseInput.target.sessionId,
+              createdAt: '2026-11-25T09:00:00Z',
+              updatedAt: '2026-11-25T09:00:00Z',
+              statusUrl,
+              resultUrl: `${statusUrl}/result`,
+              artifact: null,
+              failure: null,
+            }, 202);
+          }
+          if (operation === 'readProjectWorkflowGenerationJob') {
+            jobTimeouts.push(timeoutMs);
+            const statusUrl = `/api/v1/projects/${context.caseInput.target.projectId}/workflows/generation-jobs/${jobId}`;
+            if (jobTimeouts.length === 1) {
+              return ok({
+                jobId,
+                status: 'running',
+                projectId: context.caseInput.target.projectId,
+                runId: context.caseInput.target.runId,
+                sessionId: context.caseInput.target.sessionId,
+                createdAt: '2026-11-25T09:00:00Z',
+                updatedAt: '2026-11-25T09:00:01Z',
+                statusUrl,
+                resultUrl: `${statusUrl}/result`,
+                artifact: null,
+                failure: null,
+              });
+            }
+            // Cross the 1500ms deadline during the second read before returning proof.
+            currentTime += 600;
+            return ok({
+              jobId,
+              status: 'running',
+              projectId: context.caseInput.target.projectId,
+              runId: context.caseInput.target.runId,
+              sessionId: context.caseInput.target.sessionId,
+              createdAt: '2026-11-25T09:00:00Z',
+              updatedAt: '2026-11-25T09:00:02Z',
+              statusUrl,
+              resultUrl: `${statusUrl}/result`,
+              artifact: null,
+              failure: null,
+              zeroCreditNoSend: creditZeroProof(sessionStatus),
+            });
+          }
+          if (operation === 'cancelProjectRun') {
+            return ok({ runId: context.caseInput.target.runId, state: 'cancelled', cancelledAt: '2026-11-25T09:00:02Z' });
+          }
+          if (operation === 'readRunStatus') {
+            return ok({
+              projectId: context.caseInput.target.projectId,
+              runId: context.caseInput.target.runId,
+              rootSessionId: context.caseInput.target.sessionId,
+              executionFence: sessionStatus.executionFence,
+              logicalTurnOrdinal: 0,
+              executionState: 'cancelled',
+              stateVersion: 2,
+              runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+            });
+          }
+          throw new Error(`Unexpected operation ${operation}`);
+        },
+      },
+    );
+    const result = JSON.parse(await readFile(path.join(context.outputPath, 'result.json'), 'utf8'));
+    assert.equal(exitCode, 2);
+    assert.deepEqual(jobTimeouts, [1500, 500]);
+    assert.equal(result.generation.status, 'blocked');
+    assert.equal(result.cleanup.status, 'passed');
+    await assert.rejects(access(path.join(context.outputPath, 'zero-credit-proof.json')), { code: 'ENOENT' });
+  });
+});
+
+test('credit-zero blocks mismatched admin actor without submitting or cancelling', async () => {
+  await withCreditZeroScratch(async context => {
+    const outcome = await runCreditZeroFake(context, {
+      adminContext: {
+        actorId: 'different-admin-actor',
+        tenantId: context.caseInput.target.tenantId,
+        boundProjectId: null,
+        boundRunId: null,
+      },
+    });
+    assert.equal(outcome.exitCode, 2);
+    assert.equal(outcome.generateCount, 0);
+    assert.equal(outcome.cancelCount, 0);
+    assert.equal(outcome.result.cleanup.status, 'not-attempted');
+  });
+});
+
+test('credit-zero stops on login-required stderr and incompatible terminal run status without replaying', async () => {
+  for (const stderrMessage of [
+    'Not signed in for this target. Run login first.\n',
+    'Session expired. Run login again.\n',
+  ]) {
+    await withCreditZeroScratch(async context => {
+      const outcome = await runCreditZeroFake(context, {
+        onCancel: () => ({
+          exitCode: 1,
+          signal: null,
+          stdout: '',
+          stderr: stderrMessage,
+          timedOut: false,
+          error: null,
+        }),
+      });
+      assert.equal(outcome.exitCode, 1);
+      assert.equal(outcome.cancelCount, 1);
+      assert.equal(outcome.statusReadCount, 0);
+      assert.match(outcome.result.cleanup.failure, /denied by authority/);
+    });
+  }
+
+  await withCreditZeroScratch(async context => {
+    const outcome = await runCreditZeroFake(context, {
+      onRunStatus: () => ok({
+        projectId: context.caseInput.target.projectId,
+        runId: context.caseInput.target.runId,
+        rootSessionId: context.caseInput.target.sessionId,
+        executionFence: 3,
+        logicalTurnOrdinal: 0,
+        executionState: 'completed',
+        stateVersion: 2,
+      }),
+    });
+    assert.equal(outcome.exitCode, 1);
+    assert.equal(outcome.cancelCount, 1);
+    assert.equal(outcome.statusReadCount, 1);
+    assert.match(outcome.result.cleanup.failure, /incompatible terminal state completed/);
+  });
+
+  await withCreditZeroScratch(async context => {
+    const outcome = await runCreditZeroFake(context, {
+      cleanupDeadlineMs: 8_000,
+      cleanupReplayIntervalMs: 5_000,
+      cleanupPollIntervalMs: 1_000,
+      onRunStatus: readCount => readCount === 1
+        ? ok({
+            projectId: context.caseInput.target.projectId,
+            runId: context.caseInput.target.runId,
+            rootSessionId: context.caseInput.target.sessionId,
+            executionFence: 3,
+            logicalTurnOrdinal: 0,
+            executionState: 'cancelled',
+            stateVersion: 2,
+            runtimeCleanup: { state: 'pending', total: 1, pending: 1, complete: 0 },
+          })
+        : ok({ error: 'service_unavailable' }, 503),
+    });
+    assert.equal(outcome.exitCode, 1);
+    assert.equal(outcome.cancelCount, 1);
+    assert.equal(outcome.result.cleanup.replays, 0);
+    assert.match(outcome.result.cleanup.failure, /HTTP 503/);
+  });
+});
+
+test('credit-zero reports blocked exit 2 when capped job status read hits ETIMEDOUT', async () => {
+  await withCreditZeroScratch(async context => {
+    const sessionStatus = creditZeroSessionStatus(context.caseInput);
+    const jobId = randomUUID();
+    let currentTime = 1_000_000;
+    const exitCode = await runCase(
+      { inputPath: context.casePath, outputPath: context.outputPath, dryRun: false },
+      context.env,
+      {
+        now: () => currentTime,
+        sleep: async ms => { currentTime += ms; },
+        jobDeadlineMs: 1_500,
+        cleanupDeadlineMs: 10_000,
+        runCommand: (_cliPath, args) => {
+          const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : args[0];
+          if (args[0] === '--version') return plain('1.0.0-test\n');
+          if (args[0] === 'api' && args[1] === 'operations') return plain(creditZeroOperations());
+          if (args[0] === 'auth' && args[1] === 'status') {
+            const bound = args.includes('--project-id');
+            return plain(bound
+              ? { isSignedIn: true, tenantId: context.caseInput.target.tenantId, projectId: context.caseInput.target.projectId, runId: context.caseInput.target.runId }
+              : { isSignedIn: true, tenantId: context.caseInput.target.tenantId });
+          }
+          if (operation === 'getAuthorizationContext') {
+            return ok(args.includes('projects.admin')
+              ? { actorId: context.caseInput.expectedActorId, tenantId: context.caseInput.target.tenantId, boundProjectId: null, boundRunId: null }
+              : { actorId: context.caseInput.expectedActorId, tenantId: context.caseInput.target.tenantId, boundProjectId: context.caseInput.target.projectId, boundRunId: context.caseInput.target.runId });
+          }
+          if (operation === 'getRunSelection') return ok(creditZeroSelection(context.caseInput));
+          if (operation === 'readSessionStatus') return ok(sessionStatus);
+          if (operation === 'readDecisions') return ok({ executionFence: sessionStatus.executionFence, stateVersion: 1 });
+          if (operation === 'generateProjectWorkflow') {
+            const statusUrl = `/api/v1/projects/${context.caseInput.target.projectId}/workflows/generation-jobs/${jobId}`;
+            return ok({
+              jobId, status: 'queued', projectId: context.caseInput.target.projectId, runId: context.caseInput.target.runId,
+              sessionId: context.caseInput.target.sessionId, createdAt: '2026-11-25T09:00:00Z', updatedAt: '2026-11-25T09:00:00Z',
+              statusUrl, resultUrl: `${statusUrl}/result`, artifact: null, failure: null,
+            }, 202);
+          }
+          if (operation === 'readProjectWorkflowGenerationJob') {
+            return { exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, error: 'ETIMEDOUT' };
+          }
+          if (operation === 'cancelProjectRun') {
+            return ok({ runId: context.caseInput.target.runId, state: 'cancelled', cancelledAt: '2026-11-25T09:00:02Z' });
+          }
+          if (operation === 'readRunStatus') {
+            return ok({
+              projectId: context.caseInput.target.projectId, runId: context.caseInput.target.runId,
+              rootSessionId: context.caseInput.target.sessionId, executionFence: sessionStatus.executionFence,
+              logicalTurnOrdinal: 0, executionState: 'cancelled', stateVersion: 2,
+              runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+            });
+          }
+          throw new Error(`Unexpected operation ${operation}`);
+        },
+      },
+    );
+    const result = JSON.parse(await readFile(path.join(context.outputPath, 'result.json'), 'utf8'));
+    assert.equal(exitCode, 2);
+    assert.equal(result.generation.status, 'blocked');
+    assert.equal(result.cleanup.status, 'passed');
+  });
+});
+
+if (process.platform === 'win32') {
+  test('credit-zero restricts Windows evidence directory ACL to SYSTEM and process token SID', async () => {
+    await withCreditZeroScratch(async context => {
+      const outcome = await runCreditZeroFake(context);
+      assert.equal(outcome.exitCode, 0);
+      const { spawnSync } = await import('node:child_process');
+      const checkScript = [
+        '$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+        '$acl = [System.IO.DirectoryInfo]::new($env:AGENTWEAVER_ACL_PATH).GetAccessControl()',
+        'if ($acl.AreAccessRulesProtected -ne $true) { exit 2 }',
+        '$rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])',
+        '$sids = @($rules | ForEach-Object { $_.IdentityReference.Value })',
+        'if ($sids -notcontains $sid -or $sids -notcontains "S-1-5-18") { exit 3 }',
+        '$unexpected = @($sids | Where-Object { $_ -notin @($sid, "S-1-5-18") })',
+        'if ($unexpected.Count -gt 0) { exit 4 }',
+      ].join('; ');
+      const check = spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(checkScript, 'utf16le').toString('base64')],
+        {
+          shell: false,
+          windowsHide: true,
+          encoding: 'utf8',
+          env: { ...process.env, AGENTWEAVER_ACL_PATH: context.outputPath },
+        },
+      );
+      assert.equal(check.status, 0);
+    });
+  });
+}

@@ -288,7 +288,8 @@
         "services/orchestrator/Agentweaver.Orchestrator/ProjectsRunSelectionClient.cs",
         "scripts/acceptance/api/workflow-generation.mjs",
         "scripts/acceptance/api/tests/workflow-generation.test.mjs",
-        "scripts/acceptance/api/examples/workflow-generation.json"
+        "scripts/acceptance/api/examples/workflow-generation.json",
+        "scripts/acceptance/api/examples/workflow-generation-credit-zero.json"
       ],
       "sourceExclusions": [
         "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",

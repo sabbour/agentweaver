@@ -3,22 +3,29 @@ import { readFileSync } from 'node:fs';
 const matrix = JSON.parse(readFileSync(new URL('./numeric-cases.json', import.meta.url), 'utf8'));
 const validStatuses = new Set(['passed', 'blocked', 'not-run']);
 
-export function buildNumericMatrix(statuses = {}) {
-  const rows = matrix.requiredRows.map(row => ({
-    id: row.id,
-    caseId: row.caseId,
-    predicate: row.predicate,
-    status: row.fixedStatus ?? statuses[row.id] ?? row.initialStatus ?? 'not-run',
-    reason: row.fixedStatus === 'blocked'
+export function buildNumericMatrix(statuses = {}, options = {}) {
+  const sourceCaseId = options?.sourceCaseId ?? null;
+  const rows = matrix.requiredRows.map(row => {
+    const dedicatedBlocked = row.dedicatedOnly && sourceCaseId !== row.caseId;
+    const status = row.fixedStatus ?? (dedicatedBlocked ? 'blocked' : statuses[row.id] ?? row.initialStatus ?? 'not-run');
+    const reason = row.fixedStatus === 'blocked' || dedicatedBlocked
       ? row.reason
-      : statuses[row.id] === 'blocked'
-        ? statuses[`${row.id}:reason`] ?? 'The required evidence is missing.'
-        : row.initialStatus === 'blocked' ? row.reason : null,
-  }));
-  return validateNumericMatrix(rows);
+      : status === 'blocked'
+        ? statuses[`${row.id}:reason`] ?? row.reason ?? 'The required evidence is missing.'
+        : row.initialStatus === 'blocked' ? row.reason : null;
+    return {
+      id: row.id,
+      caseId: row.caseId,
+      predicate: row.predicate,
+      status,
+      reason,
+    };
+  });
+  return validateNumericMatrix(rows, options);
 }
 
-export function validateNumericMatrix(rows) {
+export function validateNumericMatrix(rows, options = {}) {
+  const sourceCaseId = options?.sourceCaseId ?? null;
   if (!Array.isArray(rows) || rows.length !== matrix.requiredRows.length) {
     throw new Error('The numeric case matrix is missing required rows.');
   }
@@ -33,6 +40,9 @@ export function validateNumericMatrix(rows) {
     }
     const required = matrix.requiredRows.find(item => item.id === row.id);
     if (required.fixedStatus && row.status !== required.fixedStatus) {
+      throw new Error(`The numeric case matrix row ${row.id} cannot claim ${row.status}.`);
+    }
+    if (required.dedicatedOnly && row.status === 'passed' && sourceCaseId !== required.caseId) {
       throw new Error(`The numeric case matrix row ${row.id} cannot claim ${row.status}.`);
     }
     seen.add(row.id);

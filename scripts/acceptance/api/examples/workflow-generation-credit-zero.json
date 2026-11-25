@@ -1,0 +1,34 @@
+{
+  "caseId": "workflow-generation-credit-zero",
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "targetCommit": "0000000000000000000000000000000000000000",
+  "apphostSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "approvedNonProduction": true,
+  "approvedDisposableRun": true,
+  "expectedActorId": "ACTOR_ID",
+  "expectedDecisionStateVersion": 1,
+  "expectedSelection": {
+    "projectConfigurationRevision": 1,
+    "modelSelectionReference": "MODEL_SELECTION_REFERENCE",
+    "runLimits": {
+      "maxModelTurns": 1,
+      "maxToolCalls": 0,
+      "maxChildren": 0,
+      "maxConcurrentChildren": 0,
+      "maxWallTimeSeconds": 300,
+      "maxPromptTokens": 8192,
+      "copilotHardCreditLimit": 0
+    }
+  },
+  "prompt": "Generate one workflow with a single planning step.",
+  "target": {
+    "gatewayUrl": "https://gateway.example.invalid",
+    "brokerIssuer": "https://identity.example.invalid/issuer-path",
+    "clientId": "agentweaver-cli",
+    "apiAudience": "https://gateway.example.invalid",
+    "tenantId": "TENANT_ID",
+    "projectId": "00000000-0000-0000-0000-000000000001",
+    "runId": "RUN_ID",
+    "sessionId": "ROOT_SESSION_ID"
+  }
+}

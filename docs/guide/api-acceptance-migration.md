@@ -244,6 +244,72 @@ not a pass.
 This route-specific case checks workflow generation. It does not replace full
 P1 API acceptance.
 
+## Verify zero-credit workflow generation and cleanup
+
+The `workflow-generation-credit-zero` case checks a zero-credit
+workflow-generation denial and verified disposable-run cleanup through the
+native CLI. It requires a newly provisioned disposable run for each attempt.
+
+### Before you begin
+
+Prepare a disposable run on an approved non-production Gateway with:
+
+- `modelSelection.sourceMode` set to `"hostedCopilot"`.
+- `runLimits.copilotHardCreditLimit` set to numeric `0`.
+- A ready root coordinator session in a nonterminal run (`runtimeStartup.state: "ready"`).
+- Initial decision state (`stateVersion: 1`) matching the session `executionFence`.
+
+Sign in with both the run-bound `projects.orchestrator` identity (for reads)
+and the unbound `projects.admin` identity (for cancellation).
+
+### Prepare and run the case
+
+Copy `scripts/acceptance/api/examples/workflow-generation-credit-zero.json` to
+a new local JSON file outside the repository and replace the example values.
+Set `expectedDecisionStateVersion` to `1` and
+`expectedSelection.runLimits.copilotHardCreditLimit` to `0`.
+
+Validate the input with `--dry-run`, then run the case with a new evidence
+directory:
+
+```powershell
+node scripts\acceptance\api\workflow-generation.mjs --input $caseInput --output $evidence --dry-run
+node scripts\acceptance\api\workflow-generation.mjs --input $caseInput --output $evidence
+```
+
+### How the case checks the proof and cleanup
+
+1. Preflight checks the apphost hash, both sign-ins, caller context, accepted
+   selection (including `hostedCopilot` and an explicit JSON `0` credit limit),
+   ready root session status, and initial decision state (`stateVersion: 1`).
+   A failed preflight exits without submitting generation or cancelling the run.
+2. Before submitting generation, the script saves `cancellation-request.json`
+   (the target, cancellation `Idempotency-Key`, and request body) in the
+   evidence directory. It calls `generateProjectWorkflow` once and never
+   retries generation, even on a timeout or `workflow_generation_queue_full`.
+3. It polls `readProjectWorkflowGenerationJob` and saves the redacted
+   `zeroCreditNoSend` proof to `zero-credit-proof.json` before cancelling the
+   run. Any completed job, non-null artifact, or mismatched proof fails the
+   case. It never fetches a workflow draft.
+4. It calls `cancelProjectRun` and polls `readRunStatus` up to a 90-second
+   deadline, allowing at most two same-key cancellation replays at least five
+   seconds apart after a lost response, HTTP 503 `runtime_start_queue_full`,
+   or pending cleanup. It stops on authority denial, conflict, or mismatched
+   output.
+
+### Verify the result
+
+The case passes (exit code `0`) only when preflight passes, `zeroCreditNoSend`
+matches the ready session registration and fence, `readRunStatus` reports
+`executionState: "cancelled"`, and `runtimeCleanup` reports `state: "complete"`,
+`total > 0`, `pending: 0`, and `complete === total`. Passing this dedicated
+case promotes the `credit-zero` row in `numericMatrix` to `passed`.
+
+A missing job ID or missing proof at the deadline leaves `credit-zero`
+`blocked` (exit code `2`) when cleanup completes. If cleanup remains pending,
+the case fails (exit code `1`) and retains `cancellation-request.json` for
+authorized follow-up.
+
 ## Run task model completion
 
 The `task-model-completion` case dispatches an already claimed task through the

@@ -291,9 +291,13 @@ change the existing case, at-cap, denial, or replay rows.
 
 The matrix marks exact reservation replay in the tool case as blocked because
 its exact lookup returns the rejection, not the reservation. It also keeps
-zero-credit receipts, prompt capacity, full native enforcement, and child
-native no-send proof blocked while the public observation route lacks those
-facts. The admitted-completion case replays the same generation request with
+prompt capacity, full native enforcement, and child native no-send proof
+blocked while the public observation route lacks those facts. Only the
+dedicated `workflow-generation-credit-zero` case in
+[Verify zero-credit workflow generation and cleanup](./api-acceptance-migration.md#verify-zero-credit-workflow-generation-and-cleanup)
+can promote `credit-zero` to `passed` after preflight, saved job proof, and
+verified cleanup; other numeric cases keep `credit-zero` blocked even if they
+supply `passed`. The admitted-completion case replays the same generation request with
 the same idempotency key. It checks that the Gateway returns the same
 completion and that the reservation identity and total stay the same before
 and after the replay.
