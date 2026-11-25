@@ -700,9 +700,14 @@ operation. The observation case does not use this read as complete recovery
 or physical-effect proof. After observation discovers the operation, reads
 all event pages through the native CLI, and requires a ready event bound to the
 stable run and root-session recovery status. Before capture does not discover
-or read owner recovery events. A blocked event read does not replace the base
-gate, child, or receipt result. A bound event contradiction fails the case
-while the script retains those results.
+or read owner recovery events. For a pending gate, the script separately
+compares the readiness source checkpoint with the identical checkpoint pair
+retained in the four original before-capture root-session responses. A missing,
+malformed, or changing pair blocks that comparison without changing readiness.
+A stable mismatch fails the comparison and the overall observation. The
+comparison never substitutes a replacement or later checkpoint. A blocked
+event read does not replace the base gate, child, or receipt result. A bound
+event contradiction fails the case while the script retains those results.
 
 Run the event projection and owner tests from the repository root:
 
@@ -719,9 +724,13 @@ node --test scripts\acceptance\api\tests\checkpoint-recovery-observation.test.mj
 ```
 
 The case tests compare child receipt links from both execution-plan reads.
-They also cover paged child admission and readiness, sequence gaps, duplicate
-IDs, cursor and watermark changes, unsafe sequence values, denial on a later
-page, status changes, and a passing readiness witness with a blocked receipt.
+They also cover pending-gate checkpoint parity with only the two checkpoint
+fields excluded, all four retained source reads, no confirmed work plan,
+malformed and unstable pairs, source ID and revision mismatches, and a
+different replacement checkpoint. They cover paged child admission and
+readiness, sequence gaps, duplicate IDs, cursor and watermark changes, unsafe
+sequence values, denial on a later page, status changes, and a passing
+readiness witness with a blocked receipt.
 The Orchestrator PostgreSQL tests cover current, carried, imported, and
 unproven receipts:
 
