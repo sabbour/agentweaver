@@ -378,6 +378,18 @@ function apiResponse(record, step, expectedStatus) {
   return response.body;
 }
 
+const QUEUE_FULL = 'workflow_generation_queue_full';
+
+function isQueueFull(record) {
+  if (record.exitCode !== 1 || record.error || record.signal || record.timedOut) return false;
+  try {
+    const response = JSON.parse(record.stdout);
+    return response?.status === 503 && response.body?.error === QUEUE_FULL;
+  } catch {
+    return false;
+  }
+}
+
 export function validateAuthStatus(status, input, bound) {
   if (status?.isSignedIn !== true) return false;
   if (status.tenantId !== input.target.tenantId) {
@@ -614,24 +626,45 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   let runIdentityVerified = false;
   let selection = null;
   let commandCount = 0;
-  let idempotencyKey = randomUUID();
   const runCli = dependencies.runCommand ?? runCommand;
   const now = dependencies.now ?? Date.now;
   const sleep = dependencies.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
 
-  async function execute(command) {
-    const record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
+  async function logCommand(command, evidence) {
     await appendRedactedJsonLine(commandsPath, {
       caseId: CASE_ID,
       runId,
       stepId: command.id,
       executable: path.basename(cliPath),
-      arguments: safeArguments(command.args),
-      ...record,
+      ...evidence,
     });
     commandCount += 1;
+  }
+
+  async function execute(command) {
+    const record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    await logCommand(command, { arguments: safeArguments(command.args), ...record });
     requireSuccess(record, command.id);
     return record;
+  }
+
+  async function submitGeneration(command, attempt) {
+    const record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    const queueFull = isQueueFull(record);
+    await logCommand(command, {
+      attempt,
+      startedAt: record.startedAt,
+      completedAt: record.completedAt,
+      durationMs: record.durationMs,
+      exitCode: record.exitCode,
+      signal: record.signal,
+      timedOut: record.timedOut,
+      processError: Boolean(record.error),
+      ...(queueFull ? { code: QUEUE_FULL } : {}),
+    });
+    if (attempt === 1 && queueFull) return null;
+    requireSuccess(record, command.id);
+    return apiResponse(record, 'generateProjectWorkflow', 202);
   }
 
   try {
@@ -675,8 +708,8 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     }
 
     generation.status = 'running';
-    const submit = await execute(buildGenerateCommand(input, idempotencyKey));
-    const envelope = apiResponse(submit, 'generateProjectWorkflow', 202);
+    const submit = buildGenerateCommand(input, randomUUID());
+    const envelope = await submitGeneration(submit, 1) ?? await submitGeneration(submit, 2);
     const jobId = validateJobEnvelope(envelope, input);
     generation.jobId = jobId;
 

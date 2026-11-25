@@ -1367,8 +1367,10 @@ Run its controlled case tests from the repository root:
 node --test scripts\acceptance\api\tests\workflow-generation.test.mjs
 ```
 
-These tests use controlled CLI responses. They do not contact a live Gateway
-or run a model. Run the live case only with the exact native apphost, an
+These tests use controlled CLI responses. They check that the case resends
+the same request once when Orchestrator reports a full queue and still
+verifies cancellation when submission fails. The tests do not contact a live
+Gateway or run a model. Run the live case only with the exact native apphost, an
 approved non-production target, and an approved disposable run. Follow
 [Run workflow generation](./api-acceptance-migration.md#run-workflow-generation)
 for the input and retained evidence.
