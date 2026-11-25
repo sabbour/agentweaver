@@ -1359,9 +1359,10 @@ Follow [Run a read-only CLI API case](./api-acceptance-migration.md) for the app
 Use the [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
 to inspect complete v2 history and a recorded native tool-permission denial
 through normal CLI commands and `rest`. The case reads an existing child
-session. It does not create a run or call a model. The same script also has
-root model-turn and hard-credit no-send cases. These cases use only facts from
-the current session, execution fence, and accepted selection.
+session. It does not create a run or call a model. The same script has a pinned
+child hard-credit denial case and root model-turn and hard-credit no-send cases.
+These cases use only facts from the current session, execution fence, and
+accepted selection.
 
 Use the [Workspace repository-read case](./api-acceptance-migration.md#run-the-workspace-repository-read-case)
 to read one project repository file through the `agentweaver workspace`
@@ -1458,9 +1459,11 @@ The API tests cover the checked-in case scripts and launcher contracts with loca
 
 The [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
 checks the public CLI and `rest` reads against an existing child session. Its
-root model-turn and hard-credit cases check an existing root session. Their
-dry runs are local only; they do not exercise a live target. The admitted
-completion case sends one model request and rejects the generated proposal.
+child hard-credit case checks one existing preparation attempt for equality or
+overshoot without claiming native no-send evidence. Its root model-turn and
+hard-credit cases check an existing root session. Their dry runs are local only;
+they do not exercise a live target. The admitted completion case sends one
+model request and rejects the generated proposal.
 It needs separate non-production, model-spend, and cleanup approval. Its dry
 run starts no process. The controlled tests use fixtures and do not call a
 Gateway or model:
@@ -1494,7 +1497,10 @@ recording fails and that secondary permission denials do not create invocation
 evidence. The PostgreSQL test uses a disposable test database and checks
 idempotent rejection facts. These checks do not prove live authorization,
 native SDK delivery of the rejection, tool execution, or complete legacy
-history. The response reports missing evidence as unavailable rather than
+history. The child hard-credit case preserves the exact accepted, configured,
+and observed decimal tokens while comparing their values as .NET `decimal`.
+Its duplicate-key and decimal-bound tests run through controlled raw CLI
+output and evidence files. The response reports missing evidence as unavailable rather than
 inferring it from an empty result or a reservation.
 
 The runtime-observation probe also has a focused local test:

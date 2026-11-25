@@ -553,9 +553,11 @@ The route is a read, not a live acceptance test.
 See [runtime observation contracts](../reference/contracts.md#runtime-observation-v2)
 for the response fields and limits.
 The [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
-checks a retained child-session denial through both `api invoke` and `rest`.
-Its root model-turn and hard-credit cases check a retained root-session denial
-and its native no-send witness in the same way.
+checks retained child-session tool and hard-credit denials through both
+`api invoke` and `rest`. The child hard-credit case preserves exact decimal
+number tokens and does not claim a native no-send witness. Its root model-turn
+and hard-credit cases check a retained root-session denial and its native
+no-send witness in the same way.
 The [admitted root-completion case](./numeric-runtime-observation-acceptance.md#check-an-admitted-root-completion)
 sends one model request and rejects the generated proposal. It requires
 separate non-production, model-spend, and cleanup approval.

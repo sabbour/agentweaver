@@ -304,6 +304,55 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
+    public async Task ApiInvokePreservesExactDecimalTextInObservationResponse()
+    {
+        var handler = new TestGatewayHandler
+        {
+            EmittedCatalog = await ReadEmittedCatalogAsync(),
+            ResponseBody = """
+                {"acceptedLimits":{"copilotHardCreditLimit":999999999.999999999},"history":{"items":[{"configuredValue":1000000000,"observedValue":1000000000.000000001}]}}
+                """,
+        };
+        using var http = new HttpClient(handler);
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var result = await CliApplication.RunAsync(
+        [
+            "api", "invoke", "readRuntimeObservationV2",
+            "--path", "projectId=project-1",
+            "--path", "runId=run-1",
+            "--path", "sessionId=child-1",
+            "--query", "pageSize=100",
+            "--scope", "api.read",
+            "--scope", "projects.orchestrator",
+            "--gateway-url", "https://gateway.example/",
+            "--broker-issuer", "https://identity.example/",
+            "--client-id", "agentweaver-cli",
+            "--api-audience", "https://gateway.example/",
+            "--tenant-id", "tenant-1",
+            "--project-id", "project-1",
+            "--run-id", "run-1",
+        ],
+        new CliRuntimeOptions(
+            HttpClient: http,
+            Authentication: new TestAuthentication(),
+            Output: output,
+            Error: error));
+
+        Assert.Equal(0, result);
+        var serialized = JsonNode.Parse(output.ToString())!;
+        var body = serialized["body"]!;
+        Assert.Equal("999999999.999999999",
+            body["acceptedLimits"]!["copilotHardCreditLimit"]!.GetValue<JsonElement>().GetRawText());
+        Assert.Equal("1000000000",
+            body["history"]!["items"]![0]!["configuredValue"]!.GetValue<JsonElement>().GetRawText());
+        Assert.Equal("1000000000.000000001",
+            body["history"]!["items"]![0]!["observedValue"]!.GetValue<JsonElement>().GetRawText());
+        Assert.Empty(error.ToString());
+    }
+
+    [Fact]
     public async Task CompositeSetupScopesAreRejectedBeforeProtectedRequest()
     {
         var handler = new TestGatewayHandler();

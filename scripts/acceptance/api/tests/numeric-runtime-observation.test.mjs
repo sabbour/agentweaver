@@ -8,10 +8,15 @@ import { fileURLToPath } from 'node:url';
 import {
   apiResponseBody,
   buildCommands,
+  compareDecimals,
   exactLookupFact,
+  parseChildObservationJson,
+  parseDotNetDecimal,
   parseArgs,
   resolveCliPath,
+  runCase,
   validateAuthorizationContext,
+  validateChildHardCreditObservation,
   validateInput,
   validateObservation,
 } from '../numeric-runtime-observation.mjs';
@@ -31,6 +36,9 @@ const modelTurnInput = JSON.parse(await readFile(
 ));
 const hardCreditInput = JSON.parse(await readFile(
   path.resolve(directory, '..', 'examples', 'numeric-hard-credit-no-send.json'), 'utf8',
+));
+const childHardCreditInput = JSON.parse(await readFile(
+  path.resolve(directory, '..', 'examples', 'numeric-child-hard-credit-denial.json'), 'utf8',
 ));
 const selectionHash = 'a'.repeat(64);
 const otherSelectionHash = 'b'.repeat(64);
@@ -209,6 +217,107 @@ function hardCreditObservation() {
   return { body, exact, restExact: structuredClone(exact) };
 }
 
+function childHardCreditObservation(options = {}) {
+  const caseInput = validateInput(childHardCreditInput);
+  const factId = '00000000-0000-4000-8000-000000000401';
+  const fact = {
+    factId,
+    sequence: 1,
+    kind: 'denied',
+    projectId: caseInput.target.projectId,
+    runId: caseInput.target.runId,
+    attemptId: caseInput.attemptId,
+    dispatchId: caseInput.attemptId,
+    sessionId: caseInput.target.sessionId,
+    executionFence: 4,
+    runtimeInstanceId,
+    registrationRevision,
+    acceptedSelectionHash: selectionHash,
+    ownerRevision: null,
+    limitKind: 'copilotHardCredits',
+    configuredValue: '__CONFIGURED__',
+    observedValue: '__OBSERVED__',
+    unit: 'nanoAiu',
+    scope: 'copilotRun',
+    stage: 'childPreparation',
+    reasonCode: 'hard_credit_limit_reached',
+    ownerDecision: {
+      state: 'available',
+      receiptId: factId,
+      payloadHash: 'd'.repeat(64),
+    },
+    nativeNoSend: {
+      state: 'unavailable',
+      reason: 'no_native_boundary_witness',
+    },
+  };
+  const binding = {
+    projectId: caseInput.target.projectId,
+    runId: caseInput.target.runId,
+    rootSessionId: 'root-session',
+    sessionId: caseInput.target.sessionId,
+    isRoot: false,
+    acceptedSelectionHash: selectionHash,
+    currentExecutionFence: 4,
+    sessionExecutionFence: 4,
+    runtimeInstanceId,
+    registrationRevision,
+  };
+  const body = {
+    contractVersion: 2,
+    binding,
+    acceptedLimits: {
+      copilotHardCreditLimit: '__LIMIT__',
+      creditUnit: 'nanoAiu',
+      creditScope: 'copilotRun',
+    },
+    totals: {},
+    history: {
+      snapshotId: '00000000-0000-4000-8000-000000000402',
+      highWatermark: 1,
+      complete: true,
+      exactAttempt: false,
+      items: [fact],
+      nextCursor: null,
+    },
+  };
+  const exact = {
+    contractVersion: 2,
+    binding: structuredClone(binding),
+    acceptedLimits: structuredClone(body.acceptedLimits),
+    history: {
+      snapshotId: '00000000-0000-4000-8000-000000000403',
+      highWatermark: 1,
+      exactAttempt: true,
+      complete: true,
+      items: [structuredClone(fact)],
+      nextCursor: null,
+      exactUnavailableReason: null,
+    },
+  };
+  const replaceTokens = value => JSON.stringify(value)
+    .replace('"__LIMIT__"', options.limitToken ?? '1000000000')
+    .replace('"__CONFIGURED__"', options.configuredToken ?? options.limitToken ?? '1000000000')
+    .replace(
+      '"__OBSERVED__"',
+      options.observedToken
+        ?? (options.relation === 'overshoot' ? '1000000000.000000001' : '1000000000'),
+    );
+  const pageRaw = replaceTokens({ status: 200, headers: {}, body });
+  const exactRaw = replaceTokens(exact);
+  const restRaw = `{"status":200,"body":${exactRaw}}`;
+  return { body, exact, pageRaw, exactRaw, restRaw };
+}
+
+async function parseChildFixture(value, step = 'observation') {
+  const parsed = await parseChildObservationJson(
+    typeof value === 'string' ? value : JSON.stringify(value),
+    step,
+  );
+  if (parsed.value.status === 200 && parsed.value.body) parsed.value = parsed.value.body;
+  return parsed;
+}
+
 function observation() {
   const reservation = {
     factId: '00000000-0000-4000-8000-000000000010',
@@ -332,6 +441,168 @@ test('case input accepts only approved target metadata and safe resource IDs', (
     target: { ...input.target, sessionId: 'bad/session/id' },
   }), /schema/);
   assert.throws(() => validateInput({ ...input, approvedNonProduction: false }), /schema/);
+});
+
+test('child hard-credit input requires one attempt and one explicit relation', () => {
+  const parsed = validateInput(childHardCreditInput);
+  assert.equal(parsed.caseId, 'numeric-child-hard-credit-denial');
+  assert.equal(parsed.expectedRelation, 'equal');
+  assert.throws(() => validateInput({ ...childHardCreditInput, expectedRelation: 'both' }), /schema/);
+  assert.throws(() => validateInput({ ...childHardCreditInput, attemptId: 'not-a-uuid' }), /schema/);
+  assert.throws(() => validateInput({ ...childHardCreditInput, expectedSoftWarning: true }), /schema/);
+  const uppercase = childHardCreditInput.attemptId.toUpperCase();
+  assert.equal(validateInput({ ...childHardCreditInput, attemptId: uppercase }).attemptId,
+    childHardCreditInput.attemptId);
+});
+
+test('child hard-credit parser rejects literal and escaped duplicate keys', async () => {
+  for (const source of [
+    '{"configuredValue":1,"configuredValue":2}',
+    '{"configuredValue":1,"configured\\u0056alue":2}',
+    '{"nested":{"copilotHardCreditLimit":1,"copilotHardCreditLimit":2}}',
+  ]) {
+    await assert.rejects(parseChildObservationJson(source, 'step'), /strict JSON with unique keys/);
+  }
+  await assert.rejects(
+    parseChildObservationJson('copilotHardCreditLimit: 1', 'step'),
+    /strict JSON with unique keys/,
+  );
+  await assert.rejects(
+    parseChildObservationJson('{"configuredValue":"1"}', 'step'),
+    /numeric credit tokens/,
+  );
+});
+
+test('bounded decimal parsing preserves precision and enforces .NET decimal bounds', () => {
+  for (const [token, comparison, rightToken] of [
+    ['999999999.999999999', -1, '1000000000'],
+    ['1e-28', -1, '1000000000'],
+    ['1e3', 0, '1000.0'],
+  ]) {
+    assert.equal(
+      compareDecimals(parseDotNetDecimal(token), parseDotNetDecimal(rightToken)),
+      comparison,
+    );
+  }
+  assert.equal(
+    parseDotNetDecimal('79228162514264337593543950335.0').coefficient,
+    79_228_162_514_264_337_593_543_950_335n,
+  );
+  for (const token of [
+    '-1',
+    '1e-65',
+    '1e65',
+    '1e-29',
+    '79228162514264337593543950336',
+    '1e29',
+    `${'1'.repeat(129)}`,
+  ]) {
+    assert.throws(() => parseDotNetDecimal(token), /credit value|decimal/);
+  }
+});
+
+test('child hard-credit validation binds one equal or overshoot attempt across all reads', async () => {
+  for (const relation of ['equal', 'overshoot']) {
+    const fixture = childHardCreditObservation({ relation });
+    const caseInput = validateInput({ ...childHardCreditInput, expectedRelation: relation });
+    const summary = validateChildHardCreditObservation(
+      caseInput,
+      [await parseChildFixture(fixture.pageRaw)],
+      await parseChildFixture(fixture.exactRaw),
+      await parseChildFixture(fixture.restRaw),
+    );
+    assert.equal(summary.relation, relation);
+    assert.equal(summary.creditNumberSources.copilotHardCreditLimit, '1000000000');
+    assert.equal(summary.creditNumberSources.configuredValue, '1000000000');
+    assert.equal(
+      summary.creditNumberSources.observedValue,
+      relation === 'equal' ? '1000000000' : '1000000000.000000001',
+    );
+  }
+
+  const fixture = childHardCreditObservation();
+  const page = await parseChildFixture(fixture.pageRaw);
+  const exact = await parseChildFixture(fixture.exactRaw);
+  const rest = await parseChildFixture(fixture.restRaw);
+  const caseInput = validateInput(childHardCreditInput);
+  for (const [mutate, reason] of [
+    [value => { value.value.binding.currentExecutionFence = 5; }, /selected child session and current fence|current authority/],
+    [value => { value.value.history.items[0].attemptId = '00000000-0000-4000-8000-000000000499'; }, /exactly one/],
+    [value => { value.value.history.items[0].ownerDecision.receiptId = '00000000-0000-4000-8000-000000000499'; }, /owner-backed/],
+  ]) {
+    const parsed = await parseChildFixture(fixture.pageRaw);
+    mutate(parsed);
+    assert.throws(
+      () => validateChildHardCreditObservation(caseInput, [parsed], exact, rest),
+      reason,
+    );
+  }
+  const mismatch = await parseChildFixture(fixture.exactRaw);
+  mismatch.value.history.items[0].ownerDecision.payloadHash = 'a'.repeat(64);
+  assert.throws(
+    () => validateChildHardCreditObservation(caseInput, [page], mismatch, rest),
+    /same denial/,
+  );
+
+  for (const [mutate, reason] of [
+    [value => { value.binding.acceptedSelectionHash = undefined; }, /selected child session/],
+    [value => { value.binding.currentExecutionFence = undefined; }, /selected child session/],
+    [value => { value.binding.currentExecutionFence = Number.MAX_SAFE_INTEGER + 1; }, /selected child session/],
+    [value => { value.history.snapshotId = 'not-a-uuid'; }, /paged response/],
+    [value => { value.history.highWatermark = undefined; }, /paged response/],
+    [value => { value.history.exactAttempt = true; }, /paged response/],
+  ]) {
+    const malformed = await parseChildFixture(fixture.pageRaw);
+    mutate(malformed.value);
+    assert.throws(
+      () => validateChildHardCreditObservation(caseInput, [malformed], exact, rest),
+      reason,
+    );
+  }
+
+  const extraExactItem = await parseChildFixture(fixture.exactRaw);
+  extraExactItem.value.history.items.push({
+    ...structuredClone(extraExactItem.value.history.items[0]),
+    factId: '00000000-0000-4000-8000-000000000499',
+  });
+  assert.throws(
+    () => validateChildHardCreditObservation(caseInput, [page], extraExactItem, rest),
+    /exactly one pinned denial/,
+  );
+
+  const below = childHardCreditObservation({ observedToken: '999999999.999999999' });
+  const belowInput = validateInput({ ...childHardCreditInput, expectedRelation: 'equal' });
+  const belowPage = await parseChildFixture(below.pageRaw);
+  const matchingOther = structuredClone(belowPage.value.history.items[0]);
+  matchingOther.factId = '00000000-0000-4000-8000-000000000498';
+  matchingOther.attemptId = '00000000-0000-4000-8000-000000000497';
+  matchingOther.dispatchId = matchingOther.attemptId;
+  matchingOther.observedValue = 1_000_000_000;
+  belowPage.value.history.items.push(matchingOther);
+  belowPage.value.history.highWatermark = 2;
+  matchingOther.sequence = 2;
+  assert.throws(
+    () => validateChildHardCreditObservation(
+      belowInput,
+      [belowPage],
+      exact,
+      rest,
+    ),
+    /below its configured value/,
+  );
+
+  for (const [mutate, reason] of [
+    [value => { value.history.snapshotId = 'not-a-uuid'; }, /incomplete or truncated/],
+    [value => { value.history.highWatermark = -1; }, /incomplete or truncated/],
+    [value => { value.history.highWatermark = 0; }, /exactly one pinned denial/],
+  ]) {
+    const malformed = await parseChildFixture(fixture.exactRaw);
+    mutate(malformed.value);
+    assert.throws(
+      () => validateChildHardCreditObservation(caseInput, [page], malformed, rest),
+      reason,
+    );
+  }
 });
 
 test('commands use the normal CLI and REST surfaces without passing run text', () => {
@@ -693,6 +964,222 @@ test('dry-run validates the apphost hash and creates no evidence or network requ
     assert.equal(result.network, 'not-used');
     assert.equal(result.evidence, 'not-created');
     await assert.rejects(access(outputPath), { code: 'ENOENT' });
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('child hard-credit CLI collection preserves exact tokens and saves no raw observation output', async () => {
+  const scratch = path.join(directory, `child-evidence-${randomUUID()}`);
+  const cliPath = path.join(scratch, process.platform === 'win32' ? 'agentweaver.exe' : 'agentweaver');
+  const casePath = path.join(scratch, 'case.json');
+  const outputPath = path.join(scratch, 'evidence');
+  await mkdir(scratch);
+  try {
+    await writeFile(cliPath, 'controlled CLI fixture');
+    const apphostSha256 = createHash('sha256').update(await readFile(cliPath)).digest('hex');
+    await writeFile(casePath, JSON.stringify({
+      ...childHardCreditInput,
+      expectedRelation: 'overshoot',
+      apphostSha256,
+    }));
+    const fixture = childHardCreditObservation({ relation: 'overshoot' });
+    const firstPage = JSON.parse(fixture.pageRaw);
+    firstPage.body.history.items = [];
+    firstPage.body.history.nextCursor = 'opaque-cursor';
+    const firstPageRaw = JSON.stringify(firstPage);
+    const response = (stdout = '{}') => ({
+      startedAt: '2026-11-25T00:00:00.000Z',
+      completedAt: '2026-11-25T00:00:00.001Z',
+      durationMs: 1,
+      exitCode: 0,
+      signal: null,
+      stdout,
+      stderr: '',
+      timedOut: false,
+      error: null,
+    });
+    const api = body => JSON.stringify({ status: 200, headers: {}, evidence: {}, body });
+    const context = {
+      actorId: childHardCreditInput.expectedActorId,
+      tenantId: childHardCreditInput.target.tenantId,
+      boundProjectId: childHardCreditInput.target.projectId,
+      boundRunId: childHardCreditInput.target.runId,
+    };
+    const runner = (_cli, args) => {
+      if (args[0] === '--version') return response('fixture');
+      if (args[0] === 'auth') return response(JSON.stringify({ isSignedIn: true, tenantId: context.tenantId }));
+      if (args[0] === 'api' && args[1] === 'operations') return response('{}');
+      if (args[0] === 'api' && args[1] === 'describe') return response('{}');
+      if (args[0] === 'api' && args[1] === 'invoke') {
+        if (args.includes('readRuntimeObservationV2')) {
+          const cursor = args.some(value => value === 'cursor=opaque-cursor');
+          const exact = args.some(value => value === `attemptId=${childHardCreditInput.attemptId}`);
+          return response(exact
+            ? `{"status":200,"headers":{},"body":${fixture.exactRaw}}`
+            : cursor ? fixture.pageRaw : firstPageRaw);
+        }
+        return response(api({}));
+      }
+      if (args.includes('/api/v1/authorization/context')) {
+        return response(JSON.stringify({ status: 200, body: context }));
+      }
+      if (args.includes('GET') && args.some(value => value.includes('runtime-observation/v2'))) {
+        return response(fixture.restRaw);
+      }
+      throw new Error(`Unexpected controlled command: ${args.join(' ')}`);
+    };
+    const result = await runCase(
+      { inputPath: casePath, outputPath, dryRun: false },
+      { ...process.env, AGENTWEAVER_CLI_PATH: cliPath },
+      runner,
+    );
+    assert.equal(result.status, 'passed', result.reason);
+    assert.equal(result.pagesRead, 2);
+    assert.equal(result.creditNumberSources.observedValue, '1000000000.000000001');
+
+    const persisted = JSON.parse(await readFile(path.join(outputPath, 'result.json'), 'utf8'));
+    assert.deepEqual(persisted.creditNumberSources, result.creditNumberSources);
+    const records = (await readFile(path.join(outputPath, 'commands.jsonl'), 'utf8'))
+      .trim().split('\n').map(line => JSON.parse(line));
+    const observations = records.filter(record => record.id.startsWith('observation-page-')
+      || record.id.startsWith('observation-exact-') || record.id === 'rest-exact-attempt');
+    assert.equal(observations.length, 4);
+    assert.ok(observations.every(record => !Object.hasOwn(record, 'stdout')
+      && !Object.hasOwn(record, 'stderr')));
+    assert.ok(observations.every(record => Array.isArray(record.creditNumberSources)));
+    const denialRecords = observations.filter(record =>
+      record.creditNumberSources.some(item => item.path.endsWith('.observedValue')));
+    assert.equal(denialRecords.length, 3);
+    assert.ok(denialRecords.every(record => record.creditNumberSources.some(item =>
+      item.path.endsWith('.observedValue') && item.source === '1000000000.000000001')));
+    const cursorRecord = records.find(record => record.id === 'observation-page-2');
+    assert.ok(cursorRecord.args.includes('cursor=[REDACTED]'));
+    assert.equal(records.find(record => record.id === 'observation-page-1')
+      .response.body.history.nextCursor, '[REDACTED]');
+
+    for (const [name, mutate] of [
+      ['paged-literal-duplicate', record => {
+        record.stdout = record.stdout.replace(
+          '"configuredValue":1000000000',
+          '"configuredValue":1000000000,"configuredValue":1000000000',
+        );
+      }],
+      ['exact-escaped-duplicate', record => {
+        record.stdout = record.stdout.replace(
+          '"configuredValue":1000000000',
+          '"configuredValue":1000000000,"configured\\u0056alue":1000000000',
+        );
+      }],
+    ]) {
+      const malformedOutput = path.join(scratch, name);
+      const malformedRunner = (_cli, args) => {
+        const record = runner(_cli, args);
+        const paged = args.some(value => value === 'cursor=opaque-cursor');
+        const exact = args.some(value => value === `attemptId=${childHardCreditInput.attemptId}`);
+        if (name === 'paged-literal-duplicate' && paged || name === 'exact-escaped-duplicate' && exact) {
+          mutate(record);
+        }
+        return record;
+      };
+      const blocked = await runCase(
+        { inputPath: casePath, outputPath: malformedOutput, dryRun: false },
+        { ...process.env, AGENTWEAVER_CLI_PATH: cliPath },
+        malformedRunner,
+      );
+      assert.equal(blocked.status, 'blocked');
+      assert.match(blocked.reason, /strict JSON with unique keys/);
+      const blockedRecords = (await readFile(
+        path.join(malformedOutput, 'commands.jsonl'), 'utf8',
+      )).trim().split('\n').map(line => JSON.parse(line));
+      const blockedObservations = blockedRecords.filter(item =>
+        item.id.startsWith('observation-page-')
+        || item.id === 'observation-exact-attempt'
+        || item.id === 'rest-exact-attempt');
+      assert.ok(blockedObservations.length > 0);
+      assert.ok(blockedObservations.every(item => !Object.hasOwn(item, 'stdout')
+        && !Object.hasOwn(item, 'stderr')));
+    }
+
+    const opaqueOutput = path.join(scratch, 'nested-malformed-cursor');
+    const opaqueRunner = (_cli, args) => {
+      const record = runner(_cli, args);
+      if (args.includes('readRuntimeObservationV2')
+        && args.some(value => value === 'cursor=opaque-cursor')) {
+        const payload = JSON.parse(record.stdout);
+        payload.body.history.nextCursor = {
+          opaque: 'opaque-cursor-secret',
+          nested: {
+            token: 'nested-cursor-secret',
+            configuredValue: 123456789,
+          },
+        };
+        record.stdout = JSON.stringify(payload);
+      }
+      return record;
+    };
+    const opaque = await runCase(
+      { inputPath: casePath, outputPath: opaqueOutput, dryRun: false },
+      { ...process.env, AGENTWEAVER_CLI_PATH: cliPath },
+      opaqueRunner,
+    );
+    assert.equal(opaque.status, 'blocked');
+    const opaqueCommandText = await readFile(
+      path.join(opaqueOutput, 'commands.jsonl'), 'utf8',
+    );
+    assert.doesNotMatch(opaqueCommandText, /opaque-cursor-secret|nested-cursor-secret/);
+    assert.match(opaqueCommandText, /"nextCursor":"\[REDACTED\]"/);
+    assert.doesNotMatch(opaqueCommandText, /configuredValue","source":"123456789/);
+
+    const belowOutput = path.join(scratch, 'pinned-below-limit');
+    const belowFixture = childHardCreditObservation({ observedToken: '999999999.999999999' });
+    const otherDenial = JSON.parse(belowFixture.pageRaw);
+    const other = structuredClone(otherDenial.body.history.items[0]);
+    other.factId = '00000000-0000-4000-8000-000000000450';
+    other.sequence = 2;
+    other.ownerDecision.receiptId = other.factId;
+    other.attemptId = '00000000-0000-4000-8000-000000000451';
+    other.dispatchId = other.attemptId;
+    other.observedValue = 1_000_000_000;
+    otherDenial.body.history.items.push(other);
+    otherDenial.body.history.highWatermark = 2;
+    const belowRunner = (_cli, args) => {
+      const record = runner(_cli, args);
+      if (args.includes('readRuntimeObservationV2')
+        && !args.some(value => value.startsWith('cursor=')
+          || value.startsWith(`attemptId=${childHardCreditInput.attemptId}`))) {
+        const payload = JSON.parse(firstPageRaw);
+        payload.body.history.highWatermark = 2;
+        record.stdout = JSON.stringify(payload);
+      }
+      if (args.includes('readRuntimeObservationV2')
+        && args.some(value => value === 'cursor=opaque-cursor')) {
+        record.stdout = belowFixture.pageRaw
+          .replace('"highWatermark":1', '"highWatermark":2')
+          .replace('],"nextCursor":null', `,${JSON.stringify(other)}],"nextCursor":null`);
+      }
+      if (args.includes('readRuntimeObservationV2')
+        && args.some(value => value === `attemptId=${childHardCreditInput.attemptId}`)) {
+        record.stdout = `{"status":200,"headers":{},"body":${belowFixture.exactRaw}}`;
+      }
+      if (args.includes('GET') && args.some(value => value.includes('runtime-observation/v2'))) {
+        record.stdout = `{"status":200,"body":${belowFixture.exactRaw}}`;
+      }
+      return record;
+    };
+    const belowCasePath = path.join(scratch, 'below-case.json');
+    await writeFile(belowCasePath, JSON.stringify({
+      ...childHardCreditInput,
+      expectedRelation: 'equal',
+      apphostSha256,
+    }));
+    const belowResult = await runCase(
+      { inputPath: belowCasePath, outputPath: belowOutput, dryRun: false },
+      { ...process.env, AGENTWEAVER_CLI_PATH: cliPath },
+      belowRunner,
+    );
+    assert.equal(belowResult.status, 'blocked');
+    assert.match(belowResult.reason, /below its configured value/);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
