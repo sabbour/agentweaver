@@ -17,10 +17,13 @@ target owner has approved. Creating a run or asking a model to call a tool can
 change data and incur provider charges. Get separate approval for model and
 spend use before you create the test run.
 
-Prepare a workflow-bound run with `maxToolCalls` set to `1`. Use a native
-workflow child session that has one admitted tool reservation and a later
-tool-call denial. The tool must be read-only. The case checks the existing
-child session; it does not create this workflow or attempt.
+The example keeps `maxToolCalls` set to `1`. To prove the tool-below-cap
+matrix row, prepare an existing workflow-bound run with `maxToolCalls` set to
+`2`. Use a native workflow child session with two distinct, recorded, read-only
+tool reservations: one at count `1` and one at count `2`. Record a later
+tool-call denial in the same child session. A reservation records a slot; it
+does not prove that the tool executed. The case checks the existing child
+session; it does not create this workflow or attempt.
 
 The CLI identity must have current authority to read the selected project and
 run. Use the `api.read` and `projects.orchestrator` scopes with that
@@ -40,7 +43,9 @@ new local JSON file. Replace each example value with the approved case data:
 - `approvedNonProduction`: keep `true` only after the target owner approves
   this test.
 - `expectedActorId`: the actor authorized for this case.
-- `expectedMaxToolCalls`: the accepted run limit. This case expects `1`.
+- `expectedMaxToolCalls`: the accepted run limit. The checked-in one-slot
+  example uses `1`. Set it to `2` for an existing accepted two-slot run whose
+  child session has both reservations and the later denial.
 - `target`: the Gateway origin, Broker issuer, client ID, API audience, tenant,
   project, run, and workflow child session IDs.
 
@@ -114,6 +119,17 @@ child session's current execution fence and accepted selection. Every history
 page and both exact responses must carry the selected project, run, session,
 fence, and selection. The normal CLI and `rest` exact lookups must return the
 same current-authority fact.
+
+For `tool-below-cap`, the matrix checks two separate reservations under the
+current binding. Their valid attempt IDs must differ. One reservation must
+show positive count `maxToolCalls - 1`; the next must show positive count
+`maxToolCalls`. Both must equal `reservedCount` and carry the exact accepted
+limit, unit `count`, and scope `copilotRun`. Their sequences must be positive
+safe integers no greater than the shared snapshot high-watermark. The count
+`maxToolCalls - 1` record must come first in page traversal and sequence
+order. Intervening sequence gaps are valid because history pages can omit
+events from other sessions. This row remains `blocked` for a one-slot run
+because a positive count cannot represent `0`.
 
 The rejection fact means the runtime recorded a rejection decision after the
 owner confirmed the numeric denial. It does not prove that the SDK received
@@ -222,7 +238,9 @@ Each result includes `numericMatrix`. The rows in
 with the accepted limit. Equality and overshoot are separate predicates.
 `numericMatrix.complete` is `true` only when every required row passes. A
 legacy case can still pass while the matrix remains blocked or incomplete;
-the matrix does not change the existing case status or exit code.
+the matrix does not change the existing case status or exit code. A malformed
+or incomplete reservation pair blocks only `tool-below-cap`; it does not
+change the existing case, at-cap, denial, or replay rows.
 
 The matrix marks exact reservation replay in the tool case as blocked because
 its exact lookup returns the rejection, not the reservation. It also keeps

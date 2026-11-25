@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
   "requiredRows": [
-    { "id": "tool-below-cap", "caseId": "numeric-runtime-observation", "predicate": "A current tool reservation has observedValue < accepted maxToolCalls." },
+    { "id": "tool-below-cap", "caseId": "numeric-runtime-observation", "predicate": "Distinct current tool reservations advance from accepted maxToolCalls - 1 to maxToolCalls in page traversal and sequence order within the snapshot high-watermark." },
     { "id": "tool-at-cap", "caseId": "numeric-runtime-observation", "predicate": "A current tool reservation has observedValue === accepted maxToolCalls." },
     { "id": "tool-next-denial", "caseId": "numeric-runtime-observation", "predicate": "The current tool denial has observedValue === configured maxToolCalls." },
     { "id": "tool-exact-replay", "caseId": "numeric-runtime-observation", "predicate": "An exact reservation replay preserves the run-wide reservation count.", "fixedStatus": "blocked", "reason": "The public exact-attempt lookup returns the rejection, not reservation replay evidence." },
