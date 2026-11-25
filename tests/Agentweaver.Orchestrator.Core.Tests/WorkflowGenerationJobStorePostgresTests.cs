@@ -517,7 +517,9 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
         {
             ModelSelectionReference = job.ModelSelectionReference,
             ModelSourceMode = ModelSourceMode.HostedCopilot,
-            CopilotHardCreditLimit = 0m
+            CopilotHardCreditLimit = 0m,
+            EnvironmentCurrentFencingGeneration = 1,
+            EnvironmentProviderFencingGeneration = 1
         };
         var registration = new RuntimeRegistration(
             job.RuntimeInstanceId, job.RegistrationRevision, binding,

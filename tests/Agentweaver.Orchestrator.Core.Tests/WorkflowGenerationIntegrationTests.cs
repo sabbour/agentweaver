@@ -788,6 +788,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
                 releaseHost.TrySetResult();
                 await execution.WaitAsync(deadline.Token);
                 await _registrationOwner.RevokeAfterPlacementReleaseAsync(zeroRegistration, deadline.Token);
+                await _registrationOwner.RevokeAfterPlacementReleaseAsync(_registration, deadline.Token);
                 await Assert.ThrowsAnyAsync<Exception>(() => pendingCleanup.ContinueAsync(cleanupWork, deadline.Token));
                 Assert.Equal(1, environmentCalls);
                 Assert.Equal("cleanup_pending",
