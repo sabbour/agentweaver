@@ -1011,6 +1011,62 @@ test('child and effect observations use retained commands and stable source-boun
     assert.equal(joinResult.members[0].checkpointId, 'later-checkpoint');
     assert.equal(joinResult.completedChildProof.status, 'blocked');
 
+    const receiptHash = '1'.repeat(64);
+    const linkedChild = (sessionId, associationId, messageId) => ({
+      sessionId, associationId, dispatchMessageId: messageId, turnReceiptHash: receiptHash,
+      completedReceiptLink: { messageId, receiptHash },
+    });
+    joined.executionPlan.children = [linkedChild('child-1', 'work-1', childMessage)];
+    const linked = await run('child-join', 'after-observation', joined, before);
+    assert.equal(linked.completedChildProof.status, 'passed', linked.reason);
+    const secondMessage = '00000000-0000-4000-8000-000000000312';
+    const anotherSource = childSnapshot();
+    anotherSource.tree.nodes.push({
+      ...anotherSource.tree.nodes[1], identity: { ...anotherSource.tree.nodes[1].identity, sessionId: 'child-2' },
+    });
+    Object.assign(anotherSource.sessionStatus.executionRecovery.steps[1],
+      { checkpointStatus: 'running', readiness: null, effectRecoveryState: 'mayRepeat' });
+    anotherSource.sessionStatus.executionRecovery.pendingChildDispatches.push({
+      associationId: 'work-2', childSessionId: 'child-2', messageId: secondMessage, effectRecoveryState: 'mayRepeat',
+    });
+    const twoBefore = await run('child-join', 'before-capture', anotherSource);
+    assert.equal(twoBefore.status, 'captured', twoBefore.reason);
+    const twoCompleted = structuredClone(joined);
+    twoCompleted.tree.nodes.push({
+      ...anotherSource.tree.nodes[2], lifecycle: 'completed', executionFence: 10,
+    });
+    Object.assign(twoCompleted.sessionStatus.executionRecovery.steps[1],
+      { checkpointStatus: 'succeeded', readiness: null, effectRecoveryState: 'checkpointResultRecorded' });
+    const partial = await run('child-join', 'after-observation', twoCompleted, twoBefore);
+    assert.equal(partial.members.length, 2);
+    assert.equal(partial.completedChildProof.status, 'blocked');
+    twoCompleted.executionPlan.children.push(linkedChild('child-2', 'work-2', secondMessage));
+    const completePair = await run('child-join', 'after-observation', twoCompleted, twoBefore);
+    assert.equal(completePair.completedChildProof.status, 'passed', completePair.reason);
+
+    const planReadIds = ['initial-execution-plan-before-journal', 'initial-execution-plan-after-journal'];
+    for (const [ids, change, expected, reason] of [
+      [[planReadIds[1]], child => { child.completedReceiptLink.receiptHash = '2'.repeat(64); }, 'blocked'],
+      [[planReadIds[1]], child => { delete child.completedReceiptLink; }, 'blocked'],
+      [planReadIds, child => { delete child.associationId; }, 'blocked'],
+      [planReadIds, child => { child.associationId = 'work 1'; }, 'blocked'],
+      [planReadIds, child => { child.associationId = 'work-2'; }, 'failed', /contradictory child binding/],
+      [planReadIds, child => { child.completedReceiptLink.messageId = secondMessage; }, 'failed', /original child message/],
+      [planReadIds, child => { child.completedReceiptLink.receiptHash = 'invalid'; }, 'blocked'],
+    ]) {
+      const result = await run('child-join', 'after-observation', joined, before, joined, {}, records => {
+        for (const id of ids) {
+          const record = records.find(item => item.id === id);
+          const envelope = JSON.parse(record.stdout);
+          change(envelope.body.children[0]);
+          record.stdout = JSON.stringify(envelope);
+        }
+      });
+      assert.equal(result.status, expected === 'failed' ? 'failed' : 'passed', result.reason);
+      if (reason) assert.match(result.reason, reason);
+      assert.equal(result.completedChildProof.status, 'blocked', result.reason);
+    }
+
     const reordered = structuredClone(after);
     reordered.tree.nodes.reverse();
     reordered.sessionStatus.executionRecovery.steps.reverse();

@@ -689,6 +689,14 @@ Run its local regression tests from the repository root:
 node --test scripts\acceptance\api\tests\checkpoint-recovery-observation.test.mjs
 ```
 
+The case tests compare child receipt links from both execution-plan reads.
+The Orchestrator PostgreSQL tests cover current, carried, imported, and
+unproven receipts:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~ExecutionPlanLinksCurrentAndCarriedReceiptsButOmitsSwappedMessage|FullyQualifiedName~ChildRecoveryImportsVerifiedCompletedUnjoinedResultAndReleasesHold"
+```
+
 The owner-store status tests use PostgreSQL and run in hosted CI. Local checks
 can build those tests, but cannot run them without Docker/PostgreSQL.
 

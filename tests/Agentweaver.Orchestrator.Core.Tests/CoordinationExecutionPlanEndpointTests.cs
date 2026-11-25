@@ -113,6 +113,33 @@ public sealed class CoordinationExecutionPlanEndpointTests
             restoredDefinition!.Steps[0].BuildTestCommand!.WorkspaceSource);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ExecutionPlanResponseWritesOnlyVerifiedReceiptLinks(bool linked)
+    {
+        var messageId = Guid.Parse("5956a121-5556-4c16-848c-0d4a2937966d");
+        var receiptHash = new string('a', 64);
+        var child = new CoordinationExecutionChildSnapshot(
+            "child", "session", "item", "item", "completed", 1, false, messageId,
+            new string('b', 64), new string('c', 64), new string('d', 64), receiptHash)
+        {
+            CompletedReceiptLink = linked ? new(messageId, receiptHash) : null
+        };
+        var snapshot = CreateSnapshot(overflow: false) with { Children = [child] };
+
+        using var document = JsonDocument.Parse(CoordinationEndpoints.SerializeExecutionPlanResponse(snapshot));
+        var serializedChild = document.RootElement.GetProperty("children")[0];
+        Assert.Equal(receiptHash, serializedChild.GetProperty("turnReceiptHash").GetString());
+        Assert.Equal(linked, serializedChild.TryGetProperty("completedReceiptLink", out var link));
+        if (linked)
+        {
+            Assert.Equal(messageId.ToString("D"), link.GetProperty("messageId").GetString());
+            Assert.Equal(receiptHash, link.GetProperty("receiptHash").GetString());
+            Assert.Equal(2, link.EnumerateObject().Count());
+        }
+    }
+
     [Fact]
     public void ExecutionPlanResponseRejectsOverflowWithoutTruncating()
     {

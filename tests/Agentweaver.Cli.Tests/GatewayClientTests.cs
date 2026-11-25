@@ -345,13 +345,22 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
-    public async Task ExecutionPlanOutputPreservesFingerprintAndRedactsUrlDetails()
+    public async Task ExecutionPlanOutputPreservesFingerprintAndReceiptLinksAndRedactsUrlDetails()
     {
         var handler = new TestGatewayHandler
         {
             ResponseBody = $$"""
                 {
                   "savedPlanFingerprint": { "version": 1, "sha256": "{{new string('a', 64)}}" },
+                  "children": [
+                    { "executionFence": 2, "completedReceiptLink": {
+                      "messageId": "76eac56c-2f4f-477b-af86-79d4eb4d1f80", "receiptHash": "{{new string('b', 64)}}"
+                    } },
+                    { "executionFence": 1, "completedReceiptLink": {
+                      "messageId": "a6ba6c28-4ed2-4535-8360-0c60711f6acd", "receiptHash": "{{new string('c', 64)}}"
+                    } },
+                    { "executionFence": 2 }
+                  ],
                   "workPlan": {
                     "workflow": {
                       "definition": {
@@ -381,6 +390,17 @@ public sealed class GatewayClientTests
             HttpClient: http, Authentication: new TestAuthentication(), Output: output, Error: error));
 
         Assert.Equal(0, result);
+        using var envelope = System.Text.Json.JsonDocument.Parse(output.ToString());
+        var children = envelope.RootElement.GetProperty("body").GetProperty("children");
+        Assert.Equal("76eac56c-2f4f-477b-af86-79d4eb4d1f80",
+            children[0].GetProperty("completedReceiptLink").GetProperty("messageId").GetString());
+        Assert.Equal(new string('b', 64),
+            children[0].GetProperty("completedReceiptLink").GetProperty("receiptHash").GetString());
+        Assert.Equal("a6ba6c28-4ed2-4535-8360-0c60711f6acd",
+            children[1].GetProperty("completedReceiptLink").GetProperty("messageId").GetString());
+        Assert.Equal(new string('c', 64),
+            children[1].GetProperty("completedReceiptLink").GetProperty("receiptHash").GetString());
+        Assert.False(children[2].TryGetProperty("completedReceiptLink", out _));
         Assert.Contains(new string('a', 64), output.ToString(), StringComparison.Ordinal);
         Assert.Contains("https://service.example/resource", output.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("?token=", output.ToString(), StringComparison.Ordinal);

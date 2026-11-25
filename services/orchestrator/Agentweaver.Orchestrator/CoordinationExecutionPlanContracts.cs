@@ -55,7 +55,14 @@ public sealed record CoordinationExecutionChildSnapshot(
     string PromptHash,
     string StartupBindingHash,
     string? ResultHash,
-    string? TurnReceiptHash);
+    string? TurnReceiptHash)
+{
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public CoordinationCompletedReceiptLink? CompletedReceiptLink { get; init; }
+}
+
+public sealed record CoordinationCompletedReceiptLink(Guid MessageId, string ReceiptHash);
 
 public sealed record CoordinationExecutionRecoverySnapshot(
     Guid OperationId,

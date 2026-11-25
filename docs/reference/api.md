@@ -1511,6 +1511,13 @@ checkpoint, child, or recovery data, including a plan that cannot be
 fingerprinted, returns `409 execution_plan_unavailable`.
 Stale selection keeps its existing `409` response.
 
+Each child has a `completedReceiptLink` when the owner verifies that its saved
+completion receipt belongs to the original dispatch. The link contains
+`messageId`, the original dispatch message ID, and `receiptHash`, the same
+SHA-256 digest as `turnReceiptHash`. A receipt from an earlier execution fence
+requires matching recovery records. The owner omits the link when the
+receipt is missing or cannot be tied to the original dispatch.
+
 In this response, each workflow step has a required `buildTestCommand` field.
 Its value is `null` when the step has no platform-owned BuildTest command. A
 non-null command has `executionProfileReference`, `executableReference`,

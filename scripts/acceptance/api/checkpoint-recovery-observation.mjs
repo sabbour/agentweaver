@@ -105,6 +105,10 @@ function isIdentifier(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value);
 }
 
+function isAssociationId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
 function isUuid(value) {
   return typeof value === 'string'
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -845,7 +849,51 @@ function boundSavedPlanPair(beforePlan, afterPlan, snapshot, input) {
   if (!isDeepStrictEqual(before, after)) {
     throw new CaseError('blocked', 'The execution-plan read changed during journal paging.');
   }
-  return before;
+  return { ...before, childReads: [beforePlan.children, afterPlan.children] };
+}
+
+function completedChildProof(before, observed, savedPlan) {
+  const completed = observed.members.filter(member => member.outcome === 'checkpointResultRecorded');
+  if (before.formatVersion !== 2 || completed.length === 0) {
+    return { status: 'blocked', reason: 'No completed child has a supported before capture.' };
+  }
+  let incomplete = false;
+  for (const member of completed) {
+    const reads = savedPlan.childReads.map(children => {
+      if (!Array.isArray(children)) return null;
+      return children.filter(child =>
+        child?.sessionId === member.childSessionId || child?.associationId === member.associationId)
+        .map(child => ({
+          sessionId: child.sessionId,
+          associationId: child.associationId,
+          dispatchMessageId: child.dispatchMessageId,
+          receiptHash: child.turnReceiptHash,
+          link: child.completedReceiptLink,
+        }));
+    });
+    if (!isDeepStrictEqual(reads[0], reads[1]) || !reads[0]?.length
+      || reads[0].some(child => !isIdentifier(child.sessionId) || !isAssociationId(child.associationId)
+        || !isObject(child.link) || !exactKeys(child.link, ['messageId', 'receiptHash'])
+        || !isOwnerUuid(child.link.messageId) || !isOwnerUuid(child.dispatchMessageId)
+        || !isHash(child.link.receiptHash) || child.link.receiptHash !== child.link.receiptHash.toLowerCase()
+        || !isHash(child.receiptHash))) {
+      incomplete = true;
+      continue;
+    }
+    const [child] = reads[0];
+    if (reads[0].length !== 1 || child.sessionId !== member.childSessionId
+      || child.associationId !== member.associationId) {
+      throw new CaseError('failed', 'The completed receipt has a contradictory child binding.');
+    }
+    if (!sameOwnerUuid(child.link.messageId, member.messageId)
+      || !sameOwnerUuid(child.dispatchMessageId, member.messageId)
+      || child.link.receiptHash !== child.receiptHash) {
+      throw new CaseError('failed', 'The completed receipt does not match the original child message or receipt hash.');
+    }
+  }
+  return incomplete
+    ? { status: 'blocked', reason: 'A completed child link is missing, malformed, or changed during observation.' }
+    : { status: 'passed' };
 }
 
 function stableChildSnapshot(initial, final, input) {
@@ -1903,10 +1951,7 @@ export async function runCase(options, env = process.env, commandRunner = runCom
           status: before.formatVersion === 2 ? 'passed' : 'blocked',
           ...(before.formatVersion === 1 ? { reason: 'The historical capture has no saved-plan fingerprint.' } : {}),
         },
-        completedChildProof: {
-          status: 'blocked',
-          reason: 'The owner does not expose a verified receipt-to-message link.',
-        },
+        completedChildProof: completedChildProof(before, observed, snapshot.savedPlan),
         committedRecoveryEventProof: { status: 'blocked', reason: 'The public journal has no recovery-progress projection.' },
         ...(input.caseKind === 'committed-effect' ? {
           physicalNoDuplicateProof: { status: 'blocked', reason: 'The public reads do not contain a complete effect and native-call inventory.' },
