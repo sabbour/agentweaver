@@ -497,8 +497,9 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
     [Fact]
     public async Task TerminalReconciliationAcceptsExactZeroCreditNoSendProofAndRejectsTamperedOrStaleProof()
     {
-        var job = (await _store.CreateOrGetAsync(Create("zero-credit-proof"), CancellationToken.None)).Job;
-        var validJob = (await _store.CreateOrGetAsync(Create("zero-credit-proof-valid"), CancellationToken.None)).Job;
+        var sharedRuntimeId = Guid.NewGuid();
+        var job = (await _store.CreateOrGetAsync(Create("zero-credit-proof", sharedRuntimeId), CancellationToken.None)).Job;
+        var validJob = (await _store.CreateOrGetAsync(Create("zero-credit-proof-valid", sharedRuntimeId), CancellationToken.None)).Job;
         foreach (var candidate in new[] { job, validJob })
         {
             await _store.TryBeginExecutionAsync(ProjectId, candidate.JobId, CancellationToken.None);
@@ -697,7 +698,7 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
         }
     }
 
-    private WorkflowGenerationJobCreate Create(string idempotencyKey)
+    private WorkflowGenerationJobCreate Create(string idempotencyKey, Guid? runtimeInstanceId = null)
     {
         const string prompt = "Create a safe workflow.";
         return new WorkflowGenerationJobCreate(
@@ -717,7 +718,7 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
             1,
             new string('a', 64),
             1,
-            Guid.NewGuid(),
+            runtimeInstanceId ?? Guid.NewGuid(),
             1,
             "model:provider-alpha");
     }
