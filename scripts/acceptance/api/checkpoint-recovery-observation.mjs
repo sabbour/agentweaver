@@ -13,6 +13,7 @@ const MAX_OUTPUT = 4 * 1024 * 1024;
 const EXECUTION_PLAN_MAX_OUTPUT = 12 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 60_000;
 const PAGE_SIZE = 100;
+const RECOVERY_EVENT_PAGE_SIZE = 100;
 const MAX_PAGES = 1000;
 const TARGET_KEYS = [
   'gatewayUrl', 'brokerIssuer', 'clientId', 'apiAudience', 'tenantId',
@@ -27,7 +28,10 @@ const OPERATIONS = [
   'readRunStatus', 'readSessionStatus', 'readDecisions', 'readSessionTree', 'replayRunEvents',
 ];
 const SAVED_PLAN_OPERATIONS = [...OPERATIONS, 'readExecutionPlan'];
-const discoveryOperations = input => input.caseKind === 'pending-gate' ? OPERATIONS : SAVED_PLAN_OPERATIONS;
+const discoveryOperations = input => [
+  ...(input.caseKind === 'pending-gate' ? OPERATIONS : SAVED_PLAN_OPERATIONS),
+  ...(input.mode === 'after-observation' ? ['readCheckpointRecoveryEvents'] : []),
+];
 const discoveryCommandCount = input => 3 + discoveryOperations(input).length;
 const EVENT_KINDS = new Set([
   'turn', 'tool_call', 'policy_evaluation', 'decision_accepted', 'effect_accepted',
@@ -228,8 +232,12 @@ function invokeArgs(input, operation, query = {}) {
     '--scope', 'api.read', '--scope', 'projects.orchestrator',
     ...targetArgs(target),
   ];
-  if (['readSessionStatus', 'readDecisions', 'readSessionTree', 'readExecutionPlan'].includes(operation)) {
+  if (['readSessionStatus', 'readDecisions', 'readSessionTree', 'readExecutionPlan',
+    'readCheckpointRecoveryEvents'].includes(operation)) {
     args.splice(5, 0, '--path', `sessionId=${target.sessionId}`);
+  }
+  if (operation === 'readCheckpointRecoveryEvents') {
+    args.splice(7, 0, '--path', `operationId=${input.expectedRecoveryOperationId}`);
   }
   for (const [key, value] of Object.entries(query)) args.push('--query', `${key}=${value}`);
   return args;
@@ -246,7 +254,9 @@ function restArgs(input, route) {
 export function buildCommands(input, legacy = false) {
   const unbound = targetArgs(input.target, false);
   const bound = targetArgs(input.target);
-  const operations = legacy ? OPERATIONS : discoveryOperations(input);
+  const operations = legacy
+    ? [...OPERATIONS, ...(input.mode === 'after-observation' ? ['readCheckpointRecoveryEvents'] : [])]
+    : discoveryOperations(input);
   return [
     { id: 'version', args: ['--version'] },
     { id: 'auth-status', args: ['auth', 'status', '--scope', 'api.read', '--scope', 'projects.orchestrator', ...bound] },
@@ -531,8 +541,260 @@ export function validateJournalPages(pages, input) {
   return { pagesRead: pages.length, eventCount: eventIds.size, lastPosition };
 }
 
+const RECOVERY_PROOF_FIELDS = [
+  'sourceCheckpointId', 'sourceCheckpointRevision', 'previousExecutionFence',
+  'executionFence', 'previousRuntimeInstanceId', 'runtimeInstanceId',
+  'previousRegistrationRevision', 'registrationRevision', 'recoveryMaterialMode',
+];
+const RECOVERY_EVENT_STATUS_REQUIRED = [
+  'phase', 'sourceCheckpointId', 'sourceCheckpointRevision', 'previousExecutionFence',
+  'executionFence', 'previousRuntimeInstanceId', 'previousRegistrationRevision',
+];
+const RECOVERY_EVENT_STATUS_OPTIONAL = [
+  'currentStep', 'reasonCode', 'recoveryMaterialMode', 'boundaryKind', 'dispatchHeld',
+  'sourceCheckpointHash', 'recoveryCheckpointId', 'recoveryCheckpointRevision',
+  'recoveryCheckpointHash', 'decisionStateVersion', 'runtimeInstanceId',
+  'registrationRevision', 'childManifestSha256',
+];
+
+function validRecoveryEventStatus(status) {
+  const allowed = new Set([...RECOVERY_EVENT_STATUS_REQUIRED, ...RECOVERY_EVENT_STATUS_OPTIONAL]);
+  return isObject(status)
+    && RECOVERY_EVENT_STATUS_REQUIRED.every(field => Object.hasOwn(status, field))
+    && Object.keys(status).every(field => allowed.has(field))
+    && ['pending', 'ready', 'blocked', 'indeterminate', 'failed'].includes(status.phase)
+    && nonEmpty(status.sourceCheckpointId)
+    && safePositive(status.sourceCheckpointRevision)
+    && safePositive(status.previousExecutionFence)
+    && safePositive(status.executionFence)
+    && isOwnerUuid(status.previousRuntimeInstanceId)
+    && safePositive(status.previousRegistrationRevision);
+}
+
+function validReadyRecoveryEventStatus(status) {
+  return validRecoveryEventStatus(status)
+    && status.phase === 'ready'
+    && Object.hasOwn(status, 'runtimeInstanceId')
+    && isOwnerUuid(status.runtimeInstanceId)
+    && Object.hasOwn(status, 'registrationRevision')
+    && safePositive(status.registrationRevision)
+    && Object.hasOwn(status, 'recoveryMaterialMode')
+    && ['nativeCache', 'journalRebuild'].includes(status.recoveryMaterialMode);
+}
+
+function recoveryProofBinding(runStatus, sessionStatus, before, input) {
+  const run = runStatus?.checkpointRecovery;
+  const session = sessionStatus?.checkpointRecovery;
+  if (!isObject(run) || !isObject(session)
+    || run.operationId !== input.expectedRecoveryOperationId
+    || session.operationId !== input.expectedRecoveryOperationId
+    || RECOVERY_PROOF_FIELDS.some(field => !Object.hasOwn(run, field)
+      || !Object.hasOwn(session, field)
+      || !isDeepStrictEqual(run[field], session[field]))) {
+    throw new CaseError('blocked', 'The recovery proof is missing or not bound on run and root-session status.');
+  }
+  if (run.phase !== 'ready' || session.phase !== 'ready') {
+    throw new CaseError('blocked', 'The selected recovery proof is not ready on both status surfaces.');
+  }
+  for (const field of [
+    'sourceCheckpointRevision', 'previousExecutionFence', 'executionFence',
+    'previousRegistrationRevision', 'registrationRevision',
+  ]) requireSafe(run[field], `Recovery ${field}`);
+  if (!nonEmpty(run.sourceCheckpointId)
+    || !isOwnerUuid(run.previousRuntimeInstanceId) || !isOwnerUuid(run.runtimeInstanceId)
+    || !['nativeCache', 'journalRebuild'].includes(run.recoveryMaterialMode)) {
+    throw new CaseError('blocked', 'The recovery proof binding is incomplete or unsupported.');
+  }
+  if (run.previousExecutionFence !== before.outputs.runStatus.executionFence) {
+    throw new CaseError('blocked', 'The recovery proof is not bound to the captured fence.');
+  }
+  if (run.previousRuntimeInstanceId.toLowerCase() === run.runtimeInstanceId.toLowerCase()
+    || run.executionFence !== run.previousExecutionFence + 1
+    || run.executionFence !== runStatus.executionFence
+    || run.executionFence !== sessionStatus.executionFence) {
+    throw new CaseError('failed', 'The ready recovery status has an unchanged runtime or invalid fence transition.');
+  }
+  if (input.caseKind !== 'pending-gate') {
+    const saved = savedChildFacts(before.outputs, input);
+    if (run.sourceCheckpointId !== saved.checkpointId
+      || run.sourceCheckpointRevision !== saved.checkpointRevision) {
+      throw new CaseError('blocked', 'The recovery proof is not bound to the captured source checkpoint.');
+    }
+  }
+  return Object.fromEntries([
+    ['operationId', input.expectedRecoveryOperationId],
+    ...RECOVERY_PROOF_FIELDS.map(field => [field, run[field]]),
+  ]);
+}
+
+function extractRecoveryProofBinding(runStatus, sessionStatus, input) {
+  const run = runStatus?.checkpointRecovery;
+  const session = sessionStatus?.checkpointRecovery;
+  if (!isObject(run) || !isObject(session)
+    || run.operationId !== input.expectedRecoveryOperationId
+    || session.operationId !== input.expectedRecoveryOperationId
+    || RECOVERY_PROOF_FIELDS.some(field => !Object.hasOwn(run, field)
+      || !Object.hasOwn(session, field)
+      || !isDeepStrictEqual(run[field], session[field]))) {
+    throw new CaseError('blocked', 'The recovery proof is missing or not bound on run and root-session status.');
+  }
+  return Object.fromEntries([
+    ['operationId', input.expectedRecoveryOperationId],
+    ...RECOVERY_PROOF_FIELDS.map(field => [field, run[field]]),
+  ]);
+}
+
+export function committedRecoveryEventProof(snapshot, before, input) {
+  if (snapshot.recoveryEventError) {
+    return {
+      status: 'blocked',
+      reason: snapshot.recoveryEventError.message ?? 'The recovery event read is unavailable.',
+    };
+  }
+  try {
+    const initialBinding = extractRecoveryProofBinding(
+      snapshot.runStatus, snapshot.sessionStatus, input,
+    );
+    const finalBinding = extractRecoveryProofBinding(
+      snapshot.finalAuthority.runStatus, snapshot.finalAuthority.sessionStatus, input,
+    );
+    if (!isDeepStrictEqual(initialBinding, finalBinding)) {
+      throw new CaseError(
+        'blocked', 'The recovery status binding changed while event pages were read.',
+      );
+    }
+    const initial = recoveryProofBinding(
+      snapshot.runStatus, snapshot.sessionStatus, before, input,
+    );
+    recoveryProofBinding(
+      snapshot.finalAuthority.runStatus, snapshot.finalAuthority.sessionStatus, before, input,
+    );
+    return validateRecoveryEventPages(snapshot.recoveryEvents, initial, input);
+  } catch (error) {
+    return {
+      status: error instanceof CaseError ? error.status : 'blocked',
+      reason: error instanceof Error ? error.message : 'The recovery event proof is unavailable.',
+    };
+  }
+}
+
+function validateRecoveryEventPages(pages, binding, input) {
+  if (!Array.isArray(pages) || pages.length === 0 || pages.length > MAX_PAGES) {
+    throw new CaseError('blocked', 'The checkpoint recovery event read has no complete page set.');
+  }
+  const operationId = input.expectedRecoveryOperationId;
+  const firstWatermark = pages[0]?.watermark;
+  const seenIds = new Set();
+  const seenCursors = new Set();
+  const events = [];
+  let lastSequence = 0;
+  for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+    const page = pages[pageIndex];
+    if (!exactKeys(page, ['session', 'operationId', 'watermark', 'events', 'nextCursor', 'hasMore'])
+      || !validSessionIdentity(page.session)
+      || !Array.isArray(page.events)
+      || page.events.length > 200
+      || !safePositive(page.watermark)
+      || typeof page.hasMore !== 'boolean'
+      || !(page.nextCursor === null || typeof page.nextCursor === 'string')) {
+      throw new CaseError('blocked', 'The checkpoint recovery events returned an invalid page envelope.');
+    }
+    if (page.session.projectId !== input.target.projectId
+      || page.session.runId !== input.target.runId
+      || page.session.sessionId !== input.target.sessionId
+      || page.operationId !== operationId) {
+      throw new CaseError('blocked', 'The checkpoint recovery event page is not bound to the selected operation.');
+    }
+    if (page.watermark !== firstWatermark) {
+      throw new CaseError('blocked', 'The checkpoint recovery event watermark changed during paging.');
+    }
+    if (page.hasMore !== (pageIndex < pages.length - 1)
+      || page.hasMore && (!page.nextCursor || seenCursors.has(page.nextCursor))
+      || !page.hasMore && page.nextCursor !== null) {
+      throw new CaseError('blocked', 'The checkpoint recovery event pages have invalid or incomplete cursors.');
+    }
+    if (page.nextCursor) seenCursors.add(page.nextCursor);
+    for (const event of page.events) {
+      const baseKeys = [
+        'eventId', 'sequence', 'eventType', 'eventVersion', 'occurredAt', 'operationId', 'status',
+      ];
+      if (!isObject(event)
+        || ![baseKeys, [...baseKeys, 'runtimeEffectsState']].some(keys => exactKeys(event, keys))
+        || !isOwnerUuid(event.eventId)
+        || !safePositive(event.sequence)
+        || event.sequence > firstWatermark
+        || !nonEmpty(event.eventType)
+        || event.eventVersion !== 1
+        || typeof event.occurredAt !== 'string' || Number.isNaN(Date.parse(event.occurredAt))
+        || !validRecoveryEventStatus(event.status)) {
+        throw new CaseError('blocked', 'The checkpoint recovery event page contains an invalid event.');
+      }
+      if (event.operationId !== operationId) {
+        throw new CaseError('blocked', 'A checkpoint recovery event is not bound to the selected operation.');
+      }
+      if (seenIds.has(event.eventId)) {
+        throw new CaseError('blocked', 'The checkpoint recovery event pages contain a duplicate event ID.');
+      }
+      if (event.sequence <= lastSequence) {
+        throw new CaseError('blocked', 'Checkpoint recovery event sequences do not increase across pages.');
+      }
+      seenIds.add(event.eventId);
+      lastSequence = event.sequence;
+      events.push(event);
+    }
+  }
+  const admissions = events.filter(event => event.eventId === operationId && event.status.phase === 'pending');
+  if (admissions.length !== 1) {
+    throw new CaseError('blocked', 'The selected recovery operation has no unique pending admission event.');
+  }
+  const allowedAdmissionTypes = input.caseKind === 'pending-gate'
+    ? new Set(['orchestrator.run.checkpoint_recovery_pending'])
+    : new Set([
+      'orchestrator.run.checkpoint_recovery_blocked',
+      'orchestrator.run.checkpoint_recovery_indeterminate',
+    ]);
+  if (!allowedAdmissionTypes.has(admissions[0].eventType)) {
+    throw new CaseError('blocked', 'The recovery admission event has the wrong type for this checkpoint boundary.');
+  }
+  const ready = events.filter(event =>
+    event.eventVersion === 1
+    && event.eventType === 'orchestrator.run.checkpoint_recovery_ready'
+    && event.status.phase === 'ready');
+  if (ready.length !== 1 || ready[0].operationId !== operationId) {
+    throw new CaseError('blocked', 'The selected recovery operation has no unique ready witness.');
+  }
+  if (admissions[0].sequence >= ready[0].sequence) {
+    throw new CaseError('blocked', 'The recovery admission does not precede the ready witness.');
+  }
+  if (!validReadyRecoveryEventStatus(ready[0].status)) {
+    throw new CaseError('blocked', 'The ready checkpoint recovery witness has invalid or missing fields.');
+  }
+  for (const field of RECOVERY_PROOF_FIELDS) {
+    if (ready[0].status[field] !== binding[field]) {
+      throw new CaseError('failed', 'The selected recovery event contradicts the stable status binding.');
+    }
+  }
+  for (const field of [
+    'sourceCheckpointId', 'sourceCheckpointRevision', 'previousExecutionFence',
+    'executionFence', 'previousRuntimeInstanceId', 'previousRegistrationRevision',
+  ]) {
+    if (admissions[0].status[field] !== ready[0].status[field]) {
+      throw new CaseError('failed', 'The ready witness changed the immutable admission binding.');
+    }
+  }
+  return {
+    status: 'passed',
+    operationId,
+    witnessEventId: ready[0].eventId,
+    witnessSequence: ready[0].sequence,
+    pagesRead: pages.length,
+    watermark: firstWatermark,
+  };
+}
+
+export { validateRecoveryEventPages };
+
 function statusBinding(runStatus, sessionStatus, decisions) {
-  const recovery = runStatus?.checkpointRecovery;
   return {
     run: {
       projectId: runStatus?.projectId,
@@ -561,12 +823,6 @@ function statusBinding(runStatus, sessionStatus, decisions) {
         allowedChoices: decisions.pendingGate.allowedChoices,
         allowsFreeform: decisions.pendingGate.allowsFreeform,
       },
-    },
-    recovery: recovery && {
-      operationId: recovery.operationId,
-      phase: recovery.phase,
-      currentStep: recovery.currentStep,
-      executionFence: recovery.executionFence,
     },
   };
 }
@@ -1148,14 +1404,15 @@ function verifyBeforeCommandRecords(capture, input, records) {
   if (!Array.isArray(records)) {
     throw new CaseError('blocked', 'The retained before-capture command records are missing.');
   }
-  const commands = buildCommands(input, capture.formatVersion === 1);
+  const beforeInput = { ...input, mode: 'before-capture' };
+  const commands = buildCommands(beforeInput, capture.formatVersion === 1);
   const hasPlanReads = capture.formatVersion === 2;
   const initialCommands = hasPlanReads ? commands.filter(command => command.id !== 'execution-plan') : commands;
   if (records.length < initialCommands.length + (hasPlanReads ? 8 : 6)) {
     throw new CaseError('blocked', 'The retained before-capture command records are incomplete.');
   }
   let index = 0;
-  const initialDiscoveryCount = capture.formatVersion === 1 ? 8 : discoveryCommandCount(input);
+  const initialDiscoveryCount = capture.formatVersion === 1 ? 8 : discoveryCommandCount(beforeInput);
   for (const command of initialCommands) {
     const commandId = index < initialDiscoveryCount
       ? command.id
@@ -1172,7 +1429,10 @@ function verifyBeforeCommandRecords(capture, input, records) {
   const operationIds = new Set(commandJson(records[2], 'api-operations').map(item => (
     typeof item === 'string' ? item : item?.operationId
   )));
-  if (discoveryOperations({ caseKind: capture.formatVersion === 1 ? 'pending-gate' : input.caseKind })
+  if (discoveryOperations({
+    caseKind: capture.formatVersion === 1 ? 'pending-gate' : input.caseKind,
+    mode: 'before-capture',
+  })
     .some(operation => !operationIds.has(operation))) {
     throw new CaseError('blocked', 'The retained API discovery record does not list every required operation.');
   }
@@ -1395,6 +1655,12 @@ export function validateAfterObservation(input, before, snapshot, finalSnapshot)
   )) {
     throw new CaseError('blocked', 'Run, root-session, or gate authority changed during observation.');
   }
+  if (!isDeepStrictEqual(snapshot.runStatus.checkpointRecovery,
+    finalAuthority.runStatus.checkpointRecovery)
+    || !isDeepStrictEqual(snapshot.sessionStatus.checkpointRecovery,
+      finalAuthority.sessionStatus.checkpointRecovery)) {
+    throw new CaseError('blocked', 'Recovery status changed during observation.');
+  }
   const gate = gateFacts(
     snapshot.decisions, snapshot.sessionStatus, input.expectedGateRequestId, input,
   );
@@ -1482,6 +1748,12 @@ async function requireNewOutputDirectory(outputPath) {
 
 function runEventArgs(input, cursor) {
   const args = invokeArgs(input, 'replayRunEvents', { limit: PAGE_SIZE });
+  if (cursor) args.push('--query', `cursor=${cursor}`);
+  return args;
+}
+
+function recoveryEventArgs(input, cursor) {
+  const args = invokeArgs(input, 'readCheckpointRecoveryEvents', { limit: RECOVERY_EVENT_PAGE_SIZE });
   if (cursor) args.push('--query', `cursor=${cursor}`);
   return args;
 }
@@ -1614,7 +1886,11 @@ export async function runCase(options, env = process.env, commandRunner = runCom
   async function readSnapshot(prefix, before = null) {
     const legacy = before?.formatVersion === 1;
     const commands = buildCommands(input, legacy);
-    const initialDiscoveryCount = legacy ? 8 : discoveryCommandCount(input);
+    const operations = legacy
+      ? [...OPERATIONS, ...(input.mode === 'after-observation' ? ['readCheckpointRecoveryEvents'] : [])]
+      : discoveryOperations(input);
+    const initialDiscoveryCount = 3 + operations.length;
+    let recoveryEventError = null;
     if (prefix === 'initial') {
       await execute('version', commands[0].args, 'text');
       const auth = await execute('auth-status', commands[1].args);
@@ -1626,11 +1902,22 @@ export async function runCase(options, env = process.env, commandRunner = runCom
         ? listed.map(item => typeof item === 'string' ? item : item?.operationId)
         : []);
       for (let index = 3; index < initialDiscoveryCount; index += 1) {
-        const operation = (legacy ? OPERATIONS : discoveryOperations(input))[index - 3];
+        const operation = operations[index - 3];
         if (!operationIds.has(operation)) {
+          if (operation === 'readCheckpointRecoveryEvents' && input.mode === 'after-observation') {
+            recoveryEventError = new CaseError(
+              'blocked', 'Gateway discovery does not list readCheckpointRecoveryEvents.',
+            );
+            continue;
+          }
           throw new CaseError('blocked', `Gateway discovery does not list ${operation}.`);
         }
-        await execute(`api-describe-${operation}`, commands[index].args);
+        try {
+          await execute(`api-describe-${operation}`, commands[index].args);
+        } catch (error) {
+          if (operation !== 'readCheckpointRecoveryEvents' || input.mode !== 'after-observation') throw error;
+          recoveryEventError = error;
+        }
       }
     }
     const base = initialDiscoveryCount;
@@ -1708,6 +1995,36 @@ export async function runCase(options, env = process.env, commandRunner = runCom
         { context, runStatus, sessionStatus, decisions, tree },
         input,
       );
+    }
+    const recoveryEventPages = [];
+    if (prefix === 'initial' && input.mode === 'after-observation' && !recoveryEventError) {
+      const seenCursors = new Set();
+      let cursor = null;
+      try {
+        for (let pageNumber = 1; pageNumber <= MAX_PAGES; pageNumber += 1) {
+          const pageResponse = await execute(
+            `${prefix}-recovery-events-page-${pageNumber}`,
+            recoveryEventArgs(input, cursor),
+          );
+          const page = apiResponseBody(
+            pageResponse, `${prefix}-recovery-events-page-${pageNumber}`,
+          );
+          recoveryEventPages.push(page);
+          if (page.hasMore !== true) break;
+          if (typeof page.nextCursor !== 'string'
+            || page.nextCursor.length === 0
+            || seenCursors.has(page.nextCursor)) {
+            throw new CaseError('blocked', 'The recovery event read returned a missing or repeated cursor.');
+          }
+          seenCursors.add(page.nextCursor);
+          cursor = page.nextCursor;
+          if (pageNumber === MAX_PAGES) {
+            throw new CaseError('blocked', 'The recovery event read exceeded the 1000-page safety limit.');
+          }
+        }
+      } catch (error) {
+        recoveryEventError = error;
+      }
     }
     const finalRunStatus = apiResponseBody(
       await execute(`${prefix}-final-run-status`, commands[base + 1].args),
@@ -1819,6 +2136,11 @@ export async function runCase(options, env = process.env, commandRunner = runCom
     )) {
       throw new CaseError('blocked', 'Run, root-session, or gate authority changed during journal paging.');
     }
+    if (!isDeepStrictEqual(runStatus.checkpointRecovery, finalRunStatus.checkpointRecovery)
+      || !isDeepStrictEqual(sessionStatus.checkpointRecovery,
+        finalSessionStatus.checkpointRecovery)) {
+      throw new CaseError('blocked', 'Recovery status changed during event paging.');
+    }
     return {
       context,
       runStatus,
@@ -1828,6 +2150,8 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       events,
       journal,
       ...(savedPlan ? { savedPlan } : {}),
+      recoveryEvents: recoveryEventPages,
+      recoveryEventError,
       finalAuthority: {
         runStatus: finalRunStatus,
         sessionStatus: finalSessionStatus,
@@ -1836,6 +2160,7 @@ export async function runCase(options, env = process.env, commandRunner = runCom
     };
   }
 
+  let recoveryEventResult = null;
   try {
     let before = null;
     if (input.mode === 'after-observation') {
@@ -1853,6 +2178,9 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       );
     }
     const snapshot = await readSnapshot('initial', before);
+    if (input.mode === 'after-observation') {
+      recoveryEventResult = committedRecoveryEventProof(snapshot, before, input);
+    }
     const gate = input.caseKind === 'pending-gate' ? gateFacts(
       snapshot.decisions, snapshot.sessionStatus, input.expectedGateRequestId, input,
     ) : null;
@@ -1933,7 +2261,9 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       const observed = validateChildObservation(input, before, snapshot);
       const result = {
         ...common,
-        status: 'passed',
+        status: recoveryEventResult?.status === 'failed' ? 'failed' : 'passed',
+        ...(recoveryEventResult?.status === 'failed'
+          ? { reason: recoveryEventResult.reason } : {}),
         actorId: snapshot.context.actorId,
         tenantId: snapshot.context.tenantId,
         operationId: observed.recovery.operationId,
@@ -1952,7 +2282,7 @@ export async function runCase(options, env = process.env, commandRunner = runCom
           ...(before.formatVersion === 1 ? { reason: 'The historical capture has no saved-plan fingerprint.' } : {}),
         },
         completedChildProof: completedChildProof(before, observed, snapshot.savedPlan),
-        committedRecoveryEventProof: { status: 'blocked', reason: 'The public journal has no recovery-progress projection.' },
+        committedRecoveryEventProof: recoveryEventResult,
         ...(input.caseKind === 'committed-effect' ? {
           physicalNoDuplicateProof: { status: 'blocked', reason: 'The public reads do not contain a complete effect and native-call inventory.' },
           checkpointRestartDuplicateFence: {
@@ -1972,7 +2302,9 @@ export async function runCase(options, env = process.env, commandRunner = runCom
     );
     const result = {
       ...common,
-      status: 'passed',
+      status: recoveryEventResult?.status === 'failed' ? 'failed' : 'passed',
+      ...(recoveryEventResult?.status === 'failed'
+        ? { reason: recoveryEventResult.reason } : {}),
       actorId: snapshot.context.actorId,
       tenantId: snapshot.context.tenantId,
       operationId: recovery.operationId,
@@ -1990,30 +2322,30 @@ export async function runCase(options, env = process.env, commandRunner = runCom
         recoveryMaterialMode: recovery.recoveryMaterialMode,
       },
       journal: snapshot.journal,
-      committedRecoveryEventProof: {
-        status: 'blocked',
-        reason: 'The public session journal has no supported checkpoint-recovery progress projection.',
-      },
+      committedRecoveryEventProof: recoveryEventResult,
       finishedAt: new Date().toISOString(),
     };
     await handle.write(serializeRedactedJsonLine(result) + '\n', 0, 'utf8');
     await handle.sync();
     return result;
   } catch (error) {
+    const eventFailed = recoveryEventResult?.status === 'failed';
     const result = {
       ...common,
-      status: error instanceof CaseError ? error.status : 'blocked',
+      status: eventFailed ? 'failed' : error instanceof CaseError ? error.status : 'blocked',
       reason: error instanceof Error ? error.message : 'The case did not complete.',
       ...(input.caseKind !== 'pending-gate' ? {
         fullPlanContentProof: { status: 'blocked' },
         dependencyGraphProof: { status: 'blocked' },
         completedChildProof: { status: 'blocked' },
-        committedRecoveryEventProof: { status: 'blocked' },
+        committedRecoveryEventProof: recoveryEventResult ?? { status: 'blocked' },
         ...(input.caseKind === 'committed-effect' ? {
           physicalNoDuplicateProof: { status: 'blocked' },
           checkpointRestartDuplicateFence: { status: 'blocked' },
         } : {}),
-      } : {}),
+      } : {
+        committedRecoveryEventProof: recoveryEventResult ?? { status: 'blocked' },
+      }),
       finishedAt: new Date().toISOString(),
     };
     await handle.write(serializeRedactedJsonLine(result) + '\n', 0, 'utf8');

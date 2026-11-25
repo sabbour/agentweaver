@@ -7,9 +7,10 @@ model.
 
 A `passed` result applies to the selected observation. A gate remains pending;
 saved child identities remain pending or have a recorded checkpoint result;
-or the original OpenPullRequest operation has a recorded receipt. The public
-session journal has no recovery-progress projection, so committed recovery-event
-proof remains `blocked`.
+or the original OpenPullRequest operation has a recorded receipt. After
+observation also checks retained Orchestrator recovery events for one selected
+operation. A passing event result proves that the owner recorded recovery
+readiness.
 
 ## Before you begin
 
@@ -98,15 +99,33 @@ node scripts\acceptance\api\checkpoint-recovery-observation.mjs --input $caseInp
 The script uses `auth status`, `api operations`, `api describe`, authorization
 context through `rest`, `readRunStatus`, `readSessionStatus`, `readDecisions`,
 `readSessionTree`, paged `replayRunEvents`, and, for child and effect cases,
-`readExecutionPlan`. It brackets the journal pages with the execution-plan
-reads. It compares run and root-session status through `api invoke` and `rest`.
-It reads status and decision bindings again after the journal pages. The
-script does not use caller-selected operation status or an Orchestrator outbox
-event.
+`readExecutionPlan`. After observation discovers and describes
+`readCheckpointRecoveryEvents` through the CLI, then reads its pages for the
+selected project, run, root session, and recovery operation. Before capture
+does not discover or read recovery history. The script brackets journal and
+recovery-event pages with status reads. It compares run and root-session
+status through `api invoke` and `rest`.
 
-The selected operation must be `ready`, use a different runtime and the next
-source fence, and report `nativeCache` or `journalRebuild` material. The gate
-case requires the same request, actor, choices, and freeform setting.
+The selected operation must be `ready` on run and root-session status, use a
+different runtime and the next source fence, and report `nativeCache` or
+`journalRebuild` material. The previous and replacement runtime registrations
+have their own revision values; the case binds each value exactly and does not
+compare the two numeric values. Both status surfaces
+must retain the same operation, source checkpoint ID and revision, previous
+and current execution fences, previous and replacement runtime IDs,
+registration revisions, and material mode before and after event paging. The
+gate case requires the same request, actor, choices, and freeform setting. A
+gate event binds to the source checkpoint reported by current status; the
+case does not compare that checkpoint to the before capture.
+
+The event read must return the current paging envelope and a stable watermark.
+The script follows each cursor without changing it, accepts sequence gaps,
+and rejects duplicate IDs, non-increasing or unsafe sequences, cursor loops,
+and changed page bindings. It requires a pending admission event for the
+selected boundary and one version-1
+`orchestrator.run.checkpoint_recovery_ready` witness. The witness must match
+the stable status binding. The result retains the witness event ID and
+sequence.
 
 The child cases also require a released dispatch hold, a stable authorization
 context, and the same source checkpoint captured before recovery. A later
@@ -135,8 +154,8 @@ to a different message fails the observation. Use the same observer script
 for the before capture and the after observation. The receipt result also leaves
 physical no-duplicate proof and the `checkpoint-restart-duplicate-fence` P1
 slot `blocked` because native-send and external-effect evidence is not in the
-public reads. Missing runtime identity blocks; equal old and new runtime IDs
-fail.
+public reads. A readiness witness can pass while the effect receipt remains
+blocked. Missing runtime identity blocks; equal old and new runtime IDs fail.
 
 ## Validate and read the result
 
@@ -153,10 +172,14 @@ each new evidence directory. The before-capture directory also contains
 | `captured` | The script retained the selected before-recovery observation and journal. |
 | `passed` | The selected gate, child, or receipt observation meets its checks. |
 | `blocked` | The sign-in, target, before capture, status, material, or journal evidence is missing or incomplete. For child and effect cases, changing or unbound API and REST reads are also blocked. |
-| `failed` | The recovery, runtime, fence, or gate contradicts the expected state. Differing API and REST reads fail for the pending-gate case. For child and effect cases, they fail when each source repeats the same different body with complete, stable binding. |
+| `failed` | The recovery, runtime, fence, gate, or a well-formed event for the selected operation contradicts the stable bound status. Differing API and REST reads fail for the pending-gate case. For child and effect cases, they fail when each source repeats the same different body with complete, stable binding. |
 | `validated-not-run` | Dry-run validation passed; the script used no network and wrote no evidence. |
 
 Exit codes are `0` for `captured`, `passed`, or `validated-not-run`, `1` for
-`failed`, and `2` for `blocked`. Review the redacted command records before
-you retry. A missing recovery-progress event in the session journal does not
-fail the recovery and does not prove a committed recovery event.
+`failed`, and `2` for `blocked`. Event discovery, transport, denial, and parse
+problems block only committed recovery-event proof and leave the base result
+unchanged. A bound contradiction fails the case with exit `1` while the
+script retains the other proof results. Review the redacted command records
+before you run after observation again. The witness proves only that the owner
+recorded readiness; it does not prove journal delivery, run completion, or
+physical effect uniqueness.
