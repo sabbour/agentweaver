@@ -612,9 +612,24 @@ internal sealed partial class CoordinationOwnerStore
             var resultHash = state is not null && state.Results.TryGetValue(associationId, out var result)
                 ? ChildCheckpointRecoveryManifestCodec.Hash(result)
                 : null;
-            var receiptHash = state is not null &&
-                              state.ChildTurnReceipts.TryGetValue(associationId, out var receipt)
-                ? ChildCheckpointRecoveryManifestCodec.Hash(receipt)
+            var receipt = state?.ChildTurnReceipts.GetValueOrDefault(associationId);
+            var receiptHash = receipt is null ? null : ChildCheckpointRecoveryManifestCodec.Hash(receipt);
+            var completedReceiptLink = receipt is not null && receiptHash is not null && resultHash is not null &&
+                receipt.RequestId == binding.DispatchMessageId &&
+                receipt.ChildSessionId == childId &&
+                receipt.AssociationId == associationId &&
+                receipt.WorkPlanId == plan.Plan.Id &&
+                string.Equals(receipt.AcceptedSelectionHash, selectionHash, StringComparison.OrdinalIgnoreCase) &&
+                receipt.PromptSha256 == binding.PromptHash &&
+                (receipt.ExecutionFence == executionFence ||
+                 receipt.ExecutionFence < executionFence && frozenMember is not null &&
+                 frozenMember.MessageId == binding.DispatchMessageId &&
+                 frozenMember.PromptHash == binding.PromptHash &&
+                 (frozenMember.Disposition == "joined" &&
+                  frozenMember.ResultHash == resultHash && frozenMember.TurnReceiptHash == receiptHash ||
+                  frozenMember.Disposition == "completedUnjoined" &&
+                  receipt.ExecutionFence == recoveryManifest!.SourceExecutionFence))
+                ? new CoordinationCompletedReceiptLink(receipt.RequestId, receiptHash)
                 : null;
             children.Add(new CoordinationExecutionChildSnapshot(
                 childId,
@@ -628,7 +643,10 @@ internal sealed partial class CoordinationOwnerStore
                 binding.PromptHash,
                 ChildCheckpointRecoveryManifestCodec.Hash(binding),
                 resultHash,
-                receiptHash));
+                receiptHash)
+            {
+                CompletedReceiptLink = completedReceiptLink
+            });
         }
 
         if (children.Count > ChildCheckpointRecoveryManifestCodec.MaximumChildren)

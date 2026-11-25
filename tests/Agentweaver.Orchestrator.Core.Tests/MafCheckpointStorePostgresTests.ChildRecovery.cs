@@ -1772,8 +1772,135 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.False(checkpoint.State.PendingDispatches.ContainsKey(member.AssociationId));
         Assert.Equal(MafExecutionTaskStatus.Succeeded,
             checkpoint.State.Progress.WorkItems[member.AssociationId]);
-        Assert.Equal(member.MessageId, checkpoint.State.ChildTurnReceipts[member.AssociationId].RequestId);
+        var receipt = checkpoint.State.ChildTurnReceipts[member.AssociationId];
+        Assert.Equal(member.MessageId, receipt.RequestId);
+        Assert.Equal(state.Manifest.SourceExecutionFence, receipt.ExecutionFence);
+        Assert.NotEqual(child.ExecutionFence, receipt.ExecutionFence);
+        var projected = await ReadExecutionPlanChildAsync(state.Fixture);
+        Assert.Equal(new CoordinationCompletedReceiptLink(member.MessageId,
+            ChildCheckpointRecoveryManifestCodec.Hash(receipt)), projected.CompletedReceiptLink);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecutionPlanLinksCurrentAndCarriedReceiptsButOmitsSwappedMessage(bool swapMessage)
+    {
+        var fixture = await PrepareChildRecoveryAsync(nativeState: "completed");
+        var native = fixture.NativeAdmission!;
+        var material = CreateCompletedUnjoinedMaterial(fixture, fixture.Result);
+        var sources = new RuntimeUsageSourceStore(_fixture.DataSource,
+            new OrchestratorOptions(_actor.Issuer, "orchestrator", "https://projects.test/", "projects",
+                "https://events.test/", "events", _schema), TimeProvider.System);
+        var childStatus = await fixture.Owner.ReadSessionStatusAsync(_actor, fixture.Child, CancellationToken.None);
+        var associationId = fixture.Dispatch.AssociationId;
+        var checkpoint = fixture.Source;
+        RuntimeChildTurnCompletionReceipt? receipt = null;
+        await fixture.Owner.FinishTurnAsync(
+            _actor, fixture.Child, new(childStatus.ExecutionFence, childStatus.StateVersion,
+                LogicalTurnCompletion.Completed), CancellationToken.None,
+            async (connection, transaction, token) =>
+            {
+                var evidence = await sources.RequireNativeTurnAccountedWithinTransactionAsync(
+                    connection, transaction, fixture.ChildRegistration, native.Message, fixture.Result, token);
+                var completed = RuntimeChildTurnCompletionReceipt.Create(
+                    native.Message, evidence, material.UserMaterial, material.AssistantMaterial);
+                if (swapMessage)
+                {
+                    var other = Guid.NewGuid();
+                    completed = completed with
+                    {
+                        RequestId = other,
+                        UserMaterial = completed.UserMaterial with { EventId = other },
+                        AssistantMaterial = completed.AssistantMaterial with
+                        {
+                            EventId = RuntimeRootTurnCompletionReceipt.AssistantEventId(other)
+                        }
+                    };
+                }
+                receipt = completed;
+                var state = checkpoint.State;
+                checkpoint = await _executionStore.AppendInTransactionAsync(
+                    connection, transaction, Guid.NewGuid().ToString("N"), checkpoint.Info,
+                    state with
+                    {
+                        Revision = state.Revision + 1,
+                        Progress = state.Progress with
+                        {
+                            WorkItems = state.Progress.WorkItems.SetItem(associationId, MafExecutionTaskStatus.Succeeded)
+                        },
+                        PendingDispatches = state.PendingDispatches.Remove(associationId),
+                        Results = state.Results.Add(associationId, fixture.Result),
+                        ChildTurnReceipts = state.ChildTurnReceipts.Add(associationId, completed)
+                    }, token);
+            });
+
+        var current = await ReadExecutionPlanChildAsync(fixture);
+        var receiptHash = ChildCheckpointRecoveryManifestCodec.Hash(Assert.IsType<RuntimeChildTurnCompletionReceipt>(receipt));
+        Assert.Equal(receiptHash, current.TurnReceiptHash);
+        if (swapMessage)
+        {
+            Assert.Null(current.CompletedReceiptLink);
+            return;
+        }
+
+        var expected = new CoordinationCompletedReceiptLink(fixture.Dispatch.MessageId, receiptHash);
+        Assert.Equal(expected, current.CompletedReceiptLink);
+        var run = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        var recovered = await fixture.Owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId,
+            fixture.Request with
+            {
+                ExpectedRunStateVersion = run.StateVersion,
+                CheckpointRecovery = fixture.Request.CheckpointRecovery! with
+                {
+                    SourceCheckpointId = checkpoint.Info.CheckpointId,
+                    SourceCheckpointRevision = checkpoint.State.Revision
+                }
+            }, CancellationToken.None, _selection, _executionStore);
+        var manifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, recovered.OperationId, CancellationToken.None);
+        var member = Assert.Single(manifest.Members);
+        Assert.Equal("joined", member.Disposition);
+        Assert.Equal(receiptHash, member.TurnReceiptHash);
+        Assert.NotEqual(recovered.ExecutionFence, receipt!.ExecutionFence);
+        Assert.Equal(expected, (await ReadExecutionPlanChildAsync(fixture)).CompletedReceiptLink);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var update = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_execution_operations
+            SET result = jsonb_set(result, ARRAY['checkpointRecovery', 'childManifestSha256'], to_jsonb(@hash)),
+                progress = jsonb_set(
+                    jsonb_set(progress, ARRAY['childManifest'], to_jsonb(@manifest)),
+                    ARRAY['childManifestSha256'], to_jsonb(@hash))
+            WHERE project_id = @project AND run_id = @run AND operation_id = @operation
+            """, connection);
+        var hashParameter = update.Parameters.Add("hash", NpgsqlDbType.Text);
+        var manifestParameter = update.Parameters.Add("manifest", NpgsqlDbType.Text);
+        update.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+        update.Parameters.AddWithValue("run", _binding.Identity.RunId);
+        update.Parameters.AddWithValue("operation", recovered.OperationId);
+        var otherHash = (receiptHash[0] == '0' ? "1" : "0") + receiptHash[1..];
+        foreach (var frozenHash in new[] { null, otherHash })
+        {
+            var unproven = ChildCheckpointRecoveryManifestCodec.Encode(manifest with
+            {
+                Members = [member with { TurnReceiptHash = frozenHash }]
+            });
+            hashParameter.Value = unproven.Sha256;
+            manifestParameter.Value = unproven.Json;
+            Assert.Equal(1, await update.ExecuteNonQueryAsync());
+            var withoutProvenance = await ReadExecutionPlanChildAsync(fixture);
+            Assert.Equal(receiptHash, withoutProvenance.TurnReceiptHash);
+            Assert.Null(withoutProvenance.CompletedReceiptLink);
+        }
+    }
+
+    private async Task<CoordinationExecutionChildSnapshot> ReadExecutionPlanChildAsync(ChildRecoveryFixture fixture) =>
+        Assert.Single((await fixture.Owner.ReadExecutionPlanAsync(
+            _actor, _binding.Identity, _selection,
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), CancellationToken.None)).Children);
 
     [Theory]
     [InlineData("forged result", "runtime_native_turn_accounting_invalid")]

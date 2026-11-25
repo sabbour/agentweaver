@@ -717,6 +717,9 @@ before it returns the response. The response uses `Cache-Control: no-store`,
 has an 8 MiB limit, and contains hashes and identifiers rather than child
 result text, credentials, or bootstrap material. The owner returns
 `409 execution_plan_unavailable` when it cannot provide the complete projection.
+For a completed child, the read links the saved receipt to the original
+dispatch message after checking the checkpoint and startup binding. A receipt
+from a prior execution fence also requires matching recovery records.
 
 ### Promote a plan into backlog tasks
 

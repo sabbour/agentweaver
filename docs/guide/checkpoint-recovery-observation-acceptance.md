@@ -127,8 +127,12 @@ When both version-1 fingerprints are stable, bound, and equal across recovery,
 the child and receipt results mark full-plan content and dependency-graph
 proof as `passed`. A different stable fingerprint after recovery fails with
 `The saved plan changed during recovery.` A missing, malformed, unsupported,
-unbound, or changing plan read blocks the observation. The completed-child
-receipt-to-message link remains `blocked`. The receipt result also leaves
+unbound, or changing plan read blocks the observation. Completed-child proof
+passes when at least one captured child completes and both post-recovery plan
+reads link every captured child that completed to its original message and the
+same receipt hash. Missing or changing links block this proof. A stable link
+to a different message fails the observation. Use the same observer script
+for the before capture and the after observation. The receipt result also leaves
 physical no-duplicate proof and the `checkpoint-restart-duplicate-fence` P1
 slot `blocked` because native-send and external-effect evidence is not in the
 public reads. Missing runtime identity blocks; equal old and new runtime IDs

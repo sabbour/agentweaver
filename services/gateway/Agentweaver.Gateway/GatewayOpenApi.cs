@@ -3167,7 +3167,11 @@ else if (route.OperationId is
             ("workPlanItemId", NullableStr()), ("associationId", Str()), ("lifecycle", Str()),
             ("executionFence", Int()), ("detached", Bool()), ("dispatchMessageId", Uuid()),
             ("promptHash", Str()), ("startupBindingHash", Str()),
-            ("resultHash", NullableStr()), ("turnReceiptHash", NullableStr())),
+            ("resultHash", NullableStr()), ("turnReceiptHash", NullableStr()),
+            ("completedReceiptLink", Ref("CoordinationCompletedReceiptLink"))),
+        ["CoordinationCompletedReceiptLink"] = Obj(
+            ["messageId", "receiptHash"], ("messageId", Uuid()),
+            ("receiptHash", new { type = "string", pattern = "^[0-9a-f]{64}$" })),
         ["CoordinationExecutionRecoverySnapshot"] = Obj(
             ["operationId", "selectionHash", "workPlanId", "workPlanHash", "workflowHash",
                 "sourceCheckpointId", "sourceCheckpointRevision", "sourceCheckpointHash",

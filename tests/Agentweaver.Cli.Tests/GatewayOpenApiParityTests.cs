@@ -175,6 +175,17 @@ public sealed class GatewayOpenApiParityTests
         Assert.Equal(1, fingerprintSchema["properties"]?["version"]?["maximum"]?.GetValue<int>());
         Assert.Equal("^[0-9a-f]{64}$",
             fingerprintSchema["properties"]?["sha256"]?["pattern"]?.GetValue<string>());
+        var childSchema = Assert.IsType<JsonObject>(schemas["CoordinationExecutionChildSnapshot"]);
+        Assert.Equal("#/components/schemas/CoordinationCompletedReceiptLink",
+            childSchema["properties"]?["completedReceiptLink"]?["$ref"]?.GetValue<string>());
+        Assert.DoesNotContain("completedReceiptLink",
+            childSchema["required"]!.AsArray().Select(value => value!.GetValue<string>()));
+        var linkSchema = Assert.IsType<JsonObject>(schemas["CoordinationCompletedReceiptLink"]);
+        Assert.Equal(["messageId", "receiptHash"],
+            linkSchema["required"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray());
+        Assert.Equal("uuid", linkSchema["properties"]?["messageId"]?["format"]?.GetValue<string>());
+        Assert.Equal("^[0-9a-f]{64}$",
+            linkSchema["properties"]?["receiptHash"]?["pattern"]?.GetValue<string>());
         Assert.Equal(
             "#/components/schemas/CoordinationExecutionCheckpointSnapshot",
             executionPlanSchema["properties"]?["checkpoint"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());
