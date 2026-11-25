@@ -100,5 +100,19 @@ The provider card shows three separate values:
 - **Key saved** or **No key saved**
 - **Default for new runs**
 
+The card also shows the host-request delivery from its provider response:
+
+| Delivery status | Meaning |
+| --- | --- |
+| **Waiting to send** | The request is pending. |
+| **Received by Environment** | Environment received the request. |
+| **Delivery failed** | Delivery to Environment failed. |
+| **Status unavailable** | The response has no matching delivery status. |
+
+The card shows the returned host and port. It shows **Unavailable** when
+either value is invalid. It does not derive the host from the base URL.
+Receipt by Environment does not approve the host or make the provider ready.
+Select **Refresh** to read the current provider response.
+
 After a successful switch or conflict, the page reloads the current settings
 revision and provider revisions.

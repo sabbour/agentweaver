@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
 import { PlatformModelProviders } from './PlatformModelProviders';
@@ -77,19 +77,24 @@ function provider(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setPage(pageOverrides: Record<string, unknown> = {}) {
-  api.listPlatformByokProviderDrafts.mockResolvedValue({
+function providerPage(providers: ReturnType<typeof provider>[], pageOverrides: Record<string, unknown> = {}) {
+  return {
     switchMode: 'active',
     activeProviderId: 'provider-1',
     settingsRevision: 9,
-    providers: [provider()],
+    providers,
     nextAfterProviderId: null,
     ...pageOverrides,
-  });
+  };
+}
+
+function setPage(pageOverrides: Record<string, unknown> = {}) {
+  api.listPlatformByokProviderDrafts.mockResolvedValue(providerPage([provider()], pageOverrides));
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.listPlatformByokProviderDrafts.mockReset();
   auth.active = true;
   auth.session = { accessToken: 'token-1', binding: null };
   auth.authSessionGeneration = 1;
@@ -115,6 +120,105 @@ beforeEach(() => {
 });
 
 describe('PlatformModelProviders', () => {
+  it('shows safe host delivery details from the provider response and maps exact status pairs', async () => {
+    setPage({
+      activeProviderId: null,
+      providers: [
+        provider({
+          id: 'pending', name: 'Pending provider',
+          egress: { host: 'pending.example', port: 443, destinationState: null, canApprove: false, deliveryStatus: 'pending' },
+        }),
+        provider({
+          id: 'delivered', name: 'Delivered provider',
+          egress: { host: 'delivered.example', port: 8443, destinationState: 'requested', canApprove: false, deliveryStatus: 'delivered' },
+        }),
+        provider({
+          id: 'failed', name: 'Failed provider',
+          egress: { host: 'failed.example', port: 443, destinationState: null, canApprove: false, deliveryStatus: 'failed' },
+        }),
+        provider({ id: 'missing', name: 'Missing status provider', egress: null }),
+        provider({
+          id: 'unavailable', name: 'Unavailable provider',
+          egress: { host: 'unavailable.example', port: 443, destinationState: null, canApprove: false, deliveryStatus: 'unavailable' },
+        }),
+        provider({
+          id: 'mismatch', name: 'Mismatched provider', base_url: 'https://fallback.example/v1',
+          egress: { host: 'https://unsafe.example/path', port: 0, destinationState: 'requested', canApprove: true, deliveryStatus: 'pending' },
+        }),
+      ],
+    });
+
+    render(<PlatformModelProviders />);
+
+    const row = async (name: string) => (await screen.findByText(name)).closest('li')!;
+    expect(within(await row('Pending provider')).getByText('Waiting to send')).toBeTruthy();
+    const delivered = within(await row('Delivered provider'));
+    expect(delivered.getByText('Received by Environment')).toBeTruthy();
+    expect(delivered.getByText('delivered.example')).toBeTruthy();
+    expect(delivered.getByText('8443')).toBeTruthy();
+    expect(within(await row('Failed provider')).getByText('Delivery failed')).toBeTruthy();
+    expect(within(await row('Missing status provider')).getByText('Status unavailable')).toBeTruthy();
+    expect(within(await row('Unavailable provider')).getByText('Status unavailable')).toBeTruthy();
+    const mismatch = within(await row('Mismatched provider'));
+    expect(mismatch.getByText('Status unavailable')).toBeTruthy();
+    expect(mismatch.getAllByText('Unavailable')).toHaveLength(2);
+    expect(screen.queryByText('fallback.example')).toBeNull();
+    expect(screen.getAllByText('Receiving a request does not approve the host or make the provider ready.')).toHaveLength(6);
+  });
+
+  it('refreshes host delivery details without a write or stale response reuse', async () => {
+    let finishStaleRefresh!: (value: ReturnType<typeof providerPage>) => void;
+    const initial = providerPage([provider({
+      egress: { host: 'model.example', port: 443, destinationState: null, canApprove: false, deliveryStatus: 'pending' },
+    })]);
+    api.listPlatformByokProviderDrafts
+      .mockReset()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(providerPage([provider({
+        egress: { host: 'tenant-two.example', port: 443, destinationState: 'requested', canApprove: false, deliveryStatus: 'delivered' },
+      })]))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishStaleRefresh = resolve; }));
+
+    const view = render(<PlatformModelProviders />);
+    expect(await screen.findByText('Waiting to send')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Received by Environment')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(3);
+
+    auth.active = false;
+    auth.session = null;
+    view.rerender(<PlatformModelProviders />);
+    expect(await screen.findByText('Sign in to manage platform providers.')).toBeTruthy();
+    await act(async () => finishStaleRefresh(providerPage([provider({
+      id: 'stale', name: 'Stale provider',
+      egress: { host: 'stale.example', port: 443, destinationState: null, canApprove: false, deliveryStatus: 'failed' },
+    })])));
+
+    expect(screen.queryByText('Stale provider')).toBeNull();
+    expect(screen.queryByText('Delivery failed')).toBeNull();
+    expect(api.createPlatformByokProviderDraft).not.toHaveBeenCalled();
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+    expect(api.setPlatformByokProviderCredential).not.toHaveBeenCalled();
+  });
+
+  it('clears host delivery details when a refresh loses access', async () => {
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([provider({
+        egress: { host: 'model.example', port: 443, destinationState: 'requested', canApprove: false, deliveryStatus: 'delivered' },
+      })]))
+      .mockRejectedValueOnce(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    render(<PlatformModelProviders />);
+    expect(await screen.findByText('Received by Environment')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByText(/rest of Platform Settings remains available/)).toBeTruthy();
+    expect(screen.queryByText('model.example')).toBeNull();
+    expect(screen.queryByText('Received by Environment')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use for new runs' })).toBeNull();
+  });
+
   it('shows provider, key, and default states separately and gates untouched switching', async () => {
     setPage({ switchMode: 'untouched', settingsRevision: 0, activeProviderId: null });
     render(<PlatformModelProviders />);
