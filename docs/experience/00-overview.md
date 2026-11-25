@@ -60,7 +60,7 @@ first, and load more rows with **Load more**.
 | `/projects/:projectId/knowledge` and `/projects/:projectId/memories` | Search, write, review, version, and transfer Memories for a run and an agent. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
-| `/platform-settings` | Read the status of the 16 platform component areas. Access is limited to tenant and platform administrators. |
+| `/platform-settings` | Read the status of the 16 platform component areas as a tenant or platform administrator. Read [provider host requests across tenants](../guide/web-client.md#read-provider-host-requests) as a platform administrator. |
 | `/policies` | Read saved Platform Policy source and revisions, edit a raw local draft, and validate it without saving. |
 | `/projects/:projectId/runs/:runId` | Use the Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings tabs. |
 

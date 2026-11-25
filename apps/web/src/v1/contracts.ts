@@ -262,6 +262,25 @@ export interface PlatformModelProviderDraftPage {
   nextAfterProviderId: string | null;
 }
 
+export type PlatformEgressDestination = {
+  destinationId: string;
+  requestId: string;
+  host: string;
+  port: number;
+  state: 'requested';
+  origin: 'modelProvider';
+  tenantId: string;
+  providerId: string;
+  providerRevision: number;
+  requestedBy: string;
+  requestedAt: string;
+} & ({ scope: 'platform'; projectId: null } | { scope: 'project'; projectId: string });
+
+export interface PlatformEgressDestinationPage {
+  destinations: PlatformEgressDestination[];
+  nextCursor: string | null;
+}
+
 export interface ModelProviderCredentialRequest {
   operationId: string;
   expectedProviderRevision: number;

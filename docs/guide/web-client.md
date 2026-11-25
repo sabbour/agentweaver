@@ -93,7 +93,7 @@ The client uses these routes:
 | `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. The header links to stored run Egress. |
 | `/projects/:projectId/runs/:runId/history?view=egress` | Read server-ordered stored outbound network flows for the run with exact project authority. The page shows Session tree, Activity, and Egress tabs. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
-| `/platform-settings` | Read the platform component report. Only tenant and platform administrators can read it. |
+| `/platform-settings` | Read platform components as a tenant or platform administrator. Read provider host requests across tenants as a platform administrator. |
 | `/policies` | Read saved Platform Policy source or validate an in-memory Project Policy draft. |
 
 ## Navigate the client
@@ -360,6 +360,23 @@ service, its readiness, and the active and available implementations. The
 page shows each status exactly as the owner reported it. If an owner didn't
 report, the area reads **Status not reported**. Other users get a permission
 message.
+
+### Read provider host requests
+
+Use a platform administrator sign-in with a confirmed tenant. Open **Platform
+settings** > **Platform-wide provider host requests**. The confirmed tenant
+determines access. The list includes requests from all tenants. Each project
+request shows its tenant and project IDs.
+
+The list shows requests that Environment received for current model provider
+revisions. A request does not approve network access or show that a provider
+is ready. Delivery and verification require the deployment's opt-in provider
+host request channel.
+
+Select **Load more** when it is available, including after an empty page.
+Select **Refresh** to start from the first page. If the page cannot verify
+requests, select **Retry** to read the same page again. An empty result means
+the service returned no requests. It does not report whether the channel is on.
 
 ### Read and validate Policies
 

@@ -82,6 +82,7 @@ const mocks = vi.hoisted(() => ({
   listProjectPullRequests: vi.fn(),
   getPlatformComponents: vi.fn(),
   listPlatformByokProviderDrafts: vi.fn(),
+  listPlatformEgressDestinations: vi.fn(),
   getPlatformByokProviderDraft: vi.fn(),
   createPlatformByokProviderDraft: vi.fn(),
   updatePlatformByokProviderDraft: vi.fn(),
@@ -159,6 +160,7 @@ vi.mock('./api', () => ({
     listProjectPullRequests: mocks.listProjectPullRequests,
     getPlatformComponents: mocks.getPlatformComponents,
     listPlatformByokProviderDrafts: mocks.listPlatformByokProviderDrafts,
+    listPlatformEgressDestinations: mocks.listPlatformEgressDestinations,
     getPlatformByokProviderDraft: mocks.getPlatformByokProviderDraft,
     createPlatformByokProviderDraft: mocks.createPlatformByokProviderDraft,
     updatePlatformByokProviderDraft: mocks.updatePlatformByokProviderDraft,
@@ -570,6 +572,7 @@ describe('v1 web project scoping', () => {
       projectId, coverage: { recordedSince: '2026-01-01T00:00:00Z', includesEarlierPullRequests: false }, items: [], nextCursor: null,
     }));
     mocks.getPlatformComponents.mockReset().mockResolvedValue({ observedAt: '2026-01-01T00:00:00Z', areas: [] });
+    mocks.listPlatformEgressDestinations.mockReset().mockResolvedValue({ destinations: [], nextCursor: null });
     mocks.listPlatformByokProviderDrafts.mockReset().mockResolvedValue({
       switchMode: 'untouched',
       activeProviderId: null,
@@ -3883,6 +3886,8 @@ describe('v1 web project scoping', () => {
     expect(await screen.findByRole('heading', { name: 'Platform settings' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Model providers' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Platform components' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Platform-wide provider host requests' })).toBeTruthy();
+    expect(await screen.findByText('No provider host requests were returned.')).toBeTruthy();
     await waitFor(() => expect(mocks.listPlatformByokProviderDrafts).toHaveBeenCalled());
   });
 
@@ -3893,6 +3898,7 @@ describe('v1 web project scoping', () => {
 
     expect(await screen.findByText(/Switch to a platform sign-in before managing providers/)).toBeTruthy();
     expect(mocks.listPlatformByokProviderDrafts).not.toHaveBeenCalled();
+    expect(mocks.listPlatformEgressDestinations).not.toHaveBeenCalled();
   });
 
   it('keeps the Platform Settings report visible when provider access returns 403', async () => {

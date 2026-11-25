@@ -27,6 +27,7 @@ import type {
   CreateProjectCastingProposalRequest,
   ImportProjectCastingTransferRequest,
   PlatformComponentReport,
+  PlatformEgressDestinationPage,
   ByokDeploymentBindingSnapshot,
   ProjectCastingUniverseList,
   ProjectCastingProposal,
@@ -709,6 +710,19 @@ export class AgentweaverGatewayClient {
       { method: 'PUT', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
+    );
+  }
+
+  listPlatformEgressDestinations(
+    token: string,
+    tenantSelector: string,
+    cursor: string | null,
+    signal?: AbortSignal,
+  ): Promise<PlatformEgressDestinationPage> {
+    const query = new URLSearchParams({ pageSize: '50', state: 'requested' });
+    if (cursor !== null) query.set('cursor', cursor);
+    return this.request(
+      token, `/platform/egress/destinations?${query}`, { signal }, this.baseUrl, tenantSelector,
     );
   }
 

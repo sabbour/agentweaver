@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRef, useState } from 'react';
 import { AgentweaverGatewayClient, gatewayClient, GatewayError } from './api';
 import type { AuthorizationCallbackMessage, AuthorizationTransaction } from './authProtocol';
+import type { PlatformEgressDestinationPage } from './contracts';
 
 const mocks = vi.hoisted(() => ({
   buildAuthorizeUrl: vi.fn((
@@ -65,6 +66,7 @@ vi.mock('./config', () => ({
 import { AuthProvider, useAuth } from './AuthContext';
 import { ProjectModelProviderDrafts } from './ProjectModelProviderDrafts';
 import { DeploymentByokBindings } from './DeploymentByokBindings';
+import { PlatformProviderHostRequests } from './PlatformProviderHostRequests';
 import { RunEgressPanel } from './RunEgressPanel';
 
 function deferred<T>() {
@@ -980,6 +982,84 @@ describe('Broker refresh coordination', () => {
     });
     await screen.findByText('access-2');
     expect(mocks.refreshBrokerToken).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the same session and confirmed tenant when the platform queue persistently returns 401', async () => {
+    vi.mocked(gatewayClient.getAuthorizationContext).mockResolvedValue({
+      contractVersion: 1,
+      issuer: 'projects-config',
+      actorId: 'actor-1',
+      tenantId: 'tenant-1',
+      membershipRevision: 1,
+      boundProjectId: null,
+      boundRunId: null,
+      effectiveAuthority: [],
+    });
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('access-2', 'refresh-2'));
+    const queue = vi.spyOn(gatewayClient, 'listPlatformEgressDestinations')
+      .mockRejectedValue(new GatewayError(401, { code: 'unauthorized' }, 'Unauthorized'));
+    render(<AuthProvider><Harness /><PlatformProviderHostRequests /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+
+    await screen.findByText('Sign in to view provider host requests.');
+    expect(queue).toHaveBeenCalledOnce();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh provider host requests' }));
+    });
+    expect(screen.getByText('Sign in to view provider host requests.')).toBeTruthy();
+    expect(queue.mock.calls).toEqual([
+      ['access-1', 'tenant-1', null, expect.any(AbortSignal)],
+      ['access-1', 'tenant-1', null, expect.any(AbortSignal)],
+    ]);
+    expect(mocks.refreshBrokerToken).not.toHaveBeenCalled();
+    expect(gatewayClient.getAuthorizationContext).toHaveBeenCalledOnce();
+    expect(screen.getByText('access-1')).toBeTruthy();
+    expect(screen.getByText('context:tenant-1')).toBeTruthy();
+    mocks.refreshBrokerToken.mockReset();
+  });
+
+  it.each(['queue control', 'outside control'])('renews the session during an append with focus on the %s', async (focused) => {
+    vi.mocked(gatewayClient.getAuthorizationContext).mockResolvedValue({
+      contractVersion: 1,
+      issuer: 'projects-config',
+      actorId: 'actor-1',
+      tenantId: 'tenant-1',
+      membershipRevision: 1,
+      boundProjectId: null,
+      boundRunId: null,
+      effectiveAuthority: [],
+    });
+    const append = deferred<PlatformEgressDestinationPage>();
+    const queue = vi.spyOn(gatewayClient, 'listPlatformEgressDestinations')
+      .mockResolvedValueOnce({ destinations: [], nextCursor: 'old-page' })
+      .mockReturnValueOnce(append.promise)
+      .mockResolvedValueOnce({ destinations: [], nextCursor: null });
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('access-2', 'refresh-2'));
+    render(<AuthProvider><Harness /><PlatformProviderHostRequests /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    const heading = screen.getByText('Platform-wide provider host requests');
+    const loadMore = await screen.findByRole('button', { name: 'Load more' });
+    loadMore.focus();
+    fireEvent.click(loadMore);
+    const outside = screen.getByRole('button', { name: 'Call twice' });
+    if (focused === 'outside control') outside.focus();
+    fireEvent.click(outside);
+
+    await screen.findByText('access-2');
+    await screen.findByText('No provider host requests were returned.');
+    expect(mocks.refreshBrokerToken).toHaveBeenCalledOnce();
+    expect(screen.getByText('Platform-wide provider host requests')).toBe(heading);
+    expect(document.activeElement).toBe(focused === 'queue control' ? heading : outside);
+    expect(queue.mock.calls.map(([access, tenant, cursor]) => [access, tenant, cursor])).toEqual([
+      ['access-1', 'tenant-1', null],
+      ['access-1', 'tenant-1', 'old-page'],
+      ['access-2', 'tenant-1', null],
+    ]);
+    expect(queue.mock.calls[1][3]?.aborted).toBe(true);
+    await act(async () => append.resolve({ destinations: [], nextCursor: 'stale-page' }));
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 
   it('restarts the bindings read when its 401 refreshes the active session', async () => {
