@@ -99,7 +99,7 @@ internal static class RunCommands
         }
 
         if (response.Status != 200)
-            throw new InvalidOperationException(ErrorMessage(response.Status, response.Body));
+            throw new InvalidOperationException(ErrorMessage(response.Status, response.Body, query.ContainsKey("cursor")));
         var page = ParsePage(response.Body, runId);
         await output.WriteLineAsync(page.ToJsonString(OutputJson)).ConfigureAwait(false);
         if (page["coverage"]!.GetValue<string>() == "Unavailable")
@@ -204,8 +204,12 @@ internal static class RunCommands
                scopes is JsonArray;
     }
 
-    private static string ErrorMessage(int status, JsonNode? body)
+    private static string ErrorMessage(int status, JsonNode? body, bool hasCursor)
     {
+        if (hasCursor && status == 400 && body is JsonObject problem &&
+            String(problem, "error") == "run_egress_cursor_invalid")
+            return "The pagination cursor is invalid. Rerun without --cursor to start from the first page.";
+
         var code = status == 404 &&
                    body is JsonObject json &&
                    GatewayContract.String(json, "code") == "run_not_found"

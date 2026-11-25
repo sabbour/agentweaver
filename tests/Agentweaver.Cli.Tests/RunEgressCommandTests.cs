@@ -156,6 +156,66 @@ public sealed class RunEgressCommandTests
     }
 
     [Fact]
+    public async Task InvalidCursorTellsCallerToRestartWithoutRetrying()
+    {
+        const string runId = "run-restart-egress";
+        var fixture = new Fixture
+        {
+            Status = HttpStatusCode.BadRequest,
+            Body = """{"error":"run_egress_cursor_invalid","detail":"private-cursor-canary"}""",
+            ResponseMediaType = "application/json",
+        };
+
+        Assert.Equal(1, await fixture.Run(runId, "--limit", "25", "--cursor", Cursor));
+
+        Assert.Equal(1, fixture.EgressRequestCount);
+        Assert.Equal(HttpMethod.Get, fixture.EgressMethod);
+        Assert.Empty(fixture.Output.ToString());
+        Assert.Equal("The pagination cursor is invalid. Rerun without --cursor to start from the first page." +
+            fixture.Error.NewLine, fixture.Error.ToString());
+
+        fixture.Status = HttpStatusCode.OK;
+        fixture.Body = Page("[]", "null", runId);
+        fixture.Error.GetStringBuilder().Clear();
+
+        Assert.Equal(0, await fixture.Run(runId, "--limit", "25"));
+
+        Assert.Equal(2, fixture.EgressRequestCount);
+        Assert.Equal($"/api/v1/runs/{runId}/egress?limit=25", fixture.EgressPathAndQuery);
+        var page = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Equal(runId, page["runId"]!.GetValue<string>());
+        Assert.Equal("Unavailable", page["coverage"]!.GetValue<string>());
+        Assert.Empty(page["items"]!.AsArray());
+        Assert.Null(page["nextCursor"]);
+    }
+
+    [Theory]
+    [InlineData(400, true, """{"error":"run_egress_query_invalid","detail":"private-canary"}""",
+        "The Gateway rejected the run egress request (400).")]
+    [InlineData(400, true, """{"error":"RUN_EGRESS_CURSOR_INVALID"}""",
+        "The Gateway rejected the run egress request (400).")]
+    [InlineData(400, true, """{"code":"run_egress_cursor_invalid"}""",
+        "The Gateway rejected the run egress request (400).")]
+    [InlineData(400, true, """{"error":{"code":"run_egress_cursor_invalid"}}""",
+        "The Gateway rejected the run egress request (400).")]
+    [InlineData(400, false, """{"error":"run_egress_cursor_invalid"}""",
+        "The Gateway rejected the run egress request (400).")]
+    [InlineData(503, true, """{"error":"run_egress_cursor_invalid"}""",
+        "Stored run egress is unavailable (503).")]
+    public async Task NonmatchingCursorErrorsKeepTheirExistingMessage(
+        int status, bool hasCursor, string body, string message)
+    {
+        var fixture = new Fixture { Status = (HttpStatusCode)status, Body = body };
+        string[] args = hasCursor ? [TargetRunId, "--cursor", Cursor] : [TargetRunId];
+
+        Assert.Equal(1, await fixture.Run(args));
+
+        Assert.Equal(1, fixture.EgressRequestCount);
+        Assert.Empty(fixture.Output.ToString());
+        Assert.Equal(message + fixture.Error.NewLine, fixture.Error.ToString());
+    }
+
+    [Fact]
     public async Task UnknownServerCodeStaysOffStderr()
     {
         var fixture = new Fixture
@@ -214,8 +274,8 @@ public sealed class RunEgressCommandTests
         Assert.DoesNotContain("request failed", fixture.Error.ToString(), StringComparison.Ordinal);
     }
 
-    private static string Page(string items, string nextCursor) =>
-        $$"""{"runId":"{{TargetRunId}}","coverage":"Unavailable","delayedUntil":null,"items":{{items}},"nextCursor":{{nextCursor}}}""";
+    private static string Page(string items, string nextCursor, string runId = TargetRunId) =>
+        $$"""{"runId":"{{runId}}","coverage":"Unavailable","delayedUntil":null,"items":{{items}},"nextCursor":{{nextCursor}}}""";
 
     private sealed class Fixture : HttpMessageHandler
     {
@@ -223,6 +283,7 @@ public sealed class RunEgressCommandTests
         public readonly StringWriter Error = new();
         public readonly Authentication Authentication = new();
         public HttpStatusCode Status = HttpStatusCode.OK;
+        public string? ResponseMediaType;
         public string Body = Page(
             """[{"host":"api.example","address":null,"port":443,"verdict":"allowed","firstSeen":"2026-11-20T10:00:00Z","lastSeen":"2026-11-20T10:00:01+00:00","count":2}]""",
             "\"next-page\"");
@@ -289,7 +350,7 @@ public sealed class RunEgressCommandTests
             if (TransportFailure)
                 throw new HttpRequestException("transport-canary");
             return Task.FromResult(Json(Status, Body,
-                Status == HttpStatusCode.OK ? "application/json" : "application/problem+json"));
+                ResponseMediaType ?? (Status == HttpStatusCode.OK ? "application/json" : "application/problem+json")));
         }
 
         private string OpenApi()
