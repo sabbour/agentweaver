@@ -96,7 +96,8 @@ function setup({
 }
 
 function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true,
-  modelOptions = {}, modelAwareHelper = true, targetAwareHelper = true, auditAwareHelper = true) {
+  modelOptions = {}, modelAwareHelper = true, targetAwareHelper = true, auditAwareHelper = true,
+  providerHostRequestAwareHelper = true) {
   return deployFromCommit({ sourceSha, registry, ...modelOptions }, {
     root,
     worktreePath: fixture.worktreePath,
@@ -106,6 +107,7 @@ function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = 
     deployModule: {
       DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper,
       DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION: modelAwareHelper,
+      DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION: providerHostRequestAwareHelper,
       DEPLOY_KUSTOMIZE_TARGET_OPTION: targetAwareHelper,
       DEPLOY_KUSTOMIZE_AUDIT_OPTION: auditAwareHelper,
     },
@@ -349,5 +351,68 @@ test('reports failed worktree cleanup and leaves the directory in place', async 
     assert.equal(existsSync(fixture.worktreePath), true);
   } finally {
     rmSync(fixture.testRoot, { recursive: true, force: true });
+  }
+});
+
+test('protects an already enabled provider host-request channel before invoking an older deployer even without flag', async () => {
+  const setupWithKubectl = ({ liveEnabled = false, apiServer = 'https://default.example:443' } = {}) => {
+    const base = setup();
+    const baseExec = base.exec;
+    base.exec = (name, args, options = {}) => {
+      if (name === 'kubectl') {
+        base.calls.push({ name, args, cwd: options.cwd });
+        if (args[0] === 'config' && args[1] === 'current-context') {
+          return { status: 0, stdout: 'test-ctx\n', stderr: '' };
+        }
+        if (args[0] === 'config' && args[1] === 'view') {
+          return { status: 0, stdout: `${apiServer}\n`, stderr: '' };
+        }
+        if (args[0] === 'get' && args[1] === 'configmap') {
+          const cmName = args[2];
+          if (liveEnabled && cmName === 'projects-config-runtime-config') {
+            return {
+              status: 0,
+              stdout: JSON.stringify({
+                kind: 'ConfigMap',
+                metadata: { name: cmName, namespace: 'agentweaver' },
+                data: { ProjectsConfig__ProviderHostRequest__Tls__ListenerPort: '8444' },
+              }),
+              stderr: '',
+            };
+          }
+          return { status: 0, stdout: '', stderr: '' };
+        }
+      }
+      return baseExec(name, args, options);
+    };
+    return base;
+  };
+
+  const enabled = setupWithKubectl({ liveEnabled: true });
+  try {
+    await assert.rejects(
+      runDeploy(enabled, undefined, true, {}, true, true, true, false),
+      /live cluster has the private provider host-request channel enabled/);
+    assert.equal(enabled.deployment, undefined);
+  } finally {
+    rmSync(enabled.testRoot, { recursive: true, force: true });
+  }
+
+  const wrongTarget = setupWithKubectl({ liveEnabled: false, apiServer: 'https://wrong-cluster.example:443' });
+  try {
+    await assert.rejects(
+      runDeploy(wrongTarget, undefined, true, { resourceGroup: 'awwus2np01' }, true, true, true, false),
+      /does not point at the awwus2np01 cluster/);
+    assert.equal(wrongTarget.deployment, undefined);
+  } finally {
+    rmSync(wrongTarget.testRoot, { recursive: true, force: true });
+  }
+
+  const disabled = setupWithKubectl({ liveEnabled: false });
+  try {
+    await runDeploy(disabled, undefined, true, {}, true, true, true, false);
+    assert.equal(disabled.deployment.root, disabled.worktreePath);
+  } finally {
+    rmSync(disabled.testRoot, { recursive: true, force: true });
   }
 });

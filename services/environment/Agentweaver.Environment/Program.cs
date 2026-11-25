@@ -121,6 +121,26 @@ Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorE
 builder.Services.AddScoped<RemoteMcpDiscoveryService>();
 builder.AddRemoteMcpTrustedServiceTls();
 builder.AddPlatformPolicySourceClient(projectsBaseAddress);
+var providerHostRequestEnabled = IssueSyncServiceTransport.AddChannel(
+    builder,
+    HttpProjectsHostRequestProofClient.ChannelKey,
+    HttpProjectsHostRequestProofClient.SectionName,
+    "Environment",
+    "Projects",
+    true);
+var loopbackCrl = LoopbackCrlEndpoint.AddLoopbackCrl(builder);
+if (providerHostRequestEnabled)
+{
+    builder.Services.AddScoped<IProjectsHostRequestProofClient>(services => new HttpProjectsHostRequestProofClient(
+        services.GetRequiredService<IHttpClientFactory>(),
+        services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(
+            HttpProjectsHostRequestProofClient.ChannelKey)));
+}
+else
+{
+    builder.Services.AddScoped<IProjectsHostRequestProofClient, UnavailableProjectsHostRequestProofClient>();
+}
+builder.Services.AddScoped<ProviderHostRequestStore>();
 var remoteMcpCurrentCallVerificationEnabled =
     builder.AddRemoteMcpCurrentCallVerification(authorityUri.AbsoluteUri);
 var remoteMcpNativeCallDispatchEnabled = builder.ConfigureRemoteMcpNativeCallDispatch();
@@ -312,6 +332,9 @@ if (remoteMcpCurrentCallVerificationEnabled)
 if (remoteMcpNativeCallDispatchEnabled)
     app.MapRemoteMcpNativeCallDispatch();
 app.MapProviderLifecycleReportEndpoints();
+app.MapProviderHostRequestInternalEndpoints(providerHostRequestEnabled);
+app.MapLoopbackCrl(loopbackCrl);
+app.MapPlatformEgressDestinationEndpoints();
 app.Run();
 
 static AzureFilesCsiOptions ReadAzureFilesOptions(IConfiguration configuration)

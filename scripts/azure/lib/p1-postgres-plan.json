@@ -461,6 +461,43 @@
           ]
         },
         {
+          "table": "model_provider_host_requests",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "updateColumns": [
+            "delivery_state",
+            "attempt_count",
+            "next_attempt_at",
+            "lease_owner",
+            "lease_token",
+            "lease_expires_at",
+            "environment_destination_id",
+            "delivered_at",
+            "failure_code",
+            "last_attempt_at",
+            "updated_at"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "model_provider_host_requests_guard_mutation",
+              "function": "guard_model_provider_host_request_mutation()",
+              "triggerType": 27,
+              "message": "model provider host requests cannot be deleted",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "model_provider_host_requests_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
           "table": "native_acs_policy_heads",
           "privileges": [
             "SELECT",
@@ -788,6 +825,10 @@
           "execute": false
         },
         {
+          "signature": "guard_model_provider_host_request_mutation()",
+          "execute": false
+        },
+        {
           "signature": "require_native_acs_policy_file_insert_in_revision_transaction()",
           "execute": false
         },
@@ -1101,6 +1142,30 @@
             "SELECT",
             "INSERT"
           ]
+        },
+        {
+          "table": "provider_host_request_receipts",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "provider_host_request_receipts_immutable",
+              "function": "reject_provider_host_request_receipt_mutation()",
+              "triggerType": 27,
+              "message": "provider host request receipts are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "provider_host_request_receipts_no_truncate",
+              "function": "reject_provider_host_request_receipt_mutation()",
+              "triggerType": 34,
+              "message": "provider host request receipts are immutable",
+              "sqlState": "55000"
+            }
+          ]
         }
       ],
       "functions": [
@@ -1130,6 +1195,10 @@
         },
         {
           "signature": "reject_platform_policy_proof_mutation()",
+          "execute": false
+        },
+        {
+          "signature": "reject_provider_host_request_receipt_mutation()",
           "execute": false
         }
       ]
@@ -2252,7 +2321,8 @@
     14,
     15,
     16,
-    17
+    17,
+    18
   ],
   "eventsVersions": [
     1,

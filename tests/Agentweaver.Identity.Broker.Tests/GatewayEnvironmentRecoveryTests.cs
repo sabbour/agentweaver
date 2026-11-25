@@ -207,7 +207,7 @@ public sealed class GatewayEnvironmentRecoveryTests
             .Where(route => route.Owner == GatewayOwner.Environment &&
                 route.OperationId != "listRemoteMcpConnections")
             .ToArray();
-        Assert.Equal(13, environmentRoutes.Length);
+        Assert.Equal(14, environmentRoutes.Length);
 
         foreach (var route in environmentRoutes)
         {

@@ -606,6 +606,148 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderHostRequestRecord", b =>
+                {
+                    b.Property<Guid>("RequestId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<string>("ConfigurationHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("configuration_hash");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("DeliveredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("delivered_at");
+
+                    b.Property<string>("DeliveryState")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("delivery_state");
+
+                    b.Property<Guid?>("EnvironmentDestinationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("environment_destination_id");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("failure_code");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(253)
+                        .HasColumnType("character varying(253)")
+                        .HasColumnName("host");
+
+                    b.Property<DateTimeOffset?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_expires_at");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("lease_owner");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_token");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("integer")
+                        .HasColumnName("port");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<long>("ProviderRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("provider_revision");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("RequestId")
+                        .HasName("pk_model_provider_host_requests");
+
+                    b.HasIndex("OperationId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_model_provider_host_requests_operation_id");
+
+                    b.HasIndex("ProviderId", "ProviderRevision")
+                        .IsUnique()
+                        .HasDatabaseName("ux_model_provider_host_requests_provider_revision");
+
+                    b.HasIndex("DeliveryState", "NextAttemptAt", "CreatedAt")
+                        .HasDatabaseName("ix_model_provider_host_requests_outbox");
+
+                    b.ToTable("model_provider_host_requests", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_provider_host_requests_attempt_count", "attempt_count >= 0");
+
+                            t.HasCheckConstraint("ck_model_provider_host_requests_configuration_hash", "configuration_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_host_requests_delivery_state", "delivery_state IN ('Pending', 'Delivered', 'Failed')");
+
+                            t.HasCheckConstraint("ck_model_provider_host_requests_port", "port = 443");
+
+                            t.HasCheckConstraint("ck_model_provider_host_requests_revision", "provider_revision > 0");
+
+                            t.HasCheckConstraint("ck_model_provider_host_requests_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderReferenceReservationRecord", b =>
                 {
                     b.Property<string>("ReferenceFolded")
@@ -3096,6 +3238,15 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ModelProviderDraftHeadRecord", null)
                         .WithMany()
                         .HasForeignKey("ProviderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderHostRequestRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ModelProviderDraftRevisionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProviderId", "ProviderRevision")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

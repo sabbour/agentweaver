@@ -60,19 +60,48 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
     private readonly ImmutableArray<byte[]> _peerPins;
     private readonly TimeProvider _timeProvider;
     private readonly RuntimeServiceTlsOptions _options;
+    private readonly string _backendCaFile;
 
     /// <summary>Loads and validates a local client/server certificate against its declared fingerprint.</summary>
     /// <exception cref="InvalidOperationException">The profile or local certificate is invalid.</exception>
     public RuntimeServiceTlsIdentity(
         RuntimeServiceTlsOptions options, string localServiceName, string peerServiceName,
         TimeProvider? timeProvider = null)
+        : this(options, localServiceName, peerServiceName, timeProvider, backendCaFile: null)
+    {
+    }
+
+    /// <summary>Loads and validates a local client/server certificate against its declared fingerprint.</summary>
+    /// <exception cref="InvalidOperationException">The profile or local certificate is invalid.</exception>
+    public RuntimeServiceTlsIdentity(
+        RuntimeServiceTlsOptions options, string localServiceName, string peerServiceName,
+        TimeProvider? timeProvider, string? backendCaFile)
     {
         _options = options.Validate(localServiceName, peerServiceName);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _backendCaFile = backendCaFile ?? RuntimeOwnerHttpTransport.ServiceBackendCaFile;
         _peerPins = _options.PeerCertificateSha256Pins!
             .Select(Convert.FromHexString).ToImmutableArray();
-        Certificate = X509Certificate2.CreateFromPemFile(
+        var loaded = X509Certificate2.CreateFromPemFile(
             _options.LocalCertificatePemPath!, _options.LocalPrivateKeyPemPath!);
+        if (OperatingSystem.IsWindows())
+        {
+            var pkcs12 = loaded.Export(X509ContentType.Pkcs12);
+            loaded.Dispose();
+            try
+            {
+                Certificate = X509CertificateLoader.LoadPkcs12(
+                    pkcs12, null, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(pkcs12);
+            }
+        }
+        else
+        {
+            Certificate = loaded;
+        }
         if (!Certificate.HasPrivateKey ||
             !HasCertificatePurpose(Certificate, ClientAuthentication, _timeProvider.GetUtcNow()) ||
             !HasCertificatePurpose(Certificate, ServerAuthentication, _timeProvider.GetUtcNow()) ||
@@ -100,7 +129,7 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
         // System trust does not contain the mounted backend CA, so validate against that root.
         return ValidatePinnedClientCertificate(
             certificate, chain, errors, _options.PeerCertificateSha256Pins!,
-            RuntimeOwnerHttpTransport.ServiceBackendCaFile, _timeProvider.GetUtcNow());
+            _backendCaFile, _timeProvider.GetUtcNow());
     }
 
     /// <summary>
@@ -145,7 +174,8 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
             foreach (var element in peerChain.ChainElements.Cast<X509ChainElement>().Skip(1))
                 validationChain.ChainPolicy.ExtraStore.Add(element.Certificate);
         }
-        if (!validationChain.Build(leaf))
+        if (!validationChain.Build(leaf) ||
+            validationChain.ChainStatus.Any(status => status.Status != X509ChainStatusFlags.NoError))
             return false;
 
         return IsPinnedClientCertificateLeaf(leaf, sha256Pins, now);
@@ -196,7 +226,7 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
 
     /// <summary>Builds a non-redirecting TLS client with backend-CA trust and online revocation, pinned to the peer.</summary>
     public HttpClientHandler CreateHandler() =>
-        CreateHandler(RuntimeOwnerHttpTransport.ServiceBackendCaFile);
+        CreateHandler(_backendCaFile);
 
     /// <summary>Creates the pinned mTLS owner handler using the specified service backend CA file.</summary>
     internal HttpClientHandler CreateHandler(string caFile)

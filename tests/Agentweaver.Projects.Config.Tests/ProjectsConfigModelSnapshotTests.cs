@@ -21,7 +21,7 @@ public sealed class ProjectsConfigModelSnapshotTests
         Assert.False(db.Database.HasPendingModelChanges());
 
         var snapshot = db.GetService<IMigrationsAssembly>().ModelSnapshot!.Model;
-        var target = new AddLegacySkillImmutabilityGuards().TargetModel;
+        var target = new AddModelProviderHostRequests().TargetModel;
         var differ = db.GetService<IMigrationsModelDiffer>();
         var runtimeInitializer = db.GetService<IModelRuntimeInitializer>();
         snapshot = runtimeInitializer.Initialize(snapshot, designTime: true);

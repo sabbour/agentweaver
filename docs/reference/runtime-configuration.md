@@ -13,6 +13,7 @@ into a deployed or selectable provider.
 | Scribe executor | [Owner base address](#scribe-workflow-executor) |
 | Periodic issue sync | [Service TLS profiles and listeners](#optional-periodic-issue-sync-service-channels) |
 | Hosted model catalog | [AgentHost certificate pin](#hosted-model-catalog-publication) |
+| Provider host requests | [Projects-Environment private channel](#private-provider-host-request-channel) |
 | Configuration rules | [Key names, snapshots, and Secret boundaries](#configuration-rules) |
 | PostgreSQL and workload identity | [Connection strings and identity settings](#postgresql-connection-and-workload-identity) |
 | Identity Broker | [Broker settings](#identity-broker-settings) |
@@ -94,6 +95,29 @@ publication is denied.
 AgentHost uses its mounted service certificate for this direct owner request.
 Gateway-to-AgentHost and AgentHost-from-Gateway traffic is limited to HTTPS
 port 8443 by the corresponding Cilium policies.
+
+## Private provider host-request channel
+
+The private channel between Projects & Config and Environment is disabled by
+default in `deploy/k8s/runtime-configs/`. When `--provider-host-request <file.json>`
+is passed to `deploy:kustomize` or `azure:deploy-from-commit`, the renderer
+enables `ProjectsConfig:ProviderHostRequest:Tls` and
+`Environment:ProviderHostRequest:Tls` using `RuntimeServiceTlsOptions`, binds
+each service's `Kestrel:Endpoints:ProviderHostRequest:Url` to fixed TCP port
+`8444`, mounts `projects-config-host-request-tls` and
+`environment-host-request-tls`, and adds `CiliumNetworkPolicy` rules allowing
+TCP `8444` only between `projects-config` and `environment`.
+
+Both leaf certificates must be distinct, chain to
+`/var/run/service-backend-ca/ca.crt`, include both `serverAuth` and
+`clientAuth` extended key usages, and carry
+`http://127.0.0.1:8445/ca.crl` as their CRL distribution point URL. When the
+overlay is enabled, it also mounts the mutable `service-backend-crl` ConfigMap
+at `/var/run/service-backend-crl` (without `subPath`) and sets
+`ServiceBackendCrl__LoopbackPort` (`8445`) and `ServiceBackendCrl__FilePath`
+(`/var/run/service-backend-crl/ca.crl`) on both services so Kestrel serves the
+signed DER CRL on loopback HTTP only. Once enabled on a cluster, omitting
+`--provider-host-request` on a later deploy stops before writes.
 
 ## Native ACS policy
 

@@ -25,7 +25,11 @@ public static class IssueSyncServiceTransport
     /// configuration section is absent or empty. Invalid settings throw instead of returning either value.
     /// </returns>
     public static bool AddChannel(WebApplicationBuilder builder, string key, string sectionName,
-        string local, string peer, bool listener)
+        string local, string peer, bool listener) =>
+        AddChannel(builder, key, sectionName, local, peer, listener, backendCaFile: null);
+
+    public static bool AddChannel(WebApplicationBuilder builder, string key, string sectionName,
+        string local, string peer, bool listener, string? backendCaFile)
     {
         var section = builder.Configuration.GetSection(sectionName);
         if (!section.Exists())
@@ -36,7 +40,7 @@ public static class IssueSyncServiceTransport
             throw new InvalidOperationException("Issue sync peer certificates must be distinct.");
         builder.Services.AddKeyedSingleton(key, options);
         builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(key, (services, _) =>
-            new(options, local, peer, services.GetRequiredService<TimeProvider>()));
+            new(options, local, peer, services.GetRequiredService<TimeProvider>(), backendCaFile));
         builder.Services.AddHttpClient(key, client => client.Timeout = TimeSpan.FromSeconds(20))
             .ConfigurePrimaryHttpMessageHandler(services =>
                 services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(key).CreateHandler());

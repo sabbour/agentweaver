@@ -35,6 +35,8 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
         Set<RemoteMcpCatalogSnapshotRow>();
     internal DbSet<RemoteMcpConnectionIdempotencyRow> RemoteMcpConnectionIdempotency =>
         Set<RemoteMcpConnectionIdempotencyRow>();
+    internal DbSet<ProviderHostRequestReceiptRow> ProviderHostRequestReceipts =>
+        Set<ProviderHostRequestReceiptRow>();
 
     /// <summary>Maps Environment state and immutable operation records to their database contracts.</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -465,7 +467,67 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
         });
 
         EnvironmentProviderLifecycleReportModel.Configure(modelBuilder);
+
+        modelBuilder.Entity<ProviderHostRequestReceiptRow>(entity =>
+        {
+            entity.ToTable("provider_host_request_receipts", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_provider_host_request_receipts_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_provider_host_request_receipts_revision",
+                    "provider_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_provider_host_request_receipts_configuration_hash",
+                    "configuration_hash ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_provider_host_request_receipts_fingerprint",
+                    "request_fingerprint ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_provider_host_request_receipts_port",
+                    "port = 443");
+            });
+            entity.HasKey(row => row.RequestId).HasName("pk_provider_host_request_receipts");
+            entity.Property(row => row.RequestId).HasColumnName("request_id");
+            entity.Property(row => row.DestinationId).HasColumnName("destination_id");
+            entity.Property(row => row.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
+            entity.Property(row => row.Scope).HasColumnName("scope")
+                .HasConversion<string>().HasMaxLength(16).IsRequired();
+            entity.Property(row => row.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(row => row.ProviderId).HasColumnName("provider_id").HasMaxLength(128).IsRequired();
+            entity.Property(row => row.ProviderRevision).HasColumnName("provider_revision");
+            entity.Property(row => row.ConfigurationHash).HasColumnName("configuration_hash")
+                .HasMaxLength(64).IsRequired();
+            entity.Property(row => row.OperationId).HasColumnName("operation_id");
+            entity.Property(row => row.ActorId).HasColumnName("actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(row => row.Host).HasColumnName("host").HasMaxLength(253).IsRequired();
+            entity.Property(row => row.Port).HasColumnName("port");
+            entity.Property(row => row.RequestFingerprint).HasColumnName("request_fingerprint")
+                .HasMaxLength(64).IsRequired();
+            entity.Property(row => row.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(row => new { row.CreatedAt, row.RequestId })
+                .HasDatabaseName("ix_provider_host_request_receipts_created_request");
+        });
     }
+}
+
+internal sealed class ProviderHostRequestReceiptRow
+{
+    public Guid RequestId { get; set; }
+    public Guid DestinationId { get; set; }
+    public string TenantId { get; set; } = string.Empty;
+    public ModelProviderBindingScope Scope { get; set; }
+    public string? ProjectId { get; set; }
+    public string ProviderId { get; set; } = string.Empty;
+    public long ProviderRevision { get; set; }
+    public string ConfigurationHash { get; set; } = string.Empty;
+    public Guid OperationId { get; set; }
+    public string ActorId { get; set; } = string.Empty;
+    public string Host { get; set; } = string.Empty;
+    public int Port { get; set; }
+    public string RequestFingerprint { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 /// <summary>Persisted owner identity and current lifecycle state for one project run's Environment.</summary>

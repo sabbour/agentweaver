@@ -582,6 +582,10 @@ public sealed partial class ProjectsConfigPostgresTests
             await OwnerSqlAsync(
                 $"GRANT UPDATE (consumed_at, consumed_by_kind) ON projects_config.model_provider_credential_preflights TO \"{roleName}\"");
             await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.model_provider_host_requests TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT UPDATE (delivery_state, attempt_count, next_attempt_at, lease_owner, lease_token, lease_expires_at, environment_destination_id, delivered_at, failure_code, last_attempt_at, updated_at) ON projects_config.model_provider_host_requests TO \"{roleName}\"");
+            await OwnerSqlAsync(
                 $"GRANT SELECT ON projects_config.installation_identity TO \"{roleName}\"");
             await OwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");

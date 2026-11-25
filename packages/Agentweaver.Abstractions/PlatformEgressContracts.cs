@@ -391,3 +391,102 @@ public sealed record RunEgressPage(
     DateTimeOffset? DelayedUntil,
     ImmutableArray<RunEgressRecord> Items,
     string? NextCursor);
+
+/// <summary>Lifecycle state of one platform egress destination.</summary>
+public enum PlatformEgressDestinationState { Requested, Approved, Rejected, Revoked }
+
+/// <summary>Origin that created a platform egress destination.</summary>
+public enum PlatformEgressDestinationOrigin { Manual, ModelProvider, Deployment, System }
+
+/// <summary>Exact-current egress status projected onto a saved BYOK model provider response.</summary>
+public sealed record ModelProviderEgressStatus(
+    string Host,
+    int Port,
+    string? DestinationState,
+    bool CanApprove,
+    string DeliveryStatus);
+
+/// <summary>Immutable host-request dispatch sent from Projects to Environment.</summary>
+public sealed record ProviderHostRequestDispatch(
+    Guid RequestId,
+    string TenantId,
+    ModelProviderBindingScope Scope,
+    string? ProjectId,
+    string ProviderId,
+    long ProviderRevision,
+    string ConfigurationHash,
+    Guid OperationId,
+    string ActorId,
+    string Host,
+    int Port);
+
+/// <summary>Immutable receipt returned by Environment after recording a provider host request.</summary>
+public sealed record ProviderHostRequestReceipt(
+    Guid RequestId,
+    Guid DestinationId,
+    string TenantId,
+    ModelProviderBindingScope Scope,
+    string? ProjectId,
+    string ProviderId,
+    long ProviderRevision,
+    string ConfigurationHash,
+    Guid OperationId,
+    string ActorId,
+    string Host,
+    int Port,
+    PlatformEgressDestinationState DestinationState);
+
+/// <summary>Batch status request from Projects to Environment for delivered host requests.</summary>
+public sealed record ProviderHostRequestStatusQuery(ImmutableArray<Guid> RequestIds);
+
+/// <summary>Current Environment destination state for one delivered host request.</summary>
+public sealed record ProviderHostRequestStatusItem(
+    Guid RequestId,
+    Guid DestinationId,
+    string Host,
+    int Port,
+    PlatformEgressDestinationState DestinationState);
+
+/// <summary>Batch status response from Environment to Projects.</summary>
+public sealed record ProviderHostRequestStatusResponse(ImmutableArray<ProviderHostRequestStatusItem> Statuses);
+
+/// <summary>Batch current-scope proof request from Environment to Projects.</summary>
+public sealed record ProviderHostRequestProofItem(
+    Guid RequestId,
+    string TenantId,
+    ModelProviderBindingScope Scope,
+    string? ProjectId,
+    string ProviderId,
+    long ProviderRevision,
+    string Host,
+    int Port);
+
+/// <summary>Batch current-scope proof query from Environment to Projects.</summary>
+public sealed record ProviderHostRequestProofQuery(ImmutableArray<ProviderHostRequestProofItem> Items);
+
+/// <summary>Exact current-scope proof result for one Environment host-request receipt.</summary>
+public sealed record ProviderHostRequestProofResult(Guid RequestId, bool IsCurrent);
+
+/// <summary>Batch current-scope proof response from Projects to Environment.</summary>
+public sealed record ProviderHostRequestProofResponse(ImmutableArray<ProviderHostRequestProofResult> Results);
+
+/// <summary>One current Requested egress destination returned by GET /api/v1/platform/egress/destinations.</summary>
+public sealed record PlatformEgressDestinationSummary(
+    Guid DestinationId,
+    Guid RequestId,
+    string Host,
+    int Port,
+    PlatformEgressDestinationState State,
+    PlatformEgressDestinationOrigin Origin,
+    ModelProviderBindingScope Scope,
+    string? ProjectId,
+    string TenantId,
+    string ProviderId,
+    long ProviderRevision,
+    string RequestedBy,
+    DateTimeOffset RequestedAt);
+
+/// <summary>Paged list of current Requested egress destinations.</summary>
+public sealed record PlatformEgressDestinationPage(
+    IReadOnlyList<PlatformEgressDestinationSummary> Destinations,
+    string? NextCursor);

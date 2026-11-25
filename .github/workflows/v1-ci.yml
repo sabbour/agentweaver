@@ -680,6 +680,53 @@ jobs:
         env:
           TEST_SUITE: ${{ matrix.name }}
         run: node scripts/ci/v1-test-plan.mjs run "$TEST_SUITE"
+      - name: Run loopback CRL tests with read-only root and non-writable HOME
+        if: matrix.project == 'Agentweaver.Identity.Broker.Tests' && matrix.shard == 1
+        run: |
+          set -euo pipefail
+          sdk_image='mcr.microsoft.com/dotnet/sdk:10.0.401-noble@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317'
+          test_uid="$(id -u)"
+          test_gid="$(id -g)"
+          results_dir="$(mktemp -d "$RUNNER_TEMP/loopback-crl-results.XXXXXX")"
+          trap 'rm -rf "$results_dir"' EXIT
+          docker run --rm --platform linux/amd64 --network none --read-only \
+            --user "$test_uid:$test_gid" \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs "/tmp:rw,nosuid,nodev,size=64m,uid=$test_uid,gid=$test_gid,mode=700" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0,target=/tests,readonly" \
+            --mount "type=bind,source=$results_dir,target=/results" \
+            --env HOME=/nonexistent \
+            --env XDG_DATA_HOME=/nonexistent \
+            --env DOTNET_CLI_HOME=/tmp/dotnet-cli-home \
+            --env DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+            --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+            "$sdk_image" \
+            dotnet vstest /tests/Agentweaver.Identity.Broker.Tests.dll \
+            --TestCaseFilter:"FullyQualifiedName~ProviderHostRequestMtlsTests.LoopbackCrlEndpoint" \
+            --ResultsDirectory:/results \
+            --Logger:"trx;LogFileName=LoopbackCrlTests.trx"
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const xml = fs.readFileSync(process.argv[1], "utf8");
+            const expected = [
+              "ProviderHostRequestMtlsTests.LoopbackCrlEndpointServesConcurrentMtlsSwapsFileAndIsolatesFromHttpsPort",
+              "ProviderHostRequestMtlsTests.LoopbackCrlEndpointRefreshesAfterNextUpdateAndRejectsNewlyRevokedPeer",
+            ];
+            const results = [...xml.matchAll(/<UnitTestResult\b([^>]*)\/?>/g)].map(([, s]) => {
+              const attrs = new Map([...s.matchAll(/([A-Za-z_][\w:.-]*)="([^"]*)"/g)].map(([, k, v]) => [k, v]));
+              return { testName: attrs.get("testName") ?? "", outcome: attrs.get("outcome") ?? "" };
+            });
+            for (const name of expected) {
+              const matches = results.filter(r => r.testName.endsWith(name));
+              if (matches.length !== 1 || matches[0].outcome.toLowerCase() !== "passed") {
+                throw new Error(`${name}: expected 1 Passed result, got ${JSON.stringify(matches)}`);
+              }
+            }
+            if (results.length !== expected.length) {
+              throw new Error(`Expected ${expected.length} TRX results, got ${results.length}`);
+            }
+            console.log(`Verified ${expected.length} loopback CRL tests passed in read-only container.`);
+          ' "$results_dir/LoopbackCrlTests.trx"
       - name: Unmount native join workspaces
         if: ${{ always() && matrix.shard > 0 }}
         run: |

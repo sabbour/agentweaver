@@ -5,7 +5,6 @@ using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
-using NpgsqlTypes;
 
 namespace Agentweaver.Projects.Config;
 
@@ -46,11 +45,10 @@ public sealed partial class ModelProviderDraftService
             await using var transaction = await db.Database
                 .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
             await LockProviderCreateAsync(cancellationToken).ConfigureAwait(false);
+            var tenantId = await LockCurrentAuthorityAsync(caller, scope, projectId, cancellationToken)
+                .ConfigureAwait(false);
             if (reference is not null)
-            {
-                await LockReferenceAuthorityAsync(caller, cancellationToken).ConfigureAwait(false);
                 await VerifyInstallationAsync(request.TargetInstallationId!, cancellationToken).ConfigureAwait(false);
-            }
             var replay = await ReadCreateReplayAsync(
                 caller, scope, projectId, providerId, request.OperationId, fingerprint, reference, request.TargetInstallationId, cancellationToken)
                 .ConfigureAwait(false);
@@ -72,6 +70,7 @@ public sealed partial class ModelProviderDraftService
             }
 
             var now = timeProvider.GetUtcNow();
+            var host = DeriveHost(metadata.BaseUrl);
             var head = new ModelProviderDraftHeadRecord
             {
                 ProviderId = providerId, Scope = scope, ProjectId = projectId,
@@ -95,6 +94,9 @@ public sealed partial class ModelProviderDraftService
             };
             db.ModelProviderDrafts.Add(head);
             db.ModelProviderDraftRevisions.Add(revision);
+            db.ModelProviderHostRequests.Add(CreateHostRequestRecord(
+                tenantId, scope, projectId, providerId, 1,
+                configurationHash, request.OperationId, caller.ActorId, host, now));
             if (reference is not null)
                 db.ModelProviderReferenceReservations.Add(new ModelProviderReferenceReservationRecord
                 {
@@ -106,7 +108,8 @@ public sealed partial class ModelProviderDraftService
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             DetachTrackedProvider(providerId);
-            return ToDraft(ModelProviderDraftState.Draft, revision, reference);
+            return ToDraft(ModelProviderDraftState.Draft, revision, reference,
+                new ModelProviderEgressStatus(host, PlatformEgressHostValidator.HttpsPort, null, false, "pending"));
         }
         catch (Exception exception) when (reference is not null &&
             GetPostgresException(exception) is { SqlState: PostgresErrorCodes.CheckViolation,
@@ -123,11 +126,9 @@ public sealed partial class ModelProviderDraftService
             await using var transaction = await db.Database
                 .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
             await LockProviderCreateAsync(cancellationToken).ConfigureAwait(false);
+            _ = await LockCurrentAuthorityAsync(caller, scope, projectId, cancellationToken).ConfigureAwait(false);
             if (reference is not null)
-            {
-                await LockReferenceAuthorityAsync(caller, cancellationToken).ConfigureAwait(false);
                 await VerifyInstallationAsync(request.TargetInstallationId!, cancellationToken).ConfigureAwait(false);
-            }
             var replay = await ReadCreateReplayAsync(
                 caller, scope, projectId, providerId, request.OperationId, fingerprint, reference, request.TargetInstallationId, cancellationToken)
                 .ConfigureAwait(false);
@@ -226,46 +227,89 @@ public sealed partial class ModelProviderDraftService
         }
     }
 
-    private async Task LockReferenceAuthorityAsync(ProjectAuthorizationContext caller, CancellationToken cancellationToken)
+    private async Task<string> LockCurrentAuthorityAsync(
+        ProjectAuthorizationContext caller,
+        ModelProviderBindingScope scope,
+        string? projectId,
+        CancellationToken cancellationToken)
     {
-        var grants = caller.Grants.Where(grant =>
-            grant.ResourceType == ProjectAuthorityResourceType.Platform &&
-            grant.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
-            grant.Role == ProjectAuthorityRole.PlatformAdmin).ToArray();
-        if (grants.Length == 0)
+        var chosenGrant = scope == ModelProviderBindingScope.Platform
+            ? caller.Grants.FirstOrDefault(grant =>
+                grant.ResourceType == ProjectAuthorityResourceType.Platform &&
+                grant.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
+                grant.Role == ProjectAuthorityRole.PlatformAdmin)
+            : caller.Grants.FirstOrDefault(grant =>
+                    grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                    grant.ResourceId == projectId &&
+                    grant.Role == ProjectAuthorityRole.Owner)
+                ?? caller.Grants.FirstOrDefault(grant =>
+                    grant.ResourceType == ProjectAuthorityResourceType.Platform &&
+                    grant.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
+                    grant.Role == ProjectAuthorityRole.PlatformAdmin);
+
+        if (chosenGrant is null)
             throw ProjectConfigException.Forbidden();
+
+        var result = await LockCredentialPublicationAuthorityAsync(
+            caller,
+            scope == ModelProviderBindingScope.Platform ? "Platform" : "Project",
+            scope == ModelProviderBindingScope.Platform ? null : projectId,
+            chosenGrant,
+            cancellationToken).ConfigureAwait(false);
+
+        if (string.Equals(result, "project_missing", StringComparison.Ordinal))
+            throw ModelProviderDraftException.NotFound();
+        if (!string.Equals(result, "authorized", StringComparison.Ordinal))
+            throw ProjectConfigException.Forbidden();
+
+        if (scope == ModelProviderBindingScope.Platform)
+            return caller.TenantId;
+
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
-        await using var command = new NpgsqlCommand("""
-            SELECT assignment_id, revision, authorization_result
-            FROM projects_config.lock_native_acs_policy_authority(
-                @membership_id, @issuer, @actor, @tenant, @membership_revision,
-                'Platform', 'default', @ids, @types, @resources, @roles, @revisions)
-            """, connection, transaction);
+        await using var projectCommand = new NpgsqlCommand(
+            "SELECT tenant_id FROM projects_config.projects WHERE project_id = @project_id",
+            connection,
+            transaction);
+        projectCommand.Parameters.AddWithValue("project_id", projectId!);
+        var tenantId = await projectCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        if (string.IsNullOrEmpty(tenantId))
+            throw ModelProviderDraftException.NotFound();
+        return tenantId;
+    }
+
+    private async Task<string?> LockCredentialPublicationAuthorityAsync(
+        ProjectAuthorizationContext caller,
+        string scope,
+        string? projectId,
+        ProjectAuthorizationGrant grant,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT projects_config.lock_credential_publication_authority(
+                @membership_id, @issuer, @subject, @tenant_id, @membership_revision,
+                @assignment_id, @assignment_revision, @scope, @project_id)
+            """,
+            connection,
+            transaction);
         command.Parameters.AddWithValue("membership_id", caller.MembershipId);
         command.Parameters.AddWithValue("issuer", caller.Issuer);
-        command.Parameters.AddWithValue("actor", caller.ActorId);
-        command.Parameters.AddWithValue("tenant", caller.TenantId);
+        command.Parameters.AddWithValue("subject", caller.ActorId);
+        command.Parameters.AddWithValue("tenant_id", caller.TenantId);
         command.Parameters.AddWithValue("membership_revision", caller.MembershipRevision);
-        command.Parameters.AddWithValue("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid,
-            grants.Select(item => item.AssignmentId).ToArray());
-        command.Parameters.AddWithValue("types", NpgsqlDbType.Array | NpgsqlDbType.Text,
-            grants.Select(item => item.ResourceType.ToString()).ToArray());
-        command.Parameters.AddWithValue("resources", NpgsqlDbType.Array | NpgsqlDbType.Text,
-            grants.Select(item => item.ResourceId).ToArray());
-        command.Parameters.AddWithValue("roles", NpgsqlDbType.Array | NpgsqlDbType.Text,
-            grants.Select(item => item.Role.ToString()).ToArray());
-        command.Parameters.AddWithValue("revisions", NpgsqlDbType.Array | NpgsqlDbType.Bigint,
-            grants.Select(item => item.Revision).ToArray());
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
-        {
-            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-                reader.GetString(2) != "authorized" ||
-                !grants.Any(item => item.AssignmentId == reader.GetGuid(0) && item.Revision == reader.GetInt64(1)))
-                throw ProjectConfigException.Forbidden();
-        }
-        if (AfterReferenceAuthorityLocked is not null)
+        command.Parameters.AddWithValue("assignment_id", grant.AssignmentId);
+        command.Parameters.AddWithValue("assignment_revision", grant.Revision);
+        command.Parameters.AddWithValue("scope", scope);
+        command.Parameters.AddWithValue("project_id", (object?)projectId ?? DBNull.Value);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        if (string.Equals(result, "authorized", StringComparison.Ordinal) &&
+            AfterReferenceAuthorityLocked is not null)
             await AfterReferenceAuthorityLocked(connection.ProcessID, cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     private async Task<string?> ReadReferenceAsync(string providerId, CancellationToken cancellationToken) =>

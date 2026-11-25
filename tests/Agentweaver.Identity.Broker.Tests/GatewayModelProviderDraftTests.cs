@@ -303,6 +303,30 @@ public sealed class GatewayModelProviderDraftTests
             .EnumerateArray(), item => item.GetProperty("type").GetString() == "null");
         var platformCreate = schemas.GetProperty("ModelProviderDraftPlatformCreateRequest");
         Assert.False(platformCreate.GetProperty("additionalProperties").GetBoolean());
+        Assert.True(schemas.GetProperty("ModelProviderDraft").GetProperty("properties").TryGetProperty("egress", out _));
+        Assert.True(schemas.TryGetProperty("ModelProviderEgressStatus", out var egressStatusSchema));
+        var destStateEnum = egressStatusSchema.GetProperty("properties")
+            .GetProperty("destinationState").GetProperty("anyOf")[0].GetProperty("enum")
+            .EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Equal(["requested"], destStateEnum);
+        var platformEgressDestSchema = schemas.GetProperty("PlatformEgressDestination").GetProperty("properties");
+        Assert.Equal(
+            ["requested"],
+            platformEgressDestSchema.GetProperty("state").GetProperty("enum").EnumerateArray().Select(e => e.GetString()!).ToArray());
+        Assert.Equal(
+            ["modelProvider"],
+            platformEgressDestSchema.GetProperty("origin").GetProperty("enum").EnumerateArray().Select(e => e.GetString()!).ToArray());
+        Assert.Equal(
+            ["platform", "project"],
+            platformEgressDestSchema.GetProperty("scope").GetProperty("enum").EnumerateArray().Select(e => e.GetString()!).ToArray());
+        Assert.True(paths.TryGetProperty("/api/v1/platform/egress/destinations", out var egressDestPath));
+        var egressOp = egressDestPath.GetProperty("get");
+        Assert.Equal("listPlatformEgressDestinations", egressOp.GetProperty("operationId").GetString());
+        Assert.Equal("Environment", egressOp.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(egressOp.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+        Assert.True(egressOp.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").TryGetProperty("Cache-Control", out _));
+        Assert.True(egressOp.GetProperty("responses").TryGetProperty("503", out _));
         var reference = platformCreate.GetProperty("properties").GetProperty("reference");
         Assert.Equal("string", reference.GetProperty("type").GetString());
         Assert.Equal(1, reference.GetProperty("minLength").GetInt32());

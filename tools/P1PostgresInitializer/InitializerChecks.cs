@@ -344,10 +344,10 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 38 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 25)
+        if (services.Length != 5 || protectedTables.Length != 40 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 27)
             throw new InvalidOperationException(
-                $"The exact fourteen row-lock columns, twenty-five append-only ledgers, and provider insert guard are required " +
+                $"The exact fourteen row-lock columns, twenty-seven append-only ledgers, and provider insert guard are required " +
                 $"(services={services.Length}, protected={protectedTables.Length}, locks={lockTables.Length}, append-only={appendOnlyLedgers}).");
 
         foreach (var (service, table) in protectedTables)
@@ -549,12 +549,22 @@ internal static class InitializerChecks
                 (providerRevision && typeSevenGuards.Length == 1 && IsProviderWriteGuard(typeSevenGuards[0]));
             var preflightTable = service.Service == "projects-config" &&
                 service.Schema == "projects_config" && table.Table == "model_provider_credential_preflights";
+            var hostRequestTable = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "model_provider_host_requests";
+            string[] hostRequestUpdateColumns =
+            [
+                "delivery_state", "attempt_count", "next_attempt_at", "lease_owner", "lease_token",
+                "lease_expires_at", "environment_destination_id", "delivered_at", "failure_code",
+                "last_attempt_at", "updated_at",
+            ];
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead
                 ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
                 : preflightTable
                     ? !(table.UpdateColumns ?? []).SequenceEqual(["consumed_at", "consumed_by_kind"], StringComparer.Ordinal)
-                    : table.UpdateColumns is { Length: > 0 };
+                    : hostRequestTable
+                        ? !(table.UpdateColumns ?? []).SequenceEqual(hostRequestUpdateColumns, StringComparer.Ordinal)
+                        : table.UpdateColumns is { Length: > 0 };
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
                 guards.Length != mutationGuardCount + typeSevenGuards.Length +
@@ -617,6 +627,13 @@ internal static class InitializerChecks
     /// <summary>
     /// Requires the exact reviewed column-scoped UPDATE inventory, without table-level UPDATE grants.
     /// </summary>
+    private static readonly string[] HostRequestUpdateColumns =
+    [
+        "delivery_state", "attempt_count", "next_attempt_at", "lease_owner", "lease_token",
+        "lease_expires_at", "environment_destination_id", "delivered_at", "failure_code",
+        "last_attempt_at", "updated_at",
+    ];
+
     internal static void AssertColumnUpdatePlan(ServicePlan[] services)
     {
         (string Service, string Schema, string Table, string[] Privileges, string[] Columns, bool Guarded)[]
@@ -630,6 +647,8 @@ internal static class InitializerChecks
                     ["SELECT", "INSERT"], GovernanceDecisionHeadUpdateColumns, true),
                 ("projects-config", "projects_config", "model_provider_credential_preflights",
                     ["SELECT", "INSERT"], ["consumed_at", "consumed_by_kind"], true),
+                ("projects-config", "projects_config", "model_provider_host_requests",
+                    ["SELECT", "INSERT"], HostRequestUpdateColumns, true),
             ];
         var planned = services.SelectMany(service => service.Tables
             .Where(table => table.UpdateColumns is not { Length: 0 })
@@ -648,8 +667,10 @@ internal static class InitializerChecks
                 table.Table == GovernanceDecisionHeadTable;
             var preflightGuarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
                 table.Table == "model_provider_credential_preflights";
-            var guarded = governanceGuarded || preflightGuarded;
-            var expectedGuardCount = governanceGuarded ? 4 : preflightGuarded ? 2 : 0;
+            var hostRequestGuarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
+                table.Table == "model_provider_host_requests";
+            var guarded = governanceGuarded || preflightGuarded || hostRequestGuarded;
+            var expectedGuardCount = governanceGuarded ? 4 : (preflightGuarded || hostRequestGuarded) ? 2 : 0;
             if (table.LockColumn is not null || table.MutationDenialRequired != guarded ||
                 GetMutationDenialGuards(table).Length != expectedGuardCount)
                 throw new InvalidOperationException(

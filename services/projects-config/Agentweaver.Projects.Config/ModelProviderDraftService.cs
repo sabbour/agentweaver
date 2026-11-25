@@ -22,6 +22,7 @@ public sealed partial class ModelProviderDraftService
     private readonly TimeProvider timeProvider;
     private readonly ModelBindingCapabilities modelBindings;
     private readonly bool referenceReservationsEnabled;
+    private readonly IEnvironmentHostRequestClient? environmentHostRequestClient;
 
     public ModelProviderDraftService(ProjectsConfigDbContext db, TimeProvider timeProvider)
         : this(db, timeProvider, null)
@@ -32,12 +33,14 @@ public sealed partial class ModelProviderDraftService
         ProjectsConfigDbContext db,
         TimeProvider timeProvider,
         ModelBindingCapabilities? modelBindings = null,
-        bool referenceReservationsEnabled = false)
+        bool referenceReservationsEnabled = false,
+        IEnvironmentHostRequestClient? environmentHostRequestClient = null)
     {
         this.db = db;
         this.timeProvider = timeProvider;
         this.modelBindings = modelBindings ?? ModelBindingCapabilities.Unavailable;
         this.referenceReservationsEnabled = referenceReservationsEnabled;
+        this.environmentHostRequestClient = environmentHostRequestClient;
     }
 
     private static readonly ImmutableHashSet<string> SupportedReasoningEfforts =
@@ -116,9 +119,10 @@ public sealed partial class ModelProviderDraftService
             .ToArrayAsync(cancellationToken)
             .ConfigureAwait(false);
         var hasNextPage = drafts.Length > pageSize;
-        var providers = drafts.Take(pageSize)
+        var rawProviders = drafts.Take(pageSize)
             .Select(item => ToDraft(item.State, item.Revision, item.Reference))
             .ToArray();
+        var providers = await AttachEgressStatusesAsync(rawProviders, cancellationToken).ConfigureAwait(false);
         var page = new ModelProviderDraftPage(
             providers,
             hasNextPage ? drafts[pageSize - 1].ProviderId : null);
@@ -176,9 +180,11 @@ public sealed partial class ModelProviderDraftService
                 select new { head.State, Revision = revision, Reference = reservation == null ? null : reservation.Reference })
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
-        return draft is null
-            ? throw ModelProviderDraftException.NotFound()
-            : ToDraft(draft.State, draft.Revision, draft.Reference);
+        if (draft is null)
+            throw ModelProviderDraftException.NotFound();
+        var projected = ToDraft(draft.State, draft.Revision, draft.Reference);
+        var withEgress = await AttachEgressStatusesAsync([projected], cancellationToken).ConfigureAwait(false);
+        return withEgress[0];
     }
 
     public async Task<ModelProviderDraft> SaveAsync(
@@ -237,27 +243,20 @@ public sealed partial class ModelProviderDraftService
         if (request.Reference is not null || request.TargetInstallationId is not null)
             throw ModelProviderDraftException.InvalidRequest("A reference and target are permitted only on platform create.");
 
-        // Check completed operations first so a lost response can be replayed after later edits.
-        var replay = await ReadReplayAsync(
-                request.OperationId,
-                providerId,
-                scope,
-                projectId,
-                requestFingerprint,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (replay is not null)
-            return replay;
+        var nextRevision = request.ExpectedRevision + 1;
+        var host = DeriveHost(metadata.BaseUrl);
+        ModelProviderDraftRevisionRecord? revisionRecord = null;
 
-        var current = await db.ModelProviderDrafts.AsNoTracking()
-            .SingleOrDefaultAsync(head => head.ProviderId == providerId, cancellationToken)
-            .ConfigureAwait(false);
-        if ((current is not null &&
-                (current.Scope != scope || current.ProjectId != projectId ||
-                 current.CurrentRevision != request.ExpectedRevision)) ||
-            (current is null && request.ExpectedRevision != 0))
+        try
         {
-            var concurrentReplay = await ReadReplayAsync(
+            await using var transaction = await db.Database
+                .BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken)
+                .ConfigureAwait(false);
+            var tenantId = await LockCurrentAuthorityAsync(caller, scope, projectId, cancellationToken)
+                .ConfigureAwait(false);
+
+            // Check completed operations under lock so revocation before lock denies the save and replay creates no new revision or request.
+            var replay = await ReadReplayAsync(
                     request.OperationId,
                     providerId,
                     scope,
@@ -265,16 +264,24 @@ public sealed partial class ModelProviderDraftService
                     requestFingerprint,
                     cancellationToken)
                 .ConfigureAwait(false);
-            if (concurrentReplay is not null)
-                return concurrentReplay;
-            throw ModelProviderDraftException.Conflict();
-        }
-        if (current is { State: not ModelProviderDraftState.Draft })
-            throw ModelProviderDraftException.Unavailable();
+            if (replay is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return replay;
+            }
 
-        var currentCredential = current is null
-            ? null
-            : await db.ModelProviderDraftRevisions.AsNoTracking()
+            var current = await db.ModelProviderDrafts.AsNoTracking()
+                .SingleOrDefaultAsync(head => head.ProviderId == providerId, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null ||
+                current.Scope != scope ||
+                current.ProjectId != projectId ||
+                current.CurrentRevision != request.ExpectedRevision)
+                throw ModelProviderDraftException.Conflict();
+            if (current.State != ModelProviderDraftState.Draft)
+                throw ModelProviderDraftException.Unavailable();
+
+            var currentCredential = await db.ModelProviderDraftRevisions.AsNoTracking()
                 .Where(revision =>
                     revision.ProviderId == providerId &&
                     revision.ProviderRevision == current.CurrentRevision)
@@ -286,92 +293,64 @@ public sealed partial class ModelProviderDraftService
                 })
                 .SingleAsync(cancellationToken)
                 .ConfigureAwait(false);
-        var nextRevision = request.ExpectedRevision + 1;
-        var now = timeProvider.GetUtcNow();
-        var revisionRecord = new ModelProviderDraftRevisionRecord
-        {
-            ProviderId = providerId,
-            Scope = scope,
-            ProjectId = projectId,
-            ProviderRevision = nextRevision,
-            OperationId = request.OperationId,
-            RequestFingerprint = requestFingerprint,
-            DisplayName = metadata.DisplayName,
-            ProviderType = metadata.ProviderType,
-            BaseUrl = metadata.BaseUrl,
-            Deployment = metadata.Deployment,
-            WireApi = metadata.WireApi,
-            AzureApiVersion = metadata.AzureApiVersion,
-            ReasoningEfforts = metadata.ReasoningEfforts,
-            PromptCapacityTokens = metadata.PromptCapacityTokens,
-            RateCardId = metadata.RateCardId,
-            RateCardVersion = metadata.RateCardVersion,
-            ConfigurationHash = configurationHash,
-            CredentialVersion = currentCredential?.CredentialVersion,
-            CredentialSlotId = currentCredential?.CredentialSlotId,
-            CredentialSecretId = currentCredential?.CredentialSecretId,
-            CreatedByActorId = caller.ActorId,
-            CreatedAt = now,
-        };
 
-        try
-        {
-            await using var transaction = await db.Database
-                .BeginTransactionAsync(cancellationToken)
+            var now = timeProvider.GetUtcNow();
+            revisionRecord = new ModelProviderDraftRevisionRecord
+            {
+                ProviderId = providerId,
+                Scope = scope,
+                ProjectId = projectId,
+                ProviderRevision = nextRevision,
+                OperationId = request.OperationId,
+                RequestFingerprint = requestFingerprint,
+                DisplayName = metadata.DisplayName,
+                ProviderType = metadata.ProviderType,
+                BaseUrl = metadata.BaseUrl,
+                Deployment = metadata.Deployment,
+                WireApi = metadata.WireApi,
+                AzureApiVersion = metadata.AzureApiVersion,
+                ReasoningEfforts = metadata.ReasoningEfforts,
+                PromptCapacityTokens = metadata.PromptCapacityTokens,
+                RateCardId = metadata.RateCardId,
+                RateCardVersion = metadata.RateCardVersion,
+                ConfigurationHash = configurationHash,
+                CredentialVersion = currentCredential.CredentialVersion,
+                CredentialSlotId = currentCredential.CredentialSlotId,
+                CredentialSecretId = currentCredential.CredentialSecretId,
+                CreatedByActorId = caller.ActorId,
+                CreatedAt = now,
+            };
+
+            // Repeat the expected-revision check in the update to close the race after the earlier head read.
+            var updated = await db.ModelProviderDrafts
+                .Where(head =>
+                    head.ProviderId == providerId &&
+                    head.Scope == scope &&
+                    head.ProjectId == projectId &&
+                    head.State == ModelProviderDraftState.Draft &&
+                    head.CurrentRevision == request.ExpectedRevision)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(head => head.DisplayName, metadata.DisplayName)
+                        .SetProperty(head => head.ProviderType, metadata.ProviderType)
+                        .SetProperty(head => head.BaseUrl, metadata.BaseUrl)
+                        .SetProperty(head => head.Deployment, metadata.Deployment)
+                        .SetProperty(head => head.WireApi, metadata.WireApi)
+                        .SetProperty(head => head.AzureApiVersion, metadata.AzureApiVersion)
+                        .SetProperty(head => head.ReasoningEfforts, metadata.ReasoningEfforts)
+                        .SetProperty(head => head.PromptCapacityTokens, metadata.PromptCapacityTokens)
+                        .SetProperty(head => head.CurrentRevision, nextRevision)
+                        .SetProperty(head => head.UpdatedByActorId, caller.ActorId)
+                        .SetProperty(head => head.UpdatedAt, now),
+                    cancellationToken)
                 .ConfigureAwait(false);
-            if (current is null)
-            {
-                db.ModelProviderDrafts.Add(new ModelProviderDraftHeadRecord
-                {
-                    ProviderId = providerId,
-                    Scope = scope,
-                    ProjectId = projectId,
-                    DisplayName = metadata.DisplayName,
-                    ProviderType = metadata.ProviderType,
-                    BaseUrl = metadata.BaseUrl,
-                    Deployment = metadata.Deployment,
-                    WireApi = metadata.WireApi,
-                    AzureApiVersion = metadata.AzureApiVersion,
-                    ReasoningEfforts = metadata.ReasoningEfforts,
-                    PromptCapacityTokens = metadata.PromptCapacityTokens,
-                    State = ModelProviderDraftState.Draft,
-                    CurrentRevision = nextRevision,
-                    CreatedByActorId = caller.ActorId,
-                    CreatedAt = now,
-                    UpdatedByActorId = caller.ActorId,
-                    UpdatedAt = now,
-                });
-            }
-            else
-            {
-                // Repeat the expected-revision check in the update to close the race after the earlier head read.
-                var updated = await db.ModelProviderDrafts
-                    .Where(head =>
-                        head.ProviderId == providerId &&
-                        head.Scope == scope &&
-                        head.ProjectId == projectId &&
-                        head.State == ModelProviderDraftState.Draft &&
-                        head.CurrentRevision == request.ExpectedRevision)
-                    .ExecuteUpdateAsync(
-                        setters => setters
-                            .SetProperty(head => head.DisplayName, metadata.DisplayName)
-                            .SetProperty(head => head.ProviderType, metadata.ProviderType)
-                            .SetProperty(head => head.BaseUrl, metadata.BaseUrl)
-                            .SetProperty(head => head.Deployment, metadata.Deployment)
-                            .SetProperty(head => head.WireApi, metadata.WireApi)
-                            .SetProperty(head => head.AzureApiVersion, metadata.AzureApiVersion)
-                            .SetProperty(head => head.ReasoningEfforts, metadata.ReasoningEfforts)
-                            .SetProperty(head => head.PromptCapacityTokens, metadata.PromptCapacityTokens)
-                            .SetProperty(head => head.CurrentRevision, nextRevision)
-                            .SetProperty(head => head.UpdatedByActorId, caller.ActorId)
-                            .SetProperty(head => head.UpdatedAt, now),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (updated != 1)
-                    throw ModelProviderDraftException.Conflict();
-            }
+            if (updated != 1)
+                throw ModelProviderDraftException.Conflict();
 
             db.ModelProviderDraftRevisions.Add(revisionRecord);
+            db.ModelProviderHostRequests.Add(CreateHostRequestRecord(
+                tenantId, scope, projectId, providerId, nextRevision,
+                configurationHash, request.OperationId, caller.ActorId, host, now));
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -401,8 +380,9 @@ public sealed partial class ModelProviderDraftService
         }
 
         DetachTrackedProvider(providerId);
-        return ToDraft(ModelProviderDraftState.Draft, revisionRecord,
-            await ReadReferenceAsync(providerId, cancellationToken).ConfigureAwait(false));
+        return ToDraft(ModelProviderDraftState.Draft, revisionRecord!,
+            await ReadReferenceAsync(providerId, cancellationToken).ConfigureAwait(false),
+            new ModelProviderEgressStatus(host, PlatformEgressHostValidator.HttpsPort, null, false, "pending"));
     }
 
     internal Task<ModelProviderCredentialPublicationReceipt> PublishCredentialAsync(
@@ -550,6 +530,10 @@ public sealed partial class ModelProviderDraftService
             (!string.IsNullOrEmpty(baseUri.PathAndQuery.Trim('/')) ||
              !string.IsNullOrEmpty(baseUri.Fragment)))
             throw ModelProviderDraftException.InvalidRequest("Azure provider base URL must be its HTTPS host without an API path.");
+        if (baseUri.Port != PlatformEgressHostValidator.HttpsPort ||
+            baseUri.HostNameType != UriHostNameType.Dns ||
+            PlatformEgressHostValidator.Validate(baseUri.IdnHost.ToLowerInvariant(), PlatformEgressHostValidator.HttpsPort) is not null)
+            throw ModelProviderDraftException.InvalidRequest("Provider base URL must use a valid public HTTPS DNS host on port 443.");
         if (string.IsNullOrWhiteSpace(request.Deployment) ||
             request.Deployment.Length > ModelProviderDraftLimits.Deployment)
             throw ModelProviderDraftException.InvalidRequest("Deployment must contain 1 to 256 characters.");
@@ -664,8 +648,126 @@ public sealed partial class ModelProviderDraftService
     private static ModelProviderDraft ToDraft(
         ModelProviderDraftState state,
         ModelProviderDraftRevisionRecord revision,
-        string? reference = null) =>
-        new(state, ToBinding(revision)) { Reference = reference };
+        string? reference = null,
+        ModelProviderEgressStatus? egress = null) =>
+        new(state, ToBinding(revision)) { Reference = reference, Egress = egress };
+
+    internal static string DeriveHost(string baseUrl) =>
+        new Uri(baseUrl, UriKind.Absolute).IdnHost.ToLowerInvariant();
+
+    private static ModelProviderHostRequestRecord CreateHostRequestRecord(
+        string tenantId,
+        ModelProviderBindingScope scope,
+        string? projectId,
+        string providerId,
+        long providerRevision,
+        string configurationHash,
+        Guid operationId,
+        string actorId,
+        string host,
+        DateTimeOffset now) =>
+        new()
+        {
+            RequestId = Guid.NewGuid(),
+            TenantId = tenantId,
+            Scope = scope,
+            ProjectId = projectId,
+            ProviderId = providerId,
+            ProviderRevision = providerRevision,
+            ConfigurationHash = configurationHash,
+            OperationId = operationId,
+            ActorId = actorId,
+            Host = host,
+            Port = PlatformEgressHostValidator.HttpsPort,
+            CreatedAt = now,
+            DeliveryState = ModelProviderHostRequestDeliveryState.Pending,
+            AttemptCount = 0,
+            NextAttemptAt = now,
+            UpdatedAt = now,
+        };
+
+    private async Task<IReadOnlyList<ModelProviderDraft>> AttachEgressStatusesAsync(
+        IReadOnlyList<ModelProviderDraft> drafts,
+        CancellationToken cancellationToken)
+    {
+        if (drafts.Count == 0)
+            return drafts;
+
+        var providerIds = drafts.Select(d => d.Binding.ProviderId).Distinct().ToArray();
+        ModelProviderHostRequestRecord[] requests;
+        try
+        {
+            requests = await db.ModelProviderHostRequests.AsNoTracking()
+                .Where(r => providerIds.Contains(r.ProviderId))
+                .ToArrayAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable && environmentHostRequestClient is null)
+        {
+            return drafts;
+        }
+        var byKey = requests.ToDictionary(r => (r.ProviderId, r.ProviderRevision));
+
+        var deliveredIds = drafts
+            .Select(d => byKey.TryGetValue((d.Binding.ProviderId, d.Binding.ProviderRevision), out var r) &&
+                         r.DeliveryState == ModelProviderHostRequestDeliveryState.Delivered
+                ? r.RequestId
+                : (Guid?)null)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+
+        IReadOnlyDictionary<Guid, ProviderHostRequestStatusItem>? environmentStatuses = null;
+        if (deliveredIds.Length > 0 && environmentHostRequestClient is not null)
+        {
+            try
+            {
+                environmentStatuses = await environmentHostRequestClient
+                    .GetStatusesAsync(deliveredIds, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                environmentStatuses = null;
+            }
+        }
+
+        return drafts.Select(draft =>
+        {
+            var host = DeriveHost(draft.Binding.BaseUrl);
+            if (!byKey.TryGetValue((draft.Binding.ProviderId, draft.Binding.ProviderRevision), out var req))
+                return draft with
+                {
+                    Egress = new ModelProviderEgressStatus(
+                        host, PlatformEgressHostValidator.HttpsPort, null, false, "unavailable")
+                };
+
+            var egress = req.DeliveryState switch
+            {
+                ModelProviderHostRequestDeliveryState.Pending =>
+                    new ModelProviderEgressStatus(host, req.Port, null, false, "pending"),
+                ModelProviderHostRequestDeliveryState.Failed =>
+                    new ModelProviderEgressStatus(host, req.Port, null, false, "failed"),
+                ModelProviderHostRequestDeliveryState.Delivered =>
+                    environmentStatuses is not null &&
+                    environmentStatuses.TryGetValue(req.RequestId, out var status) &&
+                    string.Equals(status.Host, req.Host, StringComparison.Ordinal) &&
+                    status.Port == req.Port
+                        ? new ModelProviderEgressStatus(
+                            req.Host, req.Port,
+                            JsonNamingPolicy.CamelCase.ConvertName(status.DestinationState.ToString()),
+                            false, "delivered")
+                        : new ModelProviderEgressStatus(host, req.Port, null, false, "unavailable"),
+                _ => new ModelProviderEgressStatus(host, req.Port, null, false, "unavailable"),
+            };
+            return draft with { Egress = egress };
+        }).ToArray();
+    }
 
     private static RuntimeRateCardPin? ReadRateCardPin(ModelProviderDraftRevisionRecord revision)
     {
@@ -700,6 +802,10 @@ public sealed partial class ModelProviderDraftService
                      .ToArray())
             entry.State = EntityState.Detached;
         foreach (var entry in db.ChangeTracker.Entries<ModelProviderReferenceReservationRecord>()
+                     .Where(entry => entry.Entity.ProviderId == providerId)
+                     .ToArray())
+            entry.State = EntityState.Detached;
+        foreach (var entry in db.ChangeTracker.Entries<ModelProviderHostRequestRecord>()
                      .Where(entry => entry.Entity.ProviderId == providerId)
                      .ToArray())
             entry.State = EntityState.Detached;

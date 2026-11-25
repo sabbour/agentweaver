@@ -67,12 +67,12 @@ const GROUPS = {
     SELECT: 'tenant_memberships __ef_migrations_history installation_identity project_skill_builtin_releases',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers project_skill_admission_fence',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_skill_trust_evidence project_skill_admissions project_skill_refresh_receipts project_skill_refresh_audit_intents project_role_assignments authority_audit model_provider_revisions model_provider_reference_reservations model_provider_credential_operations model_provider_credential_preflights native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_skill_trust_evidence project_skill_admissions project_skill_refresh_receipts project_skill_refresh_audit_intents project_role_assignments authority_audit model_provider_revisions model_provider_reference_reservations model_provider_credential_operations model_provider_credential_preflights model_provider_host_requests native_acs_policy_heads native_acs_policy_preparations native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox project_governance_decision_stream_heads project_governance_decisions project_governance_decision_outbox project_governance_decision_checkpoints',
   },
   environment: {
     SELECT: '__ef_migrations_history',
     'SELECT,INSERT,UPDATE': 'owners owner_effects workspace_volume_cleanup sandbox_leases sandbox_provider_attempts sandbox_late_resource_cleanups remote_mcp_connections p1_creation_links',
-    'SELECT,INSERT': 'lifecycle_operations remote_mcp_connection_configurations remote_mcp_catalog_snapshots remote_mcp_connection_idempotency provider_lifecycle_reports runtime_bootstrap_profile_replacements platform_policy_apply_reservations platform_policy_proof_holds platform_policy_proof_receipts sandbox_owner_mappings sandbox_egress_flows_attributed sandbox_egress_flows_unattributed',
+    'SELECT,INSERT': 'lifecycle_operations remote_mcp_connection_configurations remote_mcp_catalog_snapshots remote_mcp_connection_idempotency provider_lifecycle_reports runtime_bootstrap_profile_replacements platform_policy_apply_reservations platform_policy_proof_holds platform_policy_proof_receipts sandbox_owner_mappings sandbox_egress_flows_attributed sandbox_egress_flows_unattributed provider_host_request_receipts',
   },
   knowledge: {
     SELECT: 'knowledge_schema_migrations outbox_schema_migrations',
@@ -466,6 +466,18 @@ END;`,
       },
       {
         trigger: 'model_provider_credential_preflights_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
+    model_provider_host_requests: [
+      {
+        trigger: 'model_provider_host_requests_guard_mutation',
+        function: 'guard_model_provider_host_request_mutation()', triggerType: 27,
+        message: 'model provider host requests cannot be deleted', sqlState: '55000',
+      },
+      {
+        trigger: 'model_provider_host_requests_no_truncate',
         function: 'reject_immutable_record_mutation()', triggerType: 34,
         message: 'records in %.% are immutable', sqlState: '55000',
       },
@@ -882,6 +894,18 @@ END;`,
         message: 'platform policy proof records are append-only', sqlState: '55000',
       },
     ],
+    provider_host_request_receipts: [
+      {
+        trigger: 'provider_host_request_receipts_immutable',
+        function: 'reject_provider_host_request_receipt_mutation()', triggerType: 27,
+        message: 'provider host request receipts are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'provider_host_request_receipts_no_truncate',
+        function: 'reject_provider_host_request_receipt_mutation()', triggerType: 34,
+        message: 'provider host request receipts are immutable', sqlState: '55000',
+      },
+    ],
   },
   orchestrator: {
     maf_runtime_evidence_receipts: [
@@ -921,6 +945,7 @@ const FUNCTIONS = {
     'guard_provider_reference_installation()',
     'reject_immutable_record_mutation()',
     'guard_model_provider_credential_preflight_mutation()',
+    'guard_model_provider_host_request_mutation()',
     'require_native_acs_policy_file_insert_in_revision_transaction()',
     'require_native_acs_policy_head_advance()',
     'require_governance_decision_head_initialize()',
@@ -947,6 +972,7 @@ const FUNCTIONS = {
     'enforce_platform_policy_proof_receipt_hold()',
     'reject_platform_policy_apply_reservation_mutation()',
     'reject_platform_policy_proof_mutation()',
+    'reject_provider_host_request_receipt_mutation()',
   ],
   knowledge: [
     'reject_knowledge_revision_mutation()',
@@ -1003,6 +1029,11 @@ const UPDATE_COLUMNS = {
     native_acs_policy_heads: ['current_revision', 'updated_at'],
     project_governance_decision_stream_heads: ['sequence', 'fence_generation', 'head_hash', 'updated_at'],
     model_provider_credential_preflights: ['consumed_at', 'consumed_by_kind'],
+    model_provider_host_requests: [
+      'delivery_state', 'attempt_count', 'next_attempt_at', 'lease_owner', 'lease_token',
+      'lease_expires_at', 'environment_destination_id', 'delivered_at', 'failure_code',
+      'last_attempt_at', 'updated_at',
+    ],
   },
 };
 
@@ -1080,7 +1111,7 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 051 adds immutable native-child rebind receipts; 052 indexes accepted_runs(tenant_id, run_id, project_id).
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53],
     // Bind each owner migration catalog into the reviewed plan hash.
-    environmentVersions: Array.from({ length: 17 }, (_, index) => index + 1),
+    environmentVersions: Array.from({ length: 18 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 13 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',

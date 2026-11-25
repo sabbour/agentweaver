@@ -1130,6 +1130,23 @@ public sealed class P1PostgresInitializerTests
                 {
                     UpdateColumns = ["consumed_at", "consumed_by_kind"],
                 },
+                new TablePlan("model_provider_host_requests", ["SELECT", "INSERT"], null, true, null,
+                    [
+                        new("model_provider_host_requests_guard_mutation",
+                            "guard_model_provider_host_request_mutation()", 27,
+                            "model provider host requests cannot be deleted", "55000"),
+                        new("model_provider_host_requests_no_truncate",
+                            "reject_immutable_record_mutation()", 34,
+                            "records in %.% are immutable", "55000"),
+                    ])
+                {
+                    UpdateColumns =
+                    [
+                        "delivery_state", "attempt_count", "next_attempt_at", "lease_owner", "lease_token",
+                        "lease_expires_at", "environment_destination_id", "delivered_at", "failure_code",
+                        "last_attempt_at", "updated_at",
+                    ],
+                },
             ],
         };
         return services;
@@ -1282,6 +1299,23 @@ public sealed class P1PostgresInitializerTests
                 {
                     UpdateColumns = ["consumed_at", "consumed_by_kind"],
                 },
+                new TablePlan("model_provider_host_requests", ["SELECT", "INSERT"], null, true, null,
+                    [
+                        new("model_provider_host_requests_guard_mutation",
+                            "guard_model_provider_host_request_mutation()", 27,
+                            "model provider host requests cannot be deleted", "55000"),
+                        new("model_provider_host_requests_no_truncate",
+                            "reject_immutable_record_mutation()", 34,
+                            "records in %.% are immutable", "55000"),
+                    ])
+                {
+                    UpdateColumns =
+                    [
+                        "delivery_state", "attempt_count", "next_attempt_at", "lease_owner", "lease_token",
+                        "lease_expires_at", "environment_destination_id", "delivered_at", "failure_code",
+                        "last_attempt_at", "updated_at",
+                    ],
+                },
                 AppendOnlyTable("native_acs_policy_preparations"),
                 AppendOnlyTable("native_acs_policy_revisions"),
                 NativeAcsPolicyFilesTable(),
@@ -1342,6 +1376,7 @@ public sealed class P1PostgresInitializerTests
                 new("guard_provider_reference_installation()", false),
                 new("reject_immutable_record_mutation()", false),
                 new("guard_model_provider_credential_preflight_mutation()", false),
+                new("guard_model_provider_host_request_mutation()", false),
                 new("require_native_acs_policy_file_insert_in_revision_transaction()", false),
                 new("require_native_acs_policy_head_advance()", false),
                 new("require_governance_decision_head_initialize()", false),
@@ -1416,6 +1451,15 @@ public sealed class P1PostgresInitializerTests
                         "reject_platform_policy_proof_mutation()", 34,
                         "platform policy proof records are append-only", "55000"),
                 ]),
+                new TablePlan("provider_host_request_receipts", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("provider_host_request_receipts_immutable",
+                        "reject_provider_host_request_receipt_mutation()", 27,
+                        "provider host request receipts are immutable", "55000"),
+                    new("provider_host_request_receipts_no_truncate",
+                        "reject_provider_host_request_receipt_mutation()", 34,
+                        "provider host request receipts are immutable", "55000"),
+                ]),
             ],
             Functions =
             [
@@ -1425,6 +1469,7 @@ public sealed class P1PostgresInitializerTests
                 new("enforce_platform_policy_proof_receipt_hold()", false),
                 new("reject_platform_policy_apply_reservation_mutation()", false),
                 new("reject_platform_policy_proof_mutation()", false),
+                new("reject_provider_host_request_receipt_mutation()", false),
             ],
         };
         services[3] = services[3] with
