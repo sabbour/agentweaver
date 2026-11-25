@@ -498,10 +498,14 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
     public async Task TerminalReconciliationAcceptsExactZeroCreditNoSendProofAndRejectsTamperedOrStaleProof()
     {
         var job = (await _store.CreateOrGetAsync(Create("zero-credit-proof"), CancellationToken.None)).Job;
-        await _store.TryBeginExecutionAsync(ProjectId, job.JobId, CancellationToken.None);
-        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+        var validJob = (await _store.CreateOrGetAsync(Create("zero-credit-proof-valid"), CancellationToken.None)).Job;
+        foreach (var candidate in new[] { job, validJob })
+        {
+            await _store.TryBeginExecutionAsync(ProjectId, candidate.JobId, CancellationToken.None);
+            Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, candidate.JobId, CancellationToken.None));
+        }
         await CancelRunAsync();
-        await InsertRootAdmissionsAsync(job);
+        await InsertRootAdmissionsAsync(job, validJob);
 
         var binding = new RuntimeBinding(
             ActorIssuer, ActorId, TenantId, ProjectId, RunId, job.SessionId, "coordinator", "root-turn",
@@ -592,38 +596,7 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
             ProjectId, RunId, _ => Task.CompletedTask, CancellationToken.None);
         Assert.Equal("send-admitted", (await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None))!.ExecutionPhase);
 
-        // Replace with the exact sealed proof in a fresh job to verify exact reconciliation and idempotence.
-        var validJob = (await _store.CreateOrGetAsync(Create("zero-credit-proof-valid"), CancellationToken.None)).Job;
-        await _store.TryBeginExecutionAsync(ProjectId, validJob.JobId, CancellationToken.None);
-        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, validJob.JobId, CancellationToken.None));
-        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
-        await using (var update = new NpgsqlCommand($"""
-            UPDATE "{_schema}".workflow_generation_jobs
-            SET status = 'cancelled', failure_code = 'workflow_generation_cancelled', failure_message = 'Cancelled.'
-            WHERE project_id = @project AND job_id = @job
-            """, connection))
-        {
-            update.Parameters.AddWithValue("project", ProjectId);
-            update.Parameters.AddWithValue("job", validJob.JobId);
-            await update.ExecuteNonQueryAsync();
-        }
-        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
-        await using (var admission = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".maf_root_model_turn_admissions
-                (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
-                 accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
-            SELECT project_id, run_id, root_session_id, @request, actor_issuer, actor_id, tenant_id,
-                   accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version
-            FROM "{_schema}".maf_root_model_turn_admissions
-            WHERE project_id = @project AND run_id = @run AND request_id = @oldRequest
-            """, connection))
-        {
-            admission.Parameters.AddWithValue("project", ProjectId);
-            admission.Parameters.AddWithValue("run", RunId);
-            admission.Parameters.AddWithValue("request", validJob.NativeRequestId);
-            admission.Parameters.AddWithValue("oldRequest", job.NativeRequestId);
-            await admission.ExecuteNonQueryAsync();
-        }
+        // Now insert the exact sealed proof for validJob to verify exact reconciliation and idempotence.
         var validRequestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
             "message", validJob.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
             "user", [new RuntimeA2ATextPart("text", validJob.Prompt)],
