@@ -1681,4 +1681,91 @@ describe('Broker refresh coordination', () => {
     authValue!.signOut();
     expect(authValue!.projectCredentialOperations!.get(opKey)).toBeNull();
   });
+
+  it('apiCallOnce supports null unbound binding with proactive refresh, reconfirmation, identity check, and no 401 retry', async () => {
+    vi.spyOn(gatewayClient, 'getAuthorizationContext')
+      .mockResolvedValueOnce({
+        contractVersion: 1,
+        issuer: 'broker',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: null,
+        boundRunId: null,
+        effectiveAuthority: [],
+      })
+      .mockResolvedValueOnce({
+        contractVersion: 1,
+        issuer: 'broker',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 2,
+        boundProjectId: null,
+        boundRunId: null,
+        effectiveAuthority: [],
+      });
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce({
+      ...token('expiring-unbound', 'refresh-1'),
+      expires_in: 1,
+    });
+    mocks.refreshBrokerToken.mockResolvedValueOnce(token('refreshed-unbound', 'refresh-2'));
+
+    let authValue: ReturnType<typeof useAuth> | null = null;
+    function Probe() {
+      const auth = useAuth();
+      useEffect(() => {
+        authValue = auth;
+      }, [auth]);
+      return null;
+    }
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+
+    const authorizePromise = authValue!.authorize(null, authPopup);
+    await completePopupSignIn('code-1');
+    await authorizePromise;
+    await waitFor(() => expect(authValue!.authorizationContext?.tenantId).toBe('tenant-1'));
+    const initialEpoch = authValue!.authSessionEpoch;
+
+    // Pre-refresh increments sessionGeneration while keeping authSessionEpoch; apiCallOnce succeeds and never auto-retries on 401.
+    const operation = vi.fn().mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'Expired'));
+    await expect(
+      authValue!.apiCallOnce(operation, null, {
+        tenantId: 'tenant-1',
+        actorId: 'actor-1',
+        issuer: 'broker',
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+
+    expect(mocks.refreshBrokerToken).toHaveBeenCalledTimes(1);
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(operation).toHaveBeenCalledWith('refreshed-unbound', 'tenant-1');
+    expect(authValue!.session?.accessToken).toBe('refreshed-unbound');
+    expect(authValue!.authSessionGeneration).toBeGreaterThan(1);
+    expect(authValue!.authSessionEpoch).toBe(initialEpoch);
+
+    // Expected identity mismatch fails closed before dispatching operation.
+    const blockedOp = vi.fn();
+    await expect(
+      authValue!.apiCallOnce(blockedOp, null, {
+        tenantId: 'tenant-2',
+        actorId: 'actor-1',
+        issuer: 'broker',
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(blockedOp).not.toHaveBeenCalled();
+
+    // Run-bound and project-bound requests fail when only an unbound session exists.
+    await expect(
+      authValue!.apiCallOnce(blockedOp, { projectId: 'project-1', runId: 'run-1' }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      authValue!.apiCallOnce(blockedOp, { projectId: 'project-1' }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(blockedOp).not.toHaveBeenCalled();
+  });
 });

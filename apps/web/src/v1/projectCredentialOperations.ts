@@ -1,8 +1,10 @@
 /**
- * In-memory operation tracking for project BYOK provider first-key writes.
- * Keyed by confirmed (issuer, actorId, tenantId, projectId, providerId) and
+ * In-memory operation tracking for platform and project BYOK provider key writes.
+ * Keyed by confirmed (issuer, actorId, tenantId, scope, projectId, providerId) and
  * never stores secret values.
  */
+
+export type CredentialOperationScope = 'platform' | 'project';
 
 export type ProjectCredentialOperationStatus =
   | 'pending'
@@ -14,6 +16,7 @@ export type ProjectCredentialOperationStatus =
 export interface ProjectCredentialOperation {
   operationId: string;
   expectedProviderRevision: number;
+  expectedCredentialRevision?: number;
   status: ProjectCredentialOperationStatus;
   stalePublicationConflict?: boolean;
 }
@@ -22,7 +25,8 @@ export interface ProjectCredentialOperationKey {
   issuer: string;
   actorId: string;
   tenantId: string;
-  projectId: string;
+  scope?: CredentialOperationScope;
+  projectId: string | null;
   providerId: string;
 }
 
@@ -34,18 +38,28 @@ export interface ProjectCredentialOperationStore {
   retainIdentity: (identity: { issuer: string; actorId: string; tenantId: string }) => void;
 }
 
-function serializeKey(key: ProjectCredentialOperationKey): string {
+function isNonEmpty(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeKey(key: ProjectCredentialOperationKey): string | null {
+  if (!isNonEmpty(key.issuer) || !isNonEmpty(key.actorId) || !isNonEmpty(key.tenantId) ||
+      !isNonEmpty(key.providerId))
+    return null;
+  const scope: CredentialOperationScope = key.scope ?? (key.projectId === null ? 'platform' : 'project');
+  if (scope === 'platform') {
+    if (key.projectId !== null) return null;
+  } else if (!isNonEmpty(key.projectId)) {
+    return null;
+  }
   return JSON.stringify([
     key.issuer,
     key.actorId,
     key.tenantId,
-    key.projectId,
+    scope,
+    scope === 'platform' ? null : key.projectId,
     key.providerId,
   ]);
-}
-
-function isNonEmpty(value: string | null | undefined): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
 }
 
 export function createProjectCredentialOperationStore(): ProjectCredentialOperationStore {
@@ -56,25 +70,22 @@ export function createProjectCredentialOperationStore(): ProjectCredentialOperat
 
   return {
     get(key) {
-      if (!isNonEmpty(key.issuer) || !isNonEmpty(key.actorId) || !isNonEmpty(key.tenantId) ||
-          !isNonEmpty(key.projectId) || !isNonEmpty(key.providerId))
-        return null;
-      return operations.get(serializeKey(key))?.operation ?? null;
+      const mapKey = normalizeKey(key);
+      if (!mapKey) return null;
+      return operations.get(mapKey)?.operation ?? null;
     },
     set(key, operation) {
-      if (!isNonEmpty(key.issuer) || !isNonEmpty(key.actorId) || !isNonEmpty(key.tenantId) ||
-          !isNonEmpty(key.projectId) || !isNonEmpty(key.providerId))
-        return;
-      operations.set(serializeKey(key), {
+      const mapKey = normalizeKey(key);
+      if (!mapKey) return;
+      operations.set(mapKey, {
         identity: { issuer: key.issuer, actorId: key.actorId, tenantId: key.tenantId },
         operation,
       });
     },
     delete(key) {
-      if (!isNonEmpty(key.issuer) || !isNonEmpty(key.actorId) || !isNonEmpty(key.tenantId) ||
-          !isNonEmpty(key.projectId) || !isNonEmpty(key.providerId))
-        return;
-      operations.delete(serializeKey(key));
+      const mapKey = normalizeKey(key);
+      if (!mapKey) return;
+      operations.delete(mapKey);
     },
     clear() {
       operations.clear();

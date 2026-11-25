@@ -50,16 +50,35 @@ After you correct pricing for a Draft that has a saved key, select **Recheck
 saved key**. The page checks the current credential version and publishes the
 provider from the stored key. It does not write a second key version.
 
-## Recover a pending key publication
+## Recover a pending or uncertain key upload
 
-A pending key publication shows `publication_pending` and keeps the original
-operation ID and revision fences in page memory. Select **Retry publication**.
-The retry checks the stored key state without sending the key again.
-Retry errors appear beside the **Retry publication** action.
+The browser sends platform key writes and existing-key rechecks once through
+`apiCallOnce` with an unbound session, `credentials: 'omit'`,
+`cache: 'no-store'`, and no automatic `401` retry. The key input clears
+before dispatch and never enters operation tracking or browser storage.
 
-A quarantined publication shows `quarantined` with a recovery handoff. Use the
-named recovery operation only with verified evidence for that original key
-write. Do not enter a new key for the same uncertain operation.
+When a key write or recheck does not finish cleanly, the page closes the
+editor, reloads the provider list, and keeps the original `operationId`,
+`expectedProviderRevision`, and `expectedCredentialRevision` in memory by
+confirmed `(issuer, actorId, tenantId, scope, projectId, providerId)` across
+navigation and same-identity re-authentication. A full browser reload or tab
+close clears this in-memory state.
+
+- **`uncertain` or `pending`:** Select **Check key status** to query the
+  operation status. While an operation is unresolved, the Edit form blocks new
+  key entry while keeping metadata-only edits available. Only select **Reset
+  pending check** after an operator confirms the attempt is closed.
+- **`publication_pending`:** Select **Retry publication** to replay the
+  original operation with `recheckExistingVersion: true` and its exact stored
+  revisions without sending the key again. If the provider changed in the
+  meantime (`409`), the page stops offering **Retry publication** and shows
+  the `operationId` for operator recovery.
+- **`disable_pending`:** Wait and select **Check key status** until the
+  operation finishes.
+- **`quarantined`:** Share the shown `operationId` with a platform operator for
+  recovery. Do not enter a new key for the same operation.
+- **`published`, `cancelled`, or `disabled`:** The page clears the operation
+  and reloads the provider list.
 
 ## Choose the default for new runs
 
