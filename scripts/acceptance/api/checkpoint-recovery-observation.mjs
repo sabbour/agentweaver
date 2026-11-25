@@ -361,6 +361,62 @@ export function compareStatusApiAndRest(apiValue, restValue, label, mismatchStat
   }
 }
 
+function withoutCheckpointPair(value) {
+  const copy = structuredClone(value);
+  if (isObject(copy.executionRecovery)) {
+    delete copy.executionRecovery.checkpointId;
+    delete copy.executionRecovery.checkpointRevision;
+  }
+  return copy;
+}
+
+function comparePendingGateSessionStatus(apiValue, restValue, label) {
+  compareStatusApiAndRest(
+    withoutCheckpointPair(apiValue),
+    withoutCheckpointPair(restValue),
+    label,
+  );
+}
+
+export function capturedCheckpointPair(records) {
+  const recordIds = [
+    'initial-session-status',
+    'initial-session-status-rest',
+    'initial-final-session-status',
+    'initial-final-session-status-rest',
+  ];
+  const bodies = [];
+  for (const id of recordIds) {
+    const matches = records?.filter(record => record?.id === id) ?? [];
+    if (matches.length !== 1) {
+      return { status: 'blocked', reason: 'The before capture does not retain one of each root-session response.' };
+    }
+    try {
+      bodies.push(id.endsWith('-rest')
+        ? restBody(matches[0], id)
+        : apiResponseBody(commandJson(matches[0], id), id));
+    } catch (error) {
+      return { status: 'blocked', reason: error.message };
+    }
+  }
+  const pairs = bodies.map(body => body.executionRecovery);
+  if (pairs.some(pair => !isObject(pair)
+    || !nonEmpty(pair.checkpointId)
+    || !safePositive(pair.checkpointRevision))) {
+    return { status: 'blocked', reason: 'The before capture checkpoint pair is absent or malformed.' };
+  }
+  const [first, ...others] = pairs;
+  if (others.some(pair => pair.checkpointId !== first.checkpointId
+    || pair.checkpointRevision !== first.checkpointRevision)) {
+    return { status: 'blocked', reason: 'The before capture checkpoint pair changed or disagreed between retained reads.' };
+  }
+  return {
+    status: 'available',
+    checkpointId: first.checkpointId,
+    checkpointRevision: first.checkpointRevision,
+  };
+}
+
 function gateFacts(decisions, sessionStatus, expectedRequestId, input) {
   const gate = decisions?.pendingGate;
   const blockers = sessionStatus?.blockers;
@@ -644,7 +700,7 @@ function extractRecoveryProofBinding(runStatus, sessionStatus, input) {
   ]);
 }
 
-export function committedRecoveryEventProof(snapshot, before, input) {
+export function committedRecoveryEventProof(snapshot, before, input, beforeCheckpointPair = null) {
   if (snapshot.recoveryEventError) {
     return {
       status: 'blocked',
@@ -669,7 +725,38 @@ export function committedRecoveryEventProof(snapshot, before, input) {
     recoveryProofBinding(
       snapshot.finalAuthority.runStatus, snapshot.finalAuthority.sessionStatus, before, input,
     );
-    return validateRecoveryEventPages(snapshot.recoveryEvents, initial, input);
+    const proof = validateRecoveryEventPages(snapshot.recoveryEvents, initial, input);
+    if (input.caseKind !== 'pending-gate') return proof;
+    const comparisonPair = beforeCheckpointPair ?? {
+      status: 'blocked',
+      reason: 'The before capture checkpoint pair is unavailable.',
+    };
+    if (comparisonPair.status !== 'available') {
+      return {
+        ...proof,
+        checkpointComparison: {
+          status: 'blocked',
+          reason: comparisonPair.reason,
+        },
+      };
+    }
+    const matches = comparisonPair.checkpointId === proof.sourceCheckpointId
+      && comparisonPair.checkpointRevision === proof.sourceCheckpointRevision;
+    return {
+      ...proof,
+      checkpointComparison: {
+        status: matches ? 'passed' : 'failed',
+        before: {
+          checkpointId: comparisonPair.checkpointId,
+          checkpointRevision: comparisonPair.checkpointRevision,
+        },
+        recoverySource: {
+          checkpointId: proof.sourceCheckpointId,
+          checkpointRevision: proof.sourceCheckpointRevision,
+        },
+        ...(!matches ? { reason: 'The checkpoint ID or revision differs.' } : {}),
+      },
+    };
   } catch (error) {
     return {
       status: error instanceof CaseError ? error.status : 'blocked',
@@ -785,6 +872,10 @@ function validateRecoveryEventPages(pages, binding, input) {
   return {
     status: 'passed',
     operationId,
+    ...(input.caseKind === 'pending-gate' ? {
+      sourceCheckpointId: ready[0].status.sourceCheckpointId,
+      sourceCheckpointRevision: ready[0].status.sourceCheckpointRevision,
+    } : {}),
     witnessEventId: ready[0].eventId,
     witnessSequence: ready[0].sequence,
     pagesRead: pages.length,
@@ -1456,7 +1547,10 @@ function verifyBeforeCommandRecords(capture, input, records) {
     const actual = kind === 'api'
       ? apiResponseBody(commandJson(record, id), id)
       : restBody(record, id);
-    if (!isDeepStrictEqual(actual, expected)) {
+    const matches = input.caseKind === 'pending-gate' && id === 'session-status-rest'
+      ? isDeepStrictEqual(withoutCheckpointPair(actual), withoutCheckpointPair(expected))
+      : isDeepStrictEqual(actual, expected);
+    if (!matches) {
       throw new CaseError('blocked', `The retained ${id} record does not match the captured output.`);
     }
   }
@@ -1552,6 +1646,11 @@ function verifyBeforeCommandRecords(capture, input, records) {
     return;
   }
   const initialBinding = statusBinding(outputs.runStatus, outputs.sessionStatus, outputs.decisions);
+  comparePendingGateSessionStatus(
+    finalOutputs['initial-final-session-status'],
+    finalOutputs['initial-final-session-status-rest'],
+    'Retained final root-session status',
+  );
   const finalApiBinding = statusBinding(
     finalOutputs['initial-final-run-status'],
     finalOutputs['initial-final-session-status'],
@@ -1943,7 +2042,11 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       `${prefix}-session-status-rest`,
     );
     if (input.caseKind === 'pending-gate') {
-      compareStatusApiAndRest(sessionStatus, sessionStatusRest, 'Root-session status');
+      if (input.mode === 'before-capture') {
+        comparePendingGateSessionStatus(sessionStatus, sessionStatusRest, 'Root-session status');
+      } else {
+        compareStatusApiAndRest(sessionStatus, sessionStatusRest, 'Root-session status');
+      }
     }
     const decisions = apiResponseBody(
       await execute(`${prefix}-decisions`, commands[base + 5].args), `${prefix}-decisions`,
@@ -2046,7 +2149,15 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       `${prefix}-final-session-status-rest`,
     );
     if (input.caseKind === 'pending-gate') {
-      compareStatusApiAndRest(finalSessionStatus, finalSessionStatusRest, `${prefix} final root-session status`);
+      if (input.mode === 'before-capture') {
+        comparePendingGateSessionStatus(
+          finalSessionStatus, finalSessionStatusRest, `${prefix} final root-session status`,
+        );
+      } else {
+        compareStatusApiAndRest(
+          finalSessionStatus, finalSessionStatusRest, `${prefix} final root-session status`,
+        );
+      }
     }
     const finalDecisions = apiResponseBody(
       await execute(`${prefix}-final-decisions`, commands[base + 5].args),
@@ -2161,6 +2272,11 @@ export async function runCase(options, env = process.env, commandRunner = runCom
   }
 
   let recoveryEventResult = null;
+  let beforeCheckpointPair = null;
+  const recoveryEventFailure = () => (
+    recoveryEventResult?.status === 'failed'
+    || recoveryEventResult?.checkpointComparison?.status === 'failed'
+  );
   try {
     let before = null;
     if (input.mode === 'after-observation') {
@@ -2176,10 +2292,15 @@ export async function runCase(options, env = process.env, commandRunner = runCom
         input, input.beforeCaptureSha256, scriptSha256, apphostSha256,
         retainedInput.inputSha256, retained.records, retained.sha256,
       );
+      if (input.caseKind === 'pending-gate') {
+        beforeCheckpointPair = capturedCheckpointPair(retained.records);
+      }
     }
     const snapshot = await readSnapshot('initial', before);
     if (input.mode === 'after-observation') {
-      recoveryEventResult = committedRecoveryEventProof(snapshot, before, input);
+      recoveryEventResult = committedRecoveryEventProof(
+        snapshot, before, input, beforeCheckpointPair,
+      );
     }
     const gate = input.caseKind === 'pending-gate' ? gateFacts(
       snapshot.decisions, snapshot.sessionStatus, input.expectedGateRequestId, input,
@@ -2261,8 +2382,8 @@ export async function runCase(options, env = process.env, commandRunner = runCom
       const observed = validateChildObservation(input, before, snapshot);
       const result = {
         ...common,
-        status: recoveryEventResult?.status === 'failed' ? 'failed' : 'passed',
-        ...(recoveryEventResult?.status === 'failed'
+        status: recoveryEventFailure() ? 'failed' : 'passed',
+        ...(recoveryEventFailure()
           ? { reason: recoveryEventResult.reason } : {}),
         actorId: snapshot.context.actorId,
         tenantId: snapshot.context.tenantId,
@@ -2302,9 +2423,9 @@ export async function runCase(options, env = process.env, commandRunner = runCom
     );
     const result = {
       ...common,
-      status: recoveryEventResult?.status === 'failed' ? 'failed' : 'passed',
-      ...(recoveryEventResult?.status === 'failed'
-        ? { reason: recoveryEventResult.reason } : {}),
+      status: recoveryEventFailure() ? 'failed' : 'passed',
+      ...(recoveryEventFailure()
+        ? { reason: recoveryEventResult.reason ?? recoveryEventResult.checkpointComparison?.reason } : {}),
       actorId: snapshot.context.actorId,
       tenantId: snapshot.context.tenantId,
       operationId: recovery.operationId,
@@ -2329,7 +2450,7 @@ export async function runCase(options, env = process.env, commandRunner = runCom
     await handle.sync();
     return result;
   } catch (error) {
-    const eventFailed = recoveryEventResult?.status === 'failed';
+    const eventFailed = recoveryEventFailure();
     const result = {
       ...common,
       status: eventFailed ? 'failed' : error instanceof CaseError ? error.status : 'blocked',

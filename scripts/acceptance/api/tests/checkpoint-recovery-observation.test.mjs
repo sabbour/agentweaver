@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   apiResponseBody,
   buildCommands,
+  capturedCheckpointPair,
   caseExitCode,
   committedRecoveryEventProof,
   compareStatusApiAndRest,
@@ -87,6 +88,11 @@ function snapshot({ fence = rootFenceBefore, recovery = null, choices = gate.all
     stateVersion,
     lifecycle: 'active',
     blockers: [blocker],
+    executionRecovery: {
+      state: 'unavailable',
+      checkpointId: 'checkpoint-9',
+      checkpointRevision: 3,
+    },
     ...(checkpointRecovery ? { checkpointRecovery } : {}),
   };
   const decisions = {
@@ -643,6 +649,111 @@ test('before-capture evidence must match the captured decision and status surfac
     mode: 'after-observation',
     beforeCaptureSha256: 'f'.repeat(64),
   });
+
+  test('pending-gate checkpoint comparison uses all four original responses', () => {
+    const afterInput = validateInput({
+      ...example,
+      mode: 'after-observation',
+      beforeCaptureSha256: 'f'.repeat(64),
+    });
+    const { capture, commandRecords } = beforeCapture();
+    const pair = capturedCheckpointPair(commandRecords);
+    assert.deepEqual(pair, {
+      status: 'available',
+      checkpointId: 'checkpoint-9',
+      checkpointRevision: 3,
+    });
+
+    for (const [name, mutate] of [
+      ['missing parent', records => {
+        const body = JSON.parse(records.find(item => item.id === 'initial-session-status').stdout);
+        delete body.body.executionRecovery;
+        records.find(item => item.id === 'initial-session-status').stdout = JSON.stringify(body);
+      }],
+      ['malformed ID', records => {
+        const body = JSON.parse(records.find(item => item.id === 'initial-session-status-rest').stdout);
+        body.body.executionRecovery.checkpointId = '';
+        records.find(item => item.id === 'initial-session-status-rest').stdout = JSON.stringify(body);
+      }],
+      ['malformed revision', records => {
+        const body = JSON.parse(records.find(item => item.id === 'initial-final-session-status').stdout);
+        body.body.executionRecovery.checkpointRevision = 3.5;
+        records.find(item => item.id === 'initial-final-session-status').stdout = JSON.stringify(body);
+      }],
+      ['unstable pair', records => {
+        const body = JSON.parse(records.find(item => item.id === 'initial-final-session-status-rest').stdout);
+        body.body.executionRecovery.checkpointRevision = 4;
+        records.find(item => item.id === 'initial-final-session-status-rest').stdout = JSON.stringify(body);
+      }],
+    ]) {
+      const records = structuredClone(commandRecords);
+      mutate(records);
+      assert.equal(capturedCheckpointPair(records).status, 'blocked', name);
+    }
+
+    const snapshot = afterSnapshot();
+    const stable = {
+      runStatus: snapshot.runStatus,
+      sessionStatus: snapshot.sessionStatus,
+      finalAuthority: {
+        runStatus: structuredClone(snapshot.runStatus),
+        sessionStatus: structuredClone(snapshot.sessionStatus),
+      },
+      recoveryEvents: [recoveryEventPage(snapshot, afterInput)],
+      recoveryEventError: null,
+    };
+    const passed = committedRecoveryEventProof(stable, { outputs: capture.outputs }, afterInput, pair);
+    assert.equal(passed.status, 'passed');
+    assert.equal(passed.checkpointComparison.status, 'passed');
+
+    const blockedPair = committedRecoveryEventProof(
+      stable, { outputs: capture.outputs }, afterInput,
+      { status: 'blocked', reason: 'unstable' },
+    );
+    assert.equal(blockedPair.status, 'passed');
+    assert.equal(blockedPair.checkpointComparison.status, 'blocked');
+    assert.equal(blockedPair.witnessEventId, passed.witnessEventId);
+
+    for (const [name, candidate] of [
+      ['checkpoint ID', { ...pair, checkpointId: 'different' }],
+      ['checkpoint revision', { ...pair, checkpointRevision: 4 }],
+    ]) {
+      const mismatch = committedRecoveryEventProof(
+        stable, { outputs: capture.outputs }, afterInput, candidate,
+      );
+      assert.equal(mismatch.status, 'passed', name);
+      assert.equal(mismatch.checkpointComparison.status, 'failed', name);
+      assert.equal(mismatch.witnessEventId, passed.witnessEventId, name);
+      assert.equal(mismatch.witnessSequence, passed.witnessSequence, name);
+    }
+
+    const successor = structuredClone(stable);
+    successor.runStatus.checkpointRecovery.recoveryCheckpointId = 'checkpoint-10';
+    successor.runStatus.checkpointRecovery.recoveryCheckpointRevision = 4;
+    successor.sessionStatus.checkpointRecovery.recoveryCheckpointId = 'checkpoint-10';
+    successor.sessionStatus.checkpointRecovery.recoveryCheckpointRevision = 4;
+    successor.sessionStatus.executionRecovery.checkpointId = 'checkpoint-11';
+    successor.sessionStatus.executionRecovery.checkpointRevision = 5;
+    successor.finalAuthority.runStatus.checkpointRecovery =
+      structuredClone(successor.runStatus.checkpointRecovery);
+    successor.finalAuthority.sessionStatus.checkpointRecovery =
+      structuredClone(successor.sessionStatus.checkpointRecovery);
+    successor.finalAuthority.sessionStatus.executionRecovery.checkpointId = 'checkpoint-11';
+    successor.finalAuthority.sessionStatus.executionRecovery.checkpointRevision = 5;
+    successor.recoveryEvents = [recoveryEventPage(successor, afterInput)];
+    const successorProof = committedRecoveryEventProof(
+      successor, { outputs: capture.outputs }, afterInput, pair,
+    );
+    assert.equal(successorProof.checkpointComparison.status, 'passed');
+    assert.deepEqual(successorProof.checkpointComparison.before, {
+      checkpointId: 'checkpoint-9',
+      checkpointRevision: 3,
+    });
+    assert.deepEqual(successorProof.checkpointComparison.recoverySource, {
+      checkpointId: 'checkpoint-9',
+      checkpointRevision: 3,
+    });
+  });
   const { capture, commandRecords } = beforeCapture();
   assert.equal(verifyBeforeCapture(
     capture,
@@ -1003,6 +1114,288 @@ test('command flow distinguishes a stable lost gate from an intervening answer',
     const blocked = await runObservation('answered-during-observation', initial, answered);
     assert.equal(blocked.status, 'blocked');
     assert.equal(caseExitCode(blocked.status), 2);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('pending-gate capture retains divergent checkpoints while comparison stays separate', async () => {
+  const scratch = path.join(directory, `checkpoint-pair-flow-${randomUUID()}`);
+  const cliPath = path.join(scratch, process.platform === 'win32' ? 'agentweaver.exe' : 'agentweaver');
+  const record = stdout => ({
+    startedAt: '2026-11-15T00:00:00.000Z',
+    completedAt: '2026-11-15T00:00:00.000Z',
+    durationMs: 0,
+    exitCode: 0,
+    signal: null,
+    stdout,
+    stderr: '',
+    timedOut: false,
+    error: null,
+  });
+  await mkdir(scratch);
+  try {
+    await writeFile(cliPath, 'fake apphost');
+    const apphostSha256 = createHash('sha256').update(await readFile(cliPath)).digest('hex');
+    const beforeValue = beforeCapture().capture;
+    const beforeInputPath = path.join(scratch, 'before-input.json');
+    const beforeOutputPath = path.join(scratch, 'before-evidence');
+    await writeFile(beforeInputPath, JSON.stringify({ ...example, apphostSha256 }));
+    const beforeRecords = beforeCaptureRecords(beforeValue);
+    const divergentIndex = beforeRecords.findIndex(
+      item => item.id === 'initial-session-status-rest',
+    );
+    const divergentEnvelope = JSON.parse(beforeRecords[divergentIndex].stdout);
+    divergentEnvelope.body.executionRecovery.checkpointRevision = 4;
+    beforeRecords[divergentIndex].stdout = JSON.stringify(divergentEnvelope);
+    let beforeIndex = 0;
+    const captured = await runCase(
+      { inputPath: beforeInputPath, outputPath: beforeOutputPath, dryRun: false },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      () => {
+        const { id: _id, args: _args, ...value } = beforeRecords[beforeIndex++];
+        return value;
+      },
+    );
+    assert.equal(captured.status, 'captured', captured.reason);
+    const retained = (await readFile(path.join(beforeOutputPath, 'commands.jsonl'), 'utf8'))
+      .trimEnd().split('\n').map(line => JSON.parse(line));
+    assert.equal(
+      JSON.parse(retained.find(item => item.id === 'initial-session-status-rest').stdout)
+        .body.executionRecovery.checkpointRevision,
+      4,
+    );
+
+    const operationId = randomUUID();
+    const afterValue = afterSnapshot({ operationId });
+    afterValue.context = beforeValue.outputs.context;
+    const afterInput = {
+      ...example,
+      mode: 'after-observation',
+      apphostSha256,
+      expectedRecoveryOperationId: operationId,
+      beforeCaptureSha256: captured.captureSha256,
+    };
+    const afterInputPath = path.join(scratch, 'after-input.json');
+    const afterOutputPath = path.join(scratch, 'after-evidence');
+    await writeFile(afterInputPath, JSON.stringify(afterInput));
+    const envelope = body => JSON.stringify({ status: 200, body });
+    const runner = (_cli, args) => {
+      if (args[0] === '--version') return record('agentweaver 1.0.0');
+      if (args[0] === 'auth') {
+        return record(JSON.stringify({ isSignedIn: true, tenantId: input.target.tenantId }));
+      }
+      if (args[0] === 'api' && args[1] === 'operations') {
+        return record(JSON.stringify([
+          'readRunStatus', 'readSessionStatus', 'readDecisions', 'readSessionTree',
+          'replayRunEvents', 'readCheckpointRecoveryEvents',
+        ]));
+      }
+      if (args[0] === 'api' && args[1] === 'describe') return record('{}');
+      if (args[0] === 'rest') {
+        const route = args[args.indexOf('--url') + 1];
+        if (route.endsWith('/authorization/context')) return record(envelope(afterValue.context));
+        if (route.endsWith('/coordination/status')) return record(envelope(afterValue.runStatus));
+        if (route.endsWith('/status')) return record(envelope(afterValue.sessionStatus));
+      }
+      if (args[0] === 'api' && args[1] === 'invoke') {
+        const operation = args[2];
+        if (operation === 'readRunStatus') return record(envelope(afterValue.runStatus));
+        if (operation === 'readSessionStatus') return record(envelope(afterValue.sessionStatus));
+        if (operation === 'readDecisions') return record(envelope(afterValue.decisions));
+        if (operation === 'readSessionTree') return record(envelope(afterValue.tree));
+        if (operation === 'replayRunEvents') return record(envelope(afterValue.events[0]));
+        if (operation === 'readCheckpointRecoveryEvents') {
+          return record(envelope(recoveryEventPage(afterValue, afterInput)));
+        }
+      }
+      throw new Error(`Unexpected command: ${args.join(' ')}`);
+    };
+    const observed = await runCase(
+      {
+        inputPath: afterInputPath,
+        outputPath: afterOutputPath,
+        beforeEvidencePath: captured.capturePath,
+        dryRun: false,
+      },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      runner,
+    );
+    assert.equal(observed.status, 'passed', observed.reason);
+    assert.equal(caseExitCode(observed.status), 0);
+    assert.equal(observed.committedRecoveryEventProof.status, 'passed');
+    assert.equal(observed.committedRecoveryEventProof.checkpointComparison.status, 'blocked');
+    assert.deepEqual(JSON.parse(await readFile(path.join(afterOutputPath, 'result.json'), 'utf8')), observed);
+
+    const idRecords = beforeCaptureRecords(beforeValue);
+    const idEnvelope = JSON.parse(
+      idRecords.find(item => item.id === 'initial-final-session-status-rest').stdout,
+    );
+    idEnvelope.body.executionRecovery.checkpointId = 'different-checkpoint';
+    idRecords.find(item => item.id === 'initial-final-session-status-rest').stdout =
+      JSON.stringify(idEnvelope);
+    const idInputPath = path.join(scratch, 'checkpoint-id-input.json');
+    const idOutputPath = path.join(scratch, 'checkpoint-id-evidence');
+    await writeFile(idInputPath, JSON.stringify({ ...example, apphostSha256 }));
+    let idIndex = 0;
+    const idCapture = await runCase(
+      { inputPath: idInputPath, outputPath: idOutputPath, dryRun: false },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      () => {
+        const { id: _id, args: _args, ...value } = idRecords[idIndex++];
+        return value;
+      },
+    );
+    assert.equal(idCapture.status, 'captured', idCapture.reason);
+    const idCommands = (await readFile(path.join(idOutputPath, 'commands.jsonl'), 'utf8'))
+      .trimEnd().split('\n').map(line => JSON.parse(line));
+    assert.equal(
+      JSON.parse(idCommands.find(item => item.id === 'initial-final-session-status-rest').stdout)
+        .body.executionRecovery.checkpointId,
+      'different-checkpoint',
+    );
+    const idAfterInput = {
+      ...afterInput,
+      beforeCaptureSha256: idCapture.captureSha256,
+    };
+    const idAfterInputPath = path.join(scratch, 'checkpoint-id-after-input.json');
+    await writeFile(idAfterInputPath, JSON.stringify(idAfterInput));
+    const replayedIdCapture = await runCase(
+      {
+        inputPath: idAfterInputPath,
+        outputPath: path.join(scratch, 'checkpoint-id-after-evidence'),
+        beforeEvidencePath: idCapture.capturePath,
+        dryRun: false,
+      },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      runner,
+    );
+    assert.equal(replayedIdCapture.status, 'passed', replayedIdCapture.reason);
+    assert.equal(
+      replayedIdCapture.committedRecoveryEventProof.checkpointComparison.status,
+      'blocked',
+    );
+
+    const nonCheckpointRecords = beforeCaptureRecords(beforeValue);
+    const finalRestIndex = nonCheckpointRecords.findIndex(
+      item => item.id === 'initial-final-session-status-rest',
+    );
+    const nonCheckpointEnvelope = JSON.parse(nonCheckpointRecords[finalRestIndex].stdout);
+    nonCheckpointEnvelope.body.executionRecovery.state = 'available';
+    nonCheckpointRecords[finalRestIndex].stdout = JSON.stringify(nonCheckpointEnvelope);
+    const nonCheckpointInputPath = path.join(scratch, 'non-checkpoint-input.json');
+    await writeFile(nonCheckpointInputPath, JSON.stringify({ ...example, apphostSha256 }));
+    let nonCheckpointIndex = 0;
+    const rejected = await runCase(
+      {
+        inputPath: nonCheckpointInputPath,
+        outputPath: path.join(scratch, 'non-checkpoint-evidence'),
+        dryRun: false,
+      },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      () => {
+        const { id: _id, args: _args, ...value } = nonCheckpointRecords[nonCheckpointIndex++];
+        return value;
+      },
+    );
+    assert.equal(rejected.status, 'failed');
+    assert.equal(caseExitCode(rejected.status), 1);
+
+    const stableBeforeRecords = beforeCaptureRecords(beforeValue);
+    const stableBeforeInputPath = path.join(scratch, 'stable-before-input.json');
+    const stableBeforeOutputPath = path.join(scratch, 'stable-before-evidence');
+    await writeFile(stableBeforeInputPath, JSON.stringify({ ...example, apphostSha256 }));
+    let stableBeforeIndex = 0;
+    const stableBefore = await runCase(
+      { inputPath: stableBeforeInputPath, outputPath: stableBeforeOutputPath, dryRun: false },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      () => {
+        const { id: _id, args: _args, ...value } = stableBeforeRecords[stableBeforeIndex++];
+        return value;
+      },
+    );
+    assert.equal(stableBefore.status, 'captured', stableBefore.reason);
+
+    let rootSessionRestReads = 0;
+    const afterRestRunner = (_cli, args) => {
+      const result = runner(_cli, args);
+      if (args[0] === 'rest'
+        && args[args.indexOf('--url') + 1].endsWith(`/coordination/sessions/${input.target.sessionId}/status`)) {
+        rootSessionRestReads += 1;
+        if (rootSessionRestReads === 2) {
+          const value = JSON.parse(result.stdout);
+          value.body.executionRecovery.checkpointRevision += 1;
+          result.stdout = JSON.stringify(value);
+        }
+      }
+      return result;
+    };
+    const afterRestInput = {
+      ...afterInput,
+      beforeCaptureSha256: stableBefore.captureSha256,
+    };
+    const afterRestInputPath = path.join(scratch, 'after-rest-input.json');
+    await writeFile(afterRestInputPath, JSON.stringify(afterRestInput));
+    const afterRestMismatch = await runCase(
+      {
+        inputPath: afterRestInputPath,
+        outputPath: path.join(scratch, 'after-rest-output'),
+        beforeEvidencePath: stableBefore.capturePath,
+        dryRun: false,
+      },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      afterRestRunner,
+    );
+    assert.equal(afterRestMismatch.status, 'failed');
+    assert.equal(caseExitCode(afterRestMismatch.status), 1);
+    assert.match(afterRestMismatch.reason, /initial final root-session status returned different/);
+
+    const mismatchInput = {
+      ...afterInput,
+      beforeCaptureSha256: stableBefore.captureSha256,
+    };
+    const mismatchInputPath = path.join(scratch, 'mismatch-input.json');
+    await writeFile(mismatchInputPath, JSON.stringify(mismatchInput));
+    afterValue.runStatus.checkpointRecovery.sourceCheckpointId = 'different-source';
+    afterValue.sessionStatus.checkpointRecovery.sourceCheckpointId = 'different-source';
+    const mismatch = await runCase(
+      {
+        inputPath: mismatchInputPath,
+        outputPath: path.join(scratch, 'mismatch-output'),
+        beforeEvidencePath: stableBefore.capturePath,
+        dryRun: false,
+      },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      runner,
+    );
+    assert.equal(mismatch.status, 'failed');
+    assert.equal(caseExitCode(mismatch.status), 1);
+    assert.equal(mismatch.committedRecoveryEventProof.status, 'passed');
+    assert.equal(mismatch.committedRecoveryEventProof.checkpointComparison.status, 'failed');
+    assert.match(mismatch.reason, /differs/);
+
+    const commandsPath = path.join(beforeOutputPath, 'commands.jsonl');
+    const tamperedRecords = (await readFile(commandsPath, 'utf8'))
+      .trimEnd().split('\n').map(line => JSON.parse(line));
+    const tamperedRecord = tamperedRecords.find(item => item.id === 'initial-session-status-rest');
+    const tamperedEnvelope = JSON.parse(tamperedRecord.stdout);
+    tamperedEnvelope.body.executionRecovery.checkpointRevision = 5;
+    tamperedRecord.stdout = JSON.stringify(tamperedEnvelope);
+    const tamperedText = `${tamperedRecords.map(item => JSON.stringify(item)).join('\n')}\n`;
+    await writeFile(commandsPath, tamperedText);
+    const tamperedOutput = path.join(scratch, 'tampered-after');
+    const tampered = await runCase(
+      {
+        inputPath: afterInputPath,
+        outputPath: tamperedOutput,
+        beforeEvidencePath: captured.capturePath,
+        dryRun: false,
+      },
+      { AGENTWEAVER_CLI_PATH: cliPath },
+      runner,
+    );
+    assert.equal(tampered.status, 'blocked');
+    assert.match(tampered.reason, /hash|retained|before-capture evidence/);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

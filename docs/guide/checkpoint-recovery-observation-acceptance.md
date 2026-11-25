@@ -82,6 +82,15 @@ The result reports `capturePath` and `captureSha256`. Keep `capture.json`,
 directory. Use the capture hash in the after-observation input. The script
 checks the retained input and command records against the capture.
 
+For `pending-gate`, the initial and final API and REST root-session reads may
+have different `executionRecovery.checkpointId` and
+`executionRecovery.checkpointRevision` values. The script compares copies and
+excludes only those two fields from this API-versus-REST check. It retains
+the original responses and every other field. The capture still succeeds
+when the checkpoint pair is absent, malformed, or different between the four
+reads. The script derives no replacement pair and adds no checkpoint field to
+the input or capture.
+
 ## Observe recovery
 
 Run the normal Host recovery operation outside this case. Keep its returned
@@ -115,8 +124,19 @@ must retain the same operation, source checkpoint ID and revision, previous
 and current execution fences, previous and replacement runtime IDs,
 registration revisions, and material mode before and after event paging. The
 gate case requires the same request, actor, choices, and freeform setting. A
-gate event binds to the source checkpoint reported by current status; the
-case does not compare that checkpoint to the before capture.
+gate event binds to the source checkpoint reported by current status.
+
+After the readiness witness passes, the pending-gate case compares its source
+checkpoint ID and revision with the pair from all four original
+before-capture root-session responses. All four responses must contain the
+same nonempty checkpoint ID and positive safe-integer revision. A pair that
+is absent, malformed, or unstable blocks only the checkpoint comparison; the
+readiness witness and base observation remain passed. A stable pair that
+differs from the source pair fails the comparison and the overall observation
+while retaining the passed readiness status, witness event ID, and sequence.
+The case compares the source pair, not the replacement checkpoint or a later
+checkpoint. If the readiness witness fails, the result contains no checkpoint
+comparison.
 
 The event read must return the current paging envelope and a stable watermark.
 The script follows each cursor without changing it, accepts sequence gaps,
@@ -180,6 +200,8 @@ Exit codes are `0` for `captured`, `passed`, or `validated-not-run`, `1` for
 problems block only committed recovery-event proof and leave the base result
 unchanged. A bound contradiction fails the case with exit `1` while the
 script retains the other proof results. Review the redacted command records
-before you run after observation again. The witness proves only that the owner
-recorded readiness; it does not prove journal delivery, run completion, or
-physical effect uniqueness.
+before you run after observation again. For a pending gate, the nested
+`checkpointComparison` records `passed`, `blocked`, or `failed` independently
+inside `committedRecoveryEventProof`. The readiness witness proves only that
+the owner recorded readiness. It does not prove journal delivery, run
+completion, physical effect uniqueness, or physical recovery.
