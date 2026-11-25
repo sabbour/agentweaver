@@ -9,6 +9,7 @@ import {
   apiResponseBody,
   buildCommands,
   caseExitCode,
+  committedRecoveryEventProof,
   compareStatusApiAndRest,
   parseArgs,
   resolveCliPath,
@@ -16,6 +17,7 @@ import {
   validateAfterObservation,
   validateInput,
   validateJournalPages,
+  validateRecoveryEventPages,
   verifyBeforeCapture,
   runCase,
 } from '../checkpoint-recovery-observation.mjs';
@@ -125,6 +127,50 @@ function executionPlan(snapshot, fingerprint = 'f'.repeat(64)) {
   };
 }
 
+function recoveryEventPage(snapshot, commandInput) {
+  const recovery = snapshot.runStatus.checkpointRecovery;
+  const base = {
+    sourceCheckpointId: recovery.sourceCheckpointId,
+    sourceCheckpointRevision: recovery.sourceCheckpointRevision,
+    previousExecutionFence: recovery.previousExecutionFence,
+    executionFence: recovery.executionFence,
+    previousRuntimeInstanceId: recovery.previousRuntimeInstanceId,
+    runtimeInstanceId: recovery.runtimeInstanceId,
+    previousRegistrationRevision: recovery.previousRegistrationRevision,
+    registrationRevision: recovery.registrationRevision,
+    recoveryMaterialMode: recovery.recoveryMaterialMode,
+  };
+  return {
+    session: snapshot.sessionStatus.identity,
+    operationId: recovery.operationId,
+    watermark: 2,
+    events: [
+      {
+        eventId: recovery.operationId,
+        sequence: 1,
+        eventType: commandInput.caseKind === 'pending-gate'
+          ? 'orchestrator.run.checkpoint_recovery_pending'
+          : 'orchestrator.run.checkpoint_recovery_blocked',
+        eventVersion: 1,
+        occurredAt: '2026-11-15T00:00:01Z',
+        operationId: recovery.operationId,
+        status: { phase: 'pending', ...base },
+      },
+      {
+        eventId: '00000000-0000-4000-8000-000000000399',
+        sequence: 2,
+        eventType: 'orchestrator.run.checkpoint_recovery_ready',
+        eventVersion: 1,
+        occurredAt: '2026-11-15T00:00:02Z',
+        operationId: recovery.operationId,
+        status: { phase: 'ready', ...base },
+      },
+    ],
+    nextCursor: null,
+    hasMore: false,
+  };
+}
+
 function beforeCaptureRecords(capture, commandInput = input) {
   const commands = buildCommands(commandInput);
   const { outputs } = capture;
@@ -135,6 +181,7 @@ function beforeCaptureRecords(capture, commandInput = input) {
     'api-operations': JSON.stringify([
       'readRunStatus', 'readSessionStatus', 'readDecisions', 'readSessionTree', 'replayRunEvents',
       ...(commandInput.caseKind === 'pending-gate' ? [] : ['readExecutionPlan']),
+      ...(commandInput.mode === 'after-observation' ? ['readCheckpointRecoveryEvents'] : []),
     ]),
     'rest-authorization-context': rest(outputs.context),
     'run-status': api(outputs.runStatus),
@@ -192,6 +239,28 @@ function beforeCaptureRecords(capture, commandInput = input) {
       'initial-execution-plan-after-journal',
       commands.find(command => command.id === 'execution-plan').args,
       api(outputs.executionPlan),
+    ));
+  }
+  if (commandInput.mode === 'after-observation') {
+    records.push(record(
+      'initial-recovery-events-page-1',
+      [
+        'api', 'invoke', 'readCheckpointRecoveryEvents', '--path',
+        `projectId=${commandInput.target.projectId}`, '--path',
+        `sessionId=${commandInput.target.sessionId}`, '--path',
+        `operationId=${commandInput.expectedRecoveryOperationId}`, '--path',
+        `runId=${commandInput.target.runId}`,
+        '--scope', 'api.read', '--scope', 'projects.orchestrator',
+        '--gateway-url', commandInput.target.gatewayUrl,
+        '--broker-issuer', commandInput.target.brokerIssuer,
+        '--client-id', commandInput.target.clientId,
+        '--api-audience', commandInput.target.apiAudience,
+        '--tenant-id', commandInput.target.tenantId,
+        '--project-id', commandInput.target.projectId,
+        '--run-id', commandInput.target.runId,
+        '--query', 'limit=100',
+      ],
+      api(recoveryEventPage(outputs, commandInput)),
     ));
   }
   records.push(
@@ -276,6 +345,8 @@ function afterSnapshot(overrides = {}) {
     executionFence: rootFenceBefore + 1,
     previousRuntimeInstanceId: '00000000-0000-4000-8000-000000000201',
     runtimeInstanceId: '00000000-0000-4000-8000-000000000202',
+    previousRegistrationRevision: 1,
+    registrationRevision: 1,
     recoveryMaterialMode: 'nativeCache',
     gateRequestId: requestId,
     gateAuthorizedActorId: input.expectedActorId,
@@ -362,6 +433,15 @@ test('finite commands discover and describe reads before invoking them', () => {
   assert.ok(sessionRead.args.includes(`sessionId=${input.target.sessionId}`));
   assert.ok(commands.find(command => command.id === 'run-status-rest')
     .args.includes(`/api/v1/projects/${input.target.projectId}/runs/${input.target.runId}/coordination/status`));
+  assert.ok(!commands.some(command => command.id === 'api-describe-readCheckpointRecoveryEvents'));
+  const afterInput = { ...input, mode: 'after-observation',
+    beforeCaptureSha256: 'f'.repeat(64) };
+  const afterCommands = buildCommands(afterInput);
+  assert.ok(afterCommands.some(command =>
+    command.id === 'api-describe-readCheckpointRecoveryEvents'));
+  assert.ok(afterCommands.some(command =>
+    command.id === 'api-describe-readCheckpointRecoveryEvents'
+      && !command.args.includes('--project-id')));
 });
 
 test('API invocation response bodies require HTTP 200 and an object body', () => {
@@ -414,6 +494,147 @@ test('journal paging requires typed session-journal envelopes and rejects outbox
     eventCount: 2,
     lastPosition: 2,
   });
+});
+
+test('checkpoint recovery pages require stable cursors, IDs, sequences, and ready binding', () => {
+  const { expectedGateRequestId: _, ...common } = example;
+  const childInput = validateInput({ ...common, mode: 'after-observation', caseKind: 'child-join',
+    beforeCaptureSha256: 'f'.repeat(64) });
+  const after = childSnapshot({ after: true });
+  const binding = {
+    operationId,
+    sourceCheckpointId: after.runStatus.checkpointRecovery.sourceCheckpointId,
+    sourceCheckpointRevision: after.runStatus.checkpointRecovery.sourceCheckpointRevision,
+    previousExecutionFence: after.runStatus.checkpointRecovery.previousExecutionFence,
+    executionFence: after.runStatus.checkpointRecovery.executionFence,
+    previousRuntimeInstanceId: after.runStatus.checkpointRecovery.previousRuntimeInstanceId,
+    runtimeInstanceId: after.runStatus.checkpointRecovery.runtimeInstanceId,
+    previousRegistrationRevision: after.runStatus.checkpointRecovery.previousRegistrationRevision,
+    registrationRevision: after.runStatus.checkpointRecovery.registrationRevision,
+    recoveryMaterialMode: after.runStatus.checkpointRecovery.recoveryMaterialMode,
+  };
+  const terminal = recoveryEventPage(after, childInput);
+  const pageOne = structuredClone(terminal);
+  pageOne.watermark = 5;
+  pageOne.events = [pageOne.events[0]];
+  pageOne.hasMore = true;
+  pageOne.nextCursor = 'cursor-1';
+  const pageTwo = structuredClone(terminal);
+  pageTwo.watermark = 5;
+  pageTwo.events = [pageTwo.events[1]];
+  pageTwo.events[0].sequence = 4;
+  const proof = validateRecoveryEventPages([pageOne, pageTwo], binding, childInput);
+  assert.equal(proof.status, 'passed');
+  assert.equal(proof.witnessSequence, 4);
+  for (const mutate of [
+    pages => { pages[1].events[0].eventId = pages[0].events[0].eventId; },
+    pages => { pages[1].events[0].sequence = 1; },
+    pages => { pages[1].events[0].sequence = 6; },
+    pages => { pages[1].events[0].sequence = 1.5; },
+    pages => { pages[1].watermark = 6; },
+    pages => { pages[1].nextCursor = 'terminal-cursor'; },
+    pages => { pages[1].operationId = randomUUID(); },
+    pages => { pages[1].events[0].operationId = randomUUID(); },
+    pages => { pages[1].events[0].status.runtimeInstanceId = 'not-a-runtime'; },
+    pages => { pages[1].events[0].status.registrationRevision = '1'; },
+    pages => { pages[1].events[0].status.recoveryMaterialMode = 'other'; },
+    pages => { pages[1].events[0].status.sourceCheckpointRevision = '3'; },
+    pages => { pages[1].events[0].status.unexpected = true; },
+    pages => { pages[1].events = Array.from({ length: 201 },
+      () => structuredClone(pages[1].events[0])); },
+    pages => { pages[0].nextCursor = null; },
+  ]) {
+    const changed = structuredClone([pageOne, pageTwo]);
+    mutate(changed);
+    assert.throws(() => validateRecoveryEventPages(changed, binding, childInput),
+      error => error.status === 'blocked');
+  }
+  const loop = structuredClone([pageOne, pageTwo]);
+  loop[1].hasMore = true;
+  loop[1].nextCursor = 'cursor-1';
+  loop.push(structuredClone(loop[1]));
+  assert.throws(() => validateRecoveryEventPages(loop, binding, childInput), /cursors/);
+  assert.throws(() => validateRecoveryEventPages(
+    Array.from({ length: 1001 }, () => structuredClone(pageOne)), binding, childInput,
+  ), /1000|complete page set/);
+  const missingField = structuredClone([pageOne, pageTwo]);
+  delete missingField[1].events[0].status.registrationRevision;
+  assert.throws(() => validateRecoveryEventPages(missingField, binding, childInput),
+    error => error.status === 'blocked');
+  const malformedAndContradicted = structuredClone([pageOne, pageTwo]);
+  delete malformedAndContradicted[1].events[0].status.registrationRevision;
+  malformedAndContradicted[1].events[0].status.sourceCheckpointId = 'other';
+  assert.throws(() => validateRecoveryEventPages(
+    malformedAndContradicted, binding, childInput,
+  ), error => error.status === 'blocked');
+  const contradiction = structuredClone([pageOne, pageTwo]);
+  contradiction[1].events[0].status.sourceCheckpointId = 'other';
+  assert.throws(() => validateRecoveryEventPages(contradiction, binding, childInput),
+    error => error.status === 'failed');
+  const reversedWitness = structuredClone([terminal]);
+  reversedWitness[0].events = [
+    { ...structuredClone(terminal.events[1]), sequence: 1 },
+    { ...structuredClone(terminal.events[0]), sequence: 2 },
+  ];
+  reversedWitness[0].watermark = 2;
+  assert.throws(() => validateRecoveryEventPages(reversedWitness, binding, childInput),
+    error => error.status === 'blocked');
+  const immutableAdmission = structuredClone([pageOne, pageTwo]);
+  immutableAdmission[0].events[0].status.sourceCheckpointId = 'other';
+  assert.throws(() => validateRecoveryEventPages(immutableAdmission, binding, childInput),
+    error => error.status === 'failed');
+  const proofBefore = { outputs: childSnapshot() };
+  const stableSnapshot = {
+    runStatus: after.runStatus,
+    sessionStatus: after.sessionStatus,
+    finalAuthority: structuredClone({
+      runStatus: after.runStatus, sessionStatus: after.sessionStatus,
+    }),
+    recoveryEvents: [terminal],
+    recoveryEventError: null,
+  };
+  assert.equal(committedRecoveryEventProof(stableSnapshot, proofBefore, childInput).status, 'passed');
+  stableSnapshot.finalAuthority.runStatus.checkpointRecovery.registrationRevision = 3;
+  stableSnapshot.finalAuthority.sessionStatus.checkpointRecovery.registrationRevision = 3;
+  assert.equal(committedRecoveryEventProof(stableSnapshot, proofBefore, childInput).status, 'blocked');
+  const changedInvalid = structuredClone(stableSnapshot);
+  changedInvalid.runStatus = structuredClone(after.runStatus);
+  changedInvalid.sessionStatus = structuredClone(after.sessionStatus);
+  changedInvalid.finalAuthority.runStatus = structuredClone(after.runStatus);
+  changedInvalid.finalAuthority.sessionStatus = structuredClone(after.sessionStatus);
+  changedInvalid.finalAuthority.runStatus.checkpointRecovery.runtimeInstanceId =
+    changedInvalid.finalAuthority.runStatus.checkpointRecovery.previousRuntimeInstanceId;
+  changedInvalid.finalAuthority.sessionStatus.checkpointRecovery.runtimeInstanceId =
+    changedInvalid.finalAuthority.sessionStatus.checkpointRecovery.previousRuntimeInstanceId;
+  assert.equal(committedRecoveryEventProof(
+    changedInvalid, proofBefore, childInput,
+  ).status, 'blocked');
+  for (const [name, mutate, status] of [
+    ['wrong source', recovery => { recovery.sourceCheckpointId = 'other'; }, 'blocked'],
+    ['unchanged runtime', recovery => {
+      recovery.runtimeInstanceId = recovery.previousRuntimeInstanceId;
+    }, 'failed'],
+    ['invalid fence', recovery => { recovery.executionFence = 9; }, 'failed'],
+  ]) {
+    const changed = structuredClone({
+      ...stableSnapshot,
+      finalAuthority: {
+        runStatus: structuredClone(after.runStatus),
+        sessionStatus: structuredClone(after.sessionStatus),
+      },
+    });
+    changed.runStatus = structuredClone(after.runStatus);
+    changed.sessionStatus = structuredClone(after.sessionStatus);
+    mutate(changed.runStatus.checkpointRecovery);
+    mutate(changed.sessionStatus.checkpointRecovery);
+    mutate(changed.finalAuthority.runStatus.checkpointRecovery);
+    mutate(changed.finalAuthority.sessionStatus.checkpointRecovery);
+    assert.equal(
+      committedRecoveryEventProof(changed, proofBefore, childInput).status,
+      status,
+      name,
+    );
+  }
 });
 
 test('before-capture evidence must match the captured decision and status surfaces', () => {
@@ -576,6 +797,12 @@ test('ready recovery passes only with the same pending gate and next-fence mater
   assert.throws(() => validateAfterObservation(
     inputAfter, before, after, gateAnswered,
   ), error => error.status === 'blocked' && caseExitCode(error.status) === 2);
+  const finalPhaseChange = structuredClone(final);
+  finalPhaseChange.runStatus.checkpointRecovery.phase = 'blocked';
+  finalPhaseChange.sessionStatus.checkpointRecovery.phase = 'blocked';
+  assert.throws(() => validateAfterObservation(
+    inputAfter, before, after, finalPhaseChange,
+  ), error => error.status === 'blocked' && /Recovery status changed/.test(error.message));
 });
 
 test('dry run validates the apphost hash without starting the apphost or writing evidence', async () => {
@@ -653,6 +880,10 @@ test('non-dry command flow reaches discovery and retains verifiable before evide
     assert.equal(savedCapture.input.sha256, createHash('sha256').update(retainedInputBytes).digest('hex'));
     assert.equal(savedCapture.commandsSha256, createHash('sha256').update(retainedCommandsBytes).digest('hex'));
     const retainedRecords = retainedCommandsBytes.toString('utf8').trimEnd().split(/\r?\n/).map(line => JSON.parse(line));
+    assert.ok(retainedRecords.every(record =>
+      !record.args.some(argument => /readCheckpointRecoveryEvents/.test(argument))));
+    assert.ok(!retainedRecords.some(record =>
+      record.id.includes('recovery-events')));
     const contextRecord = retainedRecords.find(record => record.id === 'initial-authorization-context');
     const contextArgs = buildCommands(input).find(command => command.id === 'rest-authorization-context').args;
     assert.deepEqual(contextRecord.args, contextArgs.map((value, index) => (
@@ -727,7 +958,10 @@ test('command flow distinguishes a stable lost gate from an intervening answer',
     initial.context = before.outputs.context;
 
     async function runObservation(outputName, first = initial, final = first) {
-      const records = beforeCaptureRecords({ outputs: first });
+      const records = beforeCaptureRecords(
+        { outputs: first },
+        { ...input, mode: 'after-observation', expectedRecoveryOperationId: actualOperationId },
+      );
       const replaceFinal = (id, value) => {
         const record = records.find(item => item.id === id);
         record.stdout = JSON.stringify({ status: 200, body: value });
@@ -847,6 +1081,7 @@ function childSnapshot({ after = false, effect = false, fixed = false } = {}) {
       previousExecutionFence: 9, executionFence: 10, previousRegistrationRevision: 1,
       previousRuntimeInstanceId: '00000000-0000-4000-8000-000000000201',
       runtimeInstanceId: '00000000-0000-4000-8000-000000000202',
+      registrationRevision: 1,
       recoveryMaterialMode: 'nativeCache', decisionStateVersion: 8,
     };
     data.runStatus.checkpointRecovery = recovery;
@@ -857,7 +1092,11 @@ function childSnapshot({ after = false, effect = false, fixed = false } = {}) {
 }
 
 function childRecords(initial, final = initial, kind = 'child-join') {
-  const commandInput = { ...input, caseKind: kind };
+  const commandInput = {
+    ...input,
+    caseKind: kind,
+    mode: initial.runStatus.checkpointRecovery ? 'after-observation' : 'before-capture',
+  };
   const records = beforeCaptureRecords({ outputs: initial }, commandInput);
   const commands = buildCommands(commandInput);
   if (initial.events.length > 1) {
@@ -901,6 +1140,7 @@ test('child and effect observations use retained commands and stable source-boun
     const { expectedGateRequestId: _, ...common } = example;
     let serial = 0;
     let retainedCommands = [];
+    let retainedArgs = [];
     async function run(kind, phase, fixture, beforeResult, final = fixture, inputChanges = {}, mutateRecords = () => {}) {
       const n = serial++;
       const value = { ...common, caseKind: kind, apphostSha256,
@@ -913,8 +1153,10 @@ test('child and effect observations use retained commands and stable source-boun
       const records = childRecords(fixture, final, kind);
       mutateRecords(records);
       let index = 0;
+      retainedArgs = [];
       const result = await runCase({ inputPath, outputPath, beforeEvidencePath: beforeResult?.capturePath },
         { AGENTWEAVER_CLI_PATH: cliPath }, (_cli, args) => {
+          retainedArgs.push(args);
           assert.ok(!args.some(item => /recoverRun|answerGate|cancelProjectRun/.test(item)));
           assert.ok(index < records.length, `Unexpected command: ${args.join(' ')}`);
           const { id: _id, args: _args, ...record } = records[index++];
@@ -935,6 +1177,15 @@ test('child and effect observations use retained commands and stable source-boun
 
     const before = await run('child-join', 'before-capture', childSnapshot());
     assert.equal(before.status, 'captured', before.reason);
+    const unstableBefore = childSnapshot();
+    const changedBeforeFinal = structuredClone(unstableBefore);
+    changedBeforeFinal.runStatus.checkpointRecovery = { operationId };
+    changedBeforeFinal.sessionStatus.checkpointRecovery = { operationId };
+    const changedBefore = await run(
+      'child-join', 'before-capture', unstableBefore, undefined, changedBeforeFinal,
+    );
+    assert.equal(changedBefore.status, 'blocked', changedBefore.reason);
+    assert.match(changedBefore.reason, /changed during observation/);
     const after = childSnapshot({ after: true });
     const passed = await run('child-join', 'after-observation', after, before);
     assert.equal(passed.status, 'passed', passed.reason);
@@ -942,8 +1193,106 @@ test('child and effect observations use retained commands and stable source-boun
     assert.equal(passed.members[0].outcome, 'pending');
     assert.equal(passed.fullPlanContentProof.status, 'passed');
     assert.equal(passed.dependencyGraphProof.status, 'passed');
-    assert.equal(passed.committedRecoveryEventProof.status, 'blocked');
+    assert.equal(passed.committedRecoveryEventProof.status, 'passed');
     assert.equal(passed.completedChildProof.status, 'blocked');
+    const pagedEvents = await run(
+      'child-join', 'after-observation', after, before, after, {}, records => {
+        const index = records.findIndex(record => record.id === 'initial-recovery-events-page-1');
+        const page = JSON.parse(records[index].stdout).body;
+        const ready = page.events.pop();
+        page.watermark = 4;
+        page.hasMore = true;
+        page.nextCursor = 'recovery-cursor';
+        records[index].stdout = JSON.stringify({ status: 200, body: page });
+        ready.sequence = 4;
+        records.splice(index + 1, 0, {
+          ...records[index],
+          id: 'initial-recovery-events-page-2',
+          stdout: JSON.stringify({
+            status: 200,
+            body: { ...page, events: [ready], nextCursor: null, hasMore: false },
+          }),
+        });
+      },
+    );
+    assert.equal(pagedEvents.status, 'passed', pagedEvents.reason);
+    assert.equal(pagedEvents.committedRecoveryEventProof.pagesRead, 2);
+    assert.equal(pagedEvents.committedRecoveryEventProof.witnessSequence, 4);
+    const eventPageTwo = retainedCommands.find(record =>
+      record.id === 'initial-recovery-events-page-2');
+    assert.ok(eventPageTwo.args.includes('cursor=[REDACTED]'));
+    assert.ok(retainedArgs.some(args => args.includes('cursor=recovery-cursor')));
+
+    const deniedEvents = await run(
+      'child-join', 'after-observation', after, before, after, {}, records => {
+        const index = records.findIndex(record => record.id === 'initial-recovery-events-page-1');
+        const envelope = JSON.parse(records[index].stdout);
+        envelope.body.events = [envelope.body.events[0]];
+        envelope.body.hasMore = true;
+        envelope.body.nextCursor = 'denied-next';
+        records[index].stdout = JSON.stringify(envelope);
+        records.splice(index + 1, 0, {
+          ...records[index], id: 'initial-recovery-events-page-2',
+          exitCode: 1, stdout: '',
+        });
+      },
+    );
+    assert.equal(deniedEvents.status, 'passed', deniedEvents.reason);
+    assert.equal(deniedEvents.committedRecoveryEventProof.status, 'blocked');
+
+    const changedProofBinding = await run(
+      'child-join', 'after-observation', after, before, after, {}, records => {
+        for (const id of [
+          'initial-final-run-status', 'initial-final-run-status-rest',
+          'initial-final-session-status', 'initial-final-session-status-rest',
+        ]) {
+          const record = records.find(item => item.id === id);
+          const envelope = JSON.parse(record.stdout);
+          envelope.body.checkpointRecovery.registrationRevision += 1;
+          record.stdout = JSON.stringify(envelope);
+        }
+      },
+    );
+    assert.equal(changedProofBinding.status, 'blocked', changedProofBinding.reason);
+    assert.match(changedProofBinding.reason, /changed during observation/);
+
+    const cappedEvents = await run(
+      'child-join', 'after-observation', after, before, after, {}, records => {
+        const index = records.findIndex(record => record.id === 'initial-recovery-events-page-1');
+        const template = records[index];
+        const envelope = JSON.parse(template.stdout);
+        const pages = Array.from({ length: 1000 }, (_, pageIndex) => ({
+          ...template,
+          id: `initial-recovery-events-page-${pageIndex + 1}`,
+          stdout: JSON.stringify({
+            ...envelope,
+            body: {
+              ...envelope.body,
+              events: [],
+              hasMore: true,
+              nextCursor: `cursor-${pageIndex + 1}`,
+            },
+          }),
+        }));
+        records.splice(index, 1, ...pages);
+      },
+    );
+    assert.equal(cappedEvents.status, 'passed', cappedEvents.reason);
+    assert.equal(cappedEvents.committedRecoveryEventProof.status, 'blocked');
+    assert.match(cappedEvents.committedRecoveryEventProof.reason, /1000-page/);
+
+    const contradictoryWitness = await run(
+      'child-join', 'after-observation', after, before, after, {}, records => {
+        const record = records.find(item => item.id === 'initial-recovery-events-page-1');
+        const envelope = JSON.parse(record.stdout);
+        envelope.body.events[1].status.runtimeInstanceId = randomUUID();
+        record.stdout = JSON.stringify(envelope);
+      },
+    );
+    assert.equal(contradictoryWitness.status, 'failed');
+    assert.equal(caseExitCode(contradictoryWitness.status), 1);
+    assert.equal(contradictoryWitness.completedChildProof.status, 'blocked');
+    assert.equal(contradictoryWitness.fullPlanContentProof.status, 'passed');
     const changedPlan = structuredClone(after);
     changedPlan.executionPlan.savedPlanFingerprint.sha256 = 'e'.repeat(64);
     const changedPlanResult = await run('child-join', 'after-observation', changedPlan, before);
@@ -1110,7 +1459,7 @@ test('child and effect observations use retained commands and stable source-boun
       assert.equal(result.effect.evidenceState, 'terminalReceiptRecorded');
       assert.equal(result.fullPlanContentProof.status, 'passed');
       assert.equal(result.dependencyGraphProof.status, 'passed');
-      assert.equal(result.committedRecoveryEventProof.status, 'blocked');
+      assert.equal(result.committedRecoveryEventProof.status, 'passed');
       assert.equal(result.physicalNoDuplicateProof.status, 'blocked');
       for (const duplicate of [
         { ...current.sessionStatus.executionRecovery.platformGateOperations[1] },
@@ -1351,6 +1700,20 @@ test('child and effect observations use retained commands and stable source-boun
     const pendingResult = await run('committed-effect', 'after-observation', pending, effectBefore);
     assert.equal(pendingResult.status, 'blocked');
     assert.match(pendingResult.reason, /awaits reconciliation/);
+    assert.equal(pendingResult.committedRecoveryEventProof.status, 'passed');
+    const pendingContradiction = await run(
+      'committed-effect', 'after-observation', pending, effectBefore, pending, {}, records => {
+        const record = records.find(item => item.id === 'initial-recovery-events-page-1');
+        const envelope = JSON.parse(record.stdout);
+        envelope.body.events[1].status.runtimeInstanceId = randomUUID();
+        record.stdout = JSON.stringify(envelope);
+      },
+    );
+    assert.equal(pendingContradiction.status, 'failed');
+    assert.equal(caseExitCode(pendingContradiction.status), 1);
+    assert.match(pendingContradiction.reason, /awaits reconciliation/);
+    assert.equal(pendingContradiction.committedRecoveryEventProof.status, 'failed');
+    assert.match(pendingContradiction.committedRecoveryEventProof.reason, /contradicts/);
 
     for (const [name, mutate, expected] of [
       ['source ID', x => { x.runStatus.checkpointRecovery.sourceCheckpointId = 'other'; }, 'blocked'],
@@ -1367,7 +1730,7 @@ test('child and effect observations use retained commands and stable source-boun
       ['empty material', x => { x.runStatus.checkpointRecovery.recoveryMaterialMode = ''; }, 'blocked'],
       ['unsupported material', x => { x.runStatus.checkpointRecovery.recoveryMaterialMode = 'other'; }, 'failed'],
       ['held', x => { x.runStatus.checkpointRecovery.dispatchHeld = true; }, 'failed'],
-      ['fence', x => { x.runStatus.checkpointRecovery.executionFence = 11; }, 'blocked'],
+      ['fence', x => { x.runStatus.checkpointRecovery.executionFence = 11; }, 'failed'],
       ['runtime', x => { x.runStatus.checkpointRecovery.runtimeInstanceId = x.runStatus.checkpointRecovery.previousRuntimeInstanceId; }, 'failed'],
       ['message', x => { x.sessionStatus.executionRecovery.pendingChildDispatches[0].messageId = randomUUID(); }, 'failed'],
       ['child identity', x => { x.sessionStatus.executionRecovery.pendingChildDispatches[0].childSessionId = 'different-child'; }, 'failed'],
