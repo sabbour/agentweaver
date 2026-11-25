@@ -1230,14 +1230,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             binding.ModelSelectionReference!), CancellationToken.None)).Job;
         await jobStore.TryBeginExecutionAsync(binding.ProjectId, conflictJob.JobId, CancellationToken.None);
         Assert.True(await jobStore.MarkSendAdmittedAsync(binding.ProjectId, conflictJob.JobId, CancellationToken.None));
-        var conflictDecisionId = Guid.NewGuid();
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var cmd = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".coordinator_decisions
-                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
-                 execution_fence, state_version, action_kind, idempotency_key, command_hash, decision_state, decision)
-            VALUES (@project, @run, @session, 'wf-gen-conflict-job', @decision, @issuer, @actor,
-                    @fence, 1, 'proof', 'wf-gen-conflict-job', repeat('a', 64), 'accepted', jsonb_build_object());
             INSERT INTO "{_schema}".maf_root_model_turn_admissions
                 (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
                  accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
@@ -1249,7 +1243,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             cmd.Parameters.AddWithValue("run", binding.RunId);
             cmd.Parameters.AddWithValue("session", binding.SessionId);
             cmd.Parameters.AddWithValue("request", conflictJob.NativeRequestId);
-            cmd.Parameters.AddWithValue("decision", conflictDecisionId);
+            cmd.Parameters.AddWithValue("decision", decisionId);
             cmd.Parameters.AddWithValue("issuer", binding.ActorIssuer);
             cmd.Parameters.AddWithValue("actor", binding.ActorId);
             cmd.Parameters.AddWithValue("tenant", binding.TenantId);

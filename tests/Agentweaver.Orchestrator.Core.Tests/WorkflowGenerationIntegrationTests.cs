@@ -973,7 +973,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         };
         var registrations = new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System);
         var zeroRegistration = await registrations.RegisterAsync(
-            zeroBinding, DateTimeOffset.UtcNow.AddMinutes(10), CancellationToken.None);
+            zeroBinding, _registration.ExpiresAt, CancellationToken.None);
         var grant = new RuntimeGrantReceipt(
             Guid.Parse("ad450d07-7317-45bc-88aa-df9b9be0e6f4"),
             zeroRegistration.RuntimeInstanceId,
