@@ -5,6 +5,9 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from '../../harness-shared/safe-jsonl.mjs';
+import {
+  TURN_READ_OPERATION, TURN_READ_ROUTE, buildTurnDigestCommand, hasTurnDigestHelp, supportsTurnDigest,
+} from './turn-digest.mjs';
 
 const CASE_ID = 'workflow-generation';
 const CASE_SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -211,7 +214,13 @@ export function buildCommands(input) {
   const run = runBoundArgs(input);
   return [
     { id: 'version', args: ['--version'] },
+    { id: 'help', args: ['--help'], metadataOnly: true },
     { id: 'api-operations', args: ['api', 'operations', ...target] },
+    {
+      id: 'api-describe-turn-digest',
+      args: ['api', 'describe', TURN_READ_OPERATION, ...target],
+      metadataOnly: true,
+    },
     { id: 'auth-status-run', args: ['auth', 'status', ...target, ...run] },
     { id: 'auth-status-project-writer', args: ['auth', 'status', ...target, '--scope', 'projects.admin'] },
     {
@@ -360,6 +369,18 @@ function requireSuccess(record, step) {
   if (record.error || record.exitCode !== 0 || record.signal || record.timedOut) {
     throw new Error(`${step} did not complete successfully.`);
   }
+}
+
+function processMetadata(record) {
+  return {
+    startedAt: record.startedAt,
+    completedAt: record.completedAt,
+    durationMs: record.durationMs,
+    exitCode: record.exitCode,
+    signal: record.signal,
+    timedOut: record.timedOut,
+    processError: Boolean(record.error),
+  };
 }
 
 function parseJson(text, step) {
@@ -618,7 +639,9 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   const resultHandle = await open(path.join(outputPath, 'result.json'), 'wx', 0o600);
   await resultHandle.writeFile('{"status":"incomplete"}\n', 'utf8');
   const startedAt = new Date().toISOString();
-  const generation = { status: 'not-started', jobId: null, artifactId: null, definitionSha256: null, failure: null };
+  const generation = {
+    status: 'not-started', jobId: null, artifactId: null, definitionSha256: null, storedTurn: null, failure: null,
+  };
   const cleanup = { status: 'not-required', failure: null };
   let status = 'failed';
   let failure = null;
@@ -642,8 +665,15 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   }
 
   async function execute(command) {
-    const record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
-    await logCommand(command, { arguments: safeArguments(command.args), ...record });
+    let record;
+    try {
+      record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    } catch {
+      throw new Error(`${command.id} could not start.`);
+    }
+    await logCommand(command, command.metadataOnly
+      ? processMetadata(record)
+      : { arguments: safeArguments(command.args), ...record });
     requireSuccess(record, command.id);
     return record;
   }
@@ -653,13 +683,7 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     const queueFull = isQueueFull(record);
     await logCommand(command, {
       attempt,
-      startedAt: record.startedAt,
-      completedAt: record.completedAt,
-      durationMs: record.durationMs,
-      exitCode: record.exitCode,
-      signal: record.signal,
-      timedOut: record.timedOut,
-      processError: Boolean(record.error),
+      ...processMetadata(record),
       ...(queueFull ? { code: QUEUE_FULL } : {}),
     });
     if (attempt === 1 && queueFull) return null;
@@ -668,17 +692,31 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   }
 
   try {
-    let operations = null;
     for (const command of buildCommands(input)) {
-      const record = await execute(command);
+      const record = await execute(command).catch(error => {
+        if (command.id === 'api-describe-turn-digest') {
+          throw new BlockedCaseError('The CLI could not describe the Gateway turn read contract.');
+        }
+        throw error;
+      });
       if (command.id === 'version') {
         version = record.stdout.trim();
         if (!version) throw new Error('The apphost did not report its version.');
+      } else if (command.id === 'help') {
+        if (!hasTurnDigestHelp(record.stdout)) {
+          throw new BlockedCaseError('The pinned apphost does not support turn content digests.');
+        }
       } else if (command.id === 'api-operations') {
-        operations = parseJson(record.stdout, command.id);
-        const available = new Set(Array.isArray(operations) ? operations.map(item => item.operationId) : []);
-        if (REQUIRED_OPERATIONS.some(operation => !available.has(operation))) {
+        const operations = parseJson(record.stdout, command.id);
+        const available = Array.isArray(operations) ? operations : [];
+        if (REQUIRED_OPERATIONS.some(operation => !available.some(item => item?.operationId === operation))
+          || !available.some(item => item?.operationId === TURN_READ_OPERATION
+            && item.method === 'GET' && item.path === TURN_READ_ROUTE)) {
           throw new BlockedCaseError('The Gateway does not expose every operation required by this case.');
+        }
+      } else if (command.id === 'api-describe-turn-digest') {
+        if (!supportsTurnDigest(parseJson(record.stdout, command.id))) {
+          throw new BlockedCaseError('The Gateway turn read contract does not support this case.');
         }
       } else if (command.id === 'auth-status-run') {
         const signedIn = validateAuthStatus(parseJson(record.stdout, command.id), input, true);
@@ -734,9 +772,27 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     const resultRecord = await execute(buildJobResultCommand(input, jobId));
     const result = apiResponse(resultRecord, 'readProjectWorkflowGenerationResult', 200);
     validateGenerationResult(result, completedEnvelope, input, selection);
-    generation.status = 'passed';
     generation.artifactId = result.artifactId;
     generation.definitionSha256 = result.definitionSha256;
+    const { assistantMaterial, outputSha256 } = result.nativeCompletion;
+    if (assistantMaterial?.kind !== 'turnContent'
+      || !isUuid(assistantMaterial.eventId) || !isSha256(assistantMaterial.contentSha256)) {
+      throw new Error('The workflow result does not contain a valid assistant reply receipt.');
+    }
+    const { projectId, runId: targetRunId, sessionId } = input.target;
+    const eventId = assistantMaterial.eventId;
+    const turnCommand = buildTurnDigestCommand([...targetArgs(input), ...runBoundArgs(input)], {
+      projectId, runId: targetRunId, sessionId, eventId,
+    });
+    const turn = parseJson((await execute({ ...turnCommand, metadataOnly: true })).stdout, turnCommand.id);
+    if (turn?.projectId !== projectId
+      || Object.keys(turn).length !== 5
+      || turn.runId !== targetRunId || turn.sessionId !== sessionId || turn.eventId !== eventId
+      || turn.contentSha256 !== assistantMaterial.contentSha256 || turn.contentSha256 !== outputSha256) {
+      throw new Error('The stored assistant reply does not match the workflow completion receipt.');
+    }
+    generation.storedTurn = { projectId, runId: targetRunId, sessionId, eventId, contentSha256: turn.contentSha256 };
+    generation.status = 'passed';
   } catch (error) {
     generation.status = error instanceof BlockedCaseError ? 'blocked' : 'failed';
     generation.failure = error.message;
@@ -785,7 +841,7 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     schemaVersion: 1,
     caseId: CASE_ID,
     runId,
-    scope: 'workflow generation through the public Gateway and disposable-run cleanup',
+    scope: 'workflow generation through the public Gateway and verified disposable-run cancellation',
     status,
     startedAt,
     completedAt: new Date().toISOString(),

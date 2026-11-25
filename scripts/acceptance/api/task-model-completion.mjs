@@ -5,6 +5,9 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from '../../harness-shared/safe-jsonl.mjs';
+import {
+  TURN_READ_OPERATION, TURN_READ_ROUTE, buildTurnDigestCommand, hasTurnDigestHelp, supportsTurnDigest,
+} from './turn-digest.mjs';
 
 const CASE_ID = 'task-model-completion';
 const CASE_SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -39,9 +42,6 @@ const TARGET_OPTIONS = [
   ['--api-audience', 'apiAudience'],
   ['--tenant-id', 'tenantId'],
 ];
-const TURN_READ_OPERATION = 'readSessionTurnContent';
-const TURN_READ_ROUTE = '/api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}';
-const TURN_DIGEST_FLAG = '--turn-content-sha256';
 const REQUIRED_OPERATIONS = [
   'getAuthorizationContext',
   'getRunSelection',
@@ -296,20 +296,6 @@ export function buildRunUsageCommand(input) {
   };
 }
 
-function buildTurnDigestCommand(input, completed) {
-  return {
-    id: 'api-invoke-turn-digest',
-    args: [
-      'api', 'invoke', TURN_READ_OPERATION, TURN_DIGEST_FLAG,
-      ...targetArgs(input), ...runBoundArgs(input),
-      '--path', `projectId=${input.target.projectId}`,
-      '--path', `runId=${input.target.runId}`,
-      '--path', `sessionId=${completed.childSessionId}`,
-      '--path', `eventId=${completed.assistantEventId}`,
-    ],
-  };
-}
-
 export function buildCleanupCommands(input, idempotencyKey) {
   return [
     {
@@ -372,27 +358,6 @@ function runCommand(cliPath, args, env, timeoutMs = COMMAND_TIMEOUT_MS) {
     timedOut: result.error?.code === 'ETIMEDOUT',
     error: result.error?.message ?? null,
   };
-}
-
-function requireTurnDigestContract(operation) {
-  const expected = new Set(['projectId', 'runId', 'sessionId', 'eventId']);
-  if (operation?.operationId !== TURN_READ_OPERATION
-    || operation.method !== 'GET' || operation.path !== TURN_READ_ROUTE
-    || operation.requestBody?.required === true
-    || !Array.isArray(operation.parameters)
-    || operation.responses?.['200']?.content?.['application/json']?.schema?.$ref
-      !== '#/components/schemas/SessionTurnContent'
-    || operation.parameters.some(parameter => {
-      if (parameter?.in === 'path') {
-        return parameter.required !== true || !expected.delete(parameter.name);
-      }
-      return parameter?.required === true
-        && !(parameter.in === 'header' && typeof parameter.name === 'string'
-          && parameter.name.toLowerCase() === 'x-agentweaver-tenant');
-    })
-    || expected.size !== 0) {
-    throw new BlockedCaseError('The Gateway turn read contract does not support this case.');
-  }
 }
 
 function requireSuccess(record, step) {
@@ -718,8 +683,7 @@ export async function runCase(options, env = process.env, dependencies = {}) {
         version = record.stdout.trim();
         if (!version) throw new Error('The apphost did not report its version.');
       } else if (command.id === 'help') {
-        const usage = `agentweaver api invoke ${TURN_READ_OPERATION} ${TURN_DIGEST_FLAG}`;
-        if (!record.stdout.split(/\r?\n/).some(line => line.trim() === usage)) {
+        if (!hasTurnDigestHelp(record.stdout)) {
           throw new BlockedCaseError('The pinned apphost does not support turn content digests.');
         }
       } else if (command.id === 'api-operations') {
@@ -732,7 +696,9 @@ export async function runCase(options, env = process.env, dependencies = {}) {
         }
       } else if (command.id === 'api-describe-turn-digest') {
         const description = parseJson(record.stdout, command.id);
-        requireTurnDigestContract(description);
+        if (!supportsTurnDigest(description)) {
+          throw new BlockedCaseError('The Gateway turn read contract does not support this case.');
+        }
       } else if (command.id === 'auth-status-run') {
         if (!validateAuthStatus(parseJson(record.stdout, command.id), input, true)) {
           throw new BlockedCaseError('Sign in with the run-bound projects.orchestrator identity before this case.');
@@ -784,7 +750,12 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     if (completed === null) throw new Error('The task dispatch did not complete before its deadline.');
     dispatch.task = completed;
 
-    const turnCommand = buildTurnDigestCommand(input, completed);
+    const turnCommand = buildTurnDigestCommand([...targetArgs(input), ...runBoundArgs(input)], {
+      projectId: input.target.projectId,
+      runId: input.target.runId,
+      sessionId: completed.childSessionId,
+      eventId: completed.assistantEventId,
+    });
     const turn = parseJson((await execute(turnCommand)).stdout, turnCommand.id);
     if (turn?.projectId !== input.target.projectId
       || Object.keys(turn).length !== 5
