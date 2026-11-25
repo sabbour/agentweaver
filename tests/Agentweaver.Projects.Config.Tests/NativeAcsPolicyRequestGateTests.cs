@@ -56,7 +56,9 @@ public sealed class NativeAcsPolicyRequestGateTests
             .ToArray();
         var expected = new[]
         {
+            (Name: "ListPlatformGovernanceDecisions", Method: "GET"),
             (Name: "ListPlatformNativeAcsPolicyRevisions", Method: "GET"),
+            (Name: "ListProjectGovernanceDecisions", Method: "GET"),
             (Name: "ListProjectNativeAcsPolicies", Method: "GET"),
             (Name: "ListProjectNativeAcsPolicyRevisions", Method: "GET"),
             (Name: "ReadPlatformNativeAcsPolicy", Method: "GET"),
