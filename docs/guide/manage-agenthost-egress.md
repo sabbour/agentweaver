@@ -94,7 +94,9 @@ Each successful page shows:
 > Coverage unavailable. This view shows stored records only.
 
 The table shows `host`, `address`, `port`, `verdict`, `firstSeen`, `lastSeen`,
-and `count`. An empty successful page says **No stored records**. A failed load
+and `count`. **First seen** and **Last seen** show UTC timestamps exactly as the
+API returns them, including fractional seconds when present.
+An empty successful page says **No stored records**. A failed load
 shows the request error and keeps it separate from an empty result. Select
 **Retry** for a transient failure.
 

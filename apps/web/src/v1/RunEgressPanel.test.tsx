@@ -159,6 +159,41 @@ describe('RunEgressPanel', () => {
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 
+  it('shows the exact first and last timestamps in server order', async () => {
+    mocks.readRunEgress.mockResolvedValue(page([
+      {
+        ...record,
+        firstSeen: '2026-11-20T10:00:00.123403+00:00',
+        lastSeen: '2026-11-20T10:00:00.123404+00:00',
+      },
+      {
+        ...record,
+        firstSeen: '2026-11-20T10:00:00.123401+00:00',
+        lastSeen: '2026-11-20T10:00:00.123402+00:00',
+      },
+    ]));
+    render(<RunEgressPanel projectId="project-1" runId="run-1" />);
+
+    const table = await screen.findByRole('table', { name: 'Stored run egress' });
+    const [header, first, second] = within(table).getAllByRole('row');
+    const labels = within(header).getAllByRole('columnheader').map((cell) => cell.textContent);
+    const timestamps = (row: HTMLElement) => {
+      const cells = within(row).getAllByRole('cell');
+      return ['First seen', 'Last seen'].map((label) => cells[labels.indexOf(label)]?.textContent);
+    };
+    expect(timestamps(first)).toEqual([
+      '2026-11-20T10:00:00.123403+00:00',
+      '2026-11-20T10:00:00.123404+00:00',
+    ]);
+    expect(timestamps(second)).toEqual([
+      '2026-11-20T10:00:00.123401+00:00',
+      '2026-11-20T10:00:00.123402+00:00',
+    ]);
+    const region = screen.getByRole('region', { name: 'Stored run egress records' });
+    expect(region.tabIndex).toBe(0);
+    expect(within(region).getByRole('table', { name: 'Stored run egress' })).toBe(table);
+  });
+
   it('does not send a page 2 read when a late confirmation returns the original tenant', async () => {
     let resolveOriginalTenant!: (value: ProjectAuthorizationContextResponse) => void;
     const pendingOriginalTenant = new Promise<ProjectAuthorizationContextResponse>((resolve) => {

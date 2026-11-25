@@ -53,11 +53,11 @@ export async function startStaticServer({ includeGateway = true } = {}) {
 }
 
 /**
- * Builds a fake access token. The token text carries its run binding
- * (`tok.<project>.<run>`) so the fake Gateway can check it without a real
- * signature. An unbound token is `tok.unbound`.
+ * Builds a fake token for a project or run. An unbound token is `tok.unbound`.
  */
-const tokenFor = (binding) => binding ? `tok.${binding.projectId}.${binding.runId}` : 'tok.unbound';
+const tokenFor = (binding) => binding
+  ? `tok.${binding.projectId}${binding.runId ? `.${binding.runId}` : ''}`
+  : 'tok.unbound';
 /** Reads the run binding back out of an Authorization header, or null for an unbound or missing token. */
 function bindingOf(header) {
   const [, projectId, runId] = (header ?? '').replace(/^Bearer /, '').split('.');
