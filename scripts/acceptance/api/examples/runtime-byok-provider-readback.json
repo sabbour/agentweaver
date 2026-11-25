@@ -1,0 +1,25 @@
+{
+  "caseId": "runtime-byok-provider-readback",
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "targetCommit": "0000000000000000000000000000000000000000",
+  "apphostSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "approvedNonProduction": true,
+  "expectedActorId": "ACTOR_ID",
+  "target": {
+    "gatewayUrl": "https://gateway.example.invalid",
+    "brokerIssuer": "https://identity.example.invalid/issuer-path",
+    "clientId": "agentweaver-cli",
+    "apiAudience": "https://gateway.example.invalid",
+    "tenantId": "TENANT_ID"
+  },
+  "expectedRequest": {
+    "requestId": "00000000-0000-4000-8000-000000000001",
+    "tenantId": "REQUEST_TENANT_ID",
+    "scope": "platform",
+    "projectId": null,
+    "providerId": "PROVIDER_ID",
+    "providerRevision": 1,
+    "host": "provider.example.invalid",
+    "port": 443
+  }
+}

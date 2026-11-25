@@ -50,6 +50,17 @@
       "coveredOperations": [
         "dispatchCoordinatorExecution"
       ]
+    },
+    {
+      "id": "cp-runtime-byok-egress",
+      "title": "Read back a pending BYOK model-provider host request through the native CLI",
+      "caseScript": "scripts/acceptance/api/runtime-byok-provider-readback.mjs",
+      "watchRoutePrefixes": [
+        "/platform/egress/destinations"
+      ],
+      "coveredOperations": [
+        "listPlatformEgressDestinations"
+      ]
     }
   ],
   "knownGaps": []
