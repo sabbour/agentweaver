@@ -6,7 +6,7 @@
 // source-bound plan describing the semver bump each touched component will receive. Planning never
 // mutates the repository; `apply.mjs` consumes the plan it produces. See releases/README.md.
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, readFileSync as nativeReadFile } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,10 @@ import { collectChangesetEntries, readInitialBaseline } from './changesets.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BUMP_RANK = { patch: 0, minor: 1, major: 2 };
+const MAX_BATCH_BYTES = 1024 * 1024;
+const MAX_BATCH_RECORDS = 128;
 const sha = /^[a-f0-9]{40}$/;
+const changesetPath = /^\.changeset\/[a-z0-9][a-z0-9-]*\.md$/;
 
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);
@@ -23,6 +26,50 @@ function fail(location, message) {
 
 function defaultGit(root) {
   return (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+function defaultReadSource(root, sourceSha, file) {
+  return execFileSync('git', ['show', `${sourceSha}:${file}`],
+    { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+function parseBatchOutput(output, requestCount) {
+  const frames = [];
+  let offset = 0;
+  for (let index = 0; index < requestCount; index += 1) {
+    const headerEnd = output.indexOf(10, offset);
+    if (headerEnd < 0) return;
+    const header = output.subarray(offset, headerEnd).toString('latin1');
+    const match = /^([a-f0-9]{40}) blob (0|[1-9][0-9]*)$/.exec(header);
+    if (!match) return;
+    const length = Number(match[2]);
+    if (!Number.isSafeInteger(length) || length > MAX_BATCH_BYTES) return;
+    const start = headerEnd + 1;
+    const end = start + length;
+    if (end >= output.length || output[end] !== 10) return;
+    frames.push({ start, end });
+    offset = end + 1;
+  }
+  return offset === output.length ? frames : undefined;
+}
+
+function batchReadSource(root, sourceSha, files, batchSpawn) {
+  const expressions = files.map((file) => `${sourceSha}:${file}`);
+  const result = batchSpawn('git', ['cat-file', '--batch'], {
+    cwd: root,
+    input: expressions.join('\n') + '\n',
+    maxBuffer: MAX_BATCH_BYTES,
+    shell: false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  if (result.error || result.signal !== null || result.status !== 0 ||
+      !Buffer.isBuffer(result.stderr) || result.stderr.length !== 0 ||
+      !Buffer.isBuffer(result.stdout) || result.stdout.length > MAX_BATCH_BYTES) {
+    return;
+  }
+  const frames = parseBatchOutput(result.stdout, files.length);
+  return frames ? { output: result.stdout, frames } : undefined;
 }
 
 /**
@@ -82,11 +129,15 @@ export function planChecksum({ schemaVersion, sourceSha, components, initialBase
  * Builds the component version changes from a validated manifest and pending changesets.
  * Returns a source-bound plan; invalid coverage, stale source, or inconsistent baseline evidence throws.
  */
-export function createPlan(manifest, {
-  root = repositoryRoot, readdirSync, readFileSync: readFile, git = defaultGit(root),
-  readSource = (sourceSha, file) => execFileSync('git', ['show', `${sourceSha}:${file}`],
-    { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
-} = {}) {
+export function createPlan(manifest, options = {}) {
+  const {
+    root = repositoryRoot, readdirSync, readFileSync: readFile, git = defaultGit(root),
+    batchSpawnSync = spawnSync,
+  } = options;
+  const suppliedReadSource = options.readSource;
+  const readSource = suppliedReadSource === undefined
+    ? (options.readLegacySource ?? ((sourceSha, file) => defaultReadSource(root, sourceSha, file)))
+    : suppliedReadSource;
   const ids = new Set(manifest.components.map(({ id }) => id));
   const records = collectChangesetEntries(root, ids, { readdirSync, readFileSync: readFile });
 
@@ -119,15 +170,58 @@ export function createPlan(manifest, {
       fail(initialBaseline.path, 'baseline record bytes differ from source HEAD; commit edits or use a byte-preserving checkout');
     }
   }
-  for (const file of records.keys()) {
+  const compareSource = (file, source) => {
+    if (source !== (readFile ?? nativeReadFile)(path.join(root, file), 'utf8')) {
+      fail(file, 'changeset bytes differ from source HEAD; commit edits or use a byte-preserving checkout');
+    }
+  };
+  const readAndCompareLegacy = (file) => {
     let source;
     try {
       source = readSource(sourceSha, file);
     } catch (error) {
       fail(file, `missing committed source changeset: ${error.message}`);
     }
-    if (source !== (readFile ?? nativeReadFile)(path.join(root, file), 'utf8')) {
-      fail(file, 'changeset bytes differ from source HEAD; commit edits or use a byte-preserving checkout');
+    compareSource(file, source);
+  };
+  const files = [...records.keys()];
+  if (suppliedReadSource !== undefined) {
+    for (const file of files) readAndCompareLegacy(file);
+  } else {
+    for (let index = 0; index < files.length;) {
+      const chunk = [];
+      let inputBytes = 0;
+      while (index < files.length && chunk.length < MAX_BATCH_RECORDS) {
+        const file = files[index];
+        if (!changesetPath.test(file)) {
+          fail(file, 'expected a safe .changeset/*.md record name');
+        }
+        const expressionBytes = Buffer.byteLength(`${sourceSha}:${file}\n`, 'utf8');
+        if (expressionBytes > MAX_BATCH_BYTES) break;
+        if (chunk.length > 0 && inputBytes + expressionBytes > MAX_BATCH_BYTES) break;
+        chunk.push(file);
+        inputBytes += expressionBytes;
+        index += 1;
+      }
+      if (chunk.length === 0) {
+        readAndCompareLegacy(files[index]);
+        index += 1;
+        continue;
+      }
+      let batch;
+      try {
+        batch = batchReadSource(root, sourceSha, chunk, batchSpawnSync);
+      } catch {
+        batch = undefined;
+      }
+      if (!batch) {
+        for (const file of chunk) readAndCompareLegacy(file);
+        continue;
+      }
+      for (const [frameIndex, file] of chunk.entries()) {
+        const frame = batch.frames[frameIndex];
+        compareSource(file, batch.output.subarray(frame.start, frame.end).toString('utf8'));
+      }
     }
   }
 
