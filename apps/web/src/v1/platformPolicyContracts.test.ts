@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPlatformPolicyValidationArtifact,
+  comparePlatformPolicyDraft,
   createPlatformPolicyTextBuffer,
+  escapePlatformPolicyInvisibleCharacters,
   parsePlatformPolicyRevisionPage,
   parsePlatformPolicyRevisionReadResult,
   parsePlatformPolicyValidationRequestFile,
@@ -46,6 +48,111 @@ function history(overrides: Record<string, unknown> = {}) {
 }
 
 describe('Platform Policy response contracts', () => {
+  it('compares exact paths and reports additions, removals, and renames in path order', () => {
+    const saved = {
+      manifest: 'name: saved\n',
+      files: [
+        { relativePath: 'rules/z.rego', content: 'old' },
+        { relativePath: 'rules/rename.rego', content: 'same' },
+      ],
+      contentSha256: hash,
+    };
+    const comparison = comparePlatformPolicyDraft(
+      saved,
+      createPlatformPolicyTextBuffer('name: saved\n'),
+      [
+        { relativePath: 'rules/z.rego', content: createPlatformPolicyTextBuffer('') },
+        { relativePath: 'rules/new.rego', content: createPlatformPolicyTextBuffer('new') },
+        { relativePath: 'rules/renamed.rego', content: createPlatformPolicyTextBuffer('same') },
+      ],
+    );
+    expect(comparison.files.map(({ relativePath, change }) => [relativePath, change]))
+      .toEqual([
+        ['rules/new.rego', 'added'],
+        ['rules/rename.rego', 'removed'],
+        ['rules/renamed.rego', 'added'],
+        ['rules/z.rego', 'changed'],
+      ]);
+  });
+
+  it('distinguishes an empty file from a missing file and ignores file order', () => {
+    const saved = {
+      manifest: 'same',
+      files: [
+        { relativePath: 'rules/b.rego', content: 'b' },
+        { relativePath: 'rules/a.rego', content: '' },
+      ],
+      contentSha256: hash,
+    };
+    expect(comparePlatformPolicyDraft(
+      saved,
+      createPlatformPolicyTextBuffer('same'),
+      [
+        { relativePath: 'rules/a.rego', content: createPlatformPolicyTextBuffer('') },
+        { relativePath: 'rules/b.rego', content: createPlatformPolicyTextBuffer('b') },
+      ],
+    )).toEqual({ manifest: null, files: [] });
+    expect(comparePlatformPolicyDraft(
+      saved,
+      createPlatformPolicyTextBuffer('same'),
+      [{ relativePath: 'rules/b.rego', content: createPlatformPolicyTextBuffer('b') }],
+    ).files).toEqual([{
+      relativePath: 'rules/a.rego',
+      change: 'removed',
+      savedContent: '',
+      draftContent: null,
+    }]);
+  });
+
+  it('compares serialized BOMs, line endings, and the final newline', () => {
+    const saved = {
+      manifest: '\uFEFFname: saved\r\n',
+      files: [{ relativePath: 'rules/a.rego', content: 'allow: true\r\n' }],
+      contentSha256: hash,
+    };
+    const comparison = comparePlatformPolicyDraft(
+      saved,
+      createPlatformPolicyTextBuffer('name: saved\r\n'),
+      [{
+        relativePath: 'rules/a.rego',
+        content: createPlatformPolicyTextBuffer('allow: true'),
+      }],
+    );
+    expect(comparison.manifest).toEqual({
+      savedContent: '\uFEFFname: saved\r\n',
+      draftContent: 'name: saved\r\n',
+    });
+    expect(comparison.files[0]?.change).toBe('changed');
+  });
+
+  it('reuses draft path, UTF-8, and size checks while comparing', () => {
+    const saved = {
+      manifest: '',
+      files: [],
+      contentSha256: hash,
+    };
+    const content = createPlatformPolicyTextBuffer('same');
+    expect(() => comparePlatformPolicyDraft(saved, createPlatformPolicyTextBuffer(''), [
+      { relativePath: '../invalid', content },
+    ])).toThrow('valid relative path');
+    expect(() => comparePlatformPolicyDraft(saved, createPlatformPolicyTextBuffer(''), [
+      { relativePath: 'rules/a.rego', content },
+      { relativePath: 'rules/a.rego', content },
+    ])).toThrow('must be unique');
+    expect(() => comparePlatformPolicyDraft(saved, createPlatformPolicyTextBuffer(''), [
+      {
+        relativePath: 'rules/large.rego',
+        content: createPlatformPolicyTextBuffer('x'.repeat(262_145)),
+      },
+    ])).toThrow('262,144 bytes or smaller');
+  });
+
+  it('escapes backslashes and invisible characters without creating ambiguous markers', () => {
+    expect(escapePlatformPolicyInvisibleCharacters(
+      'a \\n\t \r\n\uFEFF',
+    )).toBe('a\\x20\\\\n\\t\\x20\\r\\n\\uFEFF');
+  });
+
   it('preserves BOMs and mixed line endings while building the canonical validation hash', async () => {
     const manifest = createPlatformPolicyTextBuffer('\uFEFFname: x\r\n');
     const content = createPlatformPolicyTextBuffer('allow=true\r');

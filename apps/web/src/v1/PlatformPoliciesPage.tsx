@@ -1,10 +1,166 @@
-import { Badge, Button, Field, Input, Text } from '@fluentui/react-components';
+import { Badge, Button, Checkbox, Field, Input, Text } from '@fluentui/react-components';
+import { useState } from 'react';
 import { usePlatformPoliciesController } from './PlatformPoliciesController';
 import { PlatformPolicyTextarea } from './PlatformPolicyTextarea';
 import { PageHeading } from './pageParts';
+import {
+  comparePlatformPolicyDraft,
+  escapePlatformPolicyInvisibleCharacters,
+} from './platformPolicyContracts';
+import type {
+  PlatformPolicyComparison,
+  PlatformPolicyComparisonItem,
+  PlatformPolicyRevisionReadResult,
+} from './platformPolicyContracts';
+import type { PlatformPoliciesControllerValue } from './PlatformPoliciesController';
 
 function createdAtLabel(value: string): string {
   return new Date(value).toLocaleString();
+}
+
+function PlatformPolicyComparisonControls({
+  detail,
+  draftManifest,
+  draftFiles,
+}: Pick<PlatformPoliciesControllerValue, 'draftManifest' | 'draftFiles'> & {
+  detail: PlatformPolicyRevisionReadResult;
+}) {
+  const [comparison, setComparison] = useState<{
+    revision: number;
+    contentSha256: string;
+    result: PlatformPolicyComparison;
+  } | null>(null);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [selectedComparisonItem, setSelectedComparisonItem] = useState('');
+  const [showInvisible, setShowInvisible] = useState(false);
+
+  const compareDraft = () => {
+    try {
+      const result = comparePlatformPolicyDraft(
+        detail.artifact,
+        draftManifest,
+        draftFiles.map(({ relativePath, content }) => ({ relativePath, content })),
+      );
+      const firstItem = result.manifest
+        ? 'item:manifest'
+        : result.files[0]
+          ? `file:${result.files[0].relativePath}`
+          : '';
+      setComparison({
+        revision: detail.revision,
+        contentSha256: detail.contentSha256,
+        result,
+      });
+      setComparisonError(null);
+      setSelectedComparisonItem(firstItem);
+      setShowInvisible(false);
+    } catch (reason) {
+      setComparison(null);
+      setSelectedComparisonItem('');
+      setComparisonError(reason instanceof Error
+        ? reason.message
+        : 'The draft could not be compared.');
+    }
+  };
+
+  const comparisonItems: Array<{
+    key: string;
+    label: string;
+    savedContent: string | null;
+    draftContent: string | null;
+  }> = comparison
+    ? [
+        ...(comparison.result.manifest ? [{
+          key: 'item:manifest',
+          label: 'Manifest — Changed',
+          savedContent: comparison.result.manifest.savedContent,
+          draftContent: comparison.result.manifest.draftContent,
+        }] : []),
+        ...comparison.result.files.map((item: PlatformPolicyComparisonItem) => ({
+          key: `file:${item.relativePath}`,
+          label: `${item.relativePath} — ${item.change[0].toUpperCase()}${item.change.slice(1)}`,
+          savedContent: item.savedContent,
+          draftContent: item.draftContent,
+        })),
+      ]
+    : [];
+  const selectedComparison = comparisonItems.find((item) =>
+    item.key === selectedComparisonItem);
+  const displayComparisonText = (value: string) =>
+    showInvisible ? escapePlatformPolicyInvisibleCharacters(value) : value;
+
+  return (
+    <div className="v1-policy-compare-control">
+      <Button appearance="secondary" data-platform-policy-compare onClick={compareDraft}>
+        Compare draft
+      </Button>
+      {comparisonError && <p role="alert">{comparisonError}</p>}
+      {comparison && (
+        <section
+          className="v1-policy-comparison"
+          aria-label={`Draft comparison with revision ${comparison.revision}`}
+          data-platform-policy-comparison
+        >
+          <h3>Compare draft with revision {comparison.revision}</h3>
+          <p><strong>Content hash:</strong> <code>{comparison.contentSha256}</code></p>
+          {comparisonItems.length === 0 ? (
+            <p>No changes from revision {comparison.revision}.</p>
+          ) : (
+            <>
+              <Field label="Changed item">
+                <select
+                  className="v1-select"
+                  aria-label="Changed Policy item"
+                  value={selectedComparisonItem}
+                  onChange={(event) => setSelectedComparisonItem(event.currentTarget.value)}
+                >
+                  {comparisonItems.map((item) => (
+                    <option key={item.key} value={item.key}>{item.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Checkbox
+                label="Show invisible characters"
+                checked={showInvisible}
+                onChange={(_, data) => setShowInvisible(Boolean(data.checked))}
+              />
+              {showInvisible && (
+                <p className="v1-muted">
+                  Key: {'\\x20'} space, {'\\t'} tab, {'\\r'} carriage return,
+                  {' '}
+                  {'\\n'} newline, {'\\uXXXX'} other Unicode.
+                </p>
+              )}
+              {selectedComparison && (
+                <div className="v1-policy-comparison-sides">
+                  <section aria-label="Saved comparison source">
+                    <h4>Saved</h4>
+                    {selectedComparison.savedContent === null ? (
+                      <p>Not in this revision</p>
+                    ) : (
+                      <pre className="v1-policy-source">
+                        {displayComparisonText(selectedComparison.savedContent)}
+                      </pre>
+                    )}
+                  </section>
+                  <section aria-label="Draft comparison source">
+                    <h4>Draft</h4>
+                    {selectedComparison.draftContent === null ? (
+                      <p>Not in the draft</p>
+                    ) : (
+                      <pre className="v1-policy-source">
+                        {displayComparisonText(selectedComparison.draftContent)}
+                      </pre>
+                    )}
+                  </section>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+    </div>
+  );
 }
 
 export function PlatformPoliciesPage() {
@@ -125,6 +281,18 @@ export function PlatformPoliciesPage() {
             <Button appearance="secondary" onClick={policy.loadDraftFromSavedSource}>
               Load viewed revision into draft
             </Button>
+          )}
+          {policy.scope === 'platform' && (
+            policy.detail ? (
+              <PlatformPolicyComparisonControls
+                key={`${policy.detail.policyId}:${policy.detail.revision}:${policy.draftGeneration}`}
+                detail={policy.detail}
+                draftManifest={policy.draftManifest}
+                draftFiles={policy.draftFiles}
+              />
+            ) : (
+              <p>Select View on a saved revision to compare.</p>
+            )
           )}
           <Field label="Manifest">
             <PlatformPolicyTextarea

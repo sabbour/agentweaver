@@ -73,6 +73,23 @@ export interface PlatformPolicyRevisionReadResult {
   createdAt: string;
 }
 
+export type PlatformPolicyComparisonChange = 'added' | 'removed' | 'changed';
+
+export interface PlatformPolicyComparisonItem {
+  relativePath: string;
+  change: PlatformPolicyComparisonChange;
+  savedContent: string | null;
+  draftContent: string | null;
+}
+
+export interface PlatformPolicyComparison {
+  manifest: {
+    savedContent: string;
+    draftContent: string;
+  } | null;
+  files: PlatformPolicyComparisonItem[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -282,10 +299,32 @@ export async function buildPlatformPolicyValidationArtifact(
   manifest: PlatformPolicyTextBuffer,
   files: { relativePath: string; content: PlatformPolicyTextBuffer }[],
 ): Promise<PlatformPolicyArtifactRequest> {
+  const encoded = encodePlatformPolicyArtifact(manifest, files);
+  const sortedFiles = [...encoded.files].sort((left, right) =>
+    left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0);
+  const contentSha256 = await hashPlatformPolicyArtifact(
+    encoded.manifestBytes,
+    sortedFiles.map(({ pathBytes, bytes }) => ({ pathBytes, bytes })),
+  );
+  return {
+    manifestBytes: Array.from(encoded.manifestBytes),
+    files: encoded.files.map(({ relativePath, bytes }) => ({
+      relativePath,
+      bytes: Array.from(bytes),
+    })),
+    contentSha256,
+  };
+}
+
+function encodePlatformPolicyArtifact(
+  manifest: PlatformPolicyTextBuffer,
+  files: { relativePath: string; content: PlatformPolicyTextBuffer }[],
+) {
   if (files.length > MAX_FILES)
     throw new Error('A Platform Policy can contain up to 64 files.');
 
-  const manifestBytes = encodeUtf8(serializePlatformPolicyTextBuffer(manifest));
+  const manifestText = serializePlatformPolicyTextBuffer(manifest);
+  const manifestBytes = encodeUtf8(manifestText);
   if (manifestBytes.byteLength > MAX_MANIFEST_BYTES)
     throw new Error('The Platform Policy manifest exceeds 65,536 bytes.');
 
@@ -298,17 +337,16 @@ export async function buildPlatformPolicyValidationArtifact(
       throw new Error('Platform Policy file paths must be unique.');
     seenPaths.add(file.relativePath);
     const pathBytes = encodeUtf8(file.relativePath);
-    const bytes = encodeUtf8(serializePlatformPolicyTextBuffer(file.content));
+    const text = serializePlatformPolicyTextBuffer(file.content);
+    const bytes = encodeUtf8(text);
     if (bytes.byteLength > MAX_FILE_BYTES)
       throw new Error('Each Platform Policy file must be 262,144 bytes or smaller.');
     totalBytes += bytes.byteLength;
     if (totalBytes > MAX_ARTIFACT_BYTES)
       throw new Error('The Platform Policy artifact exceeds 1,048,576 bytes.');
-    return { relativePath: file.relativePath, pathBytes, bytes };
+    return { relativePath: file.relativePath, pathBytes, bytes, text };
   });
 
-  const sortedFiles = [...encodedFiles].sort((left, right) =>
-    left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0);
   for (const path of seenPaths) {
     const segments = path.split('/');
     for (let index = 1; index < segments.length; index += 1) {
@@ -317,18 +355,65 @@ export async function buildPlatformPolicyValidationArtifact(
         throw new Error('Platform Policy file paths cannot conflict with directories.');
     }
   }
-  const contentSha256 = await hashPlatformPolicyArtifact(
-    manifestBytes,
-    sortedFiles.map(({ pathBytes, bytes }) => ({ pathBytes, bytes })),
-  );
+  return { manifestText, manifestBytes, files: encodedFiles };
+}
+
+export function comparePlatformPolicyDraft(
+  saved: PlatformPolicyArtifactText,
+  manifest: PlatformPolicyTextBuffer,
+  files: { relativePath: string; content: PlatformPolicyTextBuffer }[],
+): PlatformPolicyComparison {
+  const encoded = encodePlatformPolicyArtifact(manifest, files);
+  const savedFiles = new Map(saved.files.map((file) => [file.relativePath, file.content]));
+  const draftFiles = new Map(encoded.files.map((file) => [file.relativePath, file.text]));
+  const paths = [...new Set([...savedFiles.keys(), ...draftFiles.keys()])].sort();
+  const comparisonFiles: PlatformPolicyComparisonItem[] = [];
+  for (const relativePath of paths) {
+    const savedContent = savedFiles.get(relativePath);
+    const draftContent = draftFiles.get(relativePath);
+    if (savedContent !== draftContent) {
+      comparisonFiles.push({
+        relativePath,
+        change: savedContent === undefined
+          ? 'added'
+          : draftContent === undefined
+            ? 'removed'
+            : 'changed',
+        savedContent: savedContent ?? null,
+        draftContent: draftContent ?? null,
+      });
+    }
+  }
   return {
-    manifestBytes: Array.from(manifestBytes),
-    files: encodedFiles.map(({ relativePath, bytes }) => ({
-      relativePath,
-      bytes: Array.from(bytes),
-    })),
-    contentSha256,
+    manifest: saved.manifest === encoded.manifestText
+      ? null
+      : { savedContent: saved.manifest, draftContent: encoded.manifestText },
+    files: comparisonFiles,
   };
+}
+
+export function escapePlatformPolicyInvisibleCharacters(value: string): string {
+  let output = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '\\') output += '\\\\';
+    else if (character === ' ') output += '\\x20';
+    else if (character === '\t') output += '\\t';
+    else if (character === '\r') output += '\\r';
+    else if (character === '\n') output += '\\n';
+    else {
+      const code = character.codePointAt(0) ?? 0;
+      if (code >= 0x21 && code <= 0x7e) output += character;
+      else if (code <= 0xffff)
+        output += `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`;
+      else {
+        output += `\\u${(character.charCodeAt(0)).toString(16).toUpperCase().padStart(4, '0')}`;
+        output += `\\u${(value.charCodeAt(index + 1)).toString(16).toUpperCase().padStart(4, '0')}`;
+        index += 1;
+      }
+    }
+  }
+  return output;
 }
 
 async function hashPlatformPolicyArtifact(

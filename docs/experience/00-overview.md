@@ -32,7 +32,7 @@ Gateway. The Gateway forwards each request to its owner.
 3. [Choose or create a project](./projects.md).
 4. [Edit project settings](./configuration.md), [manage Skills](./skills.md),
    [connect accounts](./connections.md), or
-    [read and validate a Platform Policy draft](../guide/read-platform-policies.md).
+    [read, compare, and validate a Platform Policy draft](../guide/read-platform-policies.md).
 5. [Start a session](./runs-sessions.md#start-a-new-chat) with **New session**,
    or open a run from **Sessions** or a project's **Orchestrations** page.
 6. [Inspect sessions and respond to requests](./runs-sessions.md).
@@ -61,7 +61,7 @@ first, and load more rows with **Load more**.
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
 | `/platform-settings` | Read the status of the 16 platform component areas as a tenant or platform administrator. Read [provider host requests across tenants](../guide/web-client.md#read-provider-host-requests) as a platform administrator. |
-| `/policies` | Read saved Platform Policy source and revisions, edit a raw local draft, and validate it without saving. |
+| `/policies` | Read saved Platform Policy source and revisions, compare a local draft with the viewed revision, and validate without saving. |
 | `/projects/:projectId/runs/:runId` | Use the Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings tabs. |
 
 The run page's `view` query accepts `chat`, `topology`, `approvals`,
@@ -108,8 +108,9 @@ the browser URL.
 Platform Policies uses the confirmed tenant ID in each history, revision, and
 validation request. The Gateway checks current access for each operation. An
 empty history means the read is allowed and no policy is saved. The page shows
-saved source, not runtime enforcement. Draft validation does not save a policy
-or change runtime enforcement.
+saved source, not runtime enforcement. Draft comparison uses the exact viewed
+revision and no additional request. It closes while access is rechecked.
+Draft validation does not save a policy or change runtime enforcement.
 
 The creator becomes the Owner of a new project. In **Project settings >
 Access**, a tenant administrator can add and remove project members when the

@@ -646,6 +646,32 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.v1-policy-compare-control {
+  display: grid;
+  gap: var(--spacingVerticalS);
+  min-width: 0;
+}
+.v1-policy-comparison {
+  display: grid;
+  gap: var(--spacingVerticalS);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.v1-policy-comparison code,
+.v1-policy-comparison option {
+  overflow-wrap: anywhere;
+}
+.v1-policy-comparison select {
+  min-width: 0;
+  max-width: 100%;
+}
+.v1-policy-comparison-sides {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacingHorizontalM);
+  min-width: 0;
+}
 .v1-implementation-list { margin: 0; padding-inline-start: var(--spacingHorizontalL); display: grid; gap: var(--spacingVerticalXS); }
 .v1-composer { gap: var(--spacingVerticalS); }
 .v1-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

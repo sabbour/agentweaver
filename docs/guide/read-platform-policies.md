@@ -1,8 +1,8 @@
 # Read and validate Policies
 
-Use the Policies page to read saved Platform Policy source, or to validate a
-local Project Policy draft. The page does not save, apply, preview, or report
-runtime enforcement.
+Use the Policies page to read saved Platform Policy source, compare it with a
+local draft, or validate a local Project Policy draft. The page does not save,
+apply, preview, or report runtime enforcement.
 
 ## Before you begin
 
@@ -27,6 +27,29 @@ runtime enforcement.
 
 An empty history means you have read access and no Platform Policy is saved
 for that tenant.
+
+## Compare a Platform Policy draft with a saved revision
+
+1. In **Platform** scope, select **View** beside the revision to compare.
+2. Edit the draft, or select **Load viewed revision into draft** and then edit
+   the copy.
+3. Select **Compare draft**.
+4. Choose a changed manifest or file from **Changed item**.
+5. Select **Show invisible characters** to expose spaces, tabs, line endings,
+   Unicode outside printable ASCII, and the byte-order mark. Review the
+   **Saved** and **Draft** source blocks.
+
+The comparison uses the revision selected with **View**. It does not select
+the current snapshot head, copy source into the draft, or send a request.
+Files match by exact relative path. The manifest appears first when it
+changes. File changes then appear in path order as **Added**, **Removed**, or
+**Changed**. A rename appears as one removal and one addition. File order
+changes alone do not appear. An empty file differs from a missing file.
+
+The same draft path, UTF-8, and byte limits apply to comparison. Invalid
+drafts keep their content and show a fixed error. Comparison does not check
+Policy syntax or enforcement. Edit the draft or reload the page, and select
+**Compare draft** again to refresh the result.
 
 ## Validate a Project Policy draft
 
@@ -74,7 +97,10 @@ denies access, the page clears the current draft and blocks validation. Select
 **Retry** after your access changes.
 
 If Platform access expires, the page refreshes the unbound session, checks the
-Platform identity and history again, and requires another validation action.
+Platform identity and history again, and opens the exact revision selected
+before the check. The page hides saved source and the comparison during the
+check. After the source opens, select **Compare draft** again. A newer
+snapshot head does not replace the selected revision.
 
 If Project validation returns `401`, the page refreshes the unbound session,
 checks the same tenant and exact Project, and retries the unchanged draft once.
