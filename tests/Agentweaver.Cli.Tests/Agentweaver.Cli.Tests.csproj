@@ -25,5 +25,6 @@
     <None Include="..\..\scripts\acceptance\api\workspace-repository-read.mjs" Link="Scripts\acceptance\api\workspace-repository-read.mjs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\acceptance\api\workflow-generation.mjs" Link="Scripts\acceptance\api\workflow-generation.mjs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\acceptance\api\task-model-completion.mjs" Link="Scripts\acceptance\api\task-model-completion.mjs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\acceptance\api\runtime-byok-provider-readback.mjs" Link="Scripts\acceptance\api\runtime-byok-provider-readback.mjs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

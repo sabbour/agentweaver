@@ -214,6 +214,12 @@ mismatched receipts, Environment outage fallback on provider reads, receipt
 idempotency and immutability, stale-row cursor advancement, and `503` on
 unavailable proof.
 
+To run the read-only native CLI readback case for one pending BYOK
+model-provider host request against an approved non-production Gateway, follow
+[Read back a pending BYOK provider host request](./api-acceptance-migration.md#read-back-a-pending-byok-provider-host-request).
+Run `npm run test:harness:api` and `dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter FullyQualifiedName~CriticalPathCoverageTests`
+to exercise the fake-CLI case tests and critical-path coverage locally.
+
 ## Test revision-backed BYOK run admission
 
 Run the contract and orchestration tests after the Release build:

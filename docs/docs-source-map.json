@@ -235,6 +235,9 @@
         "scripts/acceptance/api/task-model-completion.mjs",
         "scripts/acceptance/api/tests/task-model-completion.test.mjs",
         "scripts/acceptance/api/examples/task-model-completion.json",
+        "scripts/acceptance/api/runtime-byok-provider-readback.mjs",
+        "scripts/acceptance/api/tests/runtime-byok-provider-readback.test.mjs",
+        "scripts/acceptance/api/examples/runtime-byok-provider-readback.json",
         "scripts/acceptance/api/numeric-",
         "scripts/acceptance/api/examples/numeric-",
         "scripts/acceptance/api/tests/numeric-"

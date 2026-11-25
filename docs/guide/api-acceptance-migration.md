@@ -424,6 +424,66 @@ is `blocked` (exit code `2`). A mismatch or an unexpected response is `failed`
 blocked. Do not use internal CLI types, extract a selection code, or bypass
 sensitive-header guards.
 
+## Read back a pending BYOK provider host request
+
+The `runtime-byok-provider-readback` case checks one known, pending
+bring-your-own-key (BYOK) model-provider host request through
+`listPlatformEgressDestinations` using the native CLI. It does not create,
+approve, or change any host request.
+
+### Before you begin
+
+You need Node.js 24, the self-contained native apphost for the source commit,
+an approved non-production Gateway, and an existing pending BYOK model-provider
+host request. Sign in as the expected actor with an unbound `projects.admin`
+identity that holds `readPlatformRuntimeDefaults` on `platform/default`:
+
+```powershell
+agentweaver auth login --scope projects.admin --gateway-url <GATEWAY_URL> --broker-issuer <BROKER_ISSUER> --client-id <CLIENT_ID> --api-audience <API_AUDIENCE> --tenant-id <TENANT_ID>
+```
+
+Do not pass `--project-id` or `--run-id`.
+
+### Prepare and run the case
+
+1. Copy `scripts/acceptance/api/examples/runtime-byok-provider-readback.json`
+   to a local JSON file outside the repository. Replace the example values for
+   `sourceCommit`, `targetCommit`, `apphostSha256`, `approvedNonProduction`,
+   `expectedActorId`, `target`, and `expectedRequest` (`requestId`, `tenantId`,
+   `scope`, `projectId`, `providerId`, `providerRevision`, `host`, and `port`).
+2. Set `AGENTWEAVER_CLI_PATH` to the absolute path of the native apphost and
+   run a dry run first to check the local input and apphost hash:
+
+   ```powershell
+   $env:AGENTWEAVER_CLI_PATH = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
+   node scripts\acceptance\api\runtime-byok-provider-readback.mjs --input .\provider-readback.json --output .\evidence\provider-readback-001 --dry-run
+   ```
+
+   A dry run starts no CLI process and creates no evidence directory.
+
+3. Run the case with a new evidence directory:
+
+   ```powershell
+   node scripts\acceptance\api\runtime-byok-provider-readback.mjs --input .\provider-readback.json --output .\evidence\provider-readback-001
+   ```
+
+   The script removes ambient target, project, and run environment variables,
+   verifies the unbound `projects.admin` authorization context, and pages
+   through `listPlatformEgressDestinations` with `state=requested`. It processes
+   list pages in memory and writes only allowlisted command status, timing
+   summaries, static error codes, and the matched destination fields to
+   `commands.jsonl` and `result.json`. If a run fails, start a new run from
+   page 1 with a new evidence directory.
+
+### Verify the result
+
+A `passed` result (exit code `0`) confirms that the unbound actor matched and
+that `listPlatformEgressDestinations` returned the exact `expectedRequest` with
+`state: "requested"` and `origin: "modelProvider"`. A missing sign-in or missing
+Gateway operation returns `blocked` (exit code `2`). Any identity, binding,
+pagination, matching, HTTP, parsing, or timeout error returns `failed` (exit
+code `1`) with a static allowlisted `errorCode`.
+
 ## Next step
 
 Use the [Testing guide](./testing.md) to choose other checks and understand
