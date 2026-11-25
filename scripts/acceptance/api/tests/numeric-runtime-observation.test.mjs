@@ -285,6 +285,43 @@ function observation() {
   return { body, exact, restExact: structuredClone(exact) };
 }
 
+function twoSlotObservation() {
+  const fixture = observation();
+  const { body, exact, restExact } = fixture;
+  const belowCap = {
+    ...body.history.items[0],
+    projectId: input.target.projectId,
+    runId: input.target.runId,
+    configuredValue: 2,
+    observedValue: 1,
+    reservedCount: 1,
+    sequence: 7,
+  };
+  const atCap = {
+    ...structuredClone(belowCap),
+    factId: '00000000-0000-4000-8000-000000000026',
+    observedValue: 2,
+    reservedCount: 2,
+    sequence: 12,
+    attemptId: '00000000-0000-4000-8000-000000000027',
+  };
+  const rejection = body.history.items[1];
+  rejection.configuredValue = 2;
+  rejection.observedValue = 2;
+  rejection.sequence = 13;
+  body.acceptedLimits.maxToolCalls = 2;
+  body.totals.toolSlotsReserved.value = 2;
+  body.history.highWatermark = 15;
+  body.history.items = [belowCap];
+  body.history.nextCursor = 'second-page';
+  const secondPage = structuredClone(body);
+  secondPage.history.items = [atCap, rejection];
+  secondPage.history.nextCursor = null;
+  exact.history.items = [structuredClone(rejection)];
+  restExact.history.items = [structuredClone(rejection)];
+  return { pages: [body, secondPage], exact, restExact, belowCap, atCap };
+}
+
 test('case input accepts only approved target metadata and safe resource IDs', () => {
   const parsed = validateInput(input);
   assert.equal(parsed.caseId, 'numeric-runtime-observation');
@@ -388,6 +425,89 @@ test('case passes only when paged history and both exact lookups retain rejectio
   assert.throws(() => validateObservation(
     validateInput(input), [body], exact, mismatchedRestEvidence,
   ), /REST exact lookup/);
+});
+
+test('tool-below-cap accepts two distinct ordered reservations across pages and preserves other rows', () => {
+  const fixture = twoSlotObservation();
+  const caseInput = validateInput({ ...input, expectedMaxToolCalls: 2 });
+  const summary = validateObservation(caseInput, fixture.pages, fixture.exact, fixture.restExact);
+  const rows = summary.numericMatrix.rows;
+  assert.equal(rows.find(row => row.id === 'tool-below-cap').status, 'passed');
+  assert.equal(rows.find(row => row.id === 'tool-at-cap').status, 'passed');
+  assert.equal(rows.find(row => row.id === 'tool-next-denial').status, 'passed');
+  assert.equal(summary.attemptId, fixture.exact.history.items[0].attemptId);
+});
+
+test('tool-below-cap blocks malformed reservation pairs without changing the legacy case pass', () => {
+  const mutations = [
+    ['zero count', fixture => {
+      fixture.belowCap.observedValue = 0;
+      fixture.belowCap.reservedCount = 0;
+    }],
+    ['duplicate attempt', fixture => {
+      fixture.atCap.attemptId = fixture.belowCap.attemptId;
+    }],
+    ['mixed-case duplicate attempt', fixture => {
+      fixture.belowCap.attemptId = 'abcdef00-0000-4000-8000-000000000011';
+      fixture.atCap.attemptId = 'ABCDEF00-0000-4000-8000-000000000011';
+    }],
+    ['missing project ID', fixture => {
+      delete fixture.belowCap.projectId;
+    }],
+    ['foreign project ID', fixture => {
+      fixture.belowCap.projectId = 'other-project';
+    }],
+    ['missing run ID', fixture => {
+      delete fixture.belowCap.runId;
+    }],
+    ['foreign run ID', fixture => {
+      fixture.belowCap.runId = 'other-run';
+    }],
+    ['stale reservation', fixture => {
+      fixture.belowCap.executionFence = 1;
+    }],
+    ['foreign reservation', fixture => {
+      fixture.belowCap.sessionId = 'other-child-session';
+    }],
+    ['missing sequence', fixture => {
+      delete fixture.belowCap.sequence;
+    }],
+    ['invalid sequence', fixture => {
+      fixture.belowCap.sequence = 1.5;
+    }],
+    ['missing watermark', fixture => {
+      delete fixture.pages[0].history.highWatermark;
+      delete fixture.pages[1].history.highWatermark;
+    }],
+    ['invalid watermark', fixture => {
+      fixture.pages[0].history.highWatermark = 0;
+      fixture.pages[1].history.highWatermark = 0;
+    }],
+    ['sequence above watermark', fixture => {
+      fixture.atCap.sequence = 16;
+    }],
+    ['reversed traversal', fixture => {
+      fixture.pages[0].history.items[0] = structuredClone(fixture.atCap);
+      fixture.pages[1].history.items[0] = structuredClone(fixture.belowCap);
+      fixture.pages[0].history.nextCursor = 'second-page';
+    }],
+    ['reversed sequences', fixture => {
+      fixture.atCap.sequence = 6;
+    }],
+  ];
+  for (const [name, mutate] of mutations) {
+    const fixture = twoSlotObservation();
+    mutate(fixture);
+    const caseInput = validateInput({ ...input, expectedMaxToolCalls: 2 });
+    const summary = validateObservation(caseInput, fixture.pages, fixture.exact, fixture.restExact);
+    assert.equal(summary.numericMatrix.rows.find(row => row.id === 'tool-below-cap').status,
+      'blocked', name);
+    assert.equal(summary.numericMatrix.rows.find(row => row.id === 'tool-at-cap').status,
+      'passed', name);
+    assert.equal(summary.numericMatrix.rows.find(row => row.id === 'tool-next-denial').status,
+      'passed', name);
+    assert.equal(summary.attemptId, fixture.exact.history.items[0].attemptId, name);
+  }
 });
 
 test('case rejects a changed snapshot and repeated facts across history pages', () => {

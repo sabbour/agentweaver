@@ -1469,6 +1469,13 @@ Gateway or model:
 node --test scripts\acceptance\api\tests\numeric-runtime-observation.test.mjs scripts\acceptance\api\tests\numeric-admitted-completion.test.mjs
 ```
 
+The numeric observation tests check a valid cross-page two-slot reservation
+pair with a sequence gap. They also check zero counts, duplicate attempts,
+stale or foreign facts, invalid or out-of-bound watermarks and sequences, and
+reversed page or sequence order. These failures block only the
+`tool-below-cap` matrix row. The ordinary one-slot fixture and the other
+matrix rows keep their existing behavior.
+
 Run the focused contract, owner paging, query validation, and Gateway schema
 tests from the repository root:
 

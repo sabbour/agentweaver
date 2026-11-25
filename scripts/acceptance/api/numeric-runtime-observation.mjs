@@ -293,6 +293,33 @@ function historyFacts(pages, firstHistory) {
   return [...factsById.values()];
 }
 
+function hasValidToolReservationPair(reservations, configuredValue, highWatermark, target) {
+  if (configuredValue < 2
+    || !Number.isSafeInteger(highWatermark)
+    || highWatermark < 1) {
+    return false;
+  }
+  const valid = reservations
+    .map((fact, traversalIndex) => ({ fact, traversalIndex }))
+    .filter(({ fact }) => isUuid(fact.attemptId)
+      && fact.projectId === target.projectId
+      && fact.runId === target.runId
+      && Number.isSafeInteger(fact.sequence)
+      && fact.sequence > 0
+      && fact.sequence <= highWatermark
+      && Number.isSafeInteger(fact.observedValue)
+      && fact.observedValue > 0
+      && fact.observedValue === fact.reservedCount
+      && fact.configuredValue === configuredValue
+      && fact.unit === 'count'
+      && fact.scope === 'copilotRun');
+  return valid.some(below => below.fact.observedValue === configuredValue - 1
+    && valid.some(atCap => atCap.fact.observedValue === configuredValue
+      && below.fact.attemptId.toLowerCase() !== atCap.fact.attemptId.toLowerCase()
+      && below.traversalIndex < atCap.traversalIndex
+      && below.fact.sequence < atCap.fact.sequence));
+}
+
 export function validateObservation(input, pages, exact, restExact) {
   switch (input.caseId) {
     case MODEL_TURN_CASE_ID:
@@ -383,9 +410,12 @@ function toolHistoryEvidence(input, pages) {
     && fact.unit === 'count'
     && fact.scope === 'copilotRun');
   const atCap = validReservations.some(fact => fact.observedValue === input.expectedMaxToolCalls);
-  const belowCap = validReservations.some(fact => fact.observedValue === input.expectedMaxToolCalls - 1
-    && validReservations.some(last => last.observedValue === input.expectedMaxToolCalls
-      && fact.sequence < last.sequence));
+  const belowCap = hasValidToolReservationPair(
+    reservations,
+    input.expectedMaxToolCalls,
+    firstHistory?.highWatermark,
+    expected,
+  );
   return { binding: first.binding, facts, rejection, reservations, validReservations, atCap, belowCap, total };
 }
 
