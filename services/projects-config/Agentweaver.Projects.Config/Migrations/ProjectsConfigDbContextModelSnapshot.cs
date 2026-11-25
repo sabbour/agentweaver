@@ -1161,6 +1161,15 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("expected_head_revision");
 
+                    b.Property<string>("GovernanceDecisionHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("governance_decision_hash");
+
+                    b.Property<Guid?>("GovernanceDecisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("governance_decision_id");
+
                     b.Property<string>("IdempotencyKey")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -1227,6 +1236,11 @@ namespace Agentweaver.Projects.Config.Migrations
 
                     b.HasKey("PreparationId");
 
+                    b.HasIndex("GovernanceDecisionId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_native_acs_policy_preparations_governance_decision_id")
+                        .HasFilter("governance_decision_id IS NOT NULL");
+
                     b.HasIndex("ScopeDigest")
                         .IsUnique()
                         .HasDatabaseName("ux_native_acs_policy_preparations_scope_digest");
@@ -1234,6 +1248,10 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("native_acs_policy_preparations", "projects_config", t =>
                         {
                             t.HasCheckConstraint("ck_native_acs_policy_preparations_expected_head", "(expected_head_policy_id IS NULL AND expected_head_revision IS NULL AND expected_head_content_sha256 IS NULL) OR (expected_head_policy_id IS NOT NULL AND expected_head_revision > 0 AND expected_head_content_sha256 IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_native_acs_policy_preparations_governance_decision_hash", "governance_decision_hash IS NULL OR governance_decision_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_native_acs_policy_preparations_governance_decision_pair", "(governance_decision_id IS NULL AND governance_decision_hash IS NULL) OR (governance_decision_id IS NOT NULL AND governance_decision_hash IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_native_acs_policy_preparations_hashes", "scope_digest ~ '^[0-9a-f]{64}$' AND request_digest ~ '^[0-9a-f]{64}$' AND proposed_content_sha256 ~ '^[0-9a-f]{64}$' AND (expected_head_content_sha256 IS NULL OR expected_head_content_sha256 ~ '^[0-9a-f]{64}$')");
 
@@ -3267,6 +3285,15 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasForeignKey("ScopeType", "ScopeId", "PolicyId", "Revision")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyPreparationRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectGovernanceDecisionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("GovernanceDecisionId")
+                        .HasPrincipalKey("DecisionId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.PlatformRuntimeRevisionRecord", b =>

@@ -359,8 +359,12 @@ the head, revision, and files. Projects checks the full artifact hash and
 rechecks current authority outside the snapshot before returning.
 The read accepts no query or body and does not change policy state. When
 enabled, the Platform PUT stores a durable, immutable preparation against the current head.
-The preparation has pending state and no checkpoint. It does not change the
-canonical head, revision history, committed-write receipt, audit, or outbox.
+The preparation has pending state and no checkpoint. Each new preparation
+appends a redacted `platform.policy.preparation.v1` record, outbox row, and
+stream head update to the governance decision chain in the same serializable
+transaction and links the preparation to that decision ID and hash. It does not
+change the canonical head, revision history, committed-write receipt, audit, or
+policy outbox.
 The private Environment source returns only committed artifacts, with pending
 admission and a null checkpoint. History returns bounded revision metadata;
 exact reads return all retained bytes after a hash check. These routes do not

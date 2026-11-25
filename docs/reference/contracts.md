@@ -507,8 +507,11 @@ for artifact construction and submission.
 
 A successful new PUT stores the expected head ID, revision and hash, the full
 proposed artifact and hash, the actor-scoped idempotency data, and creation
-time. It returns `state: "pending"` and `checkpoint: null`. It does not update
-the canonical head, revisions, committed-write receipts, audit, or outbox.
+time, and atomically appends a redacted `platform.policy.preparation.v1`
+governance decision record (`governanceDecisionId` and `governanceDecisionHash`)
+in the same serializable transaction. It returns `state: "pending"` and
+`checkpoint: null`. It does not update the canonical head, revisions,
+committed-write receipts, audit, or policy outbox.
 The store checks current authority and head state in a serializable
 transaction, then rechecks authority before commit. An exact retry returns the
 same preparation only while the caller remains authorized and the expected

@@ -41,7 +41,9 @@ public sealed record NativeAcsPolicyPreparationReceipt(
     string State,
     string? Checkpoint,
     DateTimeOffset CreatedAt,
-    bool Replayed);
+    bool Replayed,
+    Guid? GovernanceDecisionId = null,
+    string? GovernanceDecisionHash = null);
 
 public sealed record NativeAcsPolicyReadResult(
     NativeAcsPolicyScopeType ScopeType,
@@ -118,6 +120,8 @@ public sealed class NativeAcsPolicyPreparationRecord
     public required string ArtifactJson { get; set; }
     public required string Reason { get; set; }
     public required string CorrelationId { get; set; }
+    public Guid? GovernanceDecisionId { get; set; }
+    public string? GovernanceDecisionHash { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
 
