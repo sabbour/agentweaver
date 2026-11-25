@@ -302,12 +302,7 @@ export function RunEgressPanel({ projectId, runId }: { projectId: string; runId:
   const loadRef = useRef(load);
   loadRef.current = load;
 
-  useEffect(() => {
-    // Strict Mode replays effects in development. One route scope receives one first-page read.
-    if (busy || startedRouteScope.current === routeScope) return;
-    void loadRef.current(null);
-  }, [busy, load, routeScope]);
-
+  // Keep this before the first-page effect so Strict Mode restores mounted before retrying.
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -317,6 +312,12 @@ export function RunEgressPanel({ projectId, runId }: { projectId: string; runId:
       requestGeneration.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    // Strict Mode replays effects in development. One route scope receives one first-page read.
+    if (busy || startedRouteScope.current === routeScope) return;
+    void loadRef.current(null);
+  }, [busy, load, routeScope]);
 
   const visible = state.routeScope === routeScope ? state : initialState(routeScope);
   const signIn = async () => {
