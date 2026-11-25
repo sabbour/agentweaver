@@ -1,12 +1,53 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Cli;
 
 namespace Agentweaver.Cli.Tests;
 
 public sealed class RestCommandTests
 {
+    [Fact]
+    public async Task RawRequestPreservesExactDecimalTextInObservationResponse()
+    {
+        var handler = new RestHandler
+        {
+            RawResponse = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {"acceptedLimits":{"copilotHardCreditLimit":999999999.999999999},"history":{"items":[{"configuredValue":1000000000,"observedValue":1000000000.000000001}]}}
+                    """,
+                    Encoding.UTF8,
+                    "application/json"),
+            },
+        };
+        using var http = new HttpClient(handler);
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var result = await CliApplication.RunAsync(
+            Rest("--method", "GET", "--url", "/api/v1/observation"),
+            new CliRuntimeOptions(
+                HttpClient: http,
+                Authentication: new TestAuthentication(),
+                Output: output,
+                Error: error));
+
+        Assert.Equal(0, result);
+        var serialized = JsonNode.Parse(output.ToString())!;
+        var body = serialized["body"]!;
+        Assert.Equal("999999999.999999999",
+            body["acceptedLimits"]!["copilotHardCreditLimit"]!.GetValue<JsonElement>().GetRawText());
+        Assert.Equal("1000000000",
+            body["history"]!["items"]![0]!["configuredValue"]!.GetValue<JsonElement>().GetRawText());
+        Assert.Equal("1000000000.000000001",
+            body["history"]!["items"]![0]!["observedValue"]!.GetValue<JsonElement>().GetRawText());
+        Assert.Empty(error.ToString());
+    }
+
     [Fact]
     public async Task RawRequestUsesTenantPreflightWithoutOpenApiAndPreservesExplicitNullBody()
     {

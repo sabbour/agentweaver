@@ -1,9 +1,9 @@
 # Check numeric runtime evidence
 
 Use this case to inspect a workflow-bound child session that already has a
-numeric tool-call denial. The case reads status, usage, and runtime-observation
-data through the native CLI. It does not create a run, send a message, or call a
-model. To check root model-turn or hard-credit evidence, see
+numeric tool-call or hard-credit denial. The case reads status, usage, and
+runtime-observation data through the native CLI. It does not create a run, send
+a message, or call a model. To check root model-turn or hard-credit evidence, see
 [Check root model-turn and hard-credit no-send evidence](#check-root-model-turn-and-hard-credit-no-send-evidence).
 
 This case checks source behavior through a configured non-production target.
@@ -12,8 +12,14 @@ It does not prove that the target is deployed or ready for release.
 ## Before you begin
 
 You need Node.js 24 and the self-contained native Agentweaver apphost for the
-source commit you want to check. Use only a non-production target that the
-target owner has approved. Creating a run or asking a model to call a tool can
+source commit you want to check. For the child hard-credit mode, install the
+locked root dependency with this command:
+
+```powershell
+npm ci --ignore-scripts
+```
+
+Use only a non-production target that the target owner has approved. Creating a run or asking a model to call a tool can
 change data and incur provider charges. Get separate approval for model and
 spend use before you create the test run.
 
@@ -143,9 +149,50 @@ The script does not create or clean up the run. Use the normal owner commands
 to finish or cancel only a run that you own. Do not repeat a command if its
 write outcome is uncertain.
 
+## Check a child hard-credit denial
+
+The `numeric-child-hard-credit-denial` mode reads one existing child
+preparation attempt that the owner denied at the accepted Copilot hard-credit
+limit. It does not prove that a native model call sent nothing. Child
+preparation happens before dispatch insertion, so the native no-send witness
+is explicitly unavailable.
+
+Copy `scripts/acceptance/api/examples/numeric-child-hard-credit-denial.json`.
+Set the existing target fields, `attemptId`, and `expectedRelation`. The attempt
+ID must identify the exact denied child attempt. Use `equal` when observed
+credits equal the accepted limit or `overshoot` when they are greater than the
+accepted limit. Do not run one input for both relations.
+
+The dry run validates the input, native apphost path and hash, and new evidence
+path. It starts no CLI process and writes no evidence. In a live read, the case:
+
+1. Pages the complete observation history under one snapshot and high-water
+   mark.
+2. Selects exactly one current-fence `denied` fact for the pinned attempt.
+3. Requires a `childPreparation` owner decision with a receipt ID and payload
+   hash.
+4. Reads the same attempt through `api invoke` and `rest`.
+5. Compares the accepted limit, configured value, and observed value as exact
+   .NET decimal values.
+
+All three reads must identify the same project, run, child/root relationship,
+current fence, accepted selection, registration, revision, denial, receipt, and
+payload hash. Missing, stale, malformed, incomplete, or conflicting data
+returns `blocked`.
+
+The parser rejects duplicate JSON names, YAML-only syntax, quoted credit
+numbers, values outside .NET `decimal`, excessive numeric exponents, and
+conflicting evidence. It retains the original selected number tokens in
+`result.json` and in redacted command records. Saved command arguments and
+responses replace continuation cursors. Observation command records do not
+retain raw standard output or standard error.
+
+The result stores these selected strings in `creditNumberSources`:
+`copilotHardCreditLimit`, `configuredValue`, and `observedValue`.
+
 ## Check root model-turn and hard-credit no-send evidence
 
-The same script has two more read-only cases. Each case reads the **root**
+The same script has two additional no-send cases. Each case reads the **root**
 session of an existing run that already reached a limit. The script does not
 drive the run to the limit. Use the same procedure as above, with these
 changes:

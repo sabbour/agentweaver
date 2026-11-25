@@ -11,6 +11,7 @@ import { buildNumericMatrix, compareBoundary, warningFloorTransition } from './n
 const CASE_ID = 'numeric-runtime-observation';
 const MODEL_TURN_CASE_ID = 'numeric-model-turn-no-send';
 const HARD_CREDIT_CASE_ID = 'numeric-hard-credit-no-send';
+const CHILD_HARD_CREDIT_CASE_ID = 'numeric-child-hard-credit-denial';
 const COMMON_INPUT_KEYS = [
   'caseId', 'sourceCommit', 'targetCommit', 'apphostSha256',
   'approvedNonProduction', 'expectedActorId', 'target',
@@ -19,6 +20,7 @@ const CASE_INPUT_KEYS = {
   [CASE_ID]: [...COMMON_INPUT_KEYS, 'expectedMaxToolCalls'],
   [MODEL_TURN_CASE_ID]: [...COMMON_INPUT_KEYS, 'expectedMaxModelTurns'],
   [HARD_CREDIT_CASE_ID]: [...COMMON_INPUT_KEYS, 'expectedSoftWarning'],
+  [CHILD_HARD_CREDIT_CASE_ID]: [...COMMON_INPUT_KEYS, 'attemptId', 'expectedRelation'],
 };
 const CASE_SCRIPT_PATH = fileURLToPath(import.meta.url);
 const MAX_OUTPUT = 4 * 1024 * 1024;
@@ -118,6 +120,9 @@ function validCaseLimit(value) {
         && value.expectedMaxModelTurns <= 10_000;
     case HARD_CREDIT_CASE_ID:
       return typeof value.expectedSoftWarning === 'boolean';
+    case CHILD_HARD_CREDIT_CASE_ID:
+      return isUuid(value.attemptId)
+        && ['equal', 'overshoot'].includes(value.expectedRelation);
     default:
       return false;
   }
@@ -156,6 +161,10 @@ export function validateInput(value) {
   if (value.caseId === CASE_ID) parsed.expectedMaxToolCalls = value.expectedMaxToolCalls;
   if (value.caseId === MODEL_TURN_CASE_ID) parsed.expectedMaxModelTurns = value.expectedMaxModelTurns;
   if (value.caseId === HARD_CREDIT_CASE_ID) parsed.expectedSoftWarning = value.expectedSoftWarning;
+  if (value.caseId === CHILD_HARD_CREDIT_CASE_ID) {
+    parsed.attemptId = value.attemptId.toLowerCase();
+    parsed.expectedRelation = value.expectedRelation;
+  }
   parsed.target = target;
   return parsed;
 }
@@ -326,6 +335,8 @@ export function validateObservation(input, pages, exact, restExact) {
       return validateModelTurnObservation(input, pages, exact, restExact);
     case HARD_CREDIT_CASE_ID:
       return validateHardCreditObservation(input, pages, exact, restExact);
+    case CHILD_HARD_CREDIT_CASE_ID:
+      throw new Error('The child hard-credit case requires source-preserving observation responses.');
     default:
       return validateToolObservation(input, pages, exact, restExact);
   }
@@ -355,6 +366,10 @@ function requireResponseBindings(responses, binding, expected, isRoot, label) {
       throw new Error(`${name} response binding does not match the current authority. Mismatch: ${mismatch}.`);
     }
   }
+}
+
+function validHash(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
 }
 
 function toolHistoryEvidence(input, pages) {
@@ -750,7 +765,280 @@ function validateHardCreditObservation(input, pages, exact, restExact) {
 export function exactLookupFact(input, pages) {
   if (input.caseId === MODEL_TURN_CASE_ID) return modelTurnEvidence(input, pages).noSend;
   if (input.caseId === HARD_CREDIT_CASE_ID) return hardCreditEvidence(input, pages).noSend;
+  if (input.caseId === CHILD_HARD_CREDIT_CASE_ID) {
+    throw new Error('The child hard-credit attempt is pinned by the case input.');
+  }
   return toolHistoryEvidence(input, pages).rejection;
+}
+
+const CREDIT_NUMBER_KEYS = new Set([
+  'copilotHardCreditLimit',
+  'configuredValue',
+  'observedValue',
+]);
+const MAX_DECIMAL = 79_228_162_514_264_337_593_543_950_335n;
+
+export async function parseChildObservationJson(text, step) {
+  let parseDocument;
+  try {
+    ({ parseDocument } = await import('yaml'));
+  } catch {
+    throw new Error(`${step} JSON validation dependency is unavailable.`);
+  }
+  let document;
+  try {
+    document = parseDocument(text, { schema: 'json', strict: true, uniqueKeys: true });
+  } catch {
+    throw new Error(`${step} did not return strict JSON with unique keys.`);
+  }
+  if (document.errors.length > 0 || document.warnings.length > 0) {
+    throw new Error(`${step} did not return strict JSON with unique keys.`);
+  }
+
+  const tokens = new WeakMap();
+  try {
+    const value = JSON.parse(text, function preserveNumberSource(key, item, context) {
+      if (CREDIT_NUMBER_KEYS.has(key) && typeof item === 'string') {
+        throw new Error(`${step} credit value did not use a JSON number token.`);
+      }
+      if (CREDIT_NUMBER_KEYS.has(key) && typeof item === 'number') {
+        if (!context || typeof context.source !== 'string' || !/^[-0-9]/.test(context.source)) {
+          throw new Error(`${step} credit value did not use a JSON number token.`);
+        }
+        let fields = tokens.get(this);
+        if (!fields) {
+          fields = new Map();
+          tokens.set(this, fields);
+        }
+        fields.set(key, context.source);
+      }
+      return item;
+    });
+    return { value, tokens };
+  } catch {
+    throw new Error(`${step} did not return strict JSON with numeric credit tokens.`);
+  }
+}
+
+function numberToken(parsed, value, key) {
+  return parsed.tokens.get(value)?.get(key);
+}
+
+export function parseDotNetDecimal(token) {
+  if (typeof token !== 'string' || token.length === 0 || token.length > 128
+    || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(token)) {
+    throw new Error('A credit value is not a bounded JSON number.');
+  }
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token);
+  const negative = match[1] === '-';
+  const fraction = match[3] ?? '';
+  const exponentText = match[4] ?? '0';
+  const explicitExponent = BigInt(exponentText);
+  if (explicitExponent > 64n || explicitExponent < -64n) {
+    throw new Error('A credit value has an excessive decimal exponent.');
+  }
+  let coefficientText = `${match[2]}${fraction}`.replace(/^0+/, '');
+  let scale = fraction.length - Number(explicitExponent);
+  if (coefficientText === '') {
+    if (negative) return { coefficient: 0n, scale: 0 };
+    return { coefficient: 0n, scale: 0 };
+  }
+  if (negative) throw new Error('A credit value is negative.');
+  while (coefficientText.endsWith('0')) {
+    coefficientText = coefficientText.slice(0, -1);
+    scale -= 1;
+  }
+  if (scale > 28) throw new Error('A credit value exceeds the .NET decimal scale.');
+  const expandedLength = coefficientText.length + Math.max(0, -scale);
+  if (expandedLength > 29) throw new Error('A credit value is outside the .NET decimal range.');
+  const coefficient = BigInt(coefficientText);
+  const expanded = scale < 0 ? coefficient * (10n ** BigInt(-scale)) : coefficient;
+  if (expanded > MAX_DECIMAL) throw new Error('A credit value is outside the .NET decimal range.');
+  return { coefficient, scale };
+}
+
+export function compareDecimals(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  const leftInteger = left.coefficient * (10n ** BigInt(scale - left.scale));
+  const rightInteger = right.coefficient * (10n ** BigInt(scale - right.scale));
+  return leftInteger === rightInteger ? 0 : leftInteger < rightInteger ? -1 : 1;
+}
+
+function requireChildBinding(response, binding, input) {
+  const mismatch = responseBindingMismatch(response, binding, input.target, false);
+  if (mismatch) throw new Error(`A child observation response does not match the current authority: ${mismatch}.`);
+}
+
+function childHistoryEvidence(input, parsedPages) {
+  const pages = parsedPages.map(parsed => parsed.value);
+  if (pages.length === 0) throw new Error('The child observation history is empty or unavailable.');
+  const first = pages[0];
+  const binding = first.binding;
+  if (first.contractVersion !== 2
+    || binding?.isRoot !== false
+    || !validHash(binding.acceptedSelectionHash)
+    || !nonEmpty(binding.rootSessionId)
+    || binding.rootSessionId === input.target.sessionId
+    || !isUuid(binding.runtimeInstanceId)
+    || !Number.isSafeInteger(binding.registrationRevision)
+    || binding.registrationRevision < 1
+    || !Number.isSafeInteger(binding.currentExecutionFence)
+    || binding.currentExecutionFence < 1
+    || !Number.isSafeInteger(binding.sessionExecutionFence)
+    || binding.sessionExecutionFence < 1
+    || binding.currentExecutionFence !== binding.sessionExecutionFence) {
+    throw new Error('The observation binding does not match the selected child session and current fence.');
+  }
+  requireResponseBindings(pages, binding, input.target, false, 'Observation page');
+  for (const page of pages) {
+    if (!isUuid(page.history?.snapshotId)
+      || !Number.isSafeInteger(page.history?.highWatermark)
+      || page.history.highWatermark < 0
+      || page.history.exactAttempt !== false) {
+      throw new Error('The child history page is malformed or is not a paged response.');
+    }
+  }
+  const pageCursors = pages.map(page => page.history?.nextCursor).filter(cursor => typeof cursor === 'string');
+  if (new Set(pageCursors).size !== pageCursors.length || pages.at(-1)?.history?.nextCursor !== null) {
+    throw new Error('The child history has a repeated or nonterminal continuation cursor.');
+  }
+  const limitToken = numberToken(parsedPages[0], first.acceptedLimits, 'copilotHardCreditLimit');
+  if (!limitToken) throw new Error('The accepted copilotHardCreditLimit is not a JSON number token.');
+  const limit = parseDotNetDecimal(limitToken);
+  if (limit.coefficient === 0n) throw new Error('The accepted copilotHardCreditLimit must be positive.');
+  if (first.acceptedLimits?.creditUnit !== 'nanoAiu'
+    || first.acceptedLimits?.creditScope !== 'copilotRun') {
+    throw new Error('The accepted credit unit or scope is not nanoAiu and copilotRun.');
+  }
+  for (const [index, parsed] of parsedPages.entries()) {
+    if (index > 0 && (
+      numberToken(parsed, pages[index].acceptedLimits, 'copilotHardCreditLimit') !== limitToken
+      || pages[index].acceptedLimits?.creditUnit !== 'nanoAiu'
+      || pages[index].acceptedLimits?.creditScope !== 'copilotRun')) {
+      throw new Error('The child history pages do not agree on the accepted credit limit.');
+    }
+  }
+  const facts = historyFacts(pages, first.history);
+  const candidates = facts.filter(fact => fact?.attemptId?.toLowerCase() === input.attemptId);
+  const denials = candidates.filter(fact => fact?.kind === 'denied');
+  if (denials.length !== 1 || candidates.length !== 1) {
+    throw new Error('The pinned attempt does not have exactly one denial fact.');
+  }
+  const denial = denials[0];
+  if (candidates.some(fact => fact !== denial
+    && fact.limitKind === 'copilotHardCredits'
+    && (fact.ownerDecision?.receiptId !== denial.ownerDecision?.receiptId
+      || fact.ownerDecision?.payloadHash !== denial.ownerDecision?.payloadHash))) {
+    throw new Error('The pinned attempt has conflicting receipt evidence.');
+  }
+  const mismatch = authorityMismatch(denial, binding, input.target.sessionId);
+  if (mismatch) throw new Error(`The pinned attempt does not match the current authority: ${mismatch}.`);
+  if (denial.projectId !== input.target.projectId
+    || denial.runId !== input.target.runId
+    || denial.dispatchId?.toLowerCase() !== input.attemptId
+    || denial.limitKind !== 'copilotHardCredits'
+    || denial.stage !== 'childPreparation'
+    || denial.reasonCode !== 'hard_credit_limit_reached'
+    || denial.unit !== 'nanoAiu'
+    || denial.scope !== 'copilotRun'
+    || denial.ownerDecision?.state !== 'available'
+    || !isUuid(denial.factId)
+    || !isUuid(denial.ownerDecision?.receiptId)
+    || denial.ownerDecision.receiptId !== denial.factId
+    || !/^[a-f0-9]{64}$/i.test(denial.ownerDecision?.payloadHash ?? '')
+    || denial.nativeNoSend?.state !== 'unavailable'
+    || denial.nativeNoSend?.reason !== 'no_native_boundary_witness') {
+    throw new Error('The pinned attempt is not an owner-backed child-preparation hard-credit denial.');
+  }
+  const page = parsedPages.find(parsed => parsed.value.history.items.includes(denial));
+  const configuredToken = numberToken(page, denial, 'configuredValue');
+  const observedToken = numberToken(page, denial, 'observedValue');
+  if (!configuredToken || !observedToken) {
+    throw new Error('The pinned denial credit values are not JSON number tokens.');
+  }
+  const configured = parseDotNetDecimal(configuredToken);
+  const observed = parseDotNetDecimal(observedToken);
+  if (compareDecimals(configured, limit) !== 0) {
+    throw new Error('The denial configured value does not match the accepted hard-credit limit.');
+  }
+  const relation = compareDecimals(observed, configured);
+  if (relation < 0) throw new Error('The denial observed value is below its configured value.');
+  const actualRelation = relation === 0 ? 'equal' : 'overshoot';
+  if (actualRelation !== input.expectedRelation) {
+    throw new Error('The denial does not have the requested credit relation.');
+  }
+  return {
+    binding,
+    facts,
+    denial,
+    limit,
+    limitToken,
+    configuredToken,
+    observedToken,
+    relation: actualRelation,
+  };
+}
+
+function exactChildDenial(parsed, evidence, input, label) {
+  const response = parsed.value;
+  requireChildBinding(response, evidence.binding, input);
+  const items = response?.history?.items;
+  if (response?.contractVersion !== 2
+    || !isUuid(response.history?.snapshotId)
+    || !Number.isSafeInteger(response.history?.highWatermark)
+    || response.history.highWatermark < 0
+    || response.acceptedLimits?.creditUnit !== 'nanoAiu'
+    || response.acceptedLimits?.creditScope !== 'copilotRun'
+    || response?.history?.exactAttempt !== true
+    || response.history.complete !== true
+    || response.history.nextCursor !== null
+    || response.history.exactUnavailableReason !== null
+    || !Array.isArray(items)) {
+    throw new Error(`${label} is incomplete or truncated.`);
+  }
+  if (items.length !== 1
+    || items[0].kind !== 'denied'
+    || items[0].attemptId?.toLowerCase() !== input.attemptId
+    || !Number.isSafeInteger(items[0].sequence)
+    || items[0].sequence < 1
+    || items[0].sequence > response.history.highWatermark) {
+    throw new Error(`${label} does not contain exactly one pinned denial.`);
+  }
+  const fact = items[0];
+  if (!isDeepStrictEqual(fact, evidence.denial)
+    || numberToken(parsed, fact, 'configuredValue') !== evidence.configuredToken
+    || numberToken(parsed, fact, 'observedValue') !== evidence.observedToken) {
+    throw new Error(`${label} does not return the same denial and exact credit tokens.`);
+  }
+  const limitToken = numberToken(parsed, response.acceptedLimits, 'copilotHardCreditLimit');
+  if (limitToken !== evidence.limitToken) {
+    throw new Error(`${label} does not return the same accepted hard-credit limit.`);
+  }
+  return fact;
+}
+
+export function validateChildHardCreditObservation(input, parsedPages, parsedExact, parsedRestExact) {
+  const evidence = childHistoryEvidence(input, parsedPages);
+  exactChildDenial(parsedExact, evidence, input, 'The API exact lookup');
+  exactChildDenial(parsedRestExact, evidence, input, 'The REST exact lookup');
+  return {
+    attemptId: evidence.denial.attemptId,
+    dispatchId: evidence.denial.dispatchId,
+    factId: evidence.denial.factId,
+    receiptId: evidence.denial.ownerDecision.receiptId,
+    payloadHash: evidence.denial.ownerDecision.payloadHash,
+    executionFence: evidence.binding.currentExecutionFence,
+    pagesRead: parsedPages.length,
+    totalFacts: evidence.facts.length,
+    expectedRelation: input.expectedRelation,
+    relation: evidence.relation,
+    creditNumberSources: {
+      copilotHardCreditLimit: evidence.limitToken,
+      configuredValue: evidence.configuredToken,
+      observedValue: evidence.observedToken,
+    },
+    conclusion: 'The owner recorded one child-preparation hard-credit denial for the pinned attempt. The native no-send witness is unavailable, so this result does not prove that the native SDK sent nothing.',
+  };
 }
 
 async function sha256(filePath) {
@@ -798,6 +1086,10 @@ function requireSuccess(record, step) {
 
 function restBody(record, step) {
   const response = parseJson(record.stdout, step);
+  return restEnvelopeBody(response, step);
+}
+
+function restEnvelopeBody(response, step) {
   if (response.status !== 200 || response.body === null || typeof response.body !== 'object') {
     throw new Error(`${step} did not return HTTP 200 with a JSON body.`);
   }
@@ -849,7 +1141,65 @@ function recordArgs(args) {
   });
 }
 
-async function runCase(options, env = process.env) {
+function safeResponse(value) {
+  if (Array.isArray(value)) return value.map(safeResponse);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      /cursor/i.test(key) && item !== null ? '[REDACTED]' : safeResponse(item),
+    ]));
+  }
+  return value;
+}
+
+function scrubCommandRecord(record) {
+  const result = safeResponse(record);
+  for (const key of ['stdout', 'stderr']) {
+    if (typeof result[key] !== 'string') continue;
+    try {
+      result[key] = JSON.stringify(safeResponse(JSON.parse(result[key])));
+    } catch {
+      // Non-JSON output has no structured cursor field to scrub.
+    }
+  }
+  return result;
+}
+
+function tokenEvidence(parsed) {
+  const result = [];
+  const visit = (value, pathValue = '$', excluded = false) => {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${pathValue}[${index}]`, excluded));
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    if (!excluded) {
+      const fields = parsed.tokens.get(value);
+      for (const [key, source] of fields ?? []) {
+        result.push({ path: `${pathValue}.${key}`, source });
+      }
+    }
+    for (const [key, item] of Object.entries(value)) {
+      visit(item, `${pathValue}.${key}`, excluded || /cursor/i.test(key));
+    }
+  };
+  visit(parsed.value);
+  return result;
+}
+
+function commandMetadata(record) {
+  return {
+    startedAt: record.startedAt,
+    completedAt: record.completedAt,
+    durationMs: record.durationMs,
+    exitCode: record.exitCode,
+    signal: record.signal,
+    timedOut: record.timedOut,
+    error: record.error,
+  };
+}
+
+export async function runCase(options, env = process.env, commandRunner = runCommand) {
   const input = await readJsonInput(options.inputPath);
   const cliPath = resolveCliPath(env.AGENTWEAVER_CLI_PATH);
   const cliInfo = await stat(cliPath).catch(() => null);
@@ -887,14 +1237,45 @@ async function runCase(options, env = process.env) {
   };
 
   async function execute(id, args, outputKind = 'json') {
-    const record = runCommand(cliPath, args, env);
-    await appendRedactedJsonLine(commandsPath, {
+    const record = commandRunner(cliPath, args, env);
+    await appendRedactedJsonLine(commandsPath, scrubCommandRecord({
       id,
       args: recordArgs(args),
       ...record,
-    });
+    }));
     requireSuccess(record, id);
     return outputKind === 'json' ? parseJson(record.stdout, id) : record;
+  }
+
+  async function executeObservation(id, args, unwrapApiResponse) {
+    const record = commandRunner(cliPath, args, env);
+    const metadata = {
+      id,
+      args: recordArgs(args),
+      ...commandMetadata(record),
+    };
+    try {
+      requireSuccess(record, id);
+      const parsed = await parseChildObservationJson(record.stdout, id);
+      await appendRedactedJsonLine(commandsPath, {
+        ...metadata,
+        response: safeResponse(parsed.value),
+        creditNumberSources: tokenEvidence(parsed),
+      });
+      if (unwrapApiResponse) {
+        return {
+          value: apiResponseBody(parsed.value, id),
+          tokens: parsed.tokens,
+        };
+      }
+      return {
+        value: restEnvelopeBody(parsed.value, id),
+        tokens: parsed.tokens,
+      };
+    } catch (error) {
+      await appendRedactedJsonLine(commandsPath, metadata);
+      throw error;
+    }
   }
 
   try {
@@ -915,6 +1296,7 @@ async function runCase(options, env = process.env) {
     const usage = apiResponseBody(await execute('project-usage', commands[6].args), 'project-usage');
 
     const pages = [];
+    const parsedPages = [];
     let query = { pageSize: PAGE_SIZE };
     let pageNumber = 0;
     const seenCursors = new Set();
@@ -922,12 +1304,14 @@ async function runCase(options, env = process.env) {
     while (true) {
       pageNumber += 1;
       if (pageNumber > 1000) throw new Error('The history exceeded the 1000-page safety limit.');
-      const response = await execute(
-        `observation-page-${pageNumber}`,
-        observationArgs(input, query),
-      );
-      const page = apiResponseBody(response, `observation-page-${pageNumber}`);
+      const id = `observation-page-${pageNumber}`;
+      const parsedPage = input.caseId === CHILD_HARD_CREDIT_CASE_ID
+        ? await executeObservation(id, observationArgs(input, query), true)
+        : null;
+      const response = parsedPage ?? await execute(id, observationArgs(input, query));
+      const page = parsedPage?.value ?? apiResponseBody(response, id);
       pages.push(page);
+      if (parsedPage) parsedPages.push(parsedPage);
       const cursor = page.history?.nextCursor;
       if (cursor === null) break;
       if (typeof cursor !== 'string' || cursor.length === 0) throw new Error('The owner returned an invalid history cursor.');
@@ -936,13 +1320,19 @@ async function runCase(options, env = process.env) {
       query = { cursor, pageSize: PAGE_SIZE };
     }
 
-    const target = exactLookupFact(input, pages);
+    const target = input.caseId === CHILD_HARD_CREDIT_CASE_ID
+      ? { attemptId: input.attemptId }
+      : exactLookupFact(input, pages);
 
-    const exactResponse = await execute(
+    const exactArgs = observationArgs(input, { attemptId: target.attemptId });
+    const exactParsed = input.caseId === CHILD_HARD_CREDIT_CASE_ID
+      ? await executeObservation('observation-exact-attempt', exactArgs, true)
+      : null;
+    const exactResponse = exactParsed ?? await execute('observation-exact-attempt', exactArgs);
+    const exact = exactParsed?.value ?? apiResponseBody(
+      exactResponse,
       'observation-exact-attempt',
-      observationArgs(input, { attemptId: target.attemptId }),
     );
-    const exact = apiResponseBody(exactResponse, 'observation-exact-attempt');
     const restUrl = new URL(
       `/api/v1/projects/${input.target.projectId}/runs/${input.target.runId}/coordination/sessions/${input.target.sessionId}/runtime-observation/v2`,
       input.target.gatewayUrl,
@@ -952,9 +1342,14 @@ async function runCase(options, env = process.env) {
       'rest', '--method', 'GET', '--url', `${restUrl.pathname}${restUrl.search}`,
       '--scope', 'api.read', '--scope', 'projects.orchestrator', ...targetArgs(input.target),
     ];
-    const restRecord = await execute('rest-exact-attempt', restArgs, 'text');
-    const restExact = restBody(restRecord, 'rest-exact-attempt');
-    const summary = validateObservation(input, pages, exact, restExact);
+    const restParsed = input.caseId === CHILD_HARD_CREDIT_CASE_ID
+      ? await executeObservation('rest-exact-attempt', restArgs, false)
+      : null;
+    const restRecord = restParsed ?? await execute('rest-exact-attempt', restArgs, 'text');
+    const restExact = restParsed?.value ?? restBody(restRecord, 'rest-exact-attempt');
+    const summary = input.caseId === CHILD_HARD_CREDIT_CASE_ID
+      ? validateChildHardCreditObservation(input, parsedPages, exactParsed, restParsed)
+      : validateObservation(input, pages, exact, restExact);
     const result = {
       ...common,
       status: 'passed',
