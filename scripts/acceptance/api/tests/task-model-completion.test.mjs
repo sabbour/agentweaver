@@ -213,7 +213,10 @@ function fakeApphost(input, options = {}) {
         method: 'GET',
         path: turnRoute,
         parameters: ['projectId', 'runId', 'sessionId', 'eventId']
-          .map(name => ({ name, in: 'path', required: true })),
+          .map(name => ({
+            name, in: 'path', required: true,
+            schema: name === 'eventId' ? { type: 'string', format: 'uuid' } : { type: 'string' },
+          })),
         responses: { 200: { content: { 'application/json': {
           schema: { $ref: '#/components/schemas/SessionTurnContent' },
         } } } },

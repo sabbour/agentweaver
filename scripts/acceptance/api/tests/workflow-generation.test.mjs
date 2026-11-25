@@ -27,6 +27,12 @@ const examplePath = path.resolve(directory, '..', 'examples', 'workflow-generati
 const example = JSON.parse(await readFile(examplePath, 'utf8'));
 const apphostName = process.platform === 'win32' ? 'agentweaver.exe' : 'agentweaver';
 const hash = 'a'.repeat(64);
+const turnRoute = '/api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}';
+const turnOperation = {
+  operationId: 'readSessionTurnContent',
+  method: 'GET',
+  path: turnRoute,
+};
 
 function acceptedSelection(input) {
   return {
@@ -201,18 +207,46 @@ function fakeApphost(input, options = {}) {
   const jobId = randomUUID();
   const envelope = completedEnvelope(input, jobId);
   const result = resultFor(input, envelope);
+  const storedTurn = {
+    projectId: input.target.projectId,
+    runId: input.target.runId,
+    sessionId: input.target.sessionId,
+    eventId: result.nativeCompletion.assistantMaterial.eventId,
+    contentSha256: hash,
+  };
+  options.changeReceipt?.(result.nativeCompletion);
   let statusReads = 0;
   let submits = 0;
   const runner = (_cliPath, args, env) => {
     calls.push({ args, env });
     const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : null;
     if (args[0] === '--version') return { ...ok({}), stdout: '1.1.0\n' };
+    if (args[0] === '--help') {
+      return { ...ok({}), stdout: options.noDigestFlag
+        ? 'agentweaver api invoke readSessionTurnContent --turn-content-sha256-extra\n'
+        : '  agentweaver api invoke readSessionTurnContent --turn-content-sha256\n' };
+    }
     if (args[0] === 'api' && args[1] === 'operations') {
       return plain([
         'getAuthorizationContext', 'getRunSelection', 'generateProjectWorkflow',
         'readProjectWorkflowGenerationJob', 'readProjectWorkflowGenerationResult',
         'cancelProjectRun', 'readRunStatus',
-      ].map(operationId => ({ operationId })));
+      ].map(operationId => ({ operationId })).concat(options.noTurnRoute ? [] : [turnOperation]));
+    }
+    if (args[0] === 'api' && args[1] === 'describe' && args[2] === 'readSessionTurnContent') {
+      return plain({
+        ...turnOperation,
+        parameters: ['projectId', 'runId', 'sessionId', 'eventId']
+          .map(name => ({
+            name, in: 'path', required: true,
+            schema: name === 'eventId'
+              ? options.eventIdSchema ?? { type: 'string', format: 'uuid' }
+              : { type: 'string' },
+          })),
+        responses: { 200: { content: { 'application/json': {
+          schema: { $ref: options.wrongTurnSchema ? '#/components/schemas/Other' : '#/components/schemas/SessionTurnContent' },
+        } } } },
+      });
     }
     if (args[0] === 'auth' && args[1] === 'status') {
       const writer = args.includes('projects.admin');
@@ -248,6 +282,8 @@ function fakeApphost(input, options = {}) {
           : envelope);
       case 'readProjectWorkflowGenerationResult':
         return ok(result);
+      case 'readSessionTurnContent':
+        return { ...plain({ ...storedTurn, ...options.turnFields }), ...options.turnFailure };
       case 'cancelProjectRun':
         return options.cleanupFailed ? fail() : ok({ runId: input.target.runId, state: 'cancelled', cancelledAt: '2026-11-17T00:00:02Z' });
       case 'readRunStatus':
@@ -264,7 +300,7 @@ function fakeApphost(input, options = {}) {
         throw new Error(`Unexpected operation: ${args.join(' ')}`);
     }
   };
-  return { runner, calls, jobId };
+  return { runner, calls, jobId, storedTurn };
 }
 
 async function runFake(context, options = {}, runOptions = {}) {
@@ -280,9 +316,9 @@ async function runFake(context, options = {}, runOptions = {}) {
       ...runOptions,
     },
   );
-  const result = JSON.parse(await readFile(path.join(context.outputPath, 'result.json'), 'utf8'));
+  const resultText = await readFile(path.join(context.outputPath, 'result.json'), 'utf8');
   const commands = await readFile(path.join(context.outputPath, 'commands.jsonl'), 'utf8');
-  return { exitCode, result, commands, calls: apphost.calls, jobId: apphost.jobId };
+  return { exitCode, result: JSON.parse(resultText), resultText, commands, ...apphost };
 }
 
 test('case input requires approval, a bound run, a selected model, and finite run limits', () => {
@@ -307,7 +343,9 @@ test('commands use run-bound API invoke and separate unbound project-writer auth
   const input = validateInput(example);
   assert.deepEqual(buildCommands(input).map(command => command.id), [
     'version',
+    'help',
     'api-operations',
+    'api-describe-turn-digest',
     'auth-status-run',
     'auth-status-project-writer',
     'api-invoke-authorization-context',
@@ -380,10 +418,12 @@ test('native result hash matches System.Text.Json quote and surrogate escaping',
 
 test('case invokes all workflow operations, validates completion, and cancels the disposable run', async () => {
   await withScratch(async context => {
-    const { exitCode, result, commands, calls } = await runFake(context, { pendingFirst: true });
+    const { exitCode, result, commands, calls, storedTurn } = await runFake(context, { pendingFirst: true });
     assert.equal(exitCode, 0);
     assert.equal(result.status, 'passed');
+    assert.match(result.scope, /verified disposable-run cancellation/);
     assert.equal(result.generation.status, 'passed');
+    assert.deepEqual(result.generation.storedTurn, storedTurn);
     assert.equal(result.cleanup.status, 'passed');
     assert.match(commands, /"stepId":"api-invoke-generate-workflow"/);
     assert.match(commands, /"api","invoke","readProjectWorkflowGenerationJob"/);
@@ -396,6 +436,18 @@ test('case invokes all workflow operations, validates completion, and cancels th
     const [post] = submits;
     assert.ok(post.args.includes('--project-id'));
     assert.ok(post.args.includes('--run-id'));
+    const turn = calls.find(call => call.args[1] === 'invoke' && call.args[2] === 'readSessionTurnContent');
+    assert.deepEqual(turn.args.slice(-8), [
+      '--path', `projectId=${storedTurn.projectId}`, '--path', `runId=${storedTurn.runId}`,
+      '--path', `sessionId=${storedTurn.sessionId}`, '--path', `eventId=${storedTurn.eventId}`,
+    ]);
+    assert.deepEqual(turn.args.slice(2, 4), ['readSessionTurnContent', '--turn-content-sha256']);
+    assert.ok(turn.args.includes('projects.orchestrator'));
+    for (const [flag, id] of [['--project-id', storedTurn.projectId], ['--run-id', storedTurn.runId]]) {
+      const index = turn.args.indexOf(flag);
+      assert.notEqual(index, -1);
+      assert.equal(turn.args[index + 1], id);
+    }
     const cancel = calls.find(call => call.args[2] === 'cancelProjectRun');
     assert.ok(cancel.args.includes('projects.admin'));
     assert.ok(!cancel.args.includes('--project-id'));
@@ -438,12 +490,12 @@ test('a full queue retries the exact submit once and polls and reads the accepte
     const submits = calls.filter(call => call.args[2] === 'generateProjectWorkflow');
     assert.equal(submits.length, 2);
     assert.deepEqual(submits[1].args, submits[0].args);
-    assert.deepEqual(calls.slice(-5, -2).map(call => call.args), [
+    assert.deepEqual(calls.slice(-6, -3).map(call => call.args), [
       buildJobStatusCommand(context.caseInput, jobId).args,
       buildJobStatusCommand(context.caseInput, jobId).args,
       buildJobResultCommand(context.caseInput, jobId).args,
     ]);
-    assert.deepEqual(calls.slice(-2).map(call => call.args[2]), ['cancelProjectRun', 'readRunStatus']);
+    assert.deepEqual(calls.slice(-3).map(call => call.args[2]), ['readSessionTurnContent', 'cancelProjectRun', 'readRunStatus']);
     assertSafeSubmitEvidence(commands, submits, [queueFullCode, undefined]);
   });
 });
@@ -466,7 +518,7 @@ for (const [name, submitResponses, expectedCodes] of [
       assert.equal(result.generation.status, 'failed');
       assert.equal(result.generation.jobId, null);
       assert.equal(result.cleanup.status, 'passed');
-      assert.deepEqual(calls.slice(6).map(call => call.args[2]), [
+      assert.deepEqual(calls.slice(buildCommands(context.caseInput).length).map(call => call.args[2]), [
         ...submitResponses.map(() => 'generateProjectWorkflow'), 'cancelProjectRun', 'readRunStatus',
       ]);
       const submits = calls.filter(call => call.args[2] === 'generateProjectWorkflow');
@@ -474,6 +526,65 @@ for (const [name, submitResponses, expectedCodes] of [
     });
   });
 }
+
+test('missing digest support blocks before submission or cancellation', async t => {
+  for (const [name, options] of Object.entries({
+    'missing flag': { noDigestFlag: true },
+    'missing route': { noTurnRoute: true },
+    'wrong response schema': { wrongTurnSchema: true },
+    'integer event ID': { eventIdSchema: { type: 'integer' } },
+    'event ID without UUID format': { eventIdSchema: { type: 'string' } },
+  })) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result, calls } = await runFake(context, options);
+      assert.equal(exitCode, 2);
+      assert.equal(result.generation.status, 'blocked');
+      assert.equal(result.cleanup.status, 'not-attempted');
+      assert.ok(!calls.some(call => call.args[1] === 'invoke'));
+    }));
+  }
+});
+
+test('bad stored reply evidence fails without resubmission and verifies cancellation', async t => {
+  const stdoutText = 'private-reply-from-stdout';
+  const stderrText = 'private-reply-from-stderr';
+  for (const [name, options] of Object.entries({
+    'wrong project': { turnFields: { projectId: 'wrong-project' } },
+    'wrong run': { turnFields: { runId: 'wrong-run' } },
+    'wrong session': { turnFields: { sessionId: 'wrong-session' } },
+    'wrong event': { turnFields: { eventId: randomUUID() } },
+    'extra reply text': { turnFields: { text: stdoutText } },
+    'material hash disagrees': { changeReceipt: receipt => { receipt.assistantMaterial.contentSha256 = 'b'.repeat(64); } },
+    'completion hash disagrees': { changeReceipt: receipt => { receipt.outputSha256 = 'b'.repeat(64); } },
+    'read fails': { turnFailure: fail() },
+    'read exits nonzero with a matching digest': { turnFailure: { exitCode: 1 } },
+    'read times out with reply text in both streams': {
+      turnFailure: { ...fail(), exitCode: null, timedOut: true, stdout: stdoutText, stderr: stderrText, error: stderrText },
+    },
+  })) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result, resultText, commands, calls } = await runFake(context, options);
+      assert.equal(exitCode, 1);
+      assert.equal(result.generation.status, 'failed');
+      assert.equal(result.generation.storedTurn, null);
+      assert.equal(result.cleanup.status, 'passed');
+      assert.deepEqual(calls.slice(buildCommands(context.caseInput).length).map(call => call.args[2]), [
+        'generateProjectWorkflow', 'readProjectWorkflowGenerationJob', 'readProjectWorkflowGenerationResult',
+        'readSessionTurnContent', 'cancelProjectRun', 'readRunStatus',
+      ]);
+      const attempt = commands.trim().split('\n').map(line => JSON.parse(line))
+        .find(record => record.stepId === 'api-invoke-turn-digest');
+      assert.equal(attempt.timedOut, options.turnFailure?.timedOut ?? false);
+      for (const field of ['stdout', 'stderr', 'arguments', 'error']) {
+        assert.equal(Object.hasOwn(attempt, field), false, field);
+      }
+      for (const evidence of [commands, resultText]) {
+        assert.ok(!evidence.includes(stdoutText));
+        assert.ok(!evidence.includes(stderrText));
+      }
+    }));
+  }
+});
 
 test('model or budget mismatch blocks generation but still cleans up the verified disposable run', async () => {
   await withScratch(async context => {

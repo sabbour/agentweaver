@@ -849,8 +849,9 @@ Gateway route serves authenticated API clients; see
 ## Run workflow generation through the Gateway
 
 The `workflow-generation` case uses `api invoke` to submit a workflow draft,
-check job status and result, and verify native completion evidence. It uses a
-run-bound `projects.orchestrator` identity and a separate unbound
+check job status and result, and verify the stored assistant reply against the
+workflow completion receipt. It uses a run-bound `projects.orchestrator`
+identity and a separate unbound
 `projects.admin` identity for the same actor and tenant. The case also cancels
 and verifies the named disposable run.
 

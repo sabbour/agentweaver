@@ -116,7 +116,9 @@ The `workflow-generation` case uses normal `agentweaver api invoke` commands
 through the exact native apphost. It checks the current actor and accepted
 selection, creates or reattaches a durable generation job, polls its status,
 and verifies the generated draft, artifact hash, and native completion
-evidence. The job and draft remain stored after the case.
+evidence. It checks the stored assistant reply against the workflow completion
+receipt without keeping the reply text. The job and draft remain stored after
+the case.
 
 The case sends a model request and cancels the named run after it confirms the
 run identity. Use an explicitly approved non-production Gateway and a
@@ -206,29 +208,35 @@ the fields in the example and rejects unknown fields.
    ```
 
    The script checks the exact apphost hash, sign-in state, caller, and
-   accepted selection. It then uses `api invoke` to submit the generation
-   request, poll job status, and read the completed result. It cancels the
-   disposable run and verifies its status. If the first submission returns
+   accepted selection. Before submission, it checks that the apphost and
+   Gateway support the turn digest read. It then uses `api invoke` to submit
+   the generation request, poll job status, and read the completed result.
+   It reads the stored reply's hash before cancelling the disposable run
+   and verifying its status. If the first submission returns
    HTTP 503 with `workflow_generation_queue_full`, the case sends the same
    request with the same `Idempotency-Key` once more. It does not retry other
    submission failures or timeouts.
 
-   The command log records each submission attempt without its arguments or
-   output. It redacts request bodies and headers for other commands. The log
-   contains the draft returned by the result read and the target IDs. The
-   result records the artifact ID and definition hash. Store the evidence with
-   the project's access controls.
+   The command log records submission attempts and turn digest reads without
+   their arguments or output. It redacts request bodies and headers for other
+   commands. The log contains the draft returned by the result read and the
+   target IDs. The result records the artifact ID, definition hash, and the verified reply's
+   project, run, session, and event IDs and hash. Store the evidence with the
+   project's access controls.
 
 ### Verify the result
 
 The evidence directory contains `commands.jsonl` and `result.json`. A `passed`
 result (exit code `0`) requires a completed generation, matching workflow
-definition hash and artifact ID, valid native completion evidence, and a
-verified cancelled run. The result records generation and cleanup separately.
+definition hash and artifact ID, valid native completion evidence, a matching
+stored reply hash, and verified run cancellation. The result records generation
+and cancellation separately. This case checks that the run reached `cancelled`.
+It does not check whether runtime cleanup finished.
 
-A missing sign-in, missing operation, or caller/selection mismatch is
-`blocked` (exit code `2`). A generation error, timeout, response mismatch, or
-unverified cleanup is `failed` (exit code `1`). A failed or blocked case is
+A missing sign-in, missing turn digest support, missing operation, or
+caller or selection mismatch is `blocked` (exit code `2`). A generation
+error, timeout, response mismatch, or unverified cancellation is `failed`
+(exit code `1`). A failed or blocked case is
 not a pass.
 
 This route-specific case checks workflow generation. It does not replace full
