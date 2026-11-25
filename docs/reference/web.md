@@ -243,8 +243,18 @@ every Draft request. The binding selects a project and does not grant a role.
 
 The editor uses the returned provider `id` for later reads and updates. You can
 change the provider `name`. Create and update requests send provider metadata,
-not API keys or credential versions. The editor displays the provider state but
-does not publish credentials or activate a provider.
+not API keys or credential versions.
+
+On the provider detail view, when `hasCredential` is false and no unresolved
+credential operation is active, you can submit the first API key through
+`PUT /api/v1/projects/{projectId}/byok-providers/{providerId}/credential`. The
+browser clears the input synchronously before dispatch, sends the request once
+through `apiCallOnce` with no `401` retry, and tracks unresolved operation IDs
+in memory by confirmed `(issuer, actorId, tenantId, projectId, providerId)` for
+status checks (`GET .../credential/operations/{operationId}`) and publication
+rechecks (`recheckExistingVersion: true`). A full browser reload or tab close
+clears in-memory operation state. Key rotation, key removal, and provider
+activation remain unavailable in this view.
 
 ### Policy validation
 
