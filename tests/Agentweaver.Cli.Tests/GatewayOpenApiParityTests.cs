@@ -328,7 +328,7 @@ public sealed class GatewayOpenApiParityTests
             ?? throw new Xunit.Sdk.XunitException("The cursor parameter has no maximum length.");
     }
 
-    private static async Task<WebApplication> StartGatewayAsync()
+    internal static async Task<WebApplication> StartGatewayAsync()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {

@@ -15,6 +15,9 @@ namespace Agentweaver.Cli.Api;
 /// </summary>
 public sealed partial class GatewayClient : IGatewayClient
 {
+    internal const string TurnContentOperation = "readSessionTurnContent";
+    private const string TurnContentPath = "/api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}";
+    private static readonly UTF8Encoding StrictTurnUtf8 = new(false, true);
     private const int MaximumOpenApiBytes = 2 * 1024 * 1024;
     private const int MaximumRequestBytes = 64 * 1024 * 1024;
     private const int MaximumResponseBytes = 64 * 1024 * 1024;
@@ -101,7 +104,9 @@ public sealed partial class GatewayClient : IGatewayClient
         }
     }
 
-    public async Task<JsonObject> DiscoverAsync(CancellationToken ct)
+    public Task<JsonObject> DiscoverAsync(CancellationToken ct) => DiscoverAsync(ct, recordEvidence: true);
+
+    private async Task<JsonObject> DiscoverAsync(CancellationToken ct, bool recordEvidence)
     {
         _operations = new Dictionary<string, GatewayOperation>(StringComparer.Ordinal);
         var call = await SendAsync(
@@ -115,7 +120,7 @@ public sealed partial class GatewayClient : IGatewayClient
             acceptedMediaTypes: ["application/json"],
             responseHeaders: [],
             onEventChunk: null,
-            ct).ConfigureAwait(false);
+            ct, recordEvidence: recordEvidence).ConfigureAwait(false);
         if (call.Status != (int)HttpStatusCode.OK ||
             call.Body is not JsonObject document)
         {
@@ -125,6 +130,64 @@ public sealed partial class GatewayClient : IGatewayClient
         var operations = GatewayContract.Parse(document);
         _operations = operations;
         return document;
+    }
+
+    public async Task<JsonObject> ReadTurnContentDigestAsync(
+        IReadOnlyDictionary<string, string> path, CancellationToken ct)
+    {
+        if (path.Count != 4 ||
+            Identity.ProjectId is not { } projectId || Identity.RunId is not { } runId ||
+            !path.TryGetValue("projectId", out var requestedProject) || requestedProject != projectId ||
+            !path.TryGetValue("runId", out var requestedRun) || requestedRun != runId ||
+            !path.TryGetValue("sessionId", out var sessionId) || string.IsNullOrWhiteSpace(sessionId) ||
+            !path.TryGetValue("eventId", out var eventId) || !Guid.TryParseExact(eventId, "D", out var eventGuid) ||
+            eventGuid == Guid.Empty)
+            throw new InvalidDataException("The turn read requires the exact run-bound path.");
+
+        var operations = await EnsureDiscoveredAsync(ct, recordEvidence: false).ConfigureAwait(false);
+        if (!operations.TryGetValue(TurnContentOperation, out var operation) ||
+            operation.Method != "GET" || operation.Path != TurnContentPath ||
+            !operation.ResponseMediaTypes.Contains("application/json", StringComparer.Ordinal) ||
+            !operations.TryGetValue("getAuthorizationContext", out var preflight) ||
+            preflight.Method != "GET" || preflight.Path != "/api/v1/authorization/context")
+            throw new InvalidDataException("The Gateway does not advertise the expected turn read.");
+
+        var invocation = new GatewayInvocation(PathParameters: path);
+        var (requestPath, query, headers, body) = PrepareRequest(operation, invocation);
+        if (query.Count != 0 || headers.Count != 0 || body is not null)
+            throw new InvalidDataException("The Gateway turn read must not require additional request inputs.");
+
+        var bearer = await GetBearerAsync(Identity, ct).ConfigureAwait(false);
+        await ReadAuthorizationContextAsync(Identity, bearer, ct, recordEvidence: false).ConfigureAwait(false);
+        var response = await InvokeCoreAsync(operation, invocation, Identity, bearer, projectBearer: null,
+            skipAuthorizationPreflight: true, ct, pathOverride: requestPath, recordEvidence: false,
+            turnDigestPath: path).ConfigureAwait(false);
+        return (JsonObject)response.Body!;
+    }
+
+    private static JsonObject ProjectTurnDigest(byte[] bytes, IReadOnlyDictionary<string, string> path)
+    {
+        StrictTurnUtf8.GetCharCount(bytes);
+        using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 8 });
+        var turn = document.RootElement;
+        var identity = turn.GetProperty("identity");
+        var eventId = turn.GetProperty("eventId").GetGuid();
+        if (turn.EnumerateObject().Count() != 3 || identity.EnumerateObject().Count() != 3 ||
+            eventId != Guid.ParseExact(path["eventId"], "D") ||
+            identity.GetProperty("projectId").GetString() != path["projectId"] ||
+            identity.GetProperty("runId").GetString() != path["runId"] ||
+            identity.GetProperty("sessionId").GetString() != path["sessionId"] ||
+            turn.GetProperty("text").GetString() is not { } text)
+            throw new InvalidDataException("The Gateway turn does not match the requested identity.");
+
+        return new JsonObject
+        {
+            ["projectId"] = path["projectId"],
+            ["runId"] = path["runId"],
+            ["sessionId"] = path["sessionId"],
+            ["eventId"] = eventId.ToString("D"),
+            ["contentSha256"] = Convert.ToHexStringLower(SHA256.HashData(StrictTurnUtf8.GetBytes(text))),
+        };
     }
 
     public async Task<JsonObject> ValidateAuthorizationContextAsync(CancellationToken ct)
@@ -494,7 +557,8 @@ public sealed partial class GatewayClient : IGatewayClient
         string? pathOverride = null,
         byte[]? bodyBytesOverride = null,
         Action? onDispatch = null,
-        bool recordEvidence = true)
+        bool recordEvidence = true,
+        IReadOnlyDictionary<string, string>? turnDigestPath = null)
     {
         if (!skipAuthorizationPreflight)
             await ValidateAuthorizationContextAsync(ct).ConfigureAwait(false);
@@ -519,7 +583,8 @@ public sealed partial class GatewayClient : IGatewayClient
             operation.MaximumRequestBytes,
             operation.OperationId,
             onDispatch: onDispatch,
-            recordEvidence: recordEvidence).ConfigureAwait(false);
+            recordEvidence: recordEvidence,
+            turnDigestPath: turnDigestPath).ConfigureAwait(false);
     }
 
     private static readonly IReadOnlyDictionary<string, string> EmptyParameters =
@@ -533,10 +598,11 @@ public sealed partial class GatewayClient : IGatewayClient
                 : parameter.Name == name))
         ?? throw new InvalidDataException($"The live Gateway operation does not define path parameter {name}.");
 
-    private async Task<IReadOnlyDictionary<string, GatewayOperation>> EnsureDiscoveredAsync(CancellationToken ct)
+    private async Task<IReadOnlyDictionary<string, GatewayOperation>> EnsureDiscoveredAsync(
+        CancellationToken ct, bool recordEvidence = true)
     {
         if (_operations.Count == 0)
-            await DiscoverAsync(ct).ConfigureAwait(false);
+            await DiscoverAsync(ct, recordEvidence).ConfigureAwait(false);
         return _operations;
     }
 
@@ -907,7 +973,8 @@ public sealed partial class GatewayClient : IGatewayClient
         bool requireOpaqueResponse = false,
         Action? onDispatch = null,
         bool recordEvidence = true,
-        string requestContentType = "application/json")
+        string requestContentType = "application/json",
+        IReadOnlyDictionary<string, string>? turnDigestPath = null)
     {
         var requestId = Guid.NewGuid();
         var started = Stopwatch.GetTimestamp();
@@ -995,6 +1062,9 @@ public sealed partial class GatewayClient : IGatewayClient
             evidence["status"] = (int)response.StatusCode;
             var contentType = GatewayContract.NormalizeMediaType(
                 response.Content.Headers.ContentType?.ToString() ?? string.Empty);
+            if (turnDigestPath is not null &&
+                (response.StatusCode != HttpStatusCode.OK || contentType != "application/json"))
+                throw new InvalidDataException("The Gateway did not return turn JSON.");
             evidence["contentType"] = contentType;
             evidence["traceId"] = FindCorrelationId(response);
             var capturedHeaders = CaptureHeaders(response, responseHeaders);
@@ -1023,6 +1093,9 @@ public sealed partial class GatewayClient : IGatewayClient
                 streamingEventResponse ? onEventChunk : null,
                 // SSE bodies can be long-lived; after headers, the caller controls their lifetime, not the finite-call timeout.
                 streamingEventResponse ? ct : timeout.Token).ConfigureAwait(false);
+            if (turnDigestPath is not null)
+                return new GatewayResponse(200, ProjectTurnDigest(bytes, turnDigestPath), EmptyParameters, new())
+                    { HasBody = true };
             JsonNode? responseBody = null;
             byte[]? binaryBody = null;
             if (contentType == "application/octet-stream" ||

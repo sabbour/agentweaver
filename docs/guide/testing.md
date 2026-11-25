@@ -1380,18 +1380,20 @@ P1 API acceptance.
 
 The `task-model-completion` case dispatches a claimed task through the public
 Gateway with native CLI `api invoke` commands. It checks the accepted BYOK
-model and hard run budget, matching task and child completion evidence,
-priced usage, and disposable-run cleanup.
+model and hard run budget, matching task and child completion evidence, the
+stored assistant reply hash, priced usage, and disposable-run cleanup.
 
 Run its controlled case tests from the repository root:
 
 ```powershell
 node --test scripts\acceptance\api\tests\task-model-completion.test.mjs
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --filter FullyQualifiedName~TurnDigest
 ```
 
-These tests use controlled CLI responses. They do not contact a live Gateway
-or run a model. Run the live case with the exact native apphost, an approved
-non-production target, and an approved disposable run. The case sends a model
+The Node tests use controlled CLI responses. The .NET tests use the emitted
+Gateway contract and the Events turn response type with a controlled HTTP
+handler. Neither test runs a model. Run the live case with the exact native
+apphost, an approved non-production target, and an approved disposable run. The case sends a model
 request and cancels the run after it confirms the run identity. Follow
 [Run task model completion](./api-acceptance-migration.md#run-task-model-completion)
 for the input and retained evidence.

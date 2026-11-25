@@ -483,6 +483,20 @@ bearer tokens or project-authorization headers. When an operation advertises
 `X-Agentweaver-Project-Authorization`, the CLI obtains the separate,
 unbound `projects.admin` authorization for the same actor and tenant.
 
+Use `--turn-content-sha256` with `readSessionTurnContent` to verify a stored
+reply without printing the text. Sign in with a run-bound identity that has
+permission to read the turn. The `projectId` and `runId` path parameters must
+match that identity.
+
+```powershell
+agentweaver api invoke readSessionTurnContent --turn-content-sha256 --scope projects.orchestrator --project-id PROJECT_ID --run-id RUN_ID --path projectId=PROJECT_ID --path runId=RUN_ID --path sessionId=SESSION_ID --path eventId=EVENT_ID
+```
+
+The command returns `projectId`, `runId`, `sessionId`, `eventId`, and
+`contentSha256`. The digest is a SHA-256 hash of the decoded text as UTF-8,
+including its original spaces and line endings. This mode does not accept a
+request body, query parameters, custom headers, or an output file.
+
 The invocation setup receipt operations are `createP1InvocationSetup` (POST) and
 `readP1InvocationSetup` (GET), both on
 `/api/v1/p1/invocations/{invocationId}/setup`. They use the separate unbound
@@ -850,8 +864,8 @@ This route-specific case does not replace full P1 API acceptance.
 
 The `task-model-completion` case uses normal CLI `api invoke` commands to
 dispatch a claimed task through the public Gateway. It checks the accepted
-BYOK model and hard run budget, task-completion evidence, priced usage, and
-cleanup of the disposable run.
+BYOK model and hard run budget, the stored assistant reply against the child
+receipt, priced usage, and cleanup of the disposable run.
 
 The case sends a model request and cancels the named run. Use an approved
 non-production Gateway and a disposable run. Follow

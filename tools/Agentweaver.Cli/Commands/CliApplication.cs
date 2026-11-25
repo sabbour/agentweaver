@@ -8,6 +8,7 @@ namespace Agentweaver.Cli;
 
 public static class CliApplication
 {
+    private const string TurnDigestFlag = "turn-content-sha256";
     private static readonly JsonSerializerOptions OutputJson = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -21,6 +22,9 @@ public static class CliApplication
     {
         var output = runtime?.Output ?? Console.Out;
         var error = runtime?.Error ?? Console.Error;
+        if (args.Contains("--" + TurnDigestFlag, StringComparer.Ordinal))
+            return await RunTurnDigestAsync(args, runtime ?? new CliRuntimeOptions(), output, error, ct)
+                .ConfigureAwait(false);
         if (args.Length == 0 || args.Any(IsHelp))
         {
             await output.WriteLineAsync(HelpText).ConfigureAwait(false);
@@ -126,6 +130,38 @@ public static class CliApplication
         }
     }
 
+    private static async Task<int> RunTurnDigestAsync(
+        string[] args, CliRuntimeOptions runtime, TextWriter output, TextWriter error, CancellationToken ct)
+    {
+        try
+        {
+            if (args.Length < 4 || args[0] != "api" || args[1] != "invoke" || args[2] != GatewayClient.TurnContentOperation)
+                throw new CliUsageException("The flag requires the session turn read.");
+            var parsed = CliOptions.Parse(args[3..], new HashSet<string>(StringComparer.Ordinal) { TurnDigestFlag });
+            parsed.RequireOnly(new[] { TurnDigestFlag, "path", "scope" }.Concat(CliConfiguration.TargetOptionNames).ToArray());
+            if (!parsed.HasFlag(TurnDigestFlag))
+                throw new CliUsageException("The turn digest flag is required.");
+            var identity = CliConfiguration.ReadIdentity(parsed.Many("scope"), discoveryOnly: false, options: parsed);
+            var path = ParsePairs(parsed.Many("path"), "--path", StringComparer.Ordinal);
+            using var ownedClient = runtime.HttpClient is null ? CreateSafeHttpClient() : null;
+            var factory = runtime.GatewayClientFactory ??
+                new GatewayClientFactory(runtime.HttpClient ?? ownedClient!, runtime.Authentication);
+            var result = await factory.Create(identity).ReadTurnContentDigestAsync(path, ct).ConfigureAwait(false);
+            await WriteJsonAsync(output, result).ConfigureAwait(false);
+            return 0;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await error.WriteLineAsync("Turn content digest cancelled.").ConfigureAwait(false);
+            return 130;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            await error.WriteLineAsync("Could not read the turn content digest.").ConfigureAwait(false);
+            return 1;
+        }
+    }
+
     private static async Task<int> RunApiAsync(
         string[] args,
         CliRuntimeOptions runtime,
@@ -186,6 +222,14 @@ public static class CliApplication
             var description = (JsonObject)operation.Document.DeepClone();
             description["method"] = operation.Method;
             description["path"] = operation.Path;
+            if (operationId == GatewayClient.TurnContentOperation)
+                description["parameters"] = new JsonArray(operation.Parameters.Select(parameter => new JsonObject
+                {
+                    ["name"] = parameter.Name,
+                    ["in"] = parameter.Location,
+                    ["required"] = parameter.Required,
+                    ["schema"] = parameter.Schema.DeepClone(),
+                }).ToArray());
             await WriteJsonAsync(output, description).ConfigureAwait(false);
             return 0;
         }
@@ -584,6 +628,9 @@ public static class CliApplication
           agentweaver api describe <operationId> [target options]
           agentweaver api invoke <operationId> [target options] [--path name=value] [--query name=value]
               [--body <JSON|@file>] [--header name=value] [--output <new-file>]
+          agentweaver api invoke readSessionTurnContent --turn-content-sha256
+              [target options] [--scope <scope>] --path projectId=<id> --path runId=<id>
+              --path sessionId=<id> --path eventId=<guid>
           agentweaver rest --method GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS --url <root-relative-or-same-Gateway-URL>
               [target options] [--scope <scope>] [--body <JSON|@file>] [--header name=value]... [--output <new-file>]
           target options: --gateway-url <url> --broker-issuer <url> --client-id <id>

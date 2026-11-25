@@ -232,8 +232,8 @@ P1 API acceptance.
 
 The `task-model-completion` case dispatches an already claimed task through the
 public Gateway. It checks the accepted model selection and hard budget,
-owner-derived task completion, the matching child receipt, priced usage, and
-disposable-run cleanup.
+owner-derived task completion, the matching child receipt, the stored assistant
+reply, priced usage, and disposable-run cleanup.
 
 The case sends a model request and cancels the named run after it confirms the
 run identity. Use an approved non-production Gateway and a disposable run.
@@ -333,25 +333,33 @@ its documented fields. Do not add credentials, tokens, prompts, or task content.
    `POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch`.
    The Gateway and native CLI use a ten-minute deadline for each dispatch
    request. The case retries the same request while child startup is pending.
-   A terminal dispatch failure stops retries. After it verifies task
-   completion and run usage, it cancels the named run and waits for
-   `runtimeCleanup.state` to reach `complete` with no pending work. The case
-   also attempts cleanup after dispatch failure.
+   A terminal dispatch failure stops retries. Before dispatch, the case checks
+   that the apphost supports `--turn-content-sha256`. It uses `api describe`
+   to check the Gateway turn read's required inputs and HTTP 200 JSON response.
+   After dispatch completes, the case reads the
+   assistant turn in the child session once. The stored assistant reply is
+   verified against the child receipt by matching the reply's hash.
 
-   `commands.jsonl` records redacted arguments and command results. It stores
-   hashes instead of the run-selection and dispatch output, so it does not
-   record task output text. `result.json` records the selected model, task and
-   completion hashes, usage totals, and cleanup result.
+   After it verifies task completion and run usage, the case cancels the
+   named run and waits for `runtimeCleanup.state` to reach `complete` with no
+   pending work. The case
+   also attempts cleanup after a dispatch or turn read failure. It does not
+   dispatch again after a turn read failure.
+
+   `commands.jsonl` records command steps, timing, and exit status. It does
+   not record arguments, standard output, or standard error. `result.json`
+   records the selected model, task and completion hashes, verified turn IDs
+   and hash, usage totals, and cleanup result.
 
 ### Verify the result
 
 The evidence directory contains `commands.jsonl` and `result.json`. A
 `passed` result (exit code `0`) requires matching task-completion evidence and
-child receipt, fully priced BYOK usage within the accepted hard limit, and a
-cancelled run with complete runtime cleanup.
+child receipt, a matching stored reply hash, fully priced BYOK usage within the
+accepted hard limit, and a cancelled run with complete runtime cleanup.
 
-A missing sign-in, missing operation, caller mismatch, selection mismatch, or
-non-dispatchable decision is `blocked` (exit code `2`). A dispatch error,
+A missing sign-in, missing apphost capability or operation, caller mismatch,
+selection mismatch, or non-dispatchable decision is `blocked` (exit code `2`). A dispatch error,
 timeout, evidence or usage mismatch, run that does not reach `cancelled`, or
 runtime cleanup that remains pending is `failed` (exit code `1`). A failed or
 blocked case is not a pass.

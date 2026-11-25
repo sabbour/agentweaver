@@ -23,6 +23,9 @@ import {
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const examplePath = path.resolve(directory, '..', 'examples', 'task-model-completion.json');
 const example = JSON.parse(await readFile(examplePath, 'utf8'));
+const eventId = 'c57eb1b9-6e32-4a0e-aa77-0770989753e5';
+const turnRoute = '/api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}';
+const hiddenOutput = 'private reply and diagnostic sentinel';
 const apphostName = process.platform === 'win32' ? 'agentweaver.exe' : 'agentweaver';
 const hash = 'a'.repeat(64);
 
@@ -89,6 +92,7 @@ function completedDispatch(input, options = {}) {
     associationId: task.associationId,
     childSessionId: completion.childSessionId,
     outputSha256: completion.childOutputSha256,
+    assistantMaterial: { eventId, kind: 'turnContent', contentSha256: completion.childOutputSha256 },
     registrationSha256: hash,
     sourceSha256: hash,
     executionFence: completion.executionFence,
@@ -188,11 +192,35 @@ function fakeApphost(input, options = {}) {
     calls.push({ args, env });
     const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : null;
     if (args[0] === '--version') return { ...ok({}), stdout: '1.1.0\n' };
+    if (args[0] === '--help') {
+      return { ...ok({}), stdout: options.oldApphost
+        ? 'agentweaver api invoke readSessionTurnContent --turn-content-sha256-extra\n'
+        : '  agentweaver api invoke readSessionTurnContent --turn-content-sha256\n' };
+    }
     if (args[0] === 'api' && args[1] === 'operations') {
       return plain([
         'getAuthorizationContext', 'getRunSelection', 'readDecisions',
         'dispatchCoordinatorExecution', 'readRunUsage', 'cancelProjectRun', 'readRunStatus',
-      ].map(operationId => ({ operationId })));
+      ].map(operationId => ({ operationId })).concat(options.noTurnRoute ? [] : [{
+        operationId: 'readSessionTurnContent',
+        method: options.wrongTurnMethod ?? 'GET',
+        path: options.wrongTurnPath ?? turnRoute,
+      }]));
+    }
+    if (args[0] === 'api' && args[1] === 'describe' && args[2] === 'readSessionTurnContent') {
+      const description = {
+        operationId: 'readSessionTurnContent',
+        method: 'GET',
+        path: turnRoute,
+        parameters: ['projectId', 'runId', 'sessionId', 'eventId']
+          .map(name => ({ name, in: 'path', required: true })),
+        responses: { 200: { content: { 'application/json': {
+          schema: { $ref: '#/components/schemas/SessionTurnContent' },
+        } } } },
+      };
+      description.parameters.push({ name: 'X-Agentweaver-Tenant', in: 'header', required: false });
+      options.changeDescription?.(description);
+      return options.describeFailed ? fail() : plain(description);
     }
     if (args[0] === 'auth' && args[1] === 'status') {
       const writer = args.includes('projects.admin');
@@ -266,7 +294,21 @@ function fakeApphost(input, options = {}) {
               },
             },
           }
-          : completedDispatch(input, options));
+          : options.changeReceipt?.(completedDispatch(input, options)) ?? completedDispatch(input, options));
+      case 'readSessionTurnContent': {
+        const completion = completedDispatch(input, options).taskCompletion;
+        if (options.failedTurnRead) {
+          return { ...fail(), stdout: hiddenOutput, stderr: hiddenOutput, error: hiddenOutput, timedOut: true };
+        }
+        return plain({
+          projectId: input.target.projectId,
+          runId: input.target.runId,
+          sessionId: completion.childSessionId,
+          eventId,
+          contentSha256: completion.childOutputSha256,
+          ...options.turnFields,
+        });
+      }
       case 'readRunUsage':
         return ok(runUsage(input, options));
       case 'cancelProjectRun':
@@ -408,14 +450,28 @@ test('case retries the same dispatch, checks completion and usage, then cancels 
     assert.equal(result.dispatch.status, 'passed');
     assert.equal(result.dispatch.attempts, 2);
     assert.equal(result.dispatch.task.taskId, context.caseInput.expectedTask.taskId);
+    assert.ok(!Object.hasOwn(result.dispatch.task, 'childReceiptSha256'));
+    assert.deepEqual(result.dispatch.storedTurn, {
+      projectId: context.caseInput.target.projectId,
+      runId: context.caseInput.target.runId,
+      sessionId: result.dispatch.task.childSessionId,
+      eventId,
+      contentSha256: result.dispatch.task.childOutputSha256,
+    });
     assert.equal(result.dispatch.usage.amount, 1.75);
     assert.equal(result.cleanup.status, 'passed');
     assert.equal(result.cleanup.runtimeCleanup.state, 'complete');
     assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 2);
-    assert.match(commands, /"api","invoke","dispatchCoordinatorExecution"/);
-    assert.match(commands, /"api","invoke","readRunUsage"/);
+    assert.match(commands, /api-invoke-dispatch-task/);
+    assert.match(commands, /api-invoke-turn-digest/);
+    assert.match(commands, /api-invoke-run-usage/);
     assert.doesNotMatch(commands, /task output/);
-    assert.match(commands, /<redacted sha256=[a-f0-9]{64}>/);
+    assert.doesNotMatch(commands, /"stdout"|"stderr"|"error"|"arguments"/);
+    const [turn] = calls.filter(call => call.args[1] === 'invoke' && call.args[2] === 'readSessionTurnContent');
+    assert.ok(turn.args.includes('--turn-content-sha256'));
+    assert.ok(turn.args.includes('projects.orchestrator'));
+    assert.ok(turn.args.includes(`sessionId=${result.dispatch.task.childSessionId}`));
+    assert.ok(turn.args.includes(`eventId=${eventId}`));
 
     const dispatchCalls = calls.filter(call => call.args[2] === 'dispatchCoordinatorExecution');
     assert.equal(dispatchCalls.length, 2);
@@ -424,6 +480,90 @@ test('case retries the same dispatch, checks completion and usage, then cancels 
     assert.deepEqual(JSON.parse(dispatchBody), {
       expectedStateVersion: context.caseInput.expectedDecisionStateVersion,
       workPlanId: context.caseInput.expectedTask.workPlanId,
+    });
+
+    test('the stored assistant reply is verified against the child receipt without a receipt hash', async () => {
+      await withScratch(async context => {
+        const { exitCode, result } = await runFake(context, {
+          changeReceipt: response => {
+            delete response.taskCompletion.childReceiptSha256;
+            return response;
+          },
+        });
+        assert.equal(exitCode, 0);
+        assert.equal(result.dispatch.storedTurn.eventId, eventId);
+        assert.equal(result.dispatch.storedTurn.contentSha256, result.dispatch.task.childOutputSha256);
+        assert.ok(!Object.hasOwn(result.dispatch.task, 'childReceiptSha256'));
+        assert.equal(result.cleanup.status, 'passed');
+      });
+    });
+
+    test('preflight blocks dispatch without the exact apphost flag and Gateway GET route', async t => {
+      for (const [name, options] of Object.entries({
+        'old apphost': { oldApphost: true },
+        'missing route': { noTurnRoute: true },
+        'wrong method': { wrongTurnMethod: 'POST' },
+        'wrong path': { wrongTurnPath: '/api/v1/another-route' },
+        'describe failed': { describeFailed: true },
+        'missing required path parameter': { changeDescription: op => op.parameters.shift() },
+        'extra required query': {
+          changeDescription: op => op.parameters.push({ name: 'partition', in: 'query', required: true }),
+        },
+        'extra required header': {
+          changeDescription: op => op.parameters.push({ name: 'X-Owner', in: 'header', required: true }),
+        },
+        'required body': { changeDescription: op => { op.requestBody = { required: true }; } },
+        'missing 200 JSON even with other success JSON': {
+          changeDescription: op => { op.responses = { 202: op.responses[200] }; },
+        },
+        'wrong 200 response media type': {
+          changeDescription: op => { op.responses[200].content = { 'text/plain': {} }; },
+        },
+        'wrong 200 response schema': {
+          changeDescription: op => { op.responses[200].content['application/json'].schema = { type: 'string' }; },
+        },
+      })) {
+        await t.test(name, () => withScratch(async context => {
+          const { exitCode, calls } = await runFake(context, options);
+          assert.equal(exitCode, 2);
+          assert.ok(!calls.some(call => call.args[2] === 'dispatchCoordinatorExecution'));
+        }));
+      }
+    });
+
+    test('receipt and turn failures still clean up without redispatch or output leaks', async t => {
+      const editReceipt = edit => ({ changeReceipt: response => {
+        edit(response.completionEvidence, response.completionEvidence[0]);
+        return response;
+      } });
+      for (const [name, options] of Object.entries({
+        'missing receipt': editReceipt(receipts => receipts.pop()),
+        'duplicate receipt': editReceipt((receipts, receipt) => receipts.push({ ...receipt, outputSha256: 'f'.repeat(64) })),
+        'missing event': editReceipt((_, receipt) => { delete receipt.assistantMaterial.eventId; }),
+        'wrong material kind': editReceipt((_, receipt) => { receipt.assistantMaterial.kind = 'sdkCache'; }),
+        'wrong material hash': editReceipt((_, receipt) => { receipt.assistantMaterial.contentSha256 = 'f'.repeat(64); }),
+        'wrong receipt hash': editReceipt((_, receipt) => { receipt.outputSha256 = 'f'.repeat(64); }),
+        'wrong project': { turnFields: { projectId: hiddenOutput } },
+        'wrong run': { turnFields: { runId: hiddenOutput } },
+        'wrong child session': { turnFields: { sessionId: hiddenOutput } },
+        'wrong event': { turnFields: { eventId: 'eafc81b9-6e32-4a0e-aa77-0770989753e5' } },
+        'wrong digest': { turnFields: { contentSha256: 'f'.repeat(64) } },
+        'additional output': { turnFields: { text: hiddenOutput } },
+        'failed read with partial streams': { failedTurnRead: true },
+      })) {
+        await t.test(name, () => withScratch(async context => {
+          const { exitCode, result, commands, calls } = await runFake(context, options);
+          assert.equal(exitCode, 1);
+          assert.equal(result.cleanup.status, 'passed');
+          assert.equal(result.dispatch.storedTurn, null);
+          assert.equal(calls.filter(call => call.args[2] === 'dispatchCoordinatorExecution').length, 1);
+          assert.equal(calls.filter(call => call.args[1] === 'invoke' && call.args[2] === 'readSessionTurnContent').length,
+            options.changeReceipt ? 0 : 1);
+          assert.ok(!calls.some(call => call.args[2] === 'readRunUsage'));
+          assert.ok(!commands.includes(hiddenOutput));
+          assert.ok(!JSON.stringify(result).includes(hiddenOutput));
+        }));
+      }
     });
 
     const cancel = calls.find(call => call.args[2] === 'cancelProjectRun');
@@ -505,7 +645,9 @@ test('dispatch and cleanup commands use the public API through the native CLI', 
   const operations = buildCommands(input).map(command => command.id);
   assert.deepEqual(operations, [
     'version',
+    'help',
     'api-operations',
+    'api-describe-turn-digest',
     'auth-status-run',
     'auth-status-project-writer',
     'api-invoke-authorization-context',

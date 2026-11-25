@@ -39,6 +39,9 @@ const TARGET_OPTIONS = [
   ['--api-audience', 'apiAudience'],
   ['--tenant-id', 'tenantId'],
 ];
+const TURN_READ_OPERATION = 'readSessionTurnContent';
+const TURN_READ_ROUTE = '/api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}';
+const TURN_DIGEST_FLAG = '--turn-content-sha256';
 const REQUIRED_OPERATIONS = [
   'getAuthorizationContext',
   'getRunSelection',
@@ -241,7 +244,9 @@ export function buildCommands(input) {
   ];
   return [
     { id: 'version', args: ['--version'] },
+    { id: 'help', args: ['--help'] },
     { id: 'api-operations', args: ['api', 'operations', ...target] },
+    { id: 'api-describe-turn-digest', args: ['api', 'describe', TURN_READ_OPERATION, ...target] },
     { id: 'auth-status-run', args: ['auth', 'status', ...target, ...run] },
     { id: 'auth-status-project-writer', args: ['auth', 'status', ...target, '--scope', 'projects.admin'] },
     {
@@ -287,6 +292,20 @@ export function buildRunUsageCommand(input) {
       '--path', `projectId=${input.target.projectId}`,
       '--path', `runId=${input.target.runId}`,
       ...runBoundArgs(input),
+    ],
+  };
+}
+
+function buildTurnDigestCommand(input, completed) {
+  return {
+    id: 'api-invoke-turn-digest',
+    args: [
+      'api', 'invoke', TURN_READ_OPERATION, TURN_DIGEST_FLAG,
+      ...targetArgs(input), ...runBoundArgs(input),
+      '--path', `projectId=${input.target.projectId}`,
+      '--path', `runId=${input.target.runId}`,
+      '--path', `sessionId=${completed.childSessionId}`,
+      '--path', `eventId=${completed.assistantEventId}`,
     ],
   };
 }
@@ -355,21 +374,25 @@ function runCommand(cliPath, args, env, timeoutMs = COMMAND_TIMEOUT_MS) {
   };
 }
 
-function safeArguments(args) {
-  const safe = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const value = args[index];
-    safe.push(value);
-    if (value === '--body' && typeof args[index + 1] === 'string') {
-      const body = args[++index];
-      safe.push(`<redacted sha256=${createHash('sha256').update(body).digest('hex')}>`);
-    } else if (value === '--header' && typeof args[index + 1] === 'string') {
-      const header = args[++index];
-      const separator = header.indexOf('=');
-      safe.push(separator < 0 ? '<redacted>' : `${header.slice(0, separator)}=<redacted>`);
-    }
+function requireTurnDigestContract(operation) {
+  const expected = new Set(['projectId', 'runId', 'sessionId', 'eventId']);
+  if (operation?.operationId !== TURN_READ_OPERATION
+    || operation.method !== 'GET' || operation.path !== TURN_READ_ROUTE
+    || operation.requestBody?.required === true
+    || !Array.isArray(operation.parameters)
+    || operation.responses?.['200']?.content?.['application/json']?.schema?.$ref
+      !== '#/components/schemas/SessionTurnContent'
+    || operation.parameters.some(parameter => {
+      if (parameter?.in === 'path') {
+        return parameter.required !== true || !expected.delete(parameter.name);
+      }
+      return parameter?.required === true
+        && !(parameter.in === 'header' && typeof parameter.name === 'string'
+          && parameter.name.toLowerCase() === 'x-agentweaver-tenant');
+    })
+    || expected.size !== 0) {
+    throw new BlockedCaseError('The Gateway turn read contract does not support this case.');
   }
-  return safe;
 }
 
 function requireSuccess(record, step) {
@@ -501,7 +524,6 @@ export function validateCompletedDispatch(response, input, expectedStateVersion)
     || !isSha256(completion.taskContentSha256)
     || !isSha256(completion.acceptedSelectionHash)
     || !isSha256(completion.childOutputSha256)
-    || !isSha256(completion.childReceiptSha256)
     || !isSha256(completion.outputSetSha256)
     || !isSha256(completion.outputWitnessProofSha256)) {
     throw new Error('The owner did not return task-completion evidence for the expected claim and plan.');
@@ -509,12 +531,19 @@ export function validateCompletedDispatch(response, input, expectedStateVersion)
   const receipts = response.completionEvidence.filter(receipt =>
     receipt.workPlanId === expected.workPlanId
       && receipt.associationId === expected.associationId
-      && receipt.childSessionId === completion.childSessionId
-      && receipt.outputSha256 === completion.childOutputSha256);
+      && receipt.childSessionId === completion.childSessionId);
   if (receipts.length !== 1) {
     throw new Error('The completed task does not have one matching child receipt.');
   }
   const receipt = receipts[0];
+  const material = receipt.assistantMaterial;
+  if (material?.kind !== 'turnContent'
+    || !isUuid(material.eventId)
+    || material.eventId === '00000000-0000-0000-0000-000000000000'
+    || material.contentSha256 !== receipt.outputSha256
+    || receipt.outputSha256 !== completion.childOutputSha256) {
+    throw new Error('The child receipt does not identify the stored assistant reply.');
+  }
   if (receipt.contractVersion !== 1
     || !isSha256(receipt.requestSha256)
     || !isSha256(receipt.promptSha256)
@@ -541,8 +570,8 @@ export function validateCompletedDispatch(response, input, expectedStateVersion)
     definitionRevision: completion.definitionRevision,
     associationId: completion.associationId,
     childSessionId: completion.childSessionId,
+    assistantEventId: material.eventId.toLowerCase(),
     childOutputSha256: completion.childOutputSha256,
-    childReceiptSha256: completion.childReceiptSha256,
     acceptedSelectionHash: completion.acceptedSelectionHash,
     usageEventIds: receipt.usageEventIds,
     modelId: receipt.modelId,
@@ -640,7 +669,7 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   const resultHandle = await open(path.join(outputPath, 'result.json'), 'wx', 0o600);
   await resultHandle.writeFile('{"status":"incomplete"}\n', 'utf8');
   const startedAt = new Date().toISOString();
-  const dispatch = { status: 'not-started', attempts: 0, task: null, usage: null, failure: null };
+  const dispatch = { status: 'not-started', attempts: 0, task: null, storedTurn: null, usage: null, failure: null };
   const cleanup = { status: 'not-required', runtimeCleanup: null, failure: null };
   let status = 'failed';
   let failure = null;
@@ -652,22 +681,22 @@ export async function runCase(options, env = process.env, dependencies = {}) {
   const sleep = dependencies.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
 
   async function execute(command) {
-    const record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
-    const redactOutput = command.id === 'api-invoke-run-selection'
-      || command.id === 'api-invoke-dispatch-task';
+    let record;
+    try {
+      record = runCli(cliPath, command.args, env, command.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    } catch {
+      throw new Error(`${command.id} could not start.`);
+    }
     await appendRedactedJsonLine(commandsPath, {
       caseId: CASE_ID,
       runId,
       stepId: command.id,
       executable: path.basename(cliPath),
-      arguments: safeArguments(command.args),
-      ...record,
-      ...(redactOutput
-        ? {
-          stdout: `<redacted sha256=${createHash('sha256').update(record.stdout).digest('hex')}>`,
-          stderr: `<redacted sha256=${createHash('sha256').update(record.stderr).digest('hex')}>`,
-        }
-        : {}),
+      startedAt: record.startedAt,
+      completedAt: record.completedAt,
+      durationMs: record.durationMs,
+      exitCode: record.exitCode,
+      timedOut: record.timedOut,
     });
     commandCount += 1;
     requireSuccess(record, command.id);
@@ -679,16 +708,31 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     let acceptedBudgetHardLimit = null;
     let decisionStateVersion = null;
     for (const command of buildCommands(input)) {
-      const record = await execute(command);
+      const record = await execute(command).catch(error => {
+        if (command.id === 'api-describe-turn-digest') {
+          throw new BlockedCaseError('The CLI could not describe the Gateway turn read contract.');
+        }
+        throw error;
+      });
       if (command.id === 'version') {
         version = record.stdout.trim();
         if (!version) throw new Error('The apphost did not report its version.');
+      } else if (command.id === 'help') {
+        const usage = `agentweaver api invoke ${TURN_READ_OPERATION} ${TURN_DIGEST_FLAG}`;
+        if (!record.stdout.split(/\r?\n/).some(line => line.trim() === usage)) {
+          throw new BlockedCaseError('The pinned apphost does not support turn content digests.');
+        }
       } else if (command.id === 'api-operations') {
         const operations = parseJson(record.stdout, command.id);
-        const available = new Set(Array.isArray(operations) ? operations.map(item => item.operationId) : []);
-        if (REQUIRED_OPERATIONS.some(operation => !available.has(operation))) {
+        const available = Array.isArray(operations) ? operations : [];
+        if (REQUIRED_OPERATIONS.some(operation => !available.some(item => item?.operationId === operation))
+          || !available.some(item => item?.operationId === TURN_READ_OPERATION
+            && item.method === 'GET' && item.path === TURN_READ_ROUTE)) {
           throw new BlockedCaseError('The Gateway does not expose every operation required by this case.');
         }
+      } else if (command.id === 'api-describe-turn-digest') {
+        const description = parseJson(record.stdout, command.id);
+        requireTurnDigestContract(description);
       } else if (command.id === 'auth-status-run') {
         if (!validateAuthStatus(parseJson(record.stdout, command.id), input, true)) {
           throw new BlockedCaseError('Sign in with the run-bound projects.orchestrator identity before this case.');
@@ -739,6 +783,24 @@ export async function runCase(options, env = process.env, dependencies = {}) {
     }
     if (completed === null) throw new Error('The task dispatch did not complete before its deadline.');
     dispatch.task = completed;
+
+    const turnCommand = buildTurnDigestCommand(input, completed);
+    const turn = parseJson((await execute(turnCommand)).stdout, turnCommand.id);
+    if (turn?.projectId !== input.target.projectId
+      || Object.keys(turn).length !== 5
+      || turn.runId !== input.target.runId
+      || turn.sessionId !== completed.childSessionId
+      || turn.eventId !== completed.assistantEventId
+      || turn.contentSha256 !== completed.childOutputSha256) {
+      throw new Error('The stored assistant reply does not match the completed child receipt.');
+    }
+    dispatch.storedTurn = {
+      projectId: turn.projectId,
+      runId: turn.runId,
+      sessionId: turn.sessionId,
+      eventId: turn.eventId,
+      contentSha256: turn.contentSha256,
+    };
 
     const usageRecord = await execute(buildRunUsageCommand(input));
     dispatch.usage = validateRunUsage(
