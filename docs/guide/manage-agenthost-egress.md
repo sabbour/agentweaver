@@ -74,6 +74,9 @@ agentweaver run egress RUN_ID --scope projects.admin --tenant-id TENANT_ID --lim
 Replace `TENANT_ID` with the tenant used on the first page. When `nextCursor`
 is `null`, the page has no successor.
 
+If the CLI reports an invalid cursor, rerun the command without `--cursor` to
+start from the first page.
+
 ## Read egress in the web client
 
 Open a run from Orchestrations, then select **Egress** in the run header. The
