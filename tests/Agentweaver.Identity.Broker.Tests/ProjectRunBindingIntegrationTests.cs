@@ -1171,6 +1171,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var cleanupState = await WaitForCleanupStateAsync(
                     startStore, TenantId, project.ProjectId, pending.RunId, "cleanup_pending");
                 Assert.NotNull(cleanupState);
+                var terminalStatus = await ReadRunStatusAsync();
+                Assert.Equal("cancelled", terminalStatus.ExecutionState);
+                Assert.Equal(rootStatusBeforeCancel.ExecutionFence + 1, terminalStatus.ExecutionFence);
+                Assert.Equal(new RuntimeCleanupSummary("pending", 1, 1, 0), terminalStatus.RuntimeCleanup);
+                var terminalExpectation = new CancelProjectRunRequest
+                {
+                    ExpectedTerminalState = terminalStatus.ExecutionState,
+                    ExpectedTerminalFence = terminalStatus.ExecutionFence
+                };
+                using (var stale = await CancelChatAsync(firstCancelToken, "terminal-cancel-stale",
+                    terminalExpectation with { ExpectedTerminalFence = terminalStatus.ExecutionFence + 1 }))
+                {
+                    Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+                    using var problem = JsonDocument.Parse(await stale.Content.ReadAsStringAsync());
+                    Assert.Equal("terminal_cleanup_expectation_stale", problem.RootElement.GetProperty("error").GetString());
+                }
+                Assert.Equal(terminalStatus, await ReadRunStatusAsync());
+                Assert.Equal(1, runtimeRunStartOwners.CleanupCount);
+
                 var replayOwnerSchema = ownerSchema;
                 await using var replayFactory = new OrchestratorIntegrationFactory(
                     _connectionString,
@@ -1195,7 +1214,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 using var cancelReplayRequest = new HttpRequestMessage(
                     HttpMethod.Post, $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/cancel")
                 {
-                    Content = JsonContent.Create(new CancelProjectRunRequest())
+                    Content = JsonContent.Create(terminalExpectation)
                 };
                 var replayCancelToken = await IssueTokenAsync(
                     "projects.orchestrator", [TenantId], "chat-contributor", null, null, []);
@@ -1203,6 +1222,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 cancelReplayRequest.Headers.Add("Idempotency-Key", "contributor-cancel-restart-replay");
                 using var cancelReplay = await replayGateway.Client.SendAsync(cancelReplayRequest);
                 Assert.Equal(HttpStatusCode.OK, cancelReplay.StatusCode);
+                var terminalReceipt = await cancelReplay.Content
+                    .ReadFromJsonAsync<CancelProjectRunResponse>(OrchestratorJsonOptions);
+                Assert.NotNull(terminalReceipt);
+                Assert.Equal(pending.RunId, terminalReceipt.RunId);
+                Assert.Equal(terminalStatus.ExecutionState, terminalReceipt.State);
+                Assert.True(terminalReceipt.AlreadyTerminal);
+                Assert.Null(terminalReceipt.CancelledAt);
                 var secondCleanup = await runtimeRunStartOwners.WaitForCleanupAsync(2);
                 Assert.Equal(replayCancelToken, secondCleanup.Bearer);
                 Assert.Equal(firstCleanup.Projection.IntentId, secondCleanup.Projection.IntentId);
@@ -1221,6 +1247,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var completedCleanupState = await WaitForCleanupStateAsync(
                     startStore, TenantId, project.ProjectId, pending.RunId, "cleanup_complete");
                 Assert.NotNull(completedCleanupState);
+                var statusAfterCleanup = await ReadRunStatusAsync();
+                Assert.Equal(new RuntimeCleanupSummary("complete", 1, 0, 1), statusAfterCleanup.RuntimeCleanup);
+                Assert.Equal(terminalStatus, statusAfterCleanup with { RuntimeCleanup = terminalStatus.RuntimeCleanup });
                 var completedCleanupLinks = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
                     completedCleanupState.ReceiptLinks, OrchestratorJsonOptions);
                 Assert.NotNull(completedCleanupLinks);
@@ -1355,13 +1384,28 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             gateway.Client, HttpMethod.Get, rootStatusPath, boundToken, [TenantId]))
             Assert.Equal(HttpStatusCode.Forbidden, revokedStatus.StatusCode);
 
+        async Task<OwnerRunStatus> ReadRunStatusAsync()
+        {
+            using var response = await SendAsync(
+                gateway.Client, HttpMethod.Get,
+                $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/status",
+                boundToken, [TenantId]);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var status = await response.Content.ReadFromJsonAsync<OwnerRunStatus>(OrchestratorJsonOptions);
+            Assert.NotNull(status);
+            Assert.Equal(project.ProjectId, status.ProjectId);
+            Assert.Equal(pending.RunId, status.RunId);
+            return status;
+        }
+
         // Exercise the production Gateway and both fresh Projects checks for each cancellation.
-        async Task<HttpResponseMessage> CancelChatAsync(string token, string key)
+        async Task<HttpResponseMessage> CancelChatAsync(
+            string token, string key, CancelProjectRunRequest? body = null)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post,
                 $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/cancel")
             {
-                Content = JsonContent.Create(new CancelProjectRunRequest()),
+                Content = JsonContent.Create(body ?? new CancelProjectRunRequest()),
             };
             AddBearerAndTenant(request, token, TenantId);
             request.Headers.Add("Idempotency-Key", key);
