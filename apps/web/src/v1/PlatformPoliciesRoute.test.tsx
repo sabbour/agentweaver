@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthorizationCallbackMessage, AuthorizationTransaction } from './authProtocol';
 import { AgentweaverGatewayClient, gatewayClient } from './api';
@@ -127,6 +128,22 @@ function policyRevision() {
   };
 }
 
+function olderPolicyRevision() {
+  return {
+    ...policyRevision(),
+    revision: 1,
+    createdAt: '2026-01-02T03:04:05Z',
+    artifact: {
+      manifestBytes: bytes('\uFEFFname: saved-policy\r\n'),
+      files: [{
+        relativePath: 'rules/example.yaml',
+        bytes: bytes('saved \t\\n\r\n'),
+      }],
+      contentSha256: hash,
+    },
+  };
+}
+
 let popup: Window;
 let policyStatus: number;
 let validationStatus: number;
@@ -135,6 +152,7 @@ let delayHistory: boolean;
 let unauthorizedTenantOnce: string | null;
 let unauthorizedValidationTenantOnce: string | null;
 let resolveHistory: ((response: Response) => void) | null;
+let resolvePlatformValidation: ((response: Response) => void) | null;
 let requests: { url: string; init?: RequestInit }[];
 let projectValidationStatus: number;
 let projectAuthority: boolean;
@@ -249,6 +267,7 @@ describe('Platform Policies served route', () => {
     unauthorizedTenantOnce = null;
     unauthorizedValidationTenantOnce = null;
     resolveHistory = null;
+    resolvePlatformValidation = null;
     requests = [];
     authMocks.exchangeAuthorizationCode.mockResolvedValue({
       access_token: 'access-1',
@@ -313,12 +332,18 @@ describe('Platform Policies served route', () => {
       }
       if (url.pathname === '/api/v1/policies/platform/revisions/2')
         return jsonResponse(policyRevision());
+      if (url.pathname === '/api/v1/policies/platform/revisions/1')
+        return jsonResponse(olderPolicyRevision());
       if (url.pathname === '/api/v1/policies/platform/validate') {
         const tenantSelector = new Headers(init?.headers).get('X-Agentweaver-Tenant');
         if (unauthorizedValidationTenantOnce === tenantSelector) {
           unauthorizedValidationTenantOnce = null;
           return jsonResponse({ detail: 'private server detail' }, 401);
         }
+        if (validationStatus === 202)
+          return new Promise<Response>((resolve) => {
+            resolvePlatformValidation = resolve;
+          });
         return validationStatus === 422
           ? jsonResponse({
               title: 'native_acs_policy_invalid',
@@ -439,6 +464,125 @@ describe('Platform Policies served route', () => {
     expect(policyCalls.length).toBeGreaterThanOrEqual(2);
     for (const { init } of policyCalls)
       expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
+  it('compares the selected older revision without replacing the draft or making a request', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    expect(screen.getByText('Select View on a saved revision to compare.')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[1]);
+    await screen.findAllByText(/saved/);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'name: draft\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: 'rules/example.yaml' },
+    });
+    fireEvent.change(screen.getByRole('textbox', {
+      name: 'Content for rules/example.yaml',
+    }), {
+      target: { value: 'draft\t\\n \n' },
+    });
+    const requestCount = policyRequests().length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compare draft' }));
+    expect(await screen.findByRole('heading', {
+      name: 'Compare draft with revision 1',
+    })).toBeTruthy();
+    expect(policyRequests()).toHaveLength(requestCount);
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('name: draft\n');
+    expect((screen.getByRole('textbox', {
+      name: 'Content for rules/example.yaml',
+    }) as HTMLTextAreaElement).value).toBe('draft\t\\n \n');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Changed Policy item' }), {
+      target: { value: 'file:rules/example.yaml' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show invisible characters' }));
+    const saved = screen.getByRole('region', { name: 'Saved comparison source' });
+    const draft = screen.getByRole('region', { name: 'Draft comparison source' });
+    expect(saved.textContent).toContain('saved\\x20\\t\\\\n\\r\\n');
+    expect(draft.textContent).toContain('draft\\t\\\\n\\x20\\n');
+    expect(saved.textContent).not.toBe(draft.textContent);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Changed Policy item' }), {
+      target: { value: 'item:manifest' },
+    });
+    const savedManifest = screen.getByRole('region', {
+      name: 'Saved comparison source',
+    });
+    const draftManifest = screen.getByRole('region', {
+      name: 'Draft comparison source',
+    });
+    expect(savedManifest.textContent).toContain('\\uFEFFname:');
+    expect(draftManifest.textContent).not.toContain('\\uFEFF');
+
+    fireEvent.change(screen.getByRole('textbox', {
+      name: 'Content for rules/example.yaml',
+    }), {
+      target: { value: 'edited after compare' },
+    });
+    expect(screen.queryByRole('heading', {
+      name: 'Compare draft with revision 1',
+    })).toBeNull();
+    expect(screen.queryByText('draft\\t\\\\n\\x20\\n')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getAllByRole('textbox', { name: 'Relative path' })[1], {
+      target: { value: 'rules/example.yaml' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Compare draft' }));
+    expect(screen.getByRole('alert').textContent).toContain('must be unique');
+    fireEvent.change(screen.getAllByRole('textbox', { name: 'Relative path' })[1], {
+      target: { value: 'rules/second.yaml' },
+    });
+    expect(screen.queryByText(/must be unique/)).toBeNull();
+    expect(screen.queryByRole('heading', {
+      name: 'Compare draft with revision 1',
+    })).toBeNull();
+  });
+
+  it('keeps the manifest picker item distinct from a changed file named manifest', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByText(policyText);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'changed manifest' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: 'manifest' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Content for manifest' }), {
+      target: { value: 'file content' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Compare draft' }));
+
+    const picker = screen.getByRole('combobox', {
+      name: 'Changed Policy item',
+    }) as HTMLSelectElement;
+    expect([...picker.options].map(({ value }) => value)).toEqual([
+      'item:manifest',
+      'file:manifest',
+      'file:rules/example.yaml',
+    ]);
+    fireEvent.change(picker, { target: { value: 'file:manifest' } });
+    expect(screen.getByRole('region', {
+      name: 'Draft comparison source',
+    }).textContent).toContain('file content');
+    fireEvent.change(picker, { target: { value: 'item:manifest' } });
+    expect(screen.getByRole('region', {
+      name: 'Draft comparison source',
+    }).textContent).toContain('changed manifest');
   });
 
   it('validates an imported Project draft through App without reading a Policy head', async () => {
@@ -1104,6 +1248,215 @@ describe('Platform Policies served route', () => {
     expect((retry as HTMLButtonElement).disabled).toBe(false);
     expect([retry, screen.getByRole('main', { name: 'Main content' })])
       .toContain(document.activeElement);
+  });
+
+  it.each(['timer', 'visibility'] as const)(
+    'hides comparison during %s recheck and restores the pinned revision after a head advance',
+    async (trigger) => {
+      const intervalHandlers: (() => void)[] = [];
+      const setInterval = window.setInterval.bind(window);
+      vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+        if (delay === 60_000 && typeof handler === 'function')
+          intervalHandlers.push(handler as () => void);
+        return setInterval(handler, delay);
+      }) as typeof window.setInterval);
+      render(<App />);
+      fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+      await completeSignIn();
+      await screen.findByText('Saved Platform Policy revisions');
+      fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+      await screen.findByText(policyText);
+      fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+        target: { value: 'local comparison draft' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Compare draft' }));
+      const picker = screen.getByRole('combobox', { name: 'Changed Policy item' });
+      picker.focus();
+      const revisionReads = () => requests.filter(({ url }) =>
+        url.endsWith('/policies/platform/revisions/2')).length;
+      const readCount = revisionReads();
+      delayHistory = true;
+
+      if (trigger === 'timer') {
+        act(() => intervalHandlers.at(-1)?.());
+      } else {
+        const visibility = vi.spyOn(document, 'visibilityState', 'get');
+        visibility.mockReturnValue('hidden');
+        act(() => document.dispatchEvent(new Event('visibilitychange')));
+        visibility.mockReturnValue('visible');
+        act(() => document.dispatchEvent(new Event('visibilitychange')));
+      }
+
+      await waitFor(() => expect(resolveHistory).not.toBeNull());
+      expect(screen.queryByText(policyText)).toBeNull();
+      expect(screen.queryByRole('heading', {
+        name: 'Compare draft with revision 2',
+      })).toBeNull();
+      await waitFor(() => expect([
+        screen.getByRole('heading', { name: 'Platform Policies' }),
+        screen.getByRole('main', { name: 'Main content' }),
+      ]).toContain(document.activeElement));
+
+      await act(async () => {
+        resolveHistory?.(jsonResponse({
+          ...policyHistory(),
+          snapshotRevision: 3,
+          items: [
+            { revision: 3, contentSha256: 'b'.repeat(64), createdAt: '2026-01-04T03:04:05Z' },
+            ...policyHistory().items,
+          ],
+        }));
+      });
+      await waitFor(() => expect(revisionReads()).toBeGreaterThan(readCount));
+      expect(await screen.findByText(policyText)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Compare draft' })).toBeTruthy();
+      expect(screen.queryByRole('heading', {
+        name: 'Compare draft with revision 2',
+      })).toBeNull();
+      expect((screen.getByRole('textbox', {
+        name: 'Platform Policy manifest',
+      }) as HTMLTextAreaElement).value).toBe('local comparison draft');
+    },
+  );
+
+  it('does not restore a delayed revision after leaving and returning to the route', async () => {
+    const intervalHandlers: (() => void)[] = [];
+    const setInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+      if (delay === 60_000 && typeof handler === 'function')
+        intervalHandlers.push(handler as () => void);
+      return setInterval(handler, delay);
+    }) as typeof window.setInterval);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByText(policyText);
+    const revisionReads = () => requests.filter(({ url }) =>
+      url.endsWith('/policies/platform/revisions/2')).length;
+    const readCount = revisionReads();
+    delayHistory = true;
+    act(() => intervalHandlers.at(-1)?.());
+    await waitFor(() => expect(resolveHistory).not.toBeNull());
+
+    act(() => {
+      window.history.pushState({}, '', '/overview');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await act(async () => {
+      resolveHistory?.(jsonResponse(policyHistory()));
+    });
+    expect(screen.queryByText(policyText)).toBeNull();
+    expect(revisionReads()).toBe(readCount);
+
+    delayHistory = false;
+    act(() => {
+      window.history.pushState({}, '', '/policies');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await screen.findByText('Saved Platform Policy revisions');
+    expect(screen.getByText('Select View on a saved revision to compare.')).toBeTruthy();
+    expect(screen.queryByText(policyText)).toBeNull();
+    expect(revisionReads()).toBe(readCount);
+  });
+
+  it('keeps comparison hidden after timer access denial and moves focus to a safe target', async () => {
+    const intervalHandlers: (() => void)[] = [];
+    const setInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+      if (delay === 60_000 && typeof handler === 'function')
+        intervalHandlers.push(handler as () => void);
+      return setInterval(handler, delay);
+    }) as typeof window.setInterval);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByText(policyText);
+    const compare = screen.getByRole('button', { name: 'Compare draft' });
+    compare.focus();
+    await userEvent.setup().keyboard('{Enter}');
+    expect(screen.getByRole('combobox', { name: 'Changed Policy item' })).toBeTruthy();
+    expect(document.activeElement).toBe(compare);
+
+    policyStatus = 403;
+    act(() => intervalHandlers.at(-1)?.());
+    expect(await screen.findByText(
+      'You do not have permission to access Platform Policies.',
+    )).toBeTruthy();
+    expect(screen.queryByText(policyText)).toBeNull();
+    expect(screen.queryByRole('heading', {
+      name: 'Compare draft with revision 2',
+    })).toBeNull();
+    expect([
+      screen.getByRole('button', { name: 'Retry' }),
+      screen.getByRole('main', { name: 'Main content' }),
+    ]).toContain(document.activeElement);
+  });
+
+  it('clears Platform source and comparison after a delivered 403 despite a draft edit', async () => {
+    validationStatus = 202;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByText(policyText);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'before validation' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(resolvePlatformValidation).not.toBeNull());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'edited after validation' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Compare draft' }));
+    expect(screen.getByRole('combobox', { name: 'Changed Policy item' })).toBeTruthy();
+
+    await act(async () => {
+      resolvePlatformValidation?.(jsonResponse({ detail: 'private server detail' }, 403));
+    });
+    expect(await screen.findByText(
+      'You do not have permission to access Platform Policies.',
+    )).toBeTruthy();
+    expect(screen.queryByText(policyText)).toBeNull();
+    expect(screen.queryByRole('heading', {
+      name: 'Compare draft with revision 2',
+    })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Platform Policy manifest' })).toBeNull();
+  });
+
+  it('ignores an old Platform validation denial after the tenant changes', async () => {
+    validationStatus = 202;
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'old tenant draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await waitFor(() => expect(resolvePlatformValidation).not.toBeNull());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), {
+      target: { value: 'tenant-2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'new tenant draft' },
+    });
+
+    await act(async () => {
+      resolvePlatformValidation?.(jsonResponse({ detail: 'private server detail' }, 403));
+    });
+    expect(screen.queryByText(
+      'You do not have permission to access Platform Policies.',
+    )).toBeNull();
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('new tenant draft');
   });
 
   it.each([

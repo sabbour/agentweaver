@@ -72,6 +72,7 @@ export interface PlatformPoliciesControllerValue {
   detailError: string | null;
   draftManifest: PlatformPolicyTextBuffer;
   draftFiles: PlatformPolicyDraftFile[];
+  draftGeneration: number;
   draftError: string | null;
   validation: PlatformPolicyValidationResult | null;
   validationLoading: boolean;
@@ -164,6 +165,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const [detailError, setDetailError] = useState<string | null>(null);
   const [draftManifest, setDraftManifestState] = useState(() => createPlatformPolicyTextBuffer(''));
   const [draftFiles, setDraftFiles] = useState<PlatformPolicyDraftFile[]>([]);
+  const [draftGeneration, setDraftGeneration] = useState(0);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [validation, setValidation] = useState<PlatformPolicyValidationResult | null>(null);
   const [validationLoading, setValidationLoading] = useState(false);
@@ -176,6 +178,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const identityEpochRef = useRef(0);
   const currentRequestRef = useRef<AbortController | null>(null);
   const policyIdentityRef = useRef<PlatformPolicyIdentity | null>(null);
+  const revisionSelectionRef = useRef<PolicyRevisionSelection | null>(null);
   const draftIdentityRef = useRef<PlatformPolicyIdentity | null>(null);
   const draftScopeRef = useRef<PolicyScope | null>(null);
   const draftProjectRef = useRef<string | null>(null);
@@ -206,8 +209,11 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
 
   const capturePolicyLinkFocus = useCallback(() => {
     const activeElement = document.activeElement;
-    if (activeElement instanceof HTMLAnchorElement &&
-        activeElement.getAttribute('href') === '/policies')
+    if ((activeElement instanceof HTMLAnchorElement &&
+         activeElement.getAttribute('href') === '/policies') ||
+        (activeElement instanceof HTMLElement &&
+         (activeElement.closest('[data-platform-policy-comparison]') ||
+          activeElement.closest('[data-platform-policy-compare]'))))
       focusAfterHideRef.current = true;
   }, []);
 
@@ -238,6 +244,10 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     }
   }, []);
 
+  const invalidateDraftComparison = useCallback(() => {
+    setDraftGeneration((generation) => generation + 1);
+  }, []);
+
   const clearDraftValidation = useCallback((
     preserveError = false,
     canceledMessage?: string,
@@ -265,6 +275,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     identityEpochRef.current += 1;
     requestGenerationRef.current += 1;
     clearDraftValidation(preserveDraftError);
+    invalidateDraftComparison();
     if (!preserveDraft) {
       setDraftManifestState(createPlatformPolicyTextBuffer(''));
       setDraftFiles([]);
@@ -279,6 +290,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     currentRequestRef.current?.abort();
     currentRequestRef.current = null;
     policyIdentityRef.current = null;
+    revisionSelectionRef.current = null;
     if (!preservePlatformNavigation)
       setPlatformNavigationAuthorized(false);
     setProjects([]);
@@ -290,7 +302,14 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     setDetailLoading(false);
     setDetailError(null);
     setPageStatus(nextStatus);
-  }, [capturePolicyLinkFocus, clearDraftValidation, setAuthorized, setHistory, setPageStatus]);
+  }, [
+    capturePolicyLinkFocus,
+    clearDraftValidation,
+    invalidateDraftComparison,
+    setAuthorized,
+    setHistory,
+    setPageStatus,
+  ]);
 
   const updateTenantId = useCallback((value: string, userSelected: boolean) => {
     const changed = tenantRef.current.trim() !== value.trim();
@@ -340,13 +359,15 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
+    invalidateDraftComparison();
     setDraftManifestState(buffer);
-  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, invalidateDraftComparison]);
 
   const addDraftFile = useCallback(() => {
     importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
+    invalidateDraftComparison();
     const id = ++draftFileIdRef.current;
     setDraftFiles((current) => [
       ...current,
@@ -356,22 +377,24 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         content: createPlatformPolicyTextBuffer(''),
       },
     ]);
-  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, invalidateDraftComparison]);
 
   const removeDraftFile = useCallback((id: number) => {
     importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
+    invalidateDraftComparison();
     setDraftFiles((current) => current.filter((file) => file.id !== id));
-  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, invalidateDraftComparison]);
 
   const setDraftFilePath = useCallback((id: number, value: string) => {
     importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
+    invalidateDraftComparison();
     setDraftFiles((current) => current.map((file) =>
       file.id === id ? { ...file, relativePath: value } : file));
-  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, invalidateDraftComparison]);
 
   const setDraftFileContent = useCallback((
     id: number,
@@ -380,11 +403,12 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
+    invalidateDraftComparison();
     setDraftFiles((current) => current.map((file) =>
       file.id === id
         ? { ...file, content }
         : file));
-  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, invalidateDraftComparison]);
 
   const importDraft = useCallback(async (file: File) => {
     if (scopeRef.current !== 'project' ||
@@ -412,6 +436,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         return;
       bindDraftToCurrentIdentity();
       clearDraftValidation();
+      invalidateDraftComparison();
       setDraftManifestState(imported.manifest);
       setDraftFiles(imported.files.map((importedFile) => ({
         id: ++draftFileIdRef.current,
@@ -429,20 +454,21 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         ? reason.message
         : 'The selected Policy validation request could not be imported.');
     }
-  }, [bindDraftToCurrentIdentity, clearDraftValidation]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, invalidateDraftComparison]);
 
   const loadDraftFromSavedSource = useCallback(() => {
     if (scopeRef.current !== 'platform' || !authorizedRef.current || !detail) return;
     importGenerationRef.current += 1;
     bindDraftToCurrentIdentity();
     clearDraftValidation();
+    invalidateDraftComparison();
     setDraftManifestState(createPlatformPolicyTextBuffer(detail.artifact.manifest));
     setDraftFiles(detail.artifact.files.map((file) => ({
       id: ++draftFileIdRef.current,
       relativePath: file.relativePath,
       content: createPlatformPolicyTextBuffer(file.content),
     })));
-  }, [bindDraftToCurrentIdentity, clearDraftValidation, detail]);
+  }, [bindDraftToCurrentIdentity, clearDraftValidation, detail, invalidateDraftComparison]);
 
   const expectPolicyRefreshChange = useCallback((selectedTenant: string): ExpectedRefreshChange => {
     const current = latestAuthRef.current;
@@ -627,8 +653,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       historyAuthorized = true;
 
       if (retryRead?.kind === 'revision') {
-        if (firstPage.policyId !== retryRead.selection.policyId ||
-            firstPage.snapshotRevision !== retryRead.selection.snapshotRevision)
+        if (firstPage.policyId !== retryRead.selection.policyId)
           throw new Error('The selected Platform Policy revision is unavailable.');
         setDetailLoading(true);
         const result = await readPlatformPolicyRevision(
@@ -638,6 +663,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         );
         if (!isCurrentRequest(identityEpoch, requestGeneration, controller)) return;
         verifyRevision(result, retryRead.selection);
+        revisionSelectionRef.current = retryRead.selection;
         setDetail(result);
         setDetailLoading(false);
       } else if (retryRead?.kind === 'continuation') {
@@ -732,6 +758,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     clearDraftValidation();
     const generation = ++validationGenerationRef.current;
     const identityEpoch = identityEpochRef.current;
+    const authSessionGeneration = latestAuthRef.current.authSessionGeneration;
+    const unboundSessionGeneration = latestAuthRef.current.unboundSessionGeneration;
     const controller = new AbortController();
     validationControllerRef.current = controller;
     setValidationLoading(true);
@@ -916,12 +944,24 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         if (!isCurrentValidation()) return;
         setValidation(result);
       } catch (reason) {
+        if (reason instanceof GatewayError &&
+            reason.status === 403 &&
+            scopeRef.current === 'platform' &&
+            identityEpochRef.current === identityEpoch &&
+            policyIdentityRef.current === identity &&
+            tenantRef.current.trim() === identity.tenantId &&
+            latestAuthRef.current.authSessionGeneration === authSessionGeneration &&
+            latestAuthRef.current.unboundSessionGeneration === unboundSessionGeneration) {
+          clearPolicyState('denied');
+          return;
+        }
         if (!isCurrentValidation()) return;
         if (reason instanceof GatewayError && reason.status === 403) {
           clearPolicyState('denied');
         } else if (reason instanceof GatewayError &&
             reason.status === 401 &&
             reason.code === 'platform_policy_request_failed') {
+          const selection = revisionSelectionRef.current;
           clearPolicyState('checking', true, true);
           setDraftError('Platform Policy access expired. Check access, then validate again.');
           const recoveryIdentityEpoch = identityEpochRef.current;
@@ -936,8 +976,14 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
             expectedRefresh,
             refreshResult,
           )) return;
-          if (refreshResult.refreshed)
-            await runCheckRef.current?.(identity.tenantId, identity, 1);
+          if (refreshResult.refreshed) {
+            await runCheckRef.current?.(
+              identity.tenantId,
+              identity,
+              1,
+              selection ? { kind: 'revision', selection } : undefined,
+            );
+          }
           else
             setPageStatus('unavailable');
         } else {
@@ -967,7 +1013,13 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   ]);
 
   const retry = useCallback(() => {
-    void runCheck(tenantRef.current);
+    const selection = revisionSelectionRef.current;
+    void runCheck(
+      tenantRef.current,
+      policyIdentityRef.current,
+      0,
+      selection ? { kind: 'revision', selection } : undefined,
+    );
   }, [runCheck]);
 
   const viewRevision = useCallback((revision: PlatformPolicyRevisionSummary) => {
@@ -988,6 +1040,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       snapshotRevision: currentPage.snapshotRevision,
       revision,
     };
+    revisionSelectionRef.current = selection;
     const controller = new AbortController();
     currentRequestRef.current?.abort();
     currentRequestRef.current = controller;
@@ -1237,12 +1290,27 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   }, [clearPolicyState, location.pathname, runCheck]);
 
   useEffect(() => {
+    if (location.pathname === '/policies') return;
+    revisionSelectionRef.current = null;
+    identityEpochRef.current += 1;
+    requestGenerationRef.current += 1;
+    currentRequestRef.current?.abort();
+    currentRequestRef.current = null;
+  }, [location.pathname]);
+
+  useEffect(() => {
     const onVisibilityChange = () => {
       const nextVisible = document.visibilityState !== 'hidden';
       setVisible(nextVisible);
       if (nextVisible) {
         const selectedTenant = tenantRef.current.trim();
-        if (selectedTenant) void runCheck(selectedTenant);
+        const selection = revisionSelectionRef.current;
+        if (selectedTenant) void runCheck(
+          selectedTenant,
+          policyIdentityRef.current,
+          0,
+          selection ? { kind: 'revision', selection } : undefined,
+        );
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -1253,7 +1321,13 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     if (!visible) return;
     const timer = window.setInterval(() => {
       const selectedTenant = tenantRef.current.trim();
-      if (selectedTenant) void runCheck(selectedTenant);
+      const selection = revisionSelectionRef.current;
+      if (selectedTenant) void runCheck(
+        selectedTenant,
+        policyIdentityRef.current,
+        0,
+        selection ? { kind: 'revision', selection } : undefined,
+      );
     }, 60_000);
     return () => window.clearInterval(timer);
   }, [runCheck, visible]);
@@ -1290,6 +1364,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     detailError,
     draftManifest,
     draftFiles,
+    draftGeneration,
     draftError,
     validation,
     validationLoading,
@@ -1313,6 +1388,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     detailLoading,
     draftError,
     draftFiles,
+    draftGeneration,
     draftManifest,
     history,
     historyError,

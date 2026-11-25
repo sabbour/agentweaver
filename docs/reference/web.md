@@ -25,8 +25,8 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/config.ts` | Runtime and build-time configuration. |
 | `src/v1/api.ts` | Gateway HTTP client, structured errors, project BYOK Draft operations, explicit-tenant Platform Policy reads with response bounds, header forwarding, and server-sent events (SSE) parsing. |
 | `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including project BYOK Draft contracts and the project issue and pull request list pages used by the Priority picker. |
-| `src/v1/platformPolicyContracts.ts` | Bounds and validates Policy history, revision metadata, UTF-8 manifest bytes, source files, validation requests, and canonical hashes. |
-| `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only Platform history and local Project validation. |
+| `src/v1/platformPolicyContracts.ts` | Bounds and validates Policy history, revision metadata, UTF-8 manifest bytes, source files, validation requests, canonical hashes, and local draft comparisons. |
+| `src/v1/PlatformPoliciesController.tsx`, `src/v1/PlatformPoliciesPage.tsx` | Shared authorization and request fences for the gated navigation and `/policies` route; read-only Platform history, exact-revision draft comparison, and local Project validation. |
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client, callback messages, and the actionable setup message for `github_repo_app_not_configured`. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
@@ -91,7 +91,7 @@ data hooks are not mounted.
 | `/sessions` | `SessionsPage`. |
 | `/assistant` | `NewSessionPage`; `project` or `projectId` preselects the project. |
 | `/platform-settings` | `PlatformSettingsPage`; includes the platform-wide host request list for platform administrators. |
-| `/policies` | `PlatformPoliciesPage`; Platform mode reads saved history, while Project mode validates an in-memory local artifact for one authorized Project. |
+| `/policies` | `PlatformPoliciesPage`; Platform mode reads saved history and compares an in-memory draft with the exact viewed revision, while Project mode validates an in-memory local artifact for one authorized Project. |
 | `/projects/:projectId/team/cast` | `CastTeamPage`. |
 | `/projects/:projectId/runs/:runId/history` | Project-authorized Session tree, Activity, or Egress history for the selected run. `view` selects `sessions`, `activity`, or `egress`. Egress uses an exact project credential and a confirmed tenant while Session tree and Activity keep their unbound credential. |
 | `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `chat`, `topology`, `approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**). Missing or unknown values open `chat`. |
@@ -289,6 +289,12 @@ checks the 5 MiB request limit, 1 MiB artifact limit, exact byte arrays, UTF-8,
 and SHA-256 hash. The draft stays in browser memory. Project mode does not
 request a Policy head, revision, preview, save, or apply route.
 
+Platform mode compares the serialized draft text with an already authorized
+revision read. It sends no request and computes no Policy hash. Exact paths
+identify changed files; the manifest appears first. Text is rendered as React
+text, and the invisible-character view exposes spaces, tabs, line endings,
+the byte-order mark, and other non-ASCII characters.
+
 The shared controller keeps scope activation separate from the draft version.
 Editing clears stale diagnostics and stops their attempt. A response from an
 earlier scope or Project cannot change the current scope. A denial or missing
@@ -298,6 +304,10 @@ A `401` triggers one unbound-session refresh and same-scope access check before
 one retry of an unchanged draft. An aborted attempt rechecks access without
 resending. The controller checks access on route entry, when the tab becomes
 visible, and every 60 seconds while the tab stays visible.
+During a Platform check, the controller hides saved source and comparison.
+For a selected revision, it reopens that exact revision after a successful
+same-identity and same-tenant check, even when the snapshot head advances.
+The comparison stays closed until the user selects **Compare draft** again.
 
 Callback handlers check the expected origin, popup, state, and transaction
 binding. The HTML bootstrap removes callback query values before assets load.
