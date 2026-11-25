@@ -79,6 +79,40 @@ internal sealed class ProjectGovernanceDecisionStore(
                 head.Sequence, head.FenceGeneration, head.HeadHash);
     }
 
+    internal async Task<ProjectGovernanceDecisionReceipt> AppendWithCurrentHeadInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId,
+        string idempotencyKey,
+        ProjectGovernanceDecisionInput decision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ValidateStreamAndIdempotencyKey(scopeType, scopeId, resourceType, resourceId, idempotencyKey);
+        var normalizedDecision = ProjectGovernanceDecisionCanonicalJson.NormalizeAndValidate(decision);
+        var requestDigest = ProjectGovernanceDecisionCanonicalJson.Digest(
+            ProjectGovernanceDecisionCanonicalJson.Serialize(normalizedDecision));
+
+        return await AppendCoreAsync(
+            connection,
+            transaction,
+            scopeType,
+            scopeId,
+            resourceType,
+            resourceId,
+            idempotencyKey,
+            normalizedDecision,
+            requestDigest,
+            expectedSequence: null,
+            expectedFenceGeneration: null,
+            expectedHeadHash: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     internal async Task<ProjectGovernanceDecisionReceipt> AppendAsync(
         ProjectGovernanceDecisionAppendRequest request,
         CancellationToken cancellationToken)
@@ -95,15 +129,47 @@ internal sealed class ProjectGovernanceDecisionStore(
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var npgsqlTransaction = (NpgsqlTransaction)transaction.GetDbTransaction();
 
+        var receipt = await AppendCoreAsync(
+            connection,
+            npgsqlTransaction,
+            request.ScopeType,
+            request.ScopeId,
+            request.ResourceType,
+            request.ResourceId,
+            request.IdempotencyKey,
+            decision,
+            requestDigest,
+            request.ExpectedSequence,
+            request.ExpectedFenceGeneration,
+            request.ExpectedHeadHash,
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
+
+    private async Task<ProjectGovernanceDecisionReceipt> AppendCoreAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction npgsqlTransaction,
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId,
+        string idempotencyKey,
+        ProjectGovernanceDecisionInput decision,
+        string requestDigest,
+        long? expectedSequence,
+        long? expectedFenceGeneration,
+        string? expectedHeadHash,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            var replay = await FindReplayAsync(connection, npgsqlTransaction, request, requestDigest, cancellationToken)
+            var replay = await FindReplayAsync(
+                    connection, npgsqlTransaction, scopeType, scopeId, resourceType, resourceId,
+                    idempotencyKey, requestDigest, cancellationToken)
                 .ConfigureAwait(false);
             if (replay is not null)
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 return replay;
-            }
 
             await using (var initialize = new NpgsqlCommand("""
                 INSERT INTO projects_config.project_governance_decision_stream_heads
@@ -112,7 +178,7 @@ internal sealed class ProjectGovernanceDecisionStore(
                 ON CONFLICT (scope_type, scope_id, resource_type, resource_id) DO NOTHING
                 """, connection, npgsqlTransaction))
             {
-                AddStreamParameters(initialize, request);
+                AddStreamParameters(initialize, scopeType, scopeId, resourceType, resourceId);
                 initialize.Parameters.AddWithValue("genesis_hash", GenesisHash);
                 initialize.Parameters.AddWithValue("now", timeProvider.GetUtcNow());
                 await initialize.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -129,7 +195,7 @@ internal sealed class ProjectGovernanceDecisionStore(
                 FOR UPDATE
                 """, connection, npgsqlTransaction))
             {
-                AddStreamParameters(readHead, request);
+                AddStreamParameters(readHead, scopeType, scopeId, resourceType, resourceId);
                 await using var reader = await readHead.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     throw new InvalidOperationException("The governance decision stream head was not created.");
@@ -138,9 +204,10 @@ internal sealed class ProjectGovernanceDecisionStore(
                 headHash = reader.GetString(2);
             }
 
-            if (sequence != request.ExpectedSequence ||
-                fence != request.ExpectedFenceGeneration ||
-                !string.Equals(headHash, request.ExpectedHeadHash, StringComparison.Ordinal))
+            if (expectedSequence.HasValue &&
+                (sequence != expectedSequence.Value ||
+                 fence != expectedFenceGeneration!.Value ||
+                 !string.Equals(headHash, expectedHeadHash, StringComparison.Ordinal)))
                 throw ProjectConfigException.Conflict("The governance decision stream head changed.");
 
             var nextSequence = checked(sequence + 1);
@@ -150,17 +217,17 @@ internal sealed class ProjectGovernanceDecisionStore(
             var record = new ProjectGovernanceDecisionV1(
                 SchemaVersion: 1,
                 DecisionId: decisionId,
-                ScopeType: request.ScopeType.ToString(),
-                ScopeId: request.ScopeId,
-                ResourceType: request.ResourceType,
-                ResourceId: request.ResourceId,
+                ScopeType: scopeType.ToString(),
+                ScopeId: scopeId,
+                ResourceType: resourceType,
+                ResourceId: resourceId,
                 Sequence: nextSequence,
                 PreviousHash: headHash,
                 RecordedAt: now,
                 Decision: decision);
             var canonicalRecord = ProjectGovernanceDecisionCanonicalJson.Serialize(record);
             if (canonicalRecord.Length > ProjectGovernanceDecisionCanonicalJson.MaximumCanonicalBytes)
-                throw new ArgumentException("Canonical decision record exceeds 65536 bytes.", nameof(request));
+                throw new ArgumentException("Canonical decision record exceeds 65536 bytes.", nameof(decision));
             var recordHash = ProjectGovernanceDecisionCanonicalJson.ChainHash(headHash, canonicalRecord);
 
             await using (var insertRecord = new NpgsqlCommand("""
@@ -172,10 +239,10 @@ internal sealed class ProjectGovernanceDecisionStore(
                      @idempotency_key, @request_digest, @previous_hash, @record_hash, @canonical_record, @recorded_at)
                 """, connection, npgsqlTransaction))
             {
-                AddStreamParameters(insertRecord, request);
+                AddStreamParameters(insertRecord, scopeType, scopeId, resourceType, resourceId);
                 insertRecord.Parameters.AddWithValue("sequence", nextSequence);
                 insertRecord.Parameters.AddWithValue("decision_id", decisionId);
-                insertRecord.Parameters.AddWithValue("idempotency_key", request.IdempotencyKey);
+                insertRecord.Parameters.AddWithValue("idempotency_key", idempotencyKey);
                 insertRecord.Parameters.AddWithValue("request_digest", requestDigest);
                 insertRecord.Parameters.AddWithValue("previous_hash", headHash);
                 insertRecord.Parameters.AddWithValue("record_hash", recordHash);
@@ -188,10 +255,10 @@ internal sealed class ProjectGovernanceDecisionStore(
             {
                 schemaVersion = 1,
                 decisionId,
-                scopeType = request.ScopeType.ToString(),
-                scopeId = request.ScopeId,
-                resourceType = request.ResourceType,
-                resourceId = request.ResourceId,
+                scopeType = scopeType.ToString(),
+                scopeId,
+                resourceType,
+                resourceId,
                 sequence = nextSequence,
                 recordHash,
             }, OutboxJsonOptions);
@@ -221,7 +288,7 @@ internal sealed class ProjectGovernanceDecisionStore(
                   AND head_hash = @expected_hash
                 """, connection, npgsqlTransaction))
             {
-                AddStreamParameters(advanceHead, request);
+                AddStreamParameters(advanceHead, scopeType, scopeId, resourceType, resourceId);
                 advanceHead.Parameters.AddWithValue("next_sequence", nextSequence);
                 advanceHead.Parameters.AddWithValue("next_fence", nextFence);
                 advanceHead.Parameters.AddWithValue("record_hash", recordHash);
@@ -233,7 +300,6 @@ internal sealed class ProjectGovernanceDecisionStore(
                     throw ProjectConfigException.Conflict("The governance decision stream head changed.");
             }
 
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new(decisionId, decisionId, nextSequence, nextFence, headHash, recordHash, Replayed: false);
         }
         catch (PostgresException exception) when (exception.SqlState is
@@ -246,7 +312,11 @@ internal sealed class ProjectGovernanceDecisionStore(
     private static async Task<ProjectGovernanceDecisionReceipt?> FindReplayAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        ProjectGovernanceDecisionAppendRequest request,
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId,
+        string idempotencyKey,
         string requestDigest,
         CancellationToken cancellationToken)
     {
@@ -257,8 +327,8 @@ internal sealed class ProjectGovernanceDecisionStore(
               AND resource_type = @resource_type AND resource_id = @resource_id
               AND idempotency_key = @idempotency_key
             """, connection, transaction);
-        AddStreamParameters(command, request);
-        command.Parameters.AddWithValue("idempotency_key", request.IdempotencyKey);
+        AddStreamParameters(command, scopeType, scopeId, resourceType, resourceId);
+        command.Parameters.AddWithValue("idempotency_key", idempotencyKey);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;
@@ -271,25 +341,40 @@ internal sealed class ProjectGovernanceDecisionStore(
 
     private static void AddStreamParameters(
         NpgsqlCommand command,
-        ProjectGovernanceDecisionAppendRequest request)
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId)
     {
-        command.Parameters.AddWithValue("scope_type", request.ScopeType.ToString());
-        command.Parameters.AddWithValue("scope_id", request.ScopeId);
-        command.Parameters.AddWithValue("resource_type", request.ResourceType);
-        command.Parameters.AddWithValue("resource_id", request.ResourceId);
+        command.Parameters.AddWithValue("scope_type", scopeType.ToString());
+        command.Parameters.AddWithValue("scope_id", scopeId);
+        command.Parameters.AddWithValue("resource_type", resourceType);
+        command.Parameters.AddWithValue("resource_id", resourceId);
+    }
+
+    private static void ValidateStreamAndIdempotencyKey(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        string resourceType,
+        string resourceId,
+        string idempotencyKey)
+    {
+        if (!Enum.IsDefined(scopeType) ||
+            string.IsNullOrWhiteSpace(scopeId) || scopeId.Length > 256 ||
+            (scopeType == NativeAcsPolicyScopeType.Platform &&
+             scopeId != ProjectAuthorizationOwner.PlatformResourceId) ||
+            string.IsNullOrWhiteSpace(resourceType) || resourceType.Length > 64 ||
+            string.IsNullOrWhiteSpace(resourceId) || resourceId.Length > 256 ||
+            string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128)
+            throw new ArgumentException("Governance decision stream identity or idempotency key is invalid.");
     }
 
     private static void ValidateRequest(ProjectGovernanceDecisionAppendRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (!Enum.IsDefined(request.ScopeType) ||
-            string.IsNullOrWhiteSpace(request.ScopeId) || request.ScopeId.Length > 256 ||
-            (request.ScopeType == NativeAcsPolicyScopeType.Platform &&
-             request.ScopeId != ProjectAuthorizationOwner.PlatformResourceId) ||
-            string.IsNullOrWhiteSpace(request.ResourceType) || request.ResourceType.Length > 64 ||
-            string.IsNullOrWhiteSpace(request.ResourceId) || request.ResourceId.Length > 256 ||
-            request.ExpectedSequence < 0 || request.ExpectedFenceGeneration < 0 ||
-            string.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 128 ||
+        ValidateStreamAndIdempotencyKey(
+            request.ScopeType, request.ScopeId, request.ResourceType, request.ResourceId, request.IdempotencyKey);
+        if (request.ExpectedSequence < 0 || request.ExpectedFenceGeneration < 0 ||
             !ProjectGovernanceDecisionCanonicalJson.IsSha256(request.ExpectedHeadHash))
             throw new ArgumentException("Governance decision stream identity, fence, or idempotency key is invalid.", nameof(request));
     }

@@ -16,14 +16,19 @@ namespace Agentweaver.Projects.Config;
 internal sealed class NativeAcsPolicyStore(
     IDbContextFactory<ProjectsConfigDbContext> contextFactory,
     TimeProvider timeProvider,
-    IDataProtectionProvider dataProtectionProvider)
+    IDataProtectionProvider dataProtectionProvider,
+    ProjectGovernanceDecisionStore? governanceDecisions = null)
 {
     private const string PolicyRevisionEventType = "native_acs.policy_revision_committed.v1";
+    private const string PlatformPolicyPreparationResourceType = "platform_policy";
+    private const string PlatformPolicyPreparationDecisionType = "platform.policy.preparation.v1";
     private const int MaximumPolicySourceManifestBytes = 65_536;
     private const int MaximumPolicySourceFiles = 64;
     private const int MaximumPolicySourceFileBytes = 262_144;
     private const int MaximumPolicySourceArtifactBytes = 1_048_576;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly ProjectGovernanceDecisionStore _governanceDecisions =
+        governanceDecisions ?? new ProjectGovernanceDecisionStore(contextFactory, timeProvider);
     private readonly IDataProtector _scopeListCursorProtector =
         dataProtectionProvider.CreateProtector("Agentweaver.Projects.Config.ProjectPolicyScopeListCursor.v2");
     private const int HistoryCursorVersion = 1;
@@ -324,9 +329,52 @@ internal sealed class NativeAcsPolicyStore(
                 return replay;
             }
 
+            var preparationId = Guid.NewGuid();
+            var now = timeProvider.GetUtcNow();
+            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            var npgsqlTransaction = (NpgsqlTransaction)transaction.GetDbTransaction();
+            var decisionReceipt = await _governanceDecisions.AppendWithCurrentHeadInTransactionAsync(
+                connection,
+                npgsqlTransaction,
+                NativeAcsPolicyScopeType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                PlatformPolicyPreparationResourceType,
+                request.PolicyId,
+                scopeDigest,
+                new ProjectGovernanceDecisionInput(
+                    DecisionType: PlatformPolicyPreparationDecisionType,
+                    Outcome: ProjectGovernanceOutcome.Pending,
+                    ApprovalState: ProjectGovernanceApprovalState.Pending,
+                    PolicyRevision: currentHead?.Revision,
+                    PolicyArtifactSha256: request.Artifact.ContentSha256,
+                    SelectedRule: null,
+                    InterventionPoint: null,
+                    RequestId: null,
+                    ActionId: null,
+                    RunId: null,
+                    AgentId: null,
+                    RoleId: null,
+                    HumanEntraOid: null,
+                    TenantId: null,
+                    BrokerIssuer: caller.Issuer,
+                    BrokerSubject: caller.ActorId,
+                    EffectiveRoleRevisions:
+                    [
+                        new ProjectGovernanceRoleRevision(
+                            authorizingGrant.AssignmentId,
+                            authorizingGrant.Revision),
+                    ],
+                    OwnerReceiptId: preparationId.ToString("N"),
+                    OwnerReceiptPosition: null,
+                    CompilerGeneration: null,
+                    ApplicationGeneration: null,
+                    CorrelationId: request.CorrelationId,
+                    DecidedAt: now),
+                cancellationToken).ConfigureAwait(false);
+
             var record = new NativeAcsPolicyPreparationRecord
             {
-                PreparationId = Guid.NewGuid(),
+                PreparationId = preparationId,
                 ScopeDigest = scopeDigest,
                 ScopeType = request.ScopeType,
                 ScopeId = request.ScopeId,
@@ -346,7 +394,9 @@ internal sealed class NativeAcsPolicyStore(
                 ArtifactJson = JsonSerializer.Serialize(request.Artifact, JsonOptions),
                 Reason = request.Reason,
                 CorrelationId = request.CorrelationId,
-                CreatedAt = timeProvider.GetUtcNow(),
+                GovernanceDecisionId = decisionReceipt.DecisionId,
+                GovernanceDecisionHash = decisionReceipt.RecordHash,
+                CreatedAt = now,
             };
             db.NativeAcsPolicyPreparations.Add(record);
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -373,18 +423,22 @@ internal sealed class NativeAcsPolicyStore(
         }
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException
         {
-            SqlState: PostgresErrorCodes.SerializationFailure,
+            SqlState: PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.DeadlockDetected,
         })
         {
             throw ProjectConfigException.Conflict("The native ACS policy preparation conflicted with a concurrent update.");
         }
-        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.SerializationFailure)
+        catch (PostgresException exception) when (exception.SqlState is
+            PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.UniqueViolation)
         {
             throw ProjectConfigException.Conflict("The native ACS policy preparation conflicted with a concurrent update.");
         }
         catch (InvalidOperationException exception) when (exception.InnerException is DbUpdateException
         {
-            InnerException: PostgresException { SqlState: PostgresErrorCodes.SerializationFailure },
+            InnerException: PostgresException
+            {
+                SqlState: PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.UniqueViolation,
+            },
         })
         {
             throw ProjectConfigException.Conflict("The native ACS policy preparation conflicted with a concurrent update.");
@@ -1369,7 +1423,9 @@ internal sealed class NativeAcsPolicyStore(
             "pending",
             Checkpoint: null,
             record.CreatedAt,
-            replayed);
+            replayed,
+            record.GovernanceDecisionId,
+            record.GovernanceDecisionHash);
 
     private static async Task<NativeAcsPolicyHeadSnapshot?> LockPreparationHeadAsync(
         ProjectsConfigDbContext db,
@@ -1453,6 +1509,12 @@ internal sealed class NativeAcsPolicyStore(
     }
 
     // The scope digest locates one caller's retry slot.
+    internal static string ComputeScopeDigest(ProjectAuthorizationContext caller, NativeAcsPolicyWriteRequest request) =>
+        ScopeDigest(caller, request);
+
+    internal static string ComputeRequestDigest(NativeAcsPolicyWriteRequest request) =>
+        RequestDigest(request);
+
     private static string ScopeDigest(ProjectAuthorizationContext caller, NativeAcsPolicyWriteRequest request) =>
         Hash(JsonSerializer.SerializeToUtf8Bytes(new
         {

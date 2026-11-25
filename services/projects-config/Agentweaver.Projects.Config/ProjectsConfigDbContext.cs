@@ -1286,11 +1286,22 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                     "expected_head_content_sha256 IS NULL) OR " +
                     "(expected_head_policy_id IS NOT NULL AND expected_head_revision > 0 AND " +
                     "expected_head_content_sha256 IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_preparations_governance_decision_pair",
+                    "(governance_decision_id IS NULL AND governance_decision_hash IS NULL) OR " +
+                    "(governance_decision_id IS NOT NULL AND governance_decision_hash IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_preparations_governance_decision_hash",
+                    "governance_decision_hash IS NULL OR governance_decision_hash ~ '^[0-9a-f]{64}$'");
             });
             entity.HasKey(preparation => preparation.PreparationId);
             entity.HasIndex(preparation => preparation.ScopeDigest)
                 .IsUnique()
                 .HasDatabaseName("ux_native_acs_policy_preparations_scope_digest");
+            entity.HasIndex(preparation => preparation.GovernanceDecisionId)
+                .IsUnique()
+                .HasFilter("governance_decision_id IS NOT NULL")
+                .HasDatabaseName("ux_native_acs_policy_preparations_governance_decision_id");
             entity.Property(preparation => preparation.PreparationId).HasColumnName("preparation_id");
             entity.Property(preparation => preparation.ScopeDigest).HasColumnName("scope_digest").HasMaxLength(64);
             entity.Property(preparation => preparation.ScopeType)
@@ -1317,7 +1328,16 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(preparation => preparation.Reason).HasColumnName("reason").HasMaxLength(1024);
             entity.Property(preparation => preparation.CorrelationId)
                 .HasColumnName("correlation_id").HasMaxLength(128);
+            entity.Property(preparation => preparation.GovernanceDecisionId)
+                .HasColumnName("governance_decision_id");
+            entity.Property(preparation => preparation.GovernanceDecisionHash)
+                .HasColumnName("governance_decision_hash").HasMaxLength(64);
             entity.Property(preparation => preparation.CreatedAt).HasColumnName("created_at");
+            entity.HasOne<ProjectGovernanceDecisionRecord>()
+                .WithMany()
+                .HasForeignKey(preparation => preparation.GovernanceDecisionId)
+                .HasPrincipalKey(decision => decision.DecisionId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<NativeAcsPolicyRevisionRecord>(entity =>
