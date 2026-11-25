@@ -256,6 +256,21 @@ rechecks (`recheckExistingVersion: true`). A full browser reload or tab close
 clears in-memory operation state. Key rotation, key removal, and provider
 activation remain unavailable in this view.
 
+### Platform BYOK key recovery
+
+On `/platform-settings`, `PlatformModelProviders` sends initial key uploads,
+existing-key rechecks, and keyless publication retries once through
+`apiCallOnce` with an unbound session (`binding: null`), `credentials: 'omit'`,
+`cache: 'no-store'`, and no automatic `401` retry. Unresolved operations are
+stored in memory by confirmed `(issuer, actorId, tenantId, 'platform', null, providerId)`
+with their original `expectedProviderRevision` and `expectedCredentialRevision`
+(`0` for first-key uploads, `>= 1` for rechecks) for status checks
+(`GET /api/v1/platform/byok-providers/{providerId}/credential/operations/{operationId}`)
+and keyless publication retries (`recheckExistingVersion: true`). While an
+operation is unresolved, the Edit form blocks new key entry while keeping
+metadata-only edits available. A full browser reload or tab close clears
+in-memory operation state.
+
 ### Policy validation
 
 Platform Policy reads use a separate unbound session. When the browser has no

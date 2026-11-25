@@ -878,6 +878,74 @@ describe('Gateway API client', () => {
     expect(new Headers(getInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
   });
 
+  it('sends platform BYOK credential writes and operation status reads without cookies or cache', async () => {
+    const putResponse = {
+      operationId: '22222222-2222-4222-8222-222222222222',
+      status: 'published',
+      scope: 'platform',
+      projectId: null,
+      providerId: 'provider-1',
+      providerRevision: 2,
+      credentialRevision: 1,
+      credentialVersion: 'v1',
+      configurationHash: 'hash',
+      providerState: 'Available',
+    };
+    const statusResponse = {
+      operationId: '22222222-2222-4222-8222-222222222222',
+      scope: 'platform',
+      projectId: null,
+      providerId: 'provider-1',
+      status: 'publication_pending',
+      providerRevision: 2,
+      hasCredential: true,
+    };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(putResponse), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(statusResponse), { status: 200 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.setPlatformByokProviderCredential('token', 'provider/1', {
+      operationId: '22222222-2222-4222-8222-222222222222',
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 0,
+      apiKey: 'secret-key',
+    }, 'tenant-1')).resolves.toEqual(putResponse);
+
+    await expect(client.getPlatformByokProviderCredentialOperation(
+      'token',
+      'provider/1',
+      '22222222-2222-4222-8222-222222222222',
+      'tenant-1',
+    )).resolves.toEqual(statusResponse);
+
+    const [putUrl, putInit] = fetcher.mock.calls[0];
+    expect(String(putUrl)).toBe(
+      'https://gateway.example.test/api/v1/platform/byok-providers/provider%2F1/credential',
+    );
+    expect(putInit?.method).toBe('PUT');
+    expect(putInit?.credentials).toBe('omit');
+    expect(putInit?.cache).toBe('no-store');
+    expect(new Headers(putInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(new Headers(putInit?.headers).get('Content-Type')).toBe('application/json');
+    expect(JSON.parse(String(putInit?.body))).toEqual({
+      operationId: '22222222-2222-4222-8222-222222222222',
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 0,
+      apiKey: 'secret-key',
+    });
+
+    const [getUrl, getInit] = fetcher.mock.calls[1];
+    expect(String(getUrl)).toBe(
+      'https://gateway.example.test/api/v1/platform/byok-providers/provider%2F1/credential/operations/22222222-2222-4222-8222-222222222222',
+    );
+    expect(getInit?.method ?? 'GET').toBe('GET');
+    expect(getInit?.body).toBeUndefined();
+    expect(getInit?.credentials).toBe('omit');
+    expect(getInit?.cache).toBe('no-store');
+    expect(new Headers(getInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
   it('can replay a user intent with the same coordinator key', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),

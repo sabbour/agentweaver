@@ -826,9 +826,34 @@ export class AgentweaverGatewayClient {
     tenantSelector?: string | null,
   ): Promise<ModelProviderCredentialResponse> {
     return this.request(
-      token, `/platform/${encodeSegments('byok-providers', providerId, 'credential')}`,
-      { method: 'PUT', body: JSON.stringify(request) },
-      this.baseUrl, tenantSelector,
+      token,
+      `/platform/${encodeSegments('byok-providers', providerId, 'credential')}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(request),
+        credentials: 'omit',
+        cache: 'no-store',
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  getPlatformByokProviderCredentialOperation(
+    token: string,
+    providerId: string,
+    operationId: string,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialOperationStatusResponse> {
+    return this.request(
+      token,
+      `/platform/${encodeSegments('byok-providers', providerId, 'credential', 'operations', operationId)}`,
+      {
+        credentials: 'omit',
+        cache: 'no-store',
+      },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 

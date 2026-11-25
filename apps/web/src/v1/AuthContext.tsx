@@ -118,7 +118,7 @@ interface AuthContextValue {
   ) => Promise<T>;
   apiCallOnce: <T>(
     operation: (accessToken: string, tenantSelector: string) => Promise<T>,
-    binding: AuthorizationBinding,
+    binding?: AuthorizationBinding | null,
     expectedIdentity?: {
       tenantId: string;
       actorId: string | null;
@@ -1139,28 +1139,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const apiCallOnce = useCallback(async <T,>(
     operation: (accessToken: string, tenantSelector: string) => Promise<T>,
-    requestedBinding: AuthorizationBinding,
+    requestedBinding: AuthorizationBinding | null = null,
     expectedIdentity?: {
       tenantId: string;
       actorId: string | null;
       issuer: string | null;
     },
   ): Promise<T> => {
-    if (!requestedBinding?.projectId || requestedBinding.runId) {
+    if (requestedBinding !== null && (!requestedBinding.projectId || requestedBinding.runId)) {
       throw new GatewayError(
         403,
         { code: 'forbidden' },
-        'A project-only session is required for this action.',
+        'A project-only or unbound platform session is required for this action.',
       );
     }
     let current = sessionsRef.current.get(bindingKey(requestedBinding)) ?? null;
     if (!current ||
-        !sameBinding(current.binding, requestedBinding) ||
+        (requestedBinding === null ? current.binding !== null : !sameBinding(current.binding, requestedBinding)) ||
         current.binding?.runId) {
       throw new GatewayError(
         401,
         { code: 'unauthorized' },
-        'Sign in for this exact project before continuing.',
+        requestedBinding === null
+          ? 'Sign in with an unbound platform session before continuing.'
+          : 'Sign in for this exact project before continuing.',
       );
     }
     if (current.expiresAt <= Date.now() + 5_000) {
