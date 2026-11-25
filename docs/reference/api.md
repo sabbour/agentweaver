@@ -549,7 +549,7 @@ authorization cache, or a grant.
 | DELETE | `/{projectId}/role-assignments/{assignmentId:guid}` | Admin; unbound token, TenantAdmin | Revoke an assignment at `expectedRevision`. | Yes |
 | GET | `/{projectId}/configuration` | Read | Read current or requested `revision`. | Yes |
 | GET | `/{projectId}/configuration/choices` | Read | Read current project-scoped model and platform provider choices. No query parameters; `no-store`. | Yes |
-| PUT | `/{projectId}/configuration` | Admin | Append validated configuration. | Yes |
+| PUT | `/{projectId}/configuration` | Admin | Append validated configuration. Accepts an optional nullable `scanCharterAgentId` to run a post-commit local scan on one charter and return `charterScan` (`completed` with `report`, or `unavailable` with `code: "charter_scan_unavailable"`). Blank or unmatched selectors return `400 invalid_charter_selection` after auth, revision, and configuration checks. | Yes |
 | GET | `/{projectId}/casting/universes` | Read | List supported universe names for an authorized project. | Yes |
 | POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
 | POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | Yes |

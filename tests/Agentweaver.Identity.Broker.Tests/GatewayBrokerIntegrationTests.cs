@@ -1169,7 +1169,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
-    private static void AssertPayloadMatchesSchema(
+    internal static void AssertPayloadMatchesSchema(
         JsonElement payload,
         JsonElement schema,
         JsonElement schemas)
@@ -1178,12 +1178,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             return;
         if (schema.TryGetProperty("oneOf", out var variants))
         {
-            var payloadKind = payload.GetProperty("kind").GetString();
-            schema = variants.EnumerateArray().First(variant =>
+            var matches = new List<JsonElement>();
+            foreach (var rawVariant in variants.EnumerateArray())
             {
-                var kindSchema = variant.GetProperty("properties").GetProperty("kind");
-                return kindSchema.GetProperty("const").GetString() == payloadKind;
-            });
+                var variant = ResolveSchemaRef(rawVariant, schemas);
+                if (!variant.TryGetProperty("properties", out var variantProperties))
+                    continue;
+                string? discriminator = null;
+                if (variantProperties.TryGetProperty("status", out var statusSchema) &&
+                    statusSchema.TryGetProperty("const", out _))
+                    discriminator = "status";
+                else if (variantProperties.TryGetProperty("kind", out var kindSchema) &&
+                    kindSchema.TryGetProperty("const", out _))
+                    discriminator = "kind";
+                if (discriminator is null)
+                    continue;
+                var expectedConst = variantProperties.GetProperty(discriminator).GetProperty("const").GetString();
+                if (payload.ValueKind == JsonValueKind.Object &&
+                    payload.TryGetProperty(discriminator, out var payloadProperty) &&
+                    payloadProperty.ValueKind == JsonValueKind.String &&
+                    payloadProperty.GetString() == expectedConst)
+                {
+                    matches.Add(variant);
+                }
+            }
+            Assert.Single(matches);
+            schema = matches[0];
         }
         if (schema.TryGetProperty("anyOf", out var alternatives))
         {
@@ -1191,11 +1211,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 !alternative.TryGetProperty("type", out var type) ||
                 type.GetString() != "null");
         }
-        if (schema.TryGetProperty("$ref", out var reference))
-        {
-            const string prefix = "#/components/schemas/";
-            schema = schemas.GetProperty(reference.GetString()![prefix.Length..]);
-        }
+        schema = ResolveSchemaRef(schema, schemas);
         if (schema.TryGetProperty("enum", out var enumValues))
             Assert.Contains(payload.GetString(), enumValues.EnumerateArray().Select(value => value.GetString()));
         if (schema.TryGetProperty("const", out var constant))
@@ -1248,6 +1264,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         if (payload.ValueKind == JsonValueKind.Array && schema.TryGetProperty("items", out var items))
             foreach (var item in payload.EnumerateArray())
                 AssertPayloadMatchesSchema(item, items, schemas);
+    }
+
+    private static JsonElement ResolveSchemaRef(JsonElement schema, JsonElement schemas)
+    {
+        if (schema.TryGetProperty("$ref", out var reference))
+        {
+            const string prefix = "#/components/schemas/";
+            return schemas.GetProperty(reference.GetString()![prefix.Length..]);
+        }
+        return schema;
     }
 
     private sealed class ThrowingOwnerBodyStream : MemoryStream

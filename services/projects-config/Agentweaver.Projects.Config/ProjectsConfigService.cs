@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentGovernance.Security;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
@@ -43,6 +44,18 @@ public sealed record VersionedProjectConfiguration(
     ProjectConfiguration Configuration,
     string UpdatedByActorId,
     DateTimeOffset CreatedAt);
+
+/// <summary>One committed project configuration revision with an optional post-commit charter scan.</summary>
+public sealed record UpdateProjectConfigurationResponse(
+    string ProjectId,
+    long Revision,
+    ProjectConfiguration Configuration,
+    string UpdatedByActorId,
+    DateTimeOffset CreatedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProjectCharterScanResultV1? CharterScan { get; init; }
+}
 
 /// <summary>Read-only eligibility choices for model references and platform-selected provider components.</summary>
 public sealed record ProjectConfigurationChoices(
@@ -657,6 +670,51 @@ public sealed partial class ProjectsConfigService
         ProjectConfiguration configuration,
         CancellationToken cancellationToken)
     {
+        var updated = await UpdateProjectConfigurationAsync(
+            caller,
+            projectId,
+            expectedRevision,
+            configuration,
+            scanCharterAgentId: null,
+            evaluateCharter: null,
+            cancellationToken).ConfigureAwait(false);
+        return new VersionedProjectConfiguration(
+            updated.ProjectId,
+            updated.Revision,
+            updated.Configuration,
+            updated.UpdatedByActorId,
+            updated.CreatedAt);
+    }
+
+    /// <summary>
+    /// Validates and appends a project configuration revision, then runs an optional local scan of one selected charter.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The project is archived, the expected revision is stale, the configuration is invalid, or the charter selector does not match.</exception>
+    public Task<UpdateProjectConfigurationResponse> UpdateProjectConfigurationAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        long expectedRevision,
+        ProjectConfiguration configuration,
+        string? scanCharterAgentId,
+        CancellationToken cancellationToken) =>
+        UpdateProjectConfigurationAsync(
+            caller,
+            projectId,
+            expectedRevision,
+            configuration,
+            scanCharterAgentId,
+            evaluateCharter: null,
+            cancellationToken);
+
+    internal async Task<UpdateProjectConfigurationResponse> UpdateProjectConfigurationAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        long expectedRevision,
+        ProjectConfiguration configuration,
+        string? scanCharterAgentId,
+        Func<string, PromptDefenseReport>? evaluateCharter,
+        CancellationToken cancellationToken)
+    {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
         _ = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
@@ -665,6 +723,12 @@ public sealed partial class ProjectsConfigService
         await using var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
             .ConfigureAwait(false);
+        string committedProjectId;
+        long nextRevision;
+        string serializedConfiguration;
+        ProjectConfiguration normalized;
+        DateTimeOffset now;
+        ProjectAgentCharter? selectedCharter = null;
         try
         {
             _ = await new SkillAdmissionService(db, timeProvider)
@@ -686,7 +750,7 @@ public sealed partial class ProjectsConfigService
             ArgumentNullException.ThrowIfNull(configuration);
             RejectSubmittedProviderOverrides(configuration);
             configuration = KeepStoredProviderOverrides(previous, configuration);
-            var normalized = await SkillContentService.ValidateConfigurationAsync(
+            normalized = await SkillContentService.ValidateConfigurationAsync(
                 db,
                 project.ProjectId,
                 previous,
@@ -703,13 +767,18 @@ public sealed partial class ProjectsConfigService
                     (int)HttpStatusCode.BadRequest);
 
             await EnsureProjectNarrowingAsync(normalized, cancellationToken).ConfigureAwait(false);
-            var now = timeProvider.GetUtcNow();
-            var nextRevision = checked(project.ConfigurationRevision + 1);
+            if (scanCharterAgentId is not null)
+                selectedCharter = SelectCharterForScan(normalized, scanCharterAgentId);
+
+            now = timeProvider.GetUtcNow();
+            nextRevision = checked(project.ConfigurationRevision + 1);
+            committedProjectId = project.ProjectId;
+            serializedConfiguration = Serialize(normalized);
             db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
             {
-                ProjectId = project.ProjectId,
+                ProjectId = committedProjectId,
                 Revision = nextRevision,
-                ConfigurationJson = Serialize(normalized),
+                ConfigurationJson = serializedConfiguration,
                 UpdatedByActorId = caller.ActorId,
                 CreatedAt = now,
             });
@@ -717,12 +786,89 @@ public sealed partial class ProjectsConfigService
             project.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return new VersionedProjectConfiguration(
-                project.ProjectId, nextRevision, normalized, caller.ActorId, now);
         }
         catch (DbUpdateConcurrencyException)
         {
             throw ProjectConfigException.Conflict("The project configuration revision has changed.");
+        }
+
+        var charterScan = selectedCharter is null
+            ? null
+            : ScanCommittedCharter(
+                committedProjectId,
+                nextRevision,
+                serializedConfiguration,
+                selectedCharter,
+                evaluateCharter);
+        return new UpdateProjectConfigurationResponse(
+            committedProjectId, nextRevision, normalized, caller.ActorId, now)
+        {
+            CharterScan = charterScan
+        };
+    }
+
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    private static ProjectAgentCharter SelectCharterForScan(
+        ProjectConfiguration configuration,
+        string scanCharterAgentId)
+    {
+        if (!string.IsNullOrWhiteSpace(scanCharterAgentId))
+        {
+            foreach (var charter in configuration.AgentCharters)
+            {
+                if (string.Equals(charter.AgentId, scanCharterAgentId, StringComparison.Ordinal))
+                    return charter;
+            }
+        }
+
+        throw new ProjectConfigException(
+            "invalid_charter_selection",
+            "The requested agent charter was not found in the submitted configuration.",
+            (int)HttpStatusCode.BadRequest);
+    }
+
+    internal static ProjectCharterScanResultV1 ScanCommittedCharter(
+        string projectId,
+        long committedRevision,
+        string serializedConfiguration,
+        ProjectAgentCharter selectedCharter,
+        Func<string, PromptDefenseReport>? evaluateCharter = null)
+    {
+        try
+        {
+            var savedConfiguration = Deserialize<ProjectConfiguration>(serializedConfiguration);
+            var savedCharter = savedConfiguration.AgentCharters.FirstOrDefault(item =>
+                string.Equals(item.AgentId, selectedCharter.AgentId, StringComparison.Ordinal));
+            if (savedCharter is null ||
+                !string.Equals(savedCharter.Charter, selectedCharter.Charter, StringComparison.Ordinal))
+            {
+                return ProjectCharterScanResultV1.Unavailable(selectedCharter.AgentId);
+            }
+
+            var agentIdBytes = StrictUtf8.GetBytes(savedCharter.AgentId);
+            var logicalPath = $"agent-charters/by-id-sha256/{PromptContentScanContract.ComputeInputSha256(agentIdBytes)}/charter";
+            var source = new PromptContentScanSourceV1(
+                PromptContentScanOwnerKind.ProjectConfiguration,
+                projectId,
+                committedRevision,
+                logicalPath,
+                PromptContentScanProvenance.Authored,
+                SourceRevision: null,
+                ResolvedCommitSha: null);
+            var charterBytes = StrictUtf8.GetBytes(savedCharter.Charter);
+            var report = evaluateCharter is null
+                ? PromptContentScanner.Scan(PromptContentScanInputKind.ProjectCharter, source, charterBytes)
+                : PromptContentScanner.Scan(PromptContentScanInputKind.ProjectCharter, source, charterBytes, evaluateCharter);
+            var validated = PromptContentScanContract.ValidateReport(
+                report, PromptContentScanInputKind.ProjectCharter, source, charterBytes);
+            return validated.Status == PromptContentScanStatus.Completed
+                ? ProjectCharterScanResultV1.Completed(selectedCharter.AgentId, validated)
+                : ProjectCharterScanResultV1.Unavailable(selectedCharter.AgentId);
+        }
+        catch
+        {
+            return ProjectCharterScanResultV1.Unavailable(selectedCharter.AgentId);
         }
     }
 
