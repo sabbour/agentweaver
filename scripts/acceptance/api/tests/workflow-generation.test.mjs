@@ -161,6 +161,18 @@ function fail() {
   return { exitCode: 1, signal: null, stdout: '', stderr: 'controlled failure', timedOut: false, error: null };
 }
 
+const queueFullCode = 'workflow_generation_queue_full';
+const failedSubmitStdout = 'raw-submit-response';
+const failedSubmitStderr = 'raw-submit-diagnostic';
+
+function queueFull(code = queueFullCode) {
+  return {
+    ...fail(),
+    stdout: JSON.stringify({ status: 503, body: { error: code, detail: failedSubmitStdout } }),
+    stderr: failedSubmitStderr,
+  };
+}
+
 async function withScratch(callback) {
   const scratch = path.join(directory, `workflow-case-${randomUUID()}`);
   await mkdir(scratch);
@@ -190,6 +202,7 @@ function fakeApphost(input, options = {}) {
   const envelope = completedEnvelope(input, jobId);
   const result = resultFor(input, envelope);
   let statusReads = 0;
+  let submits = 0;
   const runner = (_cliPath, args, env) => {
     calls.push({ args, env });
     const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : null;
@@ -221,7 +234,10 @@ function fakeApphost(input, options = {}) {
       case 'getRunSelection':
         return ok(options.selection ?? acceptedSelection(input));
       case 'generateProjectWorkflow':
-        return ok(envelope, 202);
+        return options.submitResponses?.[submits++] ?? ok(
+          options.pendingFirst ? { ...envelope, status: 'queued', artifact: null } : envelope,
+          202,
+        );
       case 'readProjectWorkflowGenerationJob':
         statusReads += 1;
         if (options.generationFailed) {
@@ -248,7 +264,7 @@ function fakeApphost(input, options = {}) {
         throw new Error(`Unexpected operation: ${args.join(' ')}`);
     }
   };
-  return { runner, calls };
+  return { runner, calls, jobId };
 }
 
 async function runFake(context, options = {}, runOptions = {}) {
@@ -266,7 +282,7 @@ async function runFake(context, options = {}, runOptions = {}) {
   );
   const result = JSON.parse(await readFile(path.join(context.outputPath, 'result.json'), 'utf8'));
   const commands = await readFile(path.join(context.outputPath, 'commands.jsonl'), 'utf8');
-  return { exitCode, result, commands, calls: apphost.calls };
+  return { exitCode, result, commands, calls: apphost.calls, jobId: apphost.jobId };
 }
 
 test('case input requires approval, a bound run, a selected model, and finite run limits', () => {
@@ -369,13 +385,15 @@ test('case invokes all workflow operations, validates completion, and cancels th
     assert.equal(result.status, 'passed');
     assert.equal(result.generation.status, 'passed');
     assert.equal(result.cleanup.status, 'passed');
-    assert.match(commands, /"api","invoke","generateProjectWorkflow"/);
+    assert.match(commands, /"stepId":"api-invoke-generate-workflow"/);
     assert.match(commands, /"api","invoke","readProjectWorkflowGenerationJob"/);
     assert.match(commands, /"api","invoke","readProjectWorkflowGenerationResult"/);
     assert.doesNotMatch(commands, /Generate one workflow/);
     assert.equal(calls.filter(call => call.args[0] === 'api' && call.args[1] === 'invoke'
       && call.args[2] === 'readProjectWorkflowGenerationJob').length, 2);
-    const post = calls.find(call => call.args[2] === 'generateProjectWorkflow');
+    const submits = calls.filter(call => call.args[2] === 'generateProjectWorkflow');
+    assert.equal(submits.length, 1);
+    const [post] = submits;
     assert.ok(post.args.includes('--project-id'));
     assert.ok(post.args.includes('--run-id'));
     const cancel = calls.find(call => call.args[2] === 'cancelProjectRun');
@@ -389,6 +407,73 @@ test('case invokes all workflow operations, validates completion, and cancels th
     }), { PATH: 'system-path' });
   });
 });
+
+function assertSafeSubmitEvidence(commands, submitCalls, expectedCodes) {
+  const attempts = commands.trim().split('\n').map(line => JSON.parse(line))
+    .filter(record => record.stepId === 'api-invoke-generate-workflow');
+  assert.deepEqual(attempts.map(record => [record.attempt, record.code]),
+    expectedCodes.map((code, index) => [index + 1, code]));
+  for (const attempt of attempts) {
+    for (const field of ['stdout', 'stderr', 'arguments', 'error']) {
+      assert.equal(Object.hasOwn(attempt, field), false, field);
+    }
+  }
+  for (const { args } of submitCalls) {
+    const key = args.find(value => value.startsWith('Idempotency-Key=')).split('=')[1];
+    assert.equal(commands.includes(key), false);
+  }
+  assert.equal(commands.includes(failedSubmitStdout), false);
+  assert.equal(commands.includes(failedSubmitStderr), false);
+}
+
+test('a full queue retries the exact submit once and polls and reads the accepted job', async () => {
+  await withScratch(async context => {
+    const { exitCode, result, commands, calls, jobId } = await runFake(context, {
+      submitResponses: [queueFull()],
+      pendingFirst: true,
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(result.generation.jobId, jobId);
+    assert.equal(result.cleanup.status, 'passed');
+    const submits = calls.filter(call => call.args[2] === 'generateProjectWorkflow');
+    assert.equal(submits.length, 2);
+    assert.deepEqual(submits[1].args, submits[0].args);
+    assert.deepEqual(calls.slice(-5, -2).map(call => call.args), [
+      buildJobStatusCommand(context.caseInput, jobId).args,
+      buildJobStatusCommand(context.caseInput, jobId).args,
+      buildJobResultCommand(context.caseInput, jobId).args,
+    ]);
+    assert.deepEqual(calls.slice(-2).map(call => call.args[2]), ['cancelProjectRun', 'readRunStatus']);
+    assertSafeSubmitEvidence(commands, submits, [queueFullCode, undefined]);
+  });
+});
+
+for (const [name, submitResponses, expectedCodes] of [
+  ['a second full queue', [queueFull(), queueFull()], [queueFullCode, queueFullCode]],
+  ['a different 503 error', [queueFull('service_unavailable')], [undefined]],
+  ['a different HTTP status', [{ ...queueFull(), stdout: queueFull().stdout.replace('"status":503', '"status":409') }], [undefined]],
+  ['a timeout with partial output', [{ ...queueFull(), stdout: queueFull().stdout.slice(0, -1), timedOut: true }], [undefined]],
+  ['a timeout with a complete-looking response', [{ ...queueFull(), timedOut: true }], [undefined]],
+  ['malformed output', [{ ...queueFull(), stdout: queueFull().stdout.slice(0, -1) }], [undefined]],
+  ['a process error', [{ ...queueFull(), error: failedSubmitStderr }], [undefined]],
+  ['a process signal', [{ ...queueFull(), signal: 'SIGTERM' }], [undefined]],
+  ['an unexpected exit code', [{ ...queueFull(), exitCode: 0 }], [undefined]],
+]) {
+  test(`${name} stops generation without polling and still verifies cancellation`, async () => {
+    await withScratch(async context => {
+      const { exitCode, result, commands, calls } = await runFake(context, { submitResponses });
+      assert.equal(exitCode, 1);
+      assert.equal(result.generation.status, 'failed');
+      assert.equal(result.generation.jobId, null);
+      assert.equal(result.cleanup.status, 'passed');
+      assert.deepEqual(calls.slice(6).map(call => call.args[2]), [
+        ...submitResponses.map(() => 'generateProjectWorkflow'), 'cancelProjectRun', 'readRunStatus',
+      ]);
+      const submits = calls.filter(call => call.args[2] === 'generateProjectWorkflow');
+      assertSafeSubmitEvidence(commands, submits, expectedCodes);
+    });
+  });
+}
 
 test('model or budget mismatch blocks generation but still cleans up the verified disposable run', async () => {
   await withScratch(async context => {

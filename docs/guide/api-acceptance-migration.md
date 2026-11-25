@@ -208,10 +208,16 @@ the fields in the example and rejects unknown fields.
    The script checks the exact apphost hash, sign-in state, caller, and
    accepted selection. It then uses `api invoke` to submit the generation
    request, poll job status, and read the completed result. It cancels the
-   disposable run and verifies its status. The command log redacts request
-   bodies and headers; the result records the generated artifact ID and
-   definition hash. The command log also contains the returned draft and target
-   IDs. Store the evidence with the project's access controls.
+   disposable run and verifies its status. If the first submission returns
+   HTTP 503 with `workflow_generation_queue_full`, the case sends the same
+   request with the same `Idempotency-Key` once more. It does not retry other
+   submission failures or timeouts.
+
+   The command log records each submission attempt without its arguments or
+   output. It redacts request bodies and headers for other commands. The log
+   contains the draft returned by the result read and the target IDs. The
+   result records the artifact ID and definition hash. Store the evidence with
+   the project's access controls.
 
 ### Verify the result
 
