@@ -128,23 +128,29 @@ cross-kind Kubernetes clock.
 The evaluator models the union of selected Kubernetes and Cilium egress allows.
 It supports exact pod and namespace identities, numeric TCP and UDP ports,
 exact Cilium endpoint and FQDN destinations, and exact Cilium denies. It treats
-omitted peers or ports as wildcards. Selected unsupported semantics stop the
-proof. Disjoint selectors are ignored only after the selector itself is
-validated.
+omitted peers or ports as wildcards. Selected unsupported semantics, extra
+destination labels, `CiliumNetworkPolicy` namespace mismatches, and namespaced
+`CiliumClusterwideNetworkPolicy` objects stop the proof. Disjoint selectors are
+ignored only after the selector itself is validated.
 
 AgentHost egress must remain inside the System-only ceiling:
 
 - exact protected System destinations on TCP 443;
 - kube-dns on UDP and TCP 53;
 - Environment, Events & Sessions, Identity Broker, Orchestrator, and Projects &
-  Config on TCP 8443; and
-- Identity Broker on TCP 8444.
+  Config on TCP 8443;
+- Identity Broker on TCP 8444; and
+- the shared `identity-broker` Gateway in `agentweaver-gateway` with label
+  `gateway.networking.k8s.io/gateway-name=identity-broker` on TCP 443.
 
-The proof starts from unrestricted traffic when no selected policy establishes
-default-deny egress. It rejects any remaining combined allow outside the
-ceiling. DNS narrowing does not make a broader packet allow safe, and a CIDR
-deny cannot subtract an FQDN or endpoint grant. An extra exact grant in an
-ordinary input such as `agenthost-model-egress` blocks the proof.
+The proof requires default-deny egress across the full admitted AgentHost
+population; a narrowed selector never satisfies default-deny. A Cilium deny
+subtracts an allow only when its source selector covers the full allow
+(full-population or identical narrowed source). It rejects any remaining
+combined allow outside the ceiling. DNS narrowing does not make a broader
+packet allow safe, and a CIDR deny cannot subtract an FQDN or endpoint grant.
+An extra exact grant in an ordinary input such as `agenthost-model-egress`
+blocks the proof.
 
 The optional proof RBAC is under
 `deploy/k8s/rbac/platform-egress-proof/`. It gives the Environment reader only

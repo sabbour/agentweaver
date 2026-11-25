@@ -43,6 +43,7 @@ public sealed record SystemOnlyPolicyCeiling(
         new("agentweaver", "agentweaver.io/workload", "events-and-sessions", "TCP", 8443),
         new("agentweaver", "agentweaver.io/workload", "identity-broker", "TCP", 8443),
         new("agentweaver", "agentweaver.io/workload", "identity-broker", "TCP", 8444),
+        new("agentweaver-gateway", "gateway.networking.k8s.io/gateway-name", "identity-broker", "TCP", 443),
         new("agentweaver", "agentweaver.io/workload", "orchestrator", "TCP", 8443),
         new("agentweaver", "agentweaver.io/workload", "projects-config", "TCP", 8443),
     ];
@@ -65,13 +66,6 @@ public sealed record SystemOnlyPolicySetEvaluation(
 
 public static class SystemOnlyPolicySetEvaluator
 {
-    private static readonly string[] SourceSelectorKeys =
-    [
-        "agentweaver.io/workload",
-        "k8s:io.kubernetes.pod.namespace",
-        "io.kubernetes.pod.namespace",
-    ];
-
     public static SystemOnlyPolicySetEvaluation Evaluate(
         KubernetesPlatformPolicyInventory inventory,
         SystemOnlyPolicyCeiling ceiling)
@@ -96,38 +90,52 @@ public static class SystemOnlyPolicySetEvaluator
                         spec.ValueKind != JsonValueKind.Object)
                         throw Unsupported("A NetworkPolicy has no valid spec.");
                     var selector = RequiredObject(spec, "podSelector");
-                    if (!SelectorCanSelectAgentHost(selector, inventory.Namespace))
+                    var source = ClassifySourceSelector(
+                        selector, inventory.Namespace, isKubernetesNetworkPolicy: true);
+                    if (source.Coverage == SourceSelectorCoverage.None)
                         continue;
                     selected++;
                     var types = policyTypes(spec);
                     if (!types.Contains("Egress", StringComparer.Ordinal))
                         continue;
-                    hasDefaultDeny = true;
+                    if (source.Coverage == SourceSelectorCoverage.FullPopulation)
+                        hasDefaultDeny = true;
                     foreach (var rule in RequiredArrayOrEmpty(spec, "egress"))
-                        AddKubernetesRule(rule, inventory, allows);
+                        AddKubernetesRule(rule, inventory, source, allows);
                     break;
                 }
                 case "CiliumNetworkPolicy":
                 case "CiliumClusterwideNetworkPolicy":
                 {
+                    if (policy.Kind == "CiliumNetworkPolicy" && policy.Namespace != inventory.Namespace)
+                        throw Unsupported("A CiliumNetworkPolicy does not match the target namespace.");
+                    if (policy.Kind == "CiliumClusterwideNetworkPolicy" && !string.IsNullOrEmpty(policy.Namespace))
+                        throw Unsupported("A CiliumClusterwideNetworkPolicy must not have a namespace.");
                     EnsureRoot(policy.Content, policy.Kind);
                     var specs = ReadCiliumSpecs(policy.Content);
                     foreach (var candidate in specs)
                     {
                         var selector = CiliumSourceSelector(candidate);
-                        if (!SelectorCanSelectAgentHost(selector, inventory.Namespace))
+                        var source = ClassifySourceSelector(
+                            selector, inventory.Namespace, isKubernetesNetworkPolicy: false);
+                        if (source.Coverage == SourceSelectorCoverage.None)
                             continue;
                         selected++;
-                        var defaults = candidate.TryGetProperty("enableDefaultDeny", out var defaultDeny)
-                            && defaultDeny.TryGetProperty("egress", out var egressDeny)
-                                ? ReadBoolean(egressDeny, "enableDefaultDeny.egress")
-                                : CiliumDefaultEgressDeny(candidate);
-                        if (defaults)
+                        var defaults = CiliumDefaultEgressDeny(candidate);
+                        if (candidate.TryGetProperty("enableDefaultDeny", out var defaultDeny))
+                        {
+                            EnsureOnly(defaultDeny, "Cilium enableDefaultDeny", "egress", "ingress");
+                            if (defaultDeny.TryGetProperty("ingress", out var ingressDeny))
+                                _ = ReadBoolean(ingressDeny, "enableDefaultDeny.ingress");
+                            if (defaultDeny.TryGetProperty("egress", out var egressDeny))
+                                defaults = ReadBoolean(egressDeny, "enableDefaultDeny.egress");
+                        }
+                        if (defaults && source.Coverage == SourceSelectorCoverage.FullPopulation)
                             hasDefaultDeny = true;
                         foreach (var rule in RequiredArrayOrEmpty(candidate, "egress"))
-                            AddCiliumRule(rule, inventory, allows);
+                            AddCiliumRule(rule, source, allows);
                         foreach (var rule in RequiredArrayOrEmpty(candidate, "egressDeny"))
-                            AddCiliumRule(rule, inventory, denies, isDeny: true);
+                            AddCiliumRule(rule, source, denies, isDeny: true);
                     }
                     break;
                 }
@@ -149,6 +157,7 @@ public static class SystemOnlyPolicySetEvaluator
     private static void AddKubernetesRule(
         JsonElement rule,
         KubernetesPlatformPolicyInventory inventory,
+        SourceSelector source,
         List<AllowedTraffic> allows)
     {
         EnsureOnly(rule, "Kubernetes egress rule", "to", "ports");
@@ -178,6 +187,7 @@ public static class SystemOnlyPolicySetEvaluator
                     TrafficKind.Endpoint,
                     Protocol: port.Protocol,
                     Port: port.Port,
+                    Source: source,
                     Endpoint: new(
                         targetNamespace,
                         WorkloadKeyFor(workload.Key),
@@ -189,7 +199,7 @@ public static class SystemOnlyPolicySetEvaluator
 
     private static void AddCiliumRule(
         JsonElement rule,
-        KubernetesPlatformPolicyInventory inventory,
+        SourceSelector source,
         List<AllowedTraffic> traffic,
         bool isDeny = false)
     {
@@ -202,7 +212,7 @@ public static class SystemOnlyPolicySetEvaluator
             destinations++;
             if (endpoints.ValueKind != JsonValueKind.Array || endpoints.GetArrayLength() == 0)
                 throw Unsupported("A Cilium endpoint destination is empty.");
-            var ports = ReadCiliumPorts(rule);
+            var ports = ReadCiliumPorts(rule, isDeny);
             foreach (var endpoint in endpoints.EnumerateArray())
             {
                 var labels = ReadSelectorLabels(endpoint);
@@ -210,17 +220,15 @@ public static class SystemOnlyPolicySetEvaluator
                     !labels.TryGetValue("io.kubernetes.pod.namespace", out targetNamespace))
                     throw Unsupported("A Cilium endpoint destination does not pin a namespace.");
                 var workload = labels.FirstOrDefault(pair =>
-                    pair.Key == "agentweaver.io/workload" ||
-                    pair.Key == "k8s:agentweaver.io/workload");
+                    pair.Key is "agentweaver.io/workload" or "k8s:agentweaver.io/workload" or
+                        "k8s:k8s-app" or "k8s-app" or
+                        "gateway.networking.k8s.io/gateway-name" or "k8s:gateway.networking.k8s.io/gateway-name");
                 if (workload.Value is null)
-                {
-                    var dns = labels.FirstOrDefault(pair => pair.Key is "k8s:k8s-app" or "k8s-app");
-                    if (dns.Value is null)
-                        throw Unsupported("A Cilium endpoint destination does not pin a trusted identity.");
-                    workload = dns;
-                }
+                    throw Unsupported("A Cilium endpoint destination does not pin a trusted identity.");
+                if (labels.Count != 2)
+                    throw Unsupported("A Cilium endpoint destination contains unsupported labels.");
                 foreach (var port in ports)
-                    traffic.Add(new(TrafficKind.Endpoint, port.Protocol, port.Port,
+                    traffic.Add(new(TrafficKind.Endpoint, port.Protocol, port.Port, source,
                         new TrafficEndpoint(
                             targetNamespace,
                             WorkloadKeyFor(workload.Key),
@@ -232,13 +240,13 @@ public static class SystemOnlyPolicySetEvaluator
         if (rule.TryGetProperty("toFQDNs", out var names))
         {
             destinations++;
-            var ports = ReadCiliumPorts(rule);
+            var ports = ReadCiliumPorts(rule, isDeny);
             foreach (var name in names.EnumerateArray())
             {
                 EnsureOnly(name, "Cilium FQDN selector", "matchName");
                 var host = RequiredString(name, "matchName");
                 foreach (var port in ports)
-                    traffic.Add(new(TrafficKind.Fqdn, port.Protocol, port.Port, Fqdn: host));
+                    traffic.Add(new(TrafficKind.Fqdn, port.Protocol, port.Port, source, Fqdn: host));
             }
         }
         if (rule.TryGetProperty("toCIDR", out _) || rule.TryGetProperty("toCIDRSet", out _))
@@ -246,9 +254,9 @@ public static class SystemOnlyPolicySetEvaluator
             destinations++;
             if (!isDeny)
             {
-                var ports = ReadCiliumPorts(rule);
+                var ports = ReadCiliumPorts(rule, isDeny);
                 foreach (var port in ports)
-                    traffic.Add(new(TrafficKind.Cidr, port.Protocol, port.Port, Cidr: "opaque-cidr"));
+                    traffic.Add(new(TrafficKind.Cidr, port.Protocol, port.Port, source, Cidr: "opaque-cidr"));
             }
         }
         if (destinations == 0 && rule.TryGetProperty("toPorts", out _))
@@ -257,25 +265,41 @@ public static class SystemOnlyPolicySetEvaluator
             throw Unsupported("A Cilium rule has no supported destination field.");
     }
 
-    private static bool SelectorCanSelectAgentHost(JsonElement selector, string @namespace)
+    private static SourceSelector ClassifySourceSelector(
+        JsonElement selector,
+        string @namespace,
+        bool isKubernetesNetworkPolicy)
     {
         EnsureOnly(selector, "pod selector", "matchLabels", "matchExpressions");
+        var isFull = true;
+        var isDisjoint = false;
+        var labelEntries = new SortedDictionary<string, string>(StringComparer.Ordinal);
         if (selector.TryGetProperty("matchLabels", out var labels))
         {
             if (labels.ValueKind != JsonValueKind.Object)
                 throw Unsupported("A selector matchLabels value is malformed.");
             foreach (var label in labels.EnumerateObject())
             {
-                if (SourceSelectorKeys.Contains(label.Name, StringComparer.Ordinal))
+                var value = RequiredStringLabel(label.Value, label.Name);
+                labelEntries[label.Name] = value;
+                if (IsWorkloadSelectorKey(label.Name, isKubernetesNetworkPolicy))
                 {
-                    var expected = label.Name == "agentweaver.io/workload"
-                        ? "agenthost"
-                        : @namespace;
-                    if (RequiredStringLabel(label.Value, label.Name) != expected)
-                        return false;
+                    if (value != "agenthost")
+                        isDisjoint = true;
+                }
+                else if (IsNamespaceSelectorKey(label.Name, isKubernetesNetworkPolicy))
+                {
+                    if (value != @namespace)
+                        isDisjoint = true;
+                }
+                else
+                {
+                    isFull = false;
                 }
             }
         }
+
+        var expressionEntries = new List<string>();
         if (selector.TryGetProperty("matchExpressions", out var expressions))
         {
             if (expressions.ValueKind != JsonValueKind.Array)
@@ -288,25 +312,50 @@ public static class SystemOnlyPolicySetEvaluator
                 var values = expression.TryGetProperty("values", out var list)
                     ? ReadStringArray(list)
                     : ImmutableArray<string>.Empty;
-                if (SourceSelectorKeys.Contains(key, StringComparer.Ordinal))
-                {
-                    var expected = key == "agentweaver.io/workload" ? "agenthost" : @namespace;
-                    if (operation == "In" && !values.Contains(expected, StringComparer.Ordinal))
-                        return false;
-                    if (operation == "NotIn" && values.Contains(expected, StringComparer.Ordinal))
-                        return false;
-                    if (operation == "DoesNotExist")
-                        return false;
-                    if (operation != "In" && operation != "NotIn" && operation != "Exists" &&
-                        operation != "DoesNotExist")
-                        throw Unsupported($"The selector operator '{operation}' is unsupported.");
-                }
-                else if (operation is not ("In" or "NotIn" or "Exists" or "DoesNotExist"))
+                if (operation is not ("In" or "NotIn" or "Exists" or "DoesNotExist"))
                     throw Unsupported($"The selector operator '{operation}' is unsupported.");
+
+                var isWorkloadKey = IsWorkloadSelectorKey(key, isKubernetesNetworkPolicy);
+                var isNamespaceKey = IsNamespaceSelectorKey(key, isKubernetesNetworkPolicy);
+                if (isWorkloadKey || isNamespaceKey)
+                {
+                    var expected = isWorkloadKey ? "agenthost" : @namespace;
+                    if ((operation == "In" && !values.Contains(expected, StringComparer.Ordinal)) ||
+                        (operation == "NotIn" && values.Contains(expected, StringComparer.Ordinal)) ||
+                        operation == "DoesNotExist")
+                    {
+                        isDisjoint = true;
+                    }
+                }
+                else
+                {
+                    isFull = false;
+                }
+
+                var sortedValues = string.Join(",", values.OrderBy(value => value, StringComparer.Ordinal));
+                expressionEntries.Add($"{key}:{operation}:[{sortedValues}]");
             }
         }
-        return true;
+
+        if (isDisjoint)
+            return new(SourceSelectorCoverage.None, string.Empty);
+
+        if (isFull)
+            return new(SourceSelectorCoverage.FullPopulation, "FULL");
+
+        expressionEntries.Sort(StringComparer.Ordinal);
+        var canonicalLabels = string.Join(";", labelEntries.Select(pair => $"{pair.Key}={pair.Value}"));
+        var canonicalExpressions = string.Join(";", expressionEntries);
+        return new(SourceSelectorCoverage.Subset, $"{canonicalLabels}|{canonicalExpressions}");
     }
+
+    private static bool IsWorkloadSelectorKey(string key, bool isKubernetesNetworkPolicy) =>
+        key == "agentweaver.io/workload" ||
+        (!isKubernetesNetworkPolicy && key == "k8s:agentweaver.io/workload");
+
+    private static bool IsNamespaceSelectorKey(string key, bool isKubernetesNetworkPolicy) =>
+        !isKubernetesNetworkPolicy &&
+        key is "k8s:io.kubernetes.pod.namespace" or "io.kubernetes.pod.namespace";
 
     private static JsonElement CiliumSourceSelector(JsonElement spec)
     {
@@ -342,7 +391,7 @@ public static class SystemOnlyPolicySetEvaluator
         return spec;
     }
 
-    private static ImmutableArray<TrafficPort> ReadCiliumPorts(JsonElement rule)
+    private static ImmutableArray<TrafficPort> ReadCiliumPorts(JsonElement rule, bool isDeny)
     {
         if (!rule.TryGetProperty("toPorts", out var toPorts) ||
             toPorts.ValueKind != JsonValueKind.Array || toPorts.GetArrayLength() == 0)
@@ -351,7 +400,7 @@ public static class SystemOnlyPolicySetEvaluator
         foreach (var portRule in toPorts.EnumerateArray())
         {
             EnsureOnly(portRule, "Cilium port rule", "ports", "rules");
-            ValidateCiliumRules(portRule);
+            ValidateCiliumRules(portRule, isDeny);
             if (!portRule.TryGetProperty("ports", out var ports) ||
                 ports.ValueKind != JsonValueKind.Array || ports.GetArrayLength() == 0)
                 throw Unsupported("A Cilium port rule is malformed.");
@@ -372,10 +421,12 @@ public static class SystemOnlyPolicySetEvaluator
         return result.ToImmutable();
     }
 
-    private static void ValidateCiliumRules(JsonElement portRule)
+    private static void ValidateCiliumRules(JsonElement portRule, bool isDeny)
     {
         if (!portRule.TryGetProperty("rules", out var rules))
             return;
+        if (isDeny)
+            throw Unsupported("Cilium Layer 7 rules are unsupported in deny policies.");
         EnsureOnly(rules, "Cilium Layer 7 rules", "dns");
         if (!rules.TryGetProperty("dns", out var dns) ||
             dns.ValueKind != JsonValueKind.Array)
@@ -419,7 +470,7 @@ public static class SystemOnlyPolicySetEvaluator
             throw Unsupported("Kubernetes destination selector expressions are unsupported.");
         var labels = ReadStringMap(RequiredObject(selector, "matchLabels"));
         var workload = labels.FirstOrDefault(pair =>
-            pair.Key is "agentweaver.io/workload" or "k8s-app");
+            pair.Key is "agentweaver.io/workload" or "k8s-app" or "gateway.networking.k8s.io/gateway-name");
         if (workload.Value is null || labels.Count != 1)
             throw Unsupported("A Kubernetes pod destination does not pin one trusted identity.");
         return workload;
@@ -452,9 +503,21 @@ public static class SystemOnlyPolicySetEvaluator
     private static void RemoveSameTraffic(List<AllowedTraffic> allows, AllowedTraffic denied)
     {
         for (var index = allows.Count - 1; index >= 0; index--)
-            if (allows[index] == denied)
+            if (SameTraffic(allows[index], denied) && SourceCovers(denied.Source, allows[index].Source))
                 allows.RemoveAt(index);
     }
+
+    private static bool SameTraffic(AllowedTraffic left, AllowedTraffic right) =>
+        left.Kind == right.Kind &&
+        left.Protocol == right.Protocol &&
+        left.Port == right.Port &&
+        left.Endpoint == right.Endpoint &&
+        left.Fqdn == right.Fqdn &&
+        left.Cidr == right.Cidr;
+
+    private static bool SourceCovers(SourceSelector denied, SourceSelector allow) =>
+        denied.Coverage == SourceSelectorCoverage.FullPopulation ||
+        (denied.Coverage == SourceSelectorCoverage.Subset && denied.CanonicalKey == allow.CanonicalKey);
 
     private static bool CiliumDefaultEgressDeny(JsonElement spec) =>
         spec.TryGetProperty("egress", out var egress) &&
@@ -554,8 +617,13 @@ public static class SystemOnlyPolicySetEvaluator
             _ => throw Unsupported($"The {name} field is malformed."),
         };
 
-    private static string WorkloadKeyFor(string key) =>
-        key is "k8s-app" or "k8s:k8s-app" ? "k8s-app" : "agentweaver.io/workload";
+    private static string WorkloadKeyFor(string key) => key switch
+    {
+        "k8s-app" or "k8s:k8s-app" => "k8s-app",
+        "gateway.networking.k8s.io/gateway-name" or "k8s:gateway.networking.k8s.io/gateway-name" =>
+            "gateway.networking.k8s.io/gateway-name",
+        _ => "agentweaver.io/workload",
+    };
 
     private static PlatformPolicyProofException Unsupported(string message) =>
         new("policy_semantics_unsupported", message);
@@ -574,10 +642,15 @@ public static class SystemOnlyPolicySetEvaluator
 
     private enum TrafficKind { Endpoint, Fqdn, Cidr }
 
+    private enum SourceSelectorCoverage { None, Subset, FullPopulation }
+
+    private sealed record SourceSelector(SourceSelectorCoverage Coverage, string CanonicalKey);
+
     private sealed record AllowedTraffic(
         TrafficKind Kind,
         string Protocol,
         int Port,
+        SourceSelector Source,
         TrafficEndpoint? Endpoint = null,
         string? Fqdn = null,
         string? Cidr = null)
