@@ -66,7 +66,7 @@ describe('Project BYOK provider drafts', () => {
     vi.resetAllMocks();
     mocks.apiCall.mockImplementation(
       (operation: (token: string, tenant: string | null) => Promise<unknown>) =>
-        operation('project-access-token', 'tenant-1'),
+        operation('project-access-token', mocks.auth.authorizationContext?.tenantId ?? null),
     );
     mocks.authorize.mockResolvedValue(undefined);
     mocks.ensureSession.mockResolvedValue(true);
@@ -294,6 +294,7 @@ describe('Project BYOK provider drafts', () => {
     mocks.list.mockResolvedValue({ providers: [provider()], nextAfterProviderId: null });
     mocks.read
       .mockResolvedValueOnce(provider())
+      .mockResolvedValueOnce(provider())
       .mockResolvedValueOnce(provider({ name: 'Renamed model', revision: 2 }));
     mocks.update
       .mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'Session expired.'))
@@ -313,7 +314,17 @@ describe('Project BYOK provider drafts', () => {
     expect(screen.queryByRole('textbox', { name: 'Name' })).toBeNull();
     const firstRequest = mocks.update.mock.calls[0][3];
     fireEvent.click(screen.getByRole('button', { name: 'Sign in for project access' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Save metadata' }));
+
+    // Re-entry starts at the list without restoring cached editor fields.
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    expect(await screen.findByText('provider-stable-id')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    expect((screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value)
+      .toBe('Customer model');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed model' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
 
     await screen.findByText('Provider draft saved.');
     expect(mocks.update.mock.calls[1][3].operationId).toBe(firstRequest.operationId);
@@ -383,5 +394,389 @@ describe('Project BYOK provider drafts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Customer model' })).toBeNull();
+  });
+
+  it('shows returned host, port, and host-request status labels and refreshes without saving', async () => {
+    mocks.list.mockResolvedValue({ providers: [provider()], nextAfterProviderId: null });
+    mocks.read
+      .mockResolvedValueOnce(provider({
+        base_url: 'https://provider.example/v1',
+        egress: {
+          host: 'egress.override.example',
+          port: 8443,
+          destinationState: null,
+          canApprove: false,
+          deliveryStatus: 'pending',
+        },
+      }))
+      .mockResolvedValueOnce(provider({
+        base_url: 'https://provider.example/v1',
+        egress: {
+          host: 'egress.override.example',
+          port: 8443,
+          destinationState: 'requested',
+          canApprove: false,
+          deliveryStatus: 'delivered',
+        },
+      }));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+
+    expect(await screen.findByText('Waiting to send host request')).toBeTruthy();
+    expect(screen.getByText('egress.override.example')).toBeTruthy();
+    expect(screen.getByText('8443')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('Waiting for platform admin approval')).toBeTruthy();
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(mocks.read.mock.calls[1]).toEqual([
+      'project-access-token',
+      'project-1',
+      'provider-stable-id',
+      'tenant-1',
+    ]);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('maps failed, missing, unavailable, and unexpected egress combinations and distinguishes failed GETs', async () => {
+    mocks.list.mockResolvedValue({ providers: [provider()], nextAfterProviderId: null });
+    let failRefresh!: (reason: Error) => void;
+    mocks.read
+      .mockResolvedValueOnce(provider({
+        egress: {
+          host: 'api.openai.com',
+          port: 443,
+          destinationState: null,
+          canApprove: false,
+          deliveryStatus: 'failed',
+        },
+      }))
+      .mockResolvedValueOnce(provider({ egress: null }))
+      .mockResolvedValueOnce(provider({
+        egress: {
+          host: 'api.openai.com',
+          port: 443,
+          destinationState: null,
+          canApprove: false,
+          deliveryStatus: 'unavailable',
+        },
+      }))
+      .mockResolvedValueOnce(provider({
+        egress: {
+          host: 'api.openai.com',
+          port: 443,
+          destinationState: 'requested',
+          canApprove: false,
+          deliveryStatus: 'pending',
+        },
+      }))
+      .mockResolvedValueOnce(provider({
+        egress: {
+          host: 'api.openai.com',
+          port: 443,
+          destinationState: null,
+          canApprove: false,
+          deliveryStatus: 'delivered',
+        },
+      }))
+      .mockImplementationOnce(() => new Promise((_, reject) => { failRefresh = reject; }));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    expect(await screen.findByText('Host request delivery failed')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+    expect(screen.queryByText('provider.example')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('Host request status unavailable')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(screen.queryByText('Host request status unavailable')).toBeNull();
+    failRefresh(new Error('Gateway read failed.'));
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByText('Gateway read failed.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByText('Host request status unavailable')).toBeNull();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('clears state on 403 and does not reuse operation IDs across identities or scopes', async () => {
+    mocks.auth.authorizationContext = { tenantId: 'tenant-1', actorId: 'actor-1', issuer: 'broker' } as unknown as { tenantId: string };
+    mocks.list.mockResolvedValue({ providers: [provider()], nextAfterProviderId: 'cursor-1' });
+    mocks.read.mockResolvedValue(provider());
+    mocks.update
+      .mockRejectedValueOnce(new GatewayError(403, { code: 'forbidden' }, 'Access denied.'))
+      .mockResolvedValueOnce(provider({ name: 'Renamed model', revision: 2 }));
+
+    const rendered = render(
+      <ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit metadata' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed model' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    expect(await screen.findByText('Access denied.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Customer model' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Name' })).toBeNull();
+
+    const firstOperationId = mocks.update.mock.calls[0][3].operationId;
+
+    // Different actor signs in after 403 -> must not reuse the previous actor's operationId.
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    mocks.resolveAuthorizationContext.mockResolvedValue({
+      tenantId: 'tenant-1',
+      actorId: 'actor-2',
+      issuer: 'broker',
+    });
+    mocks.auth.authorizationContext = { tenantId: 'tenant-1', actorId: 'actor-2', issuer: 'broker' } as unknown as { tenantId: string };
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit metadata' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed model' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    await screen.findByText('Provider draft saved.');
+    expect(mocks.update.mock.calls[1][3].operationId).not.toBe(firstOperationId);
+  });
+
+  it('reloads on tenant switch and preserves the confirmed tenant during token renewal', async () => {
+    mocks.list
+      .mockResolvedValueOnce({ providers: [provider()], nextAfterProviderId: null })
+      .mockResolvedValueOnce({
+        providers: [provider({ id: 'provider-t2', name: 'Tenant 2 provider' })],
+        nextAfterProviderId: null,
+      })
+      .mockResolvedValueOnce({
+        providers: [provider({ id: 'provider-t2', name: 'Tenant 2 provider' })],
+        nextAfterProviderId: null,
+      });
+
+    const rendered = render(
+      <ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />,
+    );
+    expect(await screen.findByRole('button', { name: 'Customer model' })).toBeTruthy();
+
+    // Switch tenant from tenant-1 to tenant-2.
+    mocks.resolveAuthorizationContext.mockResolvedValue({ tenantId: 'tenant-2' });
+    mocks.auth.authorizationContext = { tenantId: 'tenant-2' };
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-2" />);
+
+    expect(screen.queryByRole('button', { name: 'Customer model' })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Tenant 2 provider' })).toBeTruthy();
+    expect(mocks.resolveAuthorizationContext).toHaveBeenLastCalledWith('tenant-2');
+
+    // Temporary loss of authorizationContext during token renewal must keep tenant-2.
+    mocks.auth.authorizationContext = null as unknown as { tenantId: string };
+    mocks.auth.authSessionGeneration = 1;
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector={undefined} />);
+
+    await waitFor(() => expect(mocks.resolveAuthorizationContext).toHaveBeenLastCalledWith('tenant-2'));
+    expect(mocks.ensureSession).toHaveBeenLastCalledWith({ projectId: 'project-1' }, true);
+  });
+
+  it('ignores late refresh, mismatched provider ID, and late save success or failure after navigation', async () => {
+    let finishRefresh!: (value: ReturnType<typeof provider>) => void;
+    let finishLateSave!: (value: ReturnType<typeof provider>) => void;
+    let failLateSave!: (reason: Error) => void;
+    mocks.list.mockResolvedValue({
+      providers: [
+        provider(),
+        provider({ id: 'provider-2', name: 'Second provider' }),
+      ],
+      nextAfterProviderId: null,
+    });
+    mocks.read
+      .mockResolvedValueOnce(provider())
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }))
+      .mockResolvedValueOnce(provider({ id: 'provider-2', name: 'Second provider' }))
+      .mockResolvedValueOnce(provider({ id: 'wrong-provider-id', name: 'Wrong' }));
+    mocks.update
+      .mockImplementationOnce(() => new Promise((resolve) => { finishLateSave = resolve; }))
+      .mockImplementationOnce(() => new Promise((_, reject) => { failLateSave = reject; }));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    expect(await screen.findByText('provider-stable-id')).toBeTruthy();
+
+    // Start refresh then go back before it completes.
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    finishRefresh(provider({ name: 'Stale detail' }));
+    expect(await screen.findByRole('button', { name: 'Second provider' })).toBeTruthy();
+    expect(screen.queryByText('Stale detail')).toBeNull();
+
+    // Open Second provider, then go back and open Customer model which gets mismatched ID.
+    fireEvent.click(screen.getByRole('button', { name: 'Second provider' }));
+    expect(await screen.findByText('provider-2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Customer model' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByText('wrong-provider-id')).toBeNull();
+
+    // Return to Second provider, edit, save, then Cancel before save finishes.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Second provider' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit metadata' })).toBeTruthy());
+    mocks.read.mockResolvedValueOnce(provider({ id: 'provider-2', name: 'Second provider' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('provider-2')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    finishLateSave(provider({ id: 'provider-2', name: 'Late saved', revision: 2 }));
+    expect(screen.queryByText('Provider draft saved.')).toBeNull();
+    expect(screen.queryByText(/canceled/i)).toBeNull();
+
+    // Edit again, save, Cancel before late failure.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    failLateSave(new Error('Late save failed.'));
+    expect(screen.queryByText('Late save failed.')).toBeNull();
+  });
+
+  it('disables editing until post-save detail loads, preserves save confirmation on read failure, and reloads list on return', async () => {
+    let finishPostSaveRead!: (value: ReturnType<typeof provider>) => void;
+    mocks.list
+      .mockResolvedValueOnce({ providers: [provider()], nextAfterProviderId: null })
+      .mockResolvedValueOnce({
+        providers: [provider({ name: 'Renamed model', revision: 2 })],
+        nextAfterProviderId: null,
+      });
+    mocks.read
+      .mockResolvedValueOnce(provider())
+      .mockRejectedValueOnce(new Error('Temporary read failure.'))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishPostSaveRead = resolve; }));
+    mocks.update.mockResolvedValueOnce(provider({ name: 'Renamed model', revision: 2 }));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit metadata' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed model' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    // Save confirmation is preserved when post-save detail GET fails, and Edit remains disabled.
+    expect(await screen.findByText('Provider draft saved.')).toBeTruthy();
+    expect(await screen.findByText('Temporary read failure.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Edit metadata' }) as HTMLButtonElement).disabled).toBe(true);
+    // No second automatic list read after save.
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+
+    // Retry post-save detail GET: Edit stays disabled while loading, then enables.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect((screen.getByRole('button', { name: 'Edit metadata' }) as HTMLButtonElement).disabled).toBe(true);
+    finishPostSaveRead(provider({ name: 'Renamed model', revision: 2 }));
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Edit metadata' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.getByText('Provider draft saved.')).toBeTruthy();
+
+    // Returning to list reloads it.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+    await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
+  });
+
+  it('drops stale detail and save responses when authSessionEpoch switches', async () => {
+    let finishDetailRefresh!: (value: ReturnType<typeof provider>) => void;
+    let finishSave!: (value: ReturnType<typeof provider>) => void;
+    mocks.list
+      .mockResolvedValueOnce({ providers: [provider()], nextAfterProviderId: null })
+      .mockResolvedValueOnce({
+        providers: [provider({ id: 'new-session-provider', name: 'New session provider' })],
+        nextAfterProviderId: null,
+      })
+      .mockResolvedValueOnce({
+        providers: [provider({ id: 'after-save-switch', name: 'After save switch' })],
+        nextAfterProviderId: null,
+      });
+    mocks.read
+      .mockResolvedValueOnce(provider())
+      .mockImplementationOnce(() => new Promise((resolve) => { finishDetailRefresh = resolve; }))
+      .mockResolvedValueOnce(provider({ id: 'new-session-provider', name: 'New session provider' }));
+    mocks.update.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    (mocks.auth as { authSessionEpoch?: number }).authSessionEpoch = 0;
+
+    const rendered = render(
+      <ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    expect(await screen.findByText('provider-stable-id')).toBeTruthy();
+
+    // Start detail refresh, then switch authSessionEpoch before it settles.
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    (mocks.auth as { authSessionEpoch?: number }).authSessionEpoch = 1;
+    mocks.auth.authSessionGeneration = 1;
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+
+    finishDetailRefresh(provider({ name: 'Stale detail from old epoch' }));
+    expect(await screen.findByRole('button', { name: 'New session provider' })).toBeTruthy();
+    expect(screen.queryByText('Stale detail from old epoch')).toBeNull();
+
+    // Open provider, start save, then switch authSessionEpoch before save settles.
+    fireEvent.click(screen.getByRole('button', { name: 'New session provider' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit metadata' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    (mocks.auth as { authSessionEpoch?: number }).authSessionEpoch = 2;
+    mocks.auth.authSessionGeneration = 2;
+    rendered.rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+
+    finishSave(provider({ name: 'Stale save from old epoch', revision: 2 }));
+    expect(await screen.findByRole('button', { name: 'After save switch' })).toBeTruthy();
+    expect(screen.queryByText('Provider draft saved.')).toBeNull();
+  });
+
+  it('loads the list after signInForProject replaces a pre-existing session', async () => {
+    mocks.ensureSession.mockResolvedValueOnce(false);
+    mocks.auth.session = { binding: null } as unknown as { binding: { projectId: string } };
+    (mocks.auth as { authSessionEpoch?: number }).authSessionEpoch = 0;
+    mocks.list.mockResolvedValueOnce({
+      providers: [provider({ id: 'signed-in-provider', name: 'Signed in provider' })],
+      nextAfterProviderId: null,
+    });
+    mocks.authorize.mockImplementationOnce(async () => {
+      mocks.auth.session = { binding: { projectId: 'project-1' } };
+      (mocks.auth as { authSessionEpoch?: number }).authSessionEpoch = 1;
+      mocks.auth.authSessionGeneration = 1;
+    });
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    const signInButton = await screen.findByRole('button', { name: 'Sign in for project access' });
+    fireEvent.click(signInButton);
+
+    expect(await screen.findByRole('button', { name: 'Signed in provider' })).toBeTruthy();
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers project sign-in when resolveAuthorizationContext returns null with a 401 error', async () => {
+    const unauthorized = new GatewayError(401, { code: 'unauthorized' }, 'Token expired.');
+    mocks.resolveAuthorizationContext.mockResolvedValueOnce(null);
+    (mocks.auth as { getAuthorizationContextError?: () => unknown }).getAuthorizationContextError =
+      () => unauthorized;
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    expect(await screen.findByRole('button', { name: 'Sign in for project access' })).toBeTruthy();
+    expect(screen.getByText('Token expired.')).toBeTruthy();
   });
 });

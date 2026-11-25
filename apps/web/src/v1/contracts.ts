@@ -202,6 +202,15 @@ export interface ProjectSummary {
   effectiveRoles: EffectiveProjectRole[];
 }
 
+/** Environment host-request delivery and destination state for one provider revision. */
+export interface ModelProviderEgressStatus {
+  host: string;
+  port: number;
+  destinationState: 'requested' | null;
+  canApprove: boolean;
+  deliveryStatus: 'pending' | 'delivered' | 'failed' | 'unavailable';
+}
+
 /** Provider metadata returned by the project BYOK Draft API. */
 export interface ProjectModelProviderDraft {
   id: string;
@@ -223,6 +232,7 @@ export interface ProjectModelProviderDraft {
   has_api_key: boolean;
   is_active: boolean;
   hasCredential: boolean;
+  egress?: ModelProviderEgressStatus | null;
 }
 
 /** One bounded page of project BYOK provider metadata. */

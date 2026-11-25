@@ -4,6 +4,7 @@ import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
 import type {
+  ModelProviderEgressStatus,
   ProjectModelProviderDraft,
   ProjectModelProviderDraftSaveRequest,
 } from './contracts';
@@ -22,6 +23,30 @@ type ProviderEditor = {
 };
 
 type ProviderView = 'list' | 'detail' | 'create' | 'edit';
+
+type ScopeSnapshot = {
+  projectId: string;
+  tenantId: string | null;
+  actorId: string | null;
+  issuer: string | null;
+  authSessionEpoch: number;
+  scopeGeneration: number;
+};
+
+type PendingSave = {
+  fingerprint: string;
+  operationId: string;
+  projectId: string;
+  tenantId: string | null;
+  actorId: string | null;
+  issuer: string | null;
+};
+
+class StaleRequestError extends Error {
+  constructor() {
+    super('The request scope changed before completion.');
+  }
+}
 
 const PAGE_SIZE = 50;
 
@@ -54,10 +79,36 @@ function editorFromDraft(provider: ProjectModelProviderDraft): ProviderEditor {
 function requireProjectDraft(
   provider: ProjectModelProviderDraft,
   projectId: string,
+  expectedProviderId?: string,
 ): ProjectModelProviderDraft {
   if (provider.scope !== 'project' || provider.projectId !== projectId || !provider.id)
     throw new Error('The service returned a provider draft for a different project.');
+  if (expectedProviderId !== undefined && provider.id !== expectedProviderId)
+    throw new Error('The service returned a different provider draft.');
   return provider;
+}
+
+function hostRequestStatusLabel(egress?: ModelProviderEgressStatus | null): string {
+  if (!egress) return 'Host request status unavailable';
+  if (egress.deliveryStatus === 'pending' && egress.destinationState === null)
+    return 'Waiting to send host request';
+  if (egress.deliveryStatus === 'delivered' && egress.destinationState === 'requested')
+    return 'Waiting for platform admin approval';
+  if (egress.deliveryStatus === 'failed' && egress.destinationState === null)
+    return 'Host request delivery failed';
+  return 'Host request status unavailable';
+}
+
+function hostRequestHostText(egress?: ModelProviderEgressStatus | null): string {
+  return egress && typeof egress.host === 'string' && egress.host.trim().length > 0
+    ? egress.host
+    : 'Unavailable';
+}
+
+function hostRequestPortText(egress?: ModelProviderEgressStatus | null): string {
+  return egress && Number.isSafeInteger(egress.port) && egress.port > 0
+    ? String(egress.port)
+    : 'Unavailable';
 }
 
 /** Lists and edits project provider metadata through the exact project-only Broker session. */
@@ -72,8 +123,11 @@ export function ProjectModelProviderDrafts({
     apiCall,
     session,
     authSessionGeneration,
+    authSessionEpoch = 0,
     authorizationContext,
+    authorizationContextError,
     authorizationContextLoading,
+    getAuthorizationContextError,
     authorize,
     ensureSession,
     resolveAuthorizationContext,
@@ -99,30 +153,125 @@ export function ProjectModelProviderDrafts({
   const [saveError, setSaveError] = useState<unknown>(null);
   const [saveConflict, setSaveConflict] = useState(false);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
-  const pendingSave = useRef<{ fingerprint: string; operationId: string } | null>(null);
+
+  const mountedRef = useRef(true);
+  const pendingSave = useRef<PendingSave | null>(null);
+  const listNeedsReload = useRef(false);
+  const scopeGeneration = useRef(0);
   const listGeneration = useRef(0);
   const detailGeneration = useRef(0);
-  const observedSessionGeneration = useRef(authSessionGeneration);
+  const saveGeneration = useRef(0);
   const accessCheckGeneration = useRef(0);
-  const initializationStarted = useRef(false);
+  const activeViewRef = useRef<ProviderView>(view);
+  const activeProviderIdRef = useRef<string | null>(selectedProviderId);
+  const observedSessionGeneration = useRef(authSessionGeneration);
+  const observedSessionEpoch = useRef(authSessionEpoch);
+  const authSessionEpochRef = useRef(authSessionEpoch);
+  const accessCheckInFlightRef = useRef(false);
+  const lastProjectIdRef = useRef<string | null>(null);
+  const lastTenantSelectorRef = useRef<string | null>(tenantSelector ?? null);
+  const lastConfirmedIdentityRef = useRef<{
+    projectId: string;
+    tenantId: string;
+    actorId: string | null;
+    issuer: string | null;
+  } | null>(null);
+
+  activeViewRef.current = view;
+  activeProviderIdRef.current = selectedProviderId;
+  authSessionEpochRef.current = authSessionEpoch;
+
   const projectSessionActive = session?.binding?.projectId === projectId && !session.binding.runId;
   const projectContextReady = projectSessionActive &&
     authorizationContext !== null &&
     (selectedTenant == null || authorizationContext.tenantId === selectedTenant);
+  const actorId = authorizationContext?.actorId ?? lastConfirmedIdentityRef.current?.actorId ?? null;
+  const issuer = authorizationContext?.issuer ?? lastConfirmedIdentityRef.current?.issuer ?? null;
+
+  const currentScopeRef = useRef<ScopeSnapshot>({
+    projectId,
+    tenantId: selectedTenant ?? null,
+    actorId,
+    issuer,
+    authSessionEpoch,
+    scopeGeneration: scopeGeneration.current,
+  });
+  currentScopeRef.current = {
+    projectId,
+    tenantId: selectedTenant ?? null,
+    actorId,
+    issuer,
+    authSessionEpoch,
+    scopeGeneration: scopeGeneration.current,
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      scopeGeneration.current += 1;
+      listGeneration.current += 1;
+      detailGeneration.current += 1;
+      saveGeneration.current += 1;
+      accessCheckGeneration.current += 1;
+    };
+  }, []);
+
+  const isSameScope = useCallback((captured: ScopeSnapshot): boolean => {
+    const current = currentScopeRef.current;
+    return (
+      mountedRef.current &&
+      current.scopeGeneration === captured.scopeGeneration &&
+      current.projectId === captured.projectId &&
+      current.tenantId === captured.tenantId &&
+      current.actorId === captured.actorId &&
+      current.issuer === captured.issuer &&
+      current.authSessionEpoch === captured.authSessionEpoch
+    );
+  }, []);
+
+  const clearUiStateForAccessLoss = useCallback(() => {
+    listGeneration.current += 1;
+    detailGeneration.current += 1;
+    saveGeneration.current += 1;
+    activeViewRef.current = 'list';
+    activeProviderIdRef.current = null;
+    listNeedsReload.current = false;
+    setProviders([]);
+    setNextAfterProviderId(null);
+    setListLoading(false);
+    setListError(null);
+    setView('list');
+    setSelectedProvider(null);
+    setSelectedProviderId(null);
+    setDetailLoading(false);
+    setDetailError(null);
+    setEditor(emptyEditor());
+    setSaving(false);
+    setSaveError(null);
+    setSaveConflict(false);
+    setSavedMessage(null);
+  }, []);
+
+  const resetScopeState = useCallback(() => {
+    scopeGeneration.current += 1;
+    currentScopeRef.current = {
+      ...currentScopeRef.current,
+      scopeGeneration: scopeGeneration.current,
+    };
+    accessCheckGeneration.current += 1;
+    pendingSave.current = null;
+    clearUiStateForAccessLoss();
+  }, [clearUiStateForAccessLoss]);
 
   const handleAccessFailure = useCallback((reason: unknown): boolean => {
     if (!(reason instanceof GatewayError) || (reason.status !== 401 && reason.status !== 403))
       return false;
-    listGeneration.current += 1;
-    detailGeneration.current += 1;
-    setListLoading(false);
-    setDetailLoading(false);
-    setListError(null);
-    setDetailError(null);
+    clearUiStateForAccessLoss();
     setAccessError(reason);
     setAccessState(reason.status === 401 ? 'needs-sign-in' : 'error');
     return true;
-  }, []);
+  }, [clearUiStateForAccessLoss]);
 
   const loadPage = useCallback(async (
     afterProviderId: string | null = null,
@@ -130,6 +279,10 @@ export function ProjectModelProviderDrafts({
     tenant = selectedTenant,
   ) => {
     const generation = ++listGeneration.current;
+    const capturedScope: ScopeSnapshot = {
+      ...currentScopeRef.current,
+      tenantId: tenant ?? currentScopeRef.current.tenantId,
+    };
     if (!append) {
       setProviders([]);
       setNextAfterProviderId(null);
@@ -138,17 +291,23 @@ export function ProjectModelProviderDrafts({
     setListError(null);
     try {
       const page = await apiCall(
-        (token) => gatewayClient.listProjectByokProviderDrafts(
-          token, projectId, PAGE_SIZE, afterProviderId, tenant,
-        ),
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId))
+            return Promise.reject(new StaleRequestError());
+          return gatewayClient.listProjectByokProviderDrafts(
+            token, projectId, PAGE_SIZE, afterProviderId, capturedScope.tenantId,
+          );
+        },
         binding,
       );
-      if (generation !== listGeneration.current) return;
+      if (!isSameScope(capturedScope) || generation !== listGeneration.current) return;
       const pageProviders = page.providers.map((provider) => requireProjectDraft(provider, projectId));
       setProviders((current) => append ? [...current, ...pageProviders] : pageProviders);
       setNextAfterProviderId(page.nextAfterProviderId);
     } catch (reason) {
-      if (generation === listGeneration.current) {
+      if (reason instanceof StaleRequestError) return;
+      if (isSameScope(capturedScope) && generation === listGeneration.current) {
         if (!handleAccessFailure(reason)) {
           setProviders([]);
           setNextAfterProviderId(null);
@@ -156,61 +315,237 @@ export function ProjectModelProviderDrafts({
         }
       }
     } finally {
-      if (generation === listGeneration.current) setListLoading(false);
+      if (mountedRef.current && generation === listGeneration.current)
+        setListLoading(false);
     }
-  }, [apiCall, binding, handleAccessFailure, projectId, selectedTenant]);
+  }, [apiCall, binding, handleAccessFailure, isSameScope, projectId, selectedTenant]);
 
-  const prepareAccess = useCallback(async (interactive: boolean): Promise<string | null> => {
+  const prepareAccess = useCallback(async (
+    interactive: boolean,
+    tenantOverride?: string | null,
+  ): Promise<string | null> => {
+    const generation = ++accessCheckGeneration.current;
+    const targetTenant = tenantOverride !== undefined ? tenantOverride : selectedTenant;
+    const startProjectId = projectId;
+    accessCheckInFlightRef.current = interactive;
     try {
       if (interactive) {
         await authorize(binding);
       } else if (!await ensureSession(binding, true)) {
-        setAccessState('needs-sign-in');
+        if (mountedRef.current &&
+            lastProjectIdRef.current === startProjectId &&
+            generation === accessCheckGeneration.current) {
+          clearUiStateForAccessLoss();
+          setAccessState('needs-sign-in');
+        }
         return null;
       }
-      const context = await resolveAuthorizationContext(selectedTenant ?? undefined);
-      if (!context)
-        throw new Error('Could not confirm access to this project. Try again.');
+      const context = await resolveAuthorizationContext(targetTenant ?? undefined);
+      if (!context) {
+        throw getAuthorizationContextError?.() ??
+          authorizationContextError ??
+          new Error('Could not confirm access to this project. Try again.');
+      }
+      if (!mountedRef.current ||
+          lastProjectIdRef.current !== startProjectId ||
+          generation !== accessCheckGeneration.current)
+        return null;
+
+      const confirmedActor = (context as { actorId?: string | null }).actorId ?? null;
+      const confirmedIssuer = (context as { issuer?: string | null }).issuer ?? null;
+      const previous = lastConfirmedIdentityRef.current;
+      if (previous && (
+        previous.projectId !== startProjectId ||
+        previous.tenantId !== context.tenantId ||
+        previous.actorId !== confirmedActor ||
+        previous.issuer !== confirmedIssuer
+      )) {
+        pendingSave.current = null;
+        clearUiStateForAccessLoss();
+      }
+      lastConfirmedIdentityRef.current = {
+        projectId: startProjectId,
+        tenantId: context.tenantId,
+        actorId: confirmedActor,
+        issuer: confirmedIssuer,
+      };
+      currentScopeRef.current = {
+        ...currentScopeRef.current,
+        tenantId: context.tenantId,
+        actorId: confirmedActor,
+        issuer: confirmedIssuer,
+        authSessionEpoch: authSessionEpochRef.current,
+      };
       setResolvedTenant(context.tenantId);
       setAccessState('ready');
       return context.tenantId;
     } catch (reason) {
+      if (!mountedRef.current ||
+          lastProjectIdRef.current !== startProjectId ||
+          generation !== accessCheckGeneration.current)
+        return null;
+      clearUiStateForAccessLoss();
       setAccessError(reason);
-      setAccessState('error');
+      setAccessState(reason instanceof GatewayError && reason.status === 401 ? 'needs-sign-in' : 'error');
       return null;
+    } finally {
+      if (interactive && generation === accessCheckGeneration.current)
+        accessCheckInFlightRef.current = false;
     }
-  }, [authorize, ensureSession, resolveAuthorizationContext, binding, selectedTenant]);
+  }, [
+    authorizationContextError,
+    authorize,
+    binding,
+    clearUiStateForAccessLoss,
+    ensureSession,
+    getAuthorizationContextError,
+    projectId,
+    resolveAuthorizationContext,
+    selectedTenant,
+  ]);
 
-  const initialize = useCallback(async () => {
-    const tenant = await prepareAccess(false);
+  const initialize = useCallback(async (tenantOverride?: string | null) => {
+    const tenant = await prepareAccess(false, tenantOverride);
     if (tenant) await loadPage(null, false, tenant);
   }, [loadPage, prepareAccess]);
 
   useEffect(() => {
-    if (initializationStarted.current) return;
-    initializationStarted.current = true;
-    void initialize();
-  }, [initialize]);
+    const nextTenantSelector = tenantSelector ?? null;
+    const projectChanged = lastProjectIdRef.current !== projectId;
+    const tenantSelectorChanged =
+      nextTenantSelector !== null &&
+      nextTenantSelector !== lastTenantSelectorRef.current &&
+      nextTenantSelector !== resolvedTenant;
+    const confirmedActor = authorizationContext?.actorId ?? null;
+    const confirmedIssuer = authorizationContext?.issuer ?? null;
+    const confirmedIdentityChanged = Boolean(
+      authorizationContext &&
+      lastConfirmedIdentityRef.current &&
+      (lastConfirmedIdentityRef.current.projectId !== projectId ||
+        lastConfirmedIdentityRef.current.tenantId !== authorizationContext.tenantId ||
+        lastConfirmedIdentityRef.current.actorId !== confirmedActor ||
+        lastConfirmedIdentityRef.current.issuer !== confirmedIssuer),
+    );
+
+    if (projectChanged) {
+      lastProjectIdRef.current = projectId;
+      lastTenantSelectorRef.current = nextTenantSelector;
+      lastConfirmedIdentityRef.current = null;
+      setResolvedTenant(null);
+      resetScopeState();
+      currentScopeRef.current = {
+        ...currentScopeRef.current,
+        projectId,
+        tenantId: nextTenantSelector,
+      };
+      setAccessError(null);
+      setAccessState('checking');
+      void initialize(nextTenantSelector);
+      return;
+    }
+
+    if (tenantSelectorChanged) {
+      lastTenantSelectorRef.current = nextTenantSelector;
+      lastConfirmedIdentityRef.current = null;
+      resetScopeState();
+      currentScopeRef.current = {
+        ...currentScopeRef.current,
+        tenantId: nextTenantSelector,
+      };
+      setResolvedTenant(nextTenantSelector);
+      setAccessError(null);
+      setAccessState('checking');
+      void initialize(nextTenantSelector);
+      return;
+    }
+
+    lastTenantSelectorRef.current = nextTenantSelector;
+
+    if (confirmedIdentityChanged && authorizationContext) {
+      lastConfirmedIdentityRef.current = {
+        projectId,
+        tenantId: authorizationContext.tenantId,
+        actorId: confirmedActor,
+        issuer: confirmedIssuer,
+      };
+      resetScopeState();
+      currentScopeRef.current = {
+        ...currentScopeRef.current,
+        tenantId: authorizationContext.tenantId,
+        actorId: confirmedActor,
+        issuer: confirmedIssuer,
+      };
+      setResolvedTenant(authorizationContext.tenantId);
+      setAccessError(null);
+      if (projectSessionActive) {
+        setAccessState('ready');
+        void loadPage(null, false, authorizationContext.tenantId);
+      } else {
+        setAccessState('checking');
+        void initialize(authorizationContext.tenantId);
+      }
+    }
+  }, [
+    authorizationContext,
+    initialize,
+    loadPage,
+    projectId,
+    projectSessionActive,
+    resetScopeState,
+    resolvedTenant,
+    tenantSelector,
+  ]);
 
   useEffect(() => {
-    if (observedSessionGeneration.current === authSessionGeneration) return;
+    const epochChanged = observedSessionEpoch.current !== authSessionEpoch;
+    const generationChanged = observedSessionGeneration.current !== authSessionGeneration;
+    if (!epochChanged && !generationChanged) return;
+    observedSessionEpoch.current = authSessionEpoch;
     observedSessionGeneration.current = authSessionGeneration;
+
+    if (epochChanged) {
+      if (accessCheckInFlightRef.current) {
+        currentScopeRef.current = {
+          ...currentScopeRef.current,
+          authSessionEpoch,
+        };
+        return;
+      }
+      resetScopeState();
+      currentScopeRef.current = {
+        ...currentScopeRef.current,
+        authSessionEpoch,
+      };
+      setAccessError(null);
+      setAccessState('checking');
+      void initialize(selectedTenant);
+      return;
+    }
+
+    if (!projectSessionActive) {
+      clearUiStateForAccessLoss();
+      if (!authorizationContextLoading)
+        void initialize(selectedTenant);
+      return;
+    }
+
     if (accessState !== 'ready' || projectContextReady || authorizationContextLoading)
       return;
 
-    const generation = ++accessCheckGeneration.current;
-    void (async () => {
-      const tenant = await prepareAccess(false);
-      if (generation !== accessCheckGeneration.current || !tenant) return;
-      await loadPage(null, false, tenant);
-    })();
+    // Same-session token renewal: reconfirm the tenant without invalidating active detail/save work.
+    void prepareAccess(false, selectedTenant);
   }, [
     accessState,
+    authSessionEpoch,
     authSessionGeneration,
     authorizationContextLoading,
-    loadPage,
+    clearUiStateForAccessLoss,
+    initialize,
     prepareAccess,
     projectContextReady,
+    projectSessionActive,
+    resetScopeState,
+    selectedTenant,
   ]);
 
   const retryAccess = () => {
@@ -226,39 +561,112 @@ export function ProjectModelProviderDrafts({
     if (tenant) await loadPage(null, false, tenant);
   };
 
-  const openProvider = useCallback(async (providerId: string) => {
+  const openProvider = useCallback(async (
+    providerId: string,
+    options?: { preserveSavedMessage?: boolean },
+  ) => {
     const generation = ++detailGeneration.current;
+    saveGeneration.current += 1;
+    const capturedScope = currentScopeRef.current;
+    activeViewRef.current = 'detail';
+    activeProviderIdRef.current = providerId;
     setView('detail');
     setSelectedProviderId(providerId);
     setSelectedProvider(null);
     setDetailLoading(true);
     setDetailError(null);
+    setSaving(false);
     setSaveError(null);
     setSaveConflict(false);
-    setSavedMessage(null);
+    if (!options?.preserveSavedMessage) setSavedMessage(null);
     try {
       const provider = await apiCall(
-        (token) => gatewayClient.getProjectByokProviderDraft(
-          token, projectId, providerId, selectedTenant,
-        ),
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId))
+            return Promise.reject(new StaleRequestError());
+          return gatewayClient.getProjectByokProviderDraft(
+            token, projectId, providerId, capturedScope.tenantId,
+          );
+        },
         binding,
       );
-      if (generation !== detailGeneration.current) return;
-      const checked = requireProjectDraft(provider, projectId);
+      if (!isSameScope(capturedScope) ||
+          generation !== detailGeneration.current ||
+          activeViewRef.current !== 'detail' ||
+          activeProviderIdRef.current !== providerId)
+        return;
+      const checked = requireProjectDraft(provider, projectId, providerId);
       setSelectedProvider(checked);
       setProviders((current) => current.map((item) => item.id === providerId ? checked : item));
     } catch (reason) {
-      if (generation === detailGeneration.current && !handleAccessFailure(reason))
+      if (reason instanceof StaleRequestError) return;
+      if (isSameScope(capturedScope) &&
+          generation === detailGeneration.current &&
+          activeViewRef.current === 'detail' &&
+          activeProviderIdRef.current === providerId &&
+          !handleAccessFailure(reason))
         setDetailError(reason);
     } finally {
-      if (generation === detailGeneration.current) setDetailLoading(false);
+      if (mountedRef.current && generation === detailGeneration.current)
+        setDetailLoading(false);
     }
-  }, [apiCall, binding, handleAccessFailure, projectId, selectedTenant]);
+  }, [apiCall, binding, handleAccessFailure, isSameScope, projectId]);
+
+  const goBackToList = () => {
+    detailGeneration.current += 1;
+    saveGeneration.current += 1;
+    activeViewRef.current = 'list';
+    activeProviderIdRef.current = null;
+    setView('list');
+    setSelectedProvider(null);
+    setSelectedProviderId(null);
+    setDetailLoading(false);
+    setDetailError(null);
+    setSaving(false);
+    setSaveError(null);
+    setSaveConflict(false);
+    setSavedMessage(null);
+    if (listNeedsReload.current) {
+      listNeedsReload.current = false;
+      void loadPage(null, false, selectedTenant);
+    }
+  };
+
+  const cancelEdit = () => {
+    saveGeneration.current += 1;
+    detailGeneration.current += 1;
+    setSaving(false);
+    setSaveError(null);
+    setSaveConflict(false);
+    setEditor(emptyEditor());
+    if (selectedProvider) {
+      activeViewRef.current = 'detail';
+      activeProviderIdRef.current = selectedProvider.id;
+      setView('detail');
+    } else {
+      activeViewRef.current = 'list';
+      activeProviderIdRef.current = null;
+      setView('list');
+      setSelectedProviderId(null);
+      if (listNeedsReload.current) {
+        listNeedsReload.current = false;
+        void loadPage(null, false, selectedTenant);
+      }
+    }
+  };
 
   const startCreate = () => {
+    detailGeneration.current += 1;
+    saveGeneration.current += 1;
+    activeViewRef.current = 'create';
+    activeProviderIdRef.current = null;
     setSelectedProvider(null);
     setSelectedProviderId(null);
     setEditor(emptyEditor());
+    setDetailLoading(false);
+    setDetailError(null);
+    setSaving(false);
     setSaveError(null);
     setSaveConflict(false);
     setSavedMessage(null);
@@ -266,8 +674,12 @@ export function ProjectModelProviderDrafts({
   };
 
   const startEdit = () => {
-    if (!selectedProvider) return;
+    if (!selectedProvider || detailLoading) return;
+    saveGeneration.current += 1;
+    activeViewRef.current = 'edit';
+    activeProviderIdRef.current = selectedProvider.id;
     setEditor(editorFromDraft(selectedProvider));
+    setSaving(false);
     setSaveError(null);
     setSaveConflict(false);
     setSavedMessage(null);
@@ -299,16 +711,34 @@ export function ProjectModelProviderDrafts({
       prompt_capacity_tokens: promptCapacity,
     };
     const isUpdate = view === 'edit' && selectedProvider !== null;
+    const expectedSaveView = view;
+    const expectedProviderId = isUpdate ? selectedProvider.id : null;
+    const capturedScope = currentScopeRef.current;
     const fingerprint = JSON.stringify({
       projectId,
-      providerId: isUpdate ? selectedProvider?.id ?? null : null,
+      providerId: expectedProviderId,
       requestBody,
     });
-    const operationId = pendingSave.current?.fingerprint === fingerprint
-      ? pendingSave.current.operationId
+    const canReusePending =
+      pendingSave.current !== null &&
+      pendingSave.current.fingerprint === fingerprint &&
+      pendingSave.current.projectId === capturedScope.projectId &&
+      pendingSave.current.tenantId === capturedScope.tenantId &&
+      pendingSave.current.actorId === capturedScope.actorId &&
+      pendingSave.current.issuer === capturedScope.issuer;
+    const operationId = canReusePending
+      ? pendingSave.current!.operationId
       : crypto.randomUUID();
-    pendingSave.current = { fingerprint, operationId };
+    pendingSave.current = {
+      fingerprint,
+      operationId,
+      projectId: capturedScope.projectId,
+      tenantId: capturedScope.tenantId,
+      actorId: capturedScope.actorId,
+      issuer: capturedScope.issuer,
+    };
     const request: ProjectModelProviderDraftSaveRequest = { operationId, ...requestBody };
+    const generation = ++saveGeneration.current;
 
     setSaving(true);
     setSaveError(null);
@@ -316,28 +746,48 @@ export function ProjectModelProviderDrafts({
     setSavedMessage(null);
     try {
       const saved = await apiCall(
-        (token) => isUpdate && selectedProvider
-          ? gatewayClient.updateProjectByokProviderDraft(
-            token, projectId, selectedProvider.id, request, selectedTenant,
-          )
-          : gatewayClient.createProjectByokProviderDraft(token, projectId, request, selectedTenant),
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              generation !== saveGeneration.current ||
+              activeViewRef.current !== expectedSaveView ||
+              activeProviderIdRef.current !== expectedProviderId ||
+              (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId))
+            return Promise.reject(new StaleRequestError());
+          return isUpdate && expectedProviderId
+            ? gatewayClient.updateProjectByokProviderDraft(
+              token, projectId, expectedProviderId, request, capturedScope.tenantId,
+            )
+            : gatewayClient.createProjectByokProviderDraft(
+              token, projectId, request, capturedScope.tenantId,
+            );
+        },
         binding,
       );
-      const checked = requireProjectDraft(saved, projectId);
-      setSelectedProvider(checked);
-      setSelectedProviderId(checked.id);
-      setView('detail');
+      if (!isSameScope(capturedScope) ||
+          generation !== saveGeneration.current ||
+          activeViewRef.current !== expectedSaveView ||
+          activeProviderIdRef.current !== expectedProviderId)
+        return;
+      const checked = requireProjectDraft(saved, projectId, expectedProviderId ?? undefined);
       pendingSave.current = null;
-      void openProvider(checked.id);
+      listNeedsReload.current = true;
+      setSaving(false);
       setSavedMessage('Provider draft saved.');
-      void loadPage(null, false, selectedTenant);
+      void openProvider(checked.id, { preserveSavedMessage: true });
     } catch (reason) {
-      if (!handleAccessFailure(reason)) {
-        setSaveError(reason);
-        setSaveConflict(isUpdate && reason instanceof GatewayError && reason.status === 409);
+      if (reason instanceof StaleRequestError) return;
+      if (isSameScope(capturedScope) &&
+          generation === saveGeneration.current &&
+          activeViewRef.current === expectedSaveView &&
+          activeProviderIdRef.current === expectedProviderId) {
+        if (!handleAccessFailure(reason)) {
+          setSaveError(reason);
+          setSaveConflict(isUpdate && reason instanceof GatewayError && reason.status === 409);
+        }
       }
     } finally {
-      setSaving(false);
+      if (mountedRef.current && generation === saveGeneration.current)
+        setSaving(false);
     }
   };
 
@@ -414,7 +864,13 @@ export function ProjectModelProviderDrafts({
           {view === 'detail' && (
             <>
               <div className="v1-actions">
-                <Button onClick={() => setView('list')}>Back to provider drafts</Button>
+                <Button onClick={goBackToList}>Back to provider drafts</Button>
+                <Button
+                  onClick={() => selectedProviderId && void openProvider(selectedProviderId)}
+                  disabled={!selectedProviderId || detailLoading}
+                >
+                  Refresh status
+                </Button>
                 <Button appearance="primary" onClick={startEdit} disabled={!selectedProvider || detailLoading}>
                   Edit metadata
                 </Button>
@@ -424,7 +880,12 @@ export function ProjectModelProviderDrafts({
               {detailError != null && (
                 <>
                   <ErrorNotice>{errorMessage(detailError)}</ErrorNotice>
-                  <Button onClick={() => selectedProviderId && void openProvider(selectedProviderId)}>
+                  <Button
+                    onClick={() => selectedProviderId && void openProvider(selectedProviderId, {
+                      preserveSavedMessage: Boolean(savedMessage),
+                    })}
+                    disabled={detailLoading}
+                  >
                     Retry
                   </Button>
                 </>
@@ -442,6 +903,9 @@ export function ProjectModelProviderDrafts({
                   <div><dt>Prompt capacity</dt><dd>{selectedProvider.prompt_capacity_tokens ?? 'Not set'}</dd></div>
                   <div><dt>State</dt><dd>{selectedProvider.state}</dd></div>
                   <div><dt>Revision</dt><dd>{selectedProvider.revision}</dd></div>
+                  <div><dt>Host request status</dt><dd>{hostRequestStatusLabel(selectedProvider.egress)}</dd></div>
+                  <div><dt>Host request host</dt><dd>{hostRequestHostText(selectedProvider.egress)}</dd></div>
+                  <div><dt>Host request port</dt><dd>{hostRequestPortText(selectedProvider.egress)}</dd></div>
                 </dl>
               )}
             </>
@@ -449,7 +913,7 @@ export function ProjectModelProviderDrafts({
           {(view === 'create' || view === 'edit') && (
             <form className="v1-form" onSubmit={(event) => void saveDraft(event)}>
               <div className="v1-actions">
-                <Button type="button" onClick={() => setView(selectedProvider ? 'detail' : 'list')}>
+                <Button type="button" onClick={cancelEdit}>
                   Cancel
                 </Button>
               </div>
