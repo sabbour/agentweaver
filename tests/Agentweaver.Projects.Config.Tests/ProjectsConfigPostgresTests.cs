@@ -3692,6 +3692,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             await ExecuteOwnerSqlAsync(
                 $"GRANT UPDATE (consumed_at, consumed_by_kind) ON projects_config.model_provider_credential_preflights TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.model_provider_host_requests TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT UPDATE (delivery_state, attempt_count, next_attempt_at, lease_owner, lease_token, lease_expires_at, environment_destination_id, delivered_at, failure_code, last_attempt_at, updated_at) ON projects_config.model_provider_host_requests TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT ON projects_config.installation_identity TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT, UPDATE ON projects_config.project_skill_admission_fence TO \"{roleName}\"");

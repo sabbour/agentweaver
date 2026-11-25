@@ -182,6 +182,57 @@ sequenceDiagram
     Note over E,K: An inventory, readback, or epoch conflict creates no successful receipt
 ```
 
+## Provider host access requests
+
+When a `PlatformAdmin` or project `Owner` saves a platform or project BYOK
+model provider draft, Projects rechecks current membership, qualifying role,
+project state, and expected revision under its local credential-publication
+authority lock. Projects commits the immutable provider revision and a bound
+host request (`projects_config.model_provider_host_requests`) in the same
+transaction.
+
+A single-slot Projects relay claims one pending request at a time when ready to
+send, keeps the lease live during the send and completion, and sends the request
+over pinned mutual TLS (`POST /internal/egress/host-requests`) to Environment.
+When enabled via the `--provider-host-request` overlay, each service validates
+the peer certificate against `/var/run/service-backend-ca/ca.crt` and fetches
+the signed DER CRL from its loopback Kestrel listener
+(`http://127.0.0.1:8445/ca.crl`), backed by the directory-mounted
+`service-backend-crl` ConfigMap.
+Environment stores an immutable receipt
+(`environment.provider_host_request_receipts`) in `requested` state. Projects
+marks the request delivered only when the receipt matches every bound field
+under the live lease.
+
+`GET /api/v1/platform/egress/destinations` requires unbound `PlatformAdmin`
+authority. Environment pages its immutable receipts in stable order and queries
+Projects (`POST /internal/egress/host-requests/proof`) over pinned mutual TLS.
+Environment skips stale rows from superseded revisions or inactive projects and
+advances the cursor past the last examined row. If Projects proof is unavailable,
+Environment returns `503` with `Cache-Control: no-store` and does not advance
+the cursor.
+
+```mermaid
+sequenceDiagram
+    participant Saver as PlatformAdmin or Project Owner
+    participant Admin as PlatformAdmin
+    participant Projects as Projects & Config
+    participant Relay as Projects Outbox Relay
+    participant Env as Environment
+    Saver->>Projects: Save BYOK provider (create or update)
+    Projects->>Projects: Lock current authority and expected revision
+    Projects->>Projects: Commit revision and pending host request
+    Projects-->>Saver: Saved metadata (egress.deliveryStatus = pending)
+    Relay->>Env: POST /internal/egress/host-requests (pinned mTLS)
+    Env->>Env: Save immutable receipt (state = requested)
+    Env-->>Relay: Exact receipt
+    Relay->>Projects: Mark Delivered under live lease
+    Admin->>Env: GET /api/v1/platform/egress/destinations
+    Env->>Projects: POST /internal/egress/host-requests/proof (pinned mTLS)
+    Projects-->>Env: Current-scope proof per requestId
+    Env-->>Admin: Current requested destinations (or 503 on proof outage)
+```
+
 PostgreSQL binds a nonexpiring hold to the current reservation for one logical
 target ID. Reservation and hold inserts use the same target lock. A new
 reservation is rejected while a hold exists. The coordinator compares the

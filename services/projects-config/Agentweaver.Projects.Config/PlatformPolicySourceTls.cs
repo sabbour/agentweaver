@@ -46,6 +46,9 @@ internal static class PlatformPolicySourceTls
         var otherPins = builder.Configuration
             .GetSection("ProjectsConfig:IssueSync:IdentityTls:PeerCertificateSha256Pins")
             .GetChildren().Select(pin => pin.Value)
+            .Concat(builder.Configuration
+                .GetSection($"{HttpEnvironmentHostRequestClient.SectionName}:PeerCertificateSha256Pins")
+                .GetChildren().Select(pin => pin.Value))
             .Append(builder.Configuration[$"{HostedModelCatalogPublicationTls.SectionName}:AgentHostCertificateSha256"])
             .Where(pin => pin is not null).ToArray();
         if (options.EnvironmentPins.Any(pin => otherPins.Contains(pin.Sha256, StringComparer.OrdinalIgnoreCase)) ||
@@ -125,7 +128,8 @@ internal static class PlatformPolicySourceTls
             throw InvalidConfiguration();
         var endpoints = builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().ToArray();
         var candidates = endpoints.Where(endpoint =>
-                !string.Equals(endpoint.Key, "IssueSyncIdentity", StringComparison.OrdinalIgnoreCase))
+                !string.Equals(endpoint.Key, "IssueSyncIdentity", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(endpoint.Key, HttpEnvironmentHostRequestClient.ChannelKey, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (candidates.Length > 1)
             throw InvalidConfiguration();

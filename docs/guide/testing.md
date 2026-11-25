@@ -196,6 +196,24 @@ ambiguous meters, `409 pricing_changed`, `503 pricing_unavailable`, token expiry
 and authority revocation during lookup, canonical request digest replay and
 insert races, and migration `013_retail_rate_card_digest.sql`.
 
+## Test provider host access requests
+
+Run the Projects, Environment, and Gateway host-request regressions from the
+repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter FullyQualifiedName~HostRequest
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --configuration Release --filter FullyQualifiedName~ProviderHostRequestPostgresTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~GatewayModelProviderDraftTests
+```
+
+These tests use disposable PostgreSQL databases and local test servers. They
+check atomic revision and host-request commit, authority revocation before
+lock, exact historical replay, outbox relay retries, expired-lease recovery,
+mismatched receipts, Environment outage fallback on provider reads, receipt
+idempotency and immutability, stale-row cursor advancement, and `503` on
+unavailable proof.
+
 ## Test revision-backed BYOK run admission
 
 Run the contract and orchestration tests after the Release build:

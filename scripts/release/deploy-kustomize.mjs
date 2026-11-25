@@ -25,6 +25,12 @@ import {
   requireLiveAzureCostPreserved,
   stampEventsRuntimeConfigDigest,
 } from './model-bindings-overlay.mjs';
+import {
+  applyProviderHostRequestOverlay,
+  parseProviderHostRequestOverlay,
+  requireFirstEnablementImages,
+  requireLiveProviderHostRequestPreserved,
+} from './provider-host-request-overlay.mjs';
 
 const NAMESPACE = 'agentweaver';
 const BROKER_RUNTIME_CONFIG = 'identity-broker-runtime-config-v4';
@@ -125,6 +131,7 @@ export const DEPLOY_KUSTOMIZE_USAGE = `Usage: npm run deploy:kustomize -- --imag
 Model options:
   --model-bindings <file.json>         Add the environment BYOK model bindings in this file.
   --remove-model-binding <reference>   Remove this live BYOK model binding. You can repeat it.
+  --provider-host-request <file.json>  Enable the private provider host-request channel with these pins.
 
 Audit option:
   --agenthost-egress-audit <mode>      off, allowed, or denied. Default off.
@@ -142,6 +149,7 @@ sandbox smoke check.
 `;
 export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
 export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
+export const DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION = true;
 export const DEPLOY_KUSTOMIZE_TARGET_OPTION = true;
 export const DEPLOY_KUSTOMIZE_AUDIT_OPTION = true;
 
@@ -156,6 +164,7 @@ export function parseDeployKustomizeArgs(argv) {
   let hasRegistry = false;
   let execute = false;
   let modelBindings;
+  let providerHostRequest;
   let resourceGroup;
   let agentHostEgressAudit = 'off';
   let hasAgentHostEgressAudit = false;
@@ -180,6 +189,12 @@ export function parseDeployKustomizeArgs(argv) {
       if (modelBindings !== undefined) fail('--model-bindings may be specified only once.');
       modelBindings = argv[++index];
       if (!modelBindings || modelBindings.startsWith('--')) fail('--model-bindings requires a file path.');
+    } else if (arg === '--provider-host-request') {
+      if (providerHostRequest !== undefined) fail('--provider-host-request may be specified only once.');
+      providerHostRequest = argv[++index];
+      if (!providerHostRequest || providerHostRequest.startsWith('--')) {
+        fail('--provider-host-request requires a file path.');
+      }
     } else if (arg === '--remove-model-binding') {
       const reference = argv[++index];
       if (!reference || reference.startsWith('--')) fail('--remove-model-binding requires a model reference.');
@@ -215,6 +230,7 @@ export function parseDeployKustomizeArgs(argv) {
   const options = {
     ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
     ...(modelBindings === undefined ? {} : { modelBindings }),
+    ...(providerHostRequest === undefined ? {} : { providerHostRequest }),
     ...(removeModelBindings.length ? { removeModelBindings } : {}),
     ...(resourceGroup === undefined || resourceGroup === 'agentweaver' ? {} : { resourceGroup }),
     ...(hasAgentHostEgressAudit ? { agentHostEgressAudit } : {}),
@@ -2206,6 +2222,8 @@ export async function deployKustomize(options, overrides = {}) {
   const removals = options.removeModelBindings ?? [];
   const modelBindings = options.modelBindings === undefined ? undefined
     : parseModelBindingsOverlay(readFileSync(path.resolve(root, options.modelBindings), 'utf8'));
+  const providerHostRequest = options.providerHostRequest === undefined ? undefined
+    : parseProviderHostRequestOverlay(readFileSync(path.resolve(root, options.providerHostRequest), 'utf8'));
   const requestedImages = options.imageManifest === undefined
     ? new Map(IMAGE_REPOSITORIES.map(repository => [repository, options.imageTag]))
     : parseImageManifest(readFileSync(path.resolve(root, options.imageManifest), 'utf8'));
@@ -2276,6 +2294,10 @@ export async function deployKustomize(options, overrides = {}) {
       const merged = applyModelBindingsOverlay(resources, modelBindings);
       log(`Added environment model binding(s) ${merged.references.join(', ')} at revision ${merged.revision}.`);
     }
+    if (providerHostRequest) {
+      applyProviderHostRequestOverlay(resources, providerHostRequest);
+      log('Enabled private provider host-request channel between Projects and Environment.');
+    }
     stampEventsRuntimeConfigDigest(resources);
     if (liveAgentHostSettings) {
       preserveLiveAgentHostSettings(resources, liveAgentHostSettings, agentHostTuple);
@@ -2309,6 +2331,19 @@ export async function deployKustomize(options, overrides = {}) {
     ]));
     requireLiveByokBindingsPreserved(existingRuntimeMaps.get(AGENTHOST_RUNTIME_CONFIG),
       desiredRuntimeMaps.find(resource => resource.metadata.name === AGENTHOST_RUNTIME_CONFIG), removals);
+    const liveProjectsConfig = readExistingNamedRuntimeConfigMap(
+      exec, context, root, PROJECTS_CONFIG_RUNTIME_CONFIG);
+    const liveEnvironmentConfig = existingRuntimeMaps.get(ENVIRONMENT_RUNTIME_CONFIG);
+    requireLiveProviderHostRequestPreserved(
+      liveProjectsConfig,
+      liveEnvironmentConfig,
+      runtimeConfig,
+      desiredRuntimeMaps.find(resource => resource.metadata.name === ENVIRONMENT_RUNTIME_CONFIG));
+    requireFirstEnablementImages(
+      providerHostRequest,
+      liveProjectsConfig,
+      liveEnvironmentConfig,
+      requestedImages);
     requireLiveAzureCostPreserved(readExistingNamedRuntimeConfigMap(exec, context, root, EVENTS_RUNTIME_CONFIG),
       resources.find(resource => resource.kind === 'ConfigMap' && resource.metadata?.name === EVENTS_RUNTIME_CONFIG));
     const missingRuntimeMaps = new Set([...existingRuntimeMaps]

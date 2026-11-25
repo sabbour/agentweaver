@@ -29,6 +29,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
         Set<ModelProviderCredentialOperationRecord>();
     public DbSet<ModelProviderCredentialPreflightRecord> ModelProviderCredentialPreflights =>
         Set<ModelProviderCredentialPreflightRecord>();
+    public DbSet<ModelProviderHostRequestRecord> ModelProviderHostRequests =>
+        Set<ModelProviderHostRequestRecord>();
     public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
     public DbSet<ProjectCastingGenerationRequestRecord> CastingGenerationRequests =>
@@ -529,6 +531,67 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasConversion<string>().HasMaxLength(16);
             entity.HasIndex(p => new { p.OperationId, p.IssuedAt })
                 .HasDatabaseName("ix_model_provider_credential_preflights_operation_issued");
+        });
+
+        modelBuilder.Entity<ModelProviderHostRequestRecord>(entity =>
+        {
+            entity.ToTable("model_provider_host_requests", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_model_provider_host_requests_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_model_provider_host_requests_revision",
+                    "provider_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_model_provider_host_requests_configuration_hash",
+                    "configuration_hash ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_host_requests_port",
+                    "port = 443");
+                table.HasCheckConstraint(
+                    "ck_model_provider_host_requests_delivery_state",
+                    "delivery_state IN ('Pending', 'Delivered', 'Failed')");
+                table.HasCheckConstraint(
+                    "ck_model_provider_host_requests_attempt_count",
+                    "attempt_count >= 0");
+            });
+            entity.HasKey(r => r.RequestId).HasName("pk_model_provider_host_requests");
+            entity.Property(r => r.RequestId).HasColumnName("request_id");
+            entity.Property(r => r.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
+            entity.Property(r => r.Scope).HasColumnName("scope").HasConversion<string>().HasMaxLength(16);
+            entity.Property(r => r.ProjectId).HasColumnName("project_id").HasMaxLength(ModelProviderDraftLimits.ProjectId);
+            entity.Property(r => r.ProviderId).HasColumnName("provider_id").HasMaxLength(ModelProviderDraftLimits.ProviderId).IsRequired();
+            entity.Property(r => r.ProviderRevision).HasColumnName("provider_revision");
+            entity.Property(r => r.ConfigurationHash).HasColumnName("configuration_hash").HasMaxLength(ModelProviderDraftLimits.Hash).IsRequired();
+            entity.Property(r => r.OperationId).HasColumnName("operation_id");
+            entity.Property(r => r.ActorId).HasColumnName("actor_id").HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
+            entity.Property(r => r.Host).HasColumnName("host").HasMaxLength(253).IsRequired();
+            entity.Property(r => r.Port).HasColumnName("port");
+            entity.Property(r => r.CreatedAt).HasColumnName("created_at");
+            entity.Property(r => r.DeliveryState).HasColumnName("delivery_state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(r => r.AttemptCount).HasColumnName("attempt_count");
+            entity.Property(r => r.NextAttemptAt).HasColumnName("next_attempt_at");
+            entity.Property(r => r.LeaseOwner).HasColumnName("lease_owner").HasMaxLength(128);
+            entity.Property(r => r.LeaseToken).HasColumnName("lease_token");
+            entity.Property(r => r.LeaseExpiresAt).HasColumnName("lease_expires_at");
+            entity.Property(r => r.EnvironmentDestinationId).HasColumnName("environment_destination_id");
+            entity.Property(r => r.DeliveredAt).HasColumnName("delivered_at");
+            entity.Property(r => r.FailureCode).HasColumnName("failure_code").HasMaxLength(64);
+            entity.Property(r => r.LastAttemptAt).HasColumnName("last_attempt_at");
+            entity.Property(r => r.UpdatedAt).HasColumnName("updated_at");
+            entity.HasOne<ModelProviderDraftRevisionRecord>()
+                .WithMany()
+                .HasForeignKey(r => new { r.ProviderId, r.ProviderRevision })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(r => new { r.ProviderId, r.ProviderRevision })
+                .IsUnique()
+                .HasDatabaseName("ux_model_provider_host_requests_provider_revision");
+            entity.HasIndex(r => r.OperationId)
+                .IsUnique()
+                .HasDatabaseName("ux_model_provider_host_requests_operation_id");
+            entity.HasIndex(r => new { r.DeliveryState, r.NextAttemptAt, r.CreatedAt })
+                .HasDatabaseName("ix_model_provider_host_requests_outbox");
         });
 
         modelBuilder.Entity<ProjectRunSelectionRecord>(entity =>

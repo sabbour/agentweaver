@@ -1138,6 +1138,100 @@ namespace Agentweaver.Environment.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Environment.ProviderHostRequestReceiptRow", b =>
+                {
+                    b.Property<Guid>("RequestId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ConfigurationHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("configuration_hash");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("DestinationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("destination_id");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(253)
+                        .HasColumnType("character varying(253)")
+                        .HasColumnName("host");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("integer")
+                        .HasColumnName("port");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<long>("ProviderRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("provider_revision");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("RequestId")
+                        .HasName("pk_provider_host_request_receipts");
+
+                    b.HasIndex("CreatedAt", "RequestId")
+                        .HasDatabaseName("ix_provider_host_request_receipts_created_request");
+
+                    b.ToTable("provider_host_request_receipts", "environment", t =>
+                        {
+                            t.HasCheckConstraint("ck_provider_host_request_receipts_configuration_hash", "configuration_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_provider_host_request_receipts_fingerprint", "request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_provider_host_request_receipts_port", "port = 443");
+
+                            t.HasCheckConstraint("ck_provider_host_request_receipts_revision", "provider_revision > 0");
+
+                            t.HasCheckConstraint("ck_provider_host_request_receipts_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Environment.RemoteMcpCatalogSnapshotRow", b =>
                 {
                     b.Property<string>("TenantId")

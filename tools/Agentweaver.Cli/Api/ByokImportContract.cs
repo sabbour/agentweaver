@@ -93,19 +93,21 @@ internal static class ByokImportContract
             if (!Allows(document, requestSchema, item.Body)) throw Invalid();
         var receiptSchema = Resolve(document, ResponseSchema(create));
         var requiredReceipt = ReceiptFields.Except(["reference", "rate_card_id", "rate_card_version"]).ToArray();
-        RequireShape(receiptSchema, ReceiptFields, requiredReceipt, exactRequired: false);
+        string[] allReceiptFields = [.. ReceiptFields, "egress"];
+        RequireShape(receiptSchema, allReceiptFields, requiredReceipt, exactRequired: false);
         var properties = (JsonObject)receiptSchema["properties"]!;
-        foreach (var field in ReceiptFields)
+        foreach (var field in allReceiptFields)
         {
             var type = field switch
             {
                 "revision" or "prompt_capacity_tokens" => "integer",
                 "has_api_key" or "is_active" or "hasCredential" => "boolean",
                 "reasoning_efforts" => "array",
+                "egress" => "object",
                 _ => "string",
             };
             var nullable = field is "wire_api" or "azure_api_version" or "prompt_capacity_tokens" or
-                "projectId" or "rate_card_id" or "rate_card_version";
+                "projectId" or "rate_card_id" or "rate_card_version" or "egress";
             if (!ReceiptTypes(document, properties[field], type, nullable)) throw Invalid();
         }
         if (!KnownHashPatterns(document, properties["configurationHash"]) ||
@@ -225,6 +227,7 @@ internal static class ByokImportContract
             "format" => type is not ("string" or "integer"),
             "minimum" or "maximum" => type != "integer",
             "items" or "minItems" or "maxItems" => type != "array",
+            "properties" or "required" or "additionalProperties" => type != "object",
             _ => true,
         })) return false;
         if (schema.ContainsKey("enum") && schema["enum"] is not JsonArray { Count: > 0 }) return false;
@@ -347,8 +350,9 @@ internal static class ByokImportContract
     {
         try
         {
-            if (body is not JsonObject receipt || receipt.Count != ReceiptFields.Length ||
-                ReceiptFields.Any(name => !receipt.ContainsKey(name)) ||
+            if (body is not JsonObject receipt ||
+                !ReceiptFields.All(receipt.ContainsKey) ||
+                receipt.Any(item => !ReceiptFields.Contains(item.Key, StringComparer.Ordinal) && item.Key != "egress") ||
                 GatewayContract.String(receipt, "id") != "byok-" + operationId.ToString("N") ||
                 GatewayContract.String(receipt, "reference") != binding.Reference ||
                 GatewayContract.String(receipt, "scope") != "platform" || receipt["projectId"] is not null ||

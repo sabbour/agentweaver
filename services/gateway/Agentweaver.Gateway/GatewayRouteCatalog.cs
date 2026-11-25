@@ -584,6 +584,14 @@ public static class GatewayRouteCatalog
             maximumRequestBodyBytes: ModelProviderCredentialDeleteLimit, forwardTenantSelector: true,
             exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
             excludeFromMcp: true);
+        Add("GET", GatewayOwner.Environment, "/platform/egress/destinations",
+            "/api/platform/egress/destinations", "listPlatformEgressDestinations",
+            "List requested platform egress destinations",
+            ["pageSize", "cursor", "state"],
+            forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: 512 * 1024,
+            excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/policies/platform", "/api/policies/platform/",
             "readPlatformNativeAcsPolicy", "Read the current canonical Platform Policy",
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],

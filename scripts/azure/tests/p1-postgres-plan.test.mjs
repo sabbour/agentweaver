@@ -175,6 +175,7 @@ test('Projects column updates use exact grants', () => {
   assert.deepEqual(withUpdateColumns, [
     'projects_config.project_role_assignments',
     'projects_config.model_provider_credential_preflights',
+    'projects_config.model_provider_host_requests',
     'projects_config.native_acs_policy_heads',
     'projects_config.project_governance_decision_stream_heads',
   ]);
@@ -542,7 +543,7 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
 
   assert.deepEqual(catalog, migrationIds);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
-  assert.match(source, /private const int CurrentSchemaVersion = 17;/);
+  assert.match(source, /private const int CurrentSchemaVersion = 18;/);
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 
@@ -558,7 +559,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 156);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 158);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'installation_identity').privileges, ['SELECT']);
   const reservation = projectsConfig.tables.find(table => table.table === 'model_provider_reference_reservations');
@@ -594,8 +595,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [23, 7, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 64);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [24, 8, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 66);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });
@@ -626,6 +627,10 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     },
     {
       signature: 'reject_platform_policy_proof_mutation()',
+      execute: false,
+    },
+    {
+      signature: 'reject_provider_host_request_receipt_mutation()',
       execute: false,
     },
   ]);

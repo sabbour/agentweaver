@@ -7,7 +7,7 @@ namespace Agentweaver.Environment;
 public static class EnvironmentMigrator
 {
     private const string LockName = "agentweaver.environment.migrate";
-    private const int CurrentSchemaVersion = 17;
+    private const int CurrentSchemaVersion = 18;
     private static readonly string[] SupportedMigrationIds =
     [
         "20261006150000_InitialEnvironmentLifecycle",
@@ -27,6 +27,7 @@ public static class EnvironmentMigrator
         "20261119034552_PlatformPolicyProofReceipts",
         "20261119050000_PlatformPolicyHoldReservationFence",
         "20261123100433_RemoteMcpCatalogScanEvidence",
+        "20261125000200_AddPlatformEgressDestinationsAndHostRequests",
     ];
 
     /// <summary>Ordered versions assigned to the EF migration history for maintenance planning.</summary>
@@ -79,6 +80,7 @@ public static class EnvironmentMigrator
                AND pg_catalog.to_regclass('"environment"."sandbox_owner_mappings"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."sandbox_egress_flows_attributed"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."sandbox_egress_flows_unattributed"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."provider_host_request_receipts"') IS NOT NULL
             """,
             connection);
         if (await schemaCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
@@ -235,6 +237,11 @@ public static class EnvironmentMigrator
                AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.sandbox_egress_flows_unattributed', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.provider_host_request_receipts', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.provider_host_request_receipts', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.provider_host_request_receipts', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.provider_host_request_receipts', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.provider_host_request_receipts', 'TRUNCATE')
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)

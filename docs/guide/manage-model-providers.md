@@ -262,6 +262,34 @@ Recover unknown rows first. To import remaining rows, make a new bindings file
 without confirmed references and with matching model rates, then calculate its
 new digest.
 
+## Check provider host egress requests
+
+When you save a platform or project BYOK provider draft, Projects records an
+immutable host request for the saved HTTPS host on TCP port 443 and relays it
+to Environment. Environment stores an immutable receipt with state `requested`.
+Saving a provider does not approve egress, change network policy, or make the
+provider `Available`.
+
+Each provider response includes an `egress` object with `host`, `port`,
+`destinationState`, `canApprove`, and `deliveryStatus`:
+
+- `pending`: Projects recorded the host request and has not yet received an
+  Environment receipt.
+- `delivered`: Environment confirmed the exact receipt; `destinationState` is
+  `requested`.
+- `failed`: Environment permanently rejected the request or returned a
+  mismatched receipt.
+- `unavailable`: Environment is unreachable or returned no status for the
+  current revision; the saved provider metadata is still returned.
+
+Historical operation replays return the saved metadata without `egress`.
+
+Platform administrators with unbound `PlatformAdmin` authority can list current
+`requested` provider hosts at `GET /api/v1/platform/egress/destinations`. The
+endpoint pages receipts in stable order, omits hosts that are no longer on the
+provider's current revision, and returns `503` with no cursor advance when
+Projects proof is unavailable.
+
 ## Next step
 
 For command syntax, metadata fields, and API error behavior, see the

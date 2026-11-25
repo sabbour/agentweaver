@@ -193,7 +193,8 @@ builder.Services.AddScoped<ModelProviderDraftService>(services => new(
     services.GetRequiredService<ProjectsConfigDbContext>(),
     services.GetRequiredService<TimeProvider>(),
     services.GetRequiredService<ModelBindingCapabilities>(),
-    builder.Configuration.GetValue<bool>("ProjectsConfig:ProviderReferenceReservationsEnabled")));
+    builder.Configuration.GetValue<bool>("ProjectsConfig:ProviderReferenceReservationsEnabled"),
+    services.GetService<IEnvironmentHostRequestClient>()));
 builder.Services.AddScoped<ModelProviderCredentialPublicationV2Service>();
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Projects.Config");
@@ -303,9 +304,20 @@ BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is no
     applyHttpsDefaults: !platformPolicySourceEnabled);
 var issueSyncIdentity = Agentweaver.Identity.IssueSyncServiceTransport.AddChannel(builder,
     IssueSyncAuthorityEndpoints.Channel, "ProjectsConfig:IssueSync:IdentityTls", "Projects", "IdentityBroker", true);
+var providerHostRequestEnabled = Agentweaver.Identity.IssueSyncServiceTransport.AddChannel(builder,
+    HttpEnvironmentHostRequestClient.ChannelKey, HttpEnvironmentHostRequestClient.SectionName, "Projects", "Environment", true);
+if (providerHostRequestEnabled)
+{
+    builder.Services.AddScoped<IEnvironmentHostRequestClient>(services => new HttpEnvironmentHostRequestClient(
+        services.GetRequiredService<IHttpClientFactory>(),
+        services.GetRequiredKeyedService<Agentweaver.Identity.RuntimeServiceTlsIdentity>(
+            HttpEnvironmentHostRequestClient.ChannelKey)));
+    builder.Services.AddHostedService<ModelProviderHostRequestRelay>();
+}
 HostedModelCatalogPublicationTls.Configure(builder, "/var/run/service-backend-ca/ca.crt",
     applyHttpsDefaults: !platformPolicySourceEnabled);
 PlatformPolicySourceTls.Configure(builder);
+var loopbackCrl = Agentweaver.Identity.LoopbackCrlEndpoint.AddLoopbackCrl(builder);
 
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();
@@ -413,6 +425,8 @@ if (platformPolicySourceEnabled)
     app.MapPlatformPolicySource();
 app.MapP1ProjectSetupEndpoint();
 app.MapIssueSyncAuthority(issueSyncIdentity);
+app.MapProviderHostRequestProof(providerHostRequestEnabled);
+Agentweaver.Identity.LoopbackCrlEndpoint.MapLoopbackCrl(app, loopbackCrl);
 app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();
 app.Run();

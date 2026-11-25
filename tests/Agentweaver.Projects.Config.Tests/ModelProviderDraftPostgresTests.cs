@@ -387,7 +387,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var restartedService = new ModelProviderDraftService(restartedDb, TimeProvider.System);
         var replay = await restartedService.SaveAsync(caller, ModelProviderBindingScope.Platform, null,
             "legacy-draft", edit, CancellationToken.None);
-        Assert.Equal(first, replay);
+        Assert.Equal(first with { Egress = null }, replay);
         Assert.Equal(3, replay.Binding.ProviderRevision);
         var revisions = await db.ModelProviderDraftRevisions.AsNoTracking()
             .Where(item => item.ProviderId == "legacy-draft" && item.ProviderRevision >= 2)

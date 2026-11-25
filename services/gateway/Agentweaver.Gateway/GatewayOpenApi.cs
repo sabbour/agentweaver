@@ -127,6 +127,7 @@ internal static partial class GatewayOpenApi
             ["setProjectByokProviderCredential"] = C("ModelProviderCredentialPutRequest", "ModelProviderCredentialOperationResponse", "200"),
             ["readProjectByokProviderCredentialOperation"] = C(null, "ModelProviderCredentialOperationStatusResponse", "200"),
             ["disableProjectByokProviderCredential"] = C("ModelProviderCredentialDeleteRequest", "ModelProviderCredentialOperationResponse", "200"),
+            ["listPlatformEgressDestinations"] = C(null, "PlatformEgressDestinationPage", "200"),
             ["pinSourceControlRepository"] = C("SourceControlRepositoryPinRequest", "SourceControlRepositoryPinView", "200", "202"),
             ["createSourceControlIssue"] = C("SourceControlIssueRequest", "SourceControlIssue", "200"),
             ["createSourceControlPullRequest"] = C("SourceControlPullRequestRequest", "SourceControlPullRequest", "200"),
@@ -979,7 +980,7 @@ else if (route.OperationId is
         {
             var errorStatuses = route.OperationId switch
             {
-                "listRunEnvironments" => new[] { "400", "403", "503" },
+                "listRunEnvironments" or "listPlatformEgressDestinations" => new[] { "400", "403", "503" },
                 "readEnvironmentLifecycle" =>
                     new[] { "403", "404", "503" },
                 "readEnvironmentWorkspaceVolume" =>
@@ -2613,7 +2614,27 @@ else if (route.OperationId is
             ("projectId", NullableStr()), ("state", Enum("Draft", "Available")), ("revision", Int()),
             ("configurationHash", Str()), ("has_api_key", Bool()), ("is_active", Bool()),
             ("hasCredential", Bool()), ("reference", Str()),
-            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr())),
+            ("rate_card_id", NullableStr()), ("rate_card_version", NullableStr()),
+            ("egress", Nullable(Ref("ModelProviderEgressStatus")))),
+        ["ModelProviderEgressStatus"] = StrictObj(
+            ["host", "port", "destinationState", "canApprove", "deliveryStatus"],
+            ("host", Str()), ("port", Int()),
+            ("destinationState", Nullable(Enum("requested"))),
+            ("canApprove", Bool()),
+            ("deliveryStatus", Enum("pending", "delivered", "failed", "unavailable"))),
+        ["PlatformEgressDestination"] = StrictObj(
+            ["destinationId", "requestId", "host", "port", "state", "origin", "scope",
+                "projectId", "tenantId", "providerId", "providerRevision", "requestedBy", "requestedAt"],
+            ("destinationId", Uuid()), ("requestId", Uuid()),
+            ("host", Str()), ("port", Int()),
+            ("state", Enum("requested")),
+            ("origin", Enum("modelProvider")),
+            ("scope", Enum("platform", "project")), ("projectId", NullableStr()),
+            ("tenantId", Str()), ("providerId", Str()), ("providerRevision", Int()),
+            ("requestedBy", Str()), ("requestedAt", Date())),
+        ["PlatformEgressDestinationPage"] = StrictObj(
+            ["destinations", "nextCursor"],
+            ("destinations", Arr(Ref("PlatformEgressDestination"))), ("nextCursor", NullableStr())),
         ["ModelProviderDraftPage"] = Obj(
             ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"],
             ("switchMode", Nullable(Enum("untouched", "active", "explicitHosted"))),

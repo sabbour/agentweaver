@@ -421,11 +421,14 @@ internal static class ByokDraftCommands
                 ["id", "name", "type", "base_url", "model", "wire_api", "azure_api_version",
                     "reasoning_efforts", "prompt_capacity_tokens", "scope", "projectId", "state", "revision",
                     "configurationHash", "has_api_key", "is_active", "hasCredential", "reference",
-                    "rate_card_id", "rate_card_version"],
+                    "rate_card_id", "rate_card_version", "egress"],
                 ["id", "name", "type", "base_url", "model", "wire_api", "azure_api_version",
                     "reasoning_efforts", "prompt_capacity_tokens", "scope", "projectId", "state", "revision",
                     "configurationHash", "rate_card_id", "rate_card_version",
                     "has_api_key", "is_active", "hasCredential"]),
+            "ModelProviderEgressStatus" => new(
+                ["host", "port", "destinationState", "canApprove", "deliveryStatus"],
+                ["host", "port", "destinationState", "canApprove", "deliveryStatus"]),
             "ModelProviderDraftPage" => new(
                 ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"],
                 ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"]),
@@ -475,6 +478,7 @@ internal static class ByokDraftCommands
             "AzureRetailRuntimeRateCard" =>
                 ["RuntimeRateCardBody", "AzureRetailRuntimeRateCardProvenance"],
             "AzureRetailPriceLookupResult" => ["AzureRetailMeterCandidate"],
+            "ModelProviderDraft" => ["ModelProviderEgressStatus"],
             _ => [],
         };
         foreach (var name in nested)
@@ -591,6 +595,14 @@ internal static class ByokDraftCommands
                 RequireType(properties, "has_api_key", "boolean");
                 RequireType(properties, "is_active", "boolean");
                 RequireType(properties, "hasCredential", "boolean");
+                RequireNullableReference(properties, "egress", "ModelProviderEgressStatus");
+                break;
+            case "ModelProviderEgressStatus":
+                RequireType(properties, "host", "string");
+                RequireType(properties, "port", "integer");
+                RequireNullableType(properties, "destinationState", "string");
+                RequireType(properties, "canApprove", "boolean");
+                RequireType(properties, "deliveryStatus", "string");
                 break;
             case "ModelProviderDraftPage":
                 RequireNullableType(properties, "switchMode", "string");
@@ -695,6 +707,17 @@ internal static class ByokDraftCommands
             alternatives[0] is not JsonObject value ||
             alternatives[1] is not JsonObject @null ||
             GatewayContract.String(value, "type") != type ||
+            GatewayContract.String(@null, "type") != "null")
+            throw ContractMismatch();
+    }
+
+    private static void RequireNullableReference(JsonObject properties, string name, string schemaName)
+    {
+        if (properties[name]?["anyOf"] is not JsonArray alternatives ||
+            alternatives.Count != 2 ||
+            alternatives[0] is not JsonObject value ||
+            alternatives[1] is not JsonObject @null ||
+            GatewayContract.String(value, "$ref") != "#/components/schemas/" + schemaName ||
             GatewayContract.String(@null, "type") != "null")
             throw ContractMismatch();
     }

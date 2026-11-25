@@ -51,6 +51,29 @@ public sealed class PlatformPolicySourceTlsTests
     }
 
     [Fact]
+    public void EnabledProfileCoexistsWithProviderHostRequestEndpointAndRejectsSharedPeerPins()
+    {
+        using var certificates = new PolicySourceCertificates();
+        var values = new Dictionary<string, string?>(certificates.Configuration())
+        {
+            ["Kestrel:Endpoints:ProviderHostRequest:Url"] = "https://+:8444",
+            ["ProjectsConfig:ProviderHostRequest:Tls:PeerCertificateSha256Pins:0"] = new string('c', 64),
+        };
+        var builder = Builder(values);
+
+        Assert.True(PlatformPolicySourceTls.Configure(builder, certificates.CaPath));
+
+        var sharedPinValues = new Dictionary<string, string?>(certificates.Configuration())
+        {
+            ["Kestrel:Endpoints:ProviderHostRequest:Url"] = "https://+:8444",
+            ["ProjectsConfig:ProviderHostRequest:Tls:PeerCertificateSha256Pins:0"] = certificates.EnvironmentPin,
+        };
+        var sharedPinBuilder = Builder(sharedPinValues);
+        Assert.Throws<InvalidOperationException>(() =>
+            PlatformPolicySourceTls.Configure(sharedPinBuilder, certificates.CaPath));
+    }
+
+    [Fact]
     public void InvalidPinProfilesAndConflictingListenerConfigurationFailStartup()
     {
         using var certificates = new PolicySourceCertificates();

@@ -1310,11 +1310,11 @@ public sealed partial class ProjectsConfigPostgresTests
         await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
         await using var read = new NpgsqlCommand("""
             SELECT pg_get_functiondef(
-                'projects_config.lock_native_acs_policy_authority(uuid,text,text,text,bigint,text,text,uuid[],text[],text[],text[],bigint[])'::regprocedure)
+                'projects_config.lock_credential_publication_authority(uuid,text,text,text,bigint,uuid,bigint,text,text)'::regprocedure)
             """, connection);
         var original = (string)(await read.ExecuteScalarAsync()
             ?? throw new InvalidOperationException("The authority function is missing."));
-        var locks = Regex.Matches(original, @"\bFOR\s+SHARE\b", RegexOptions.IgnoreCase);
+        var locks = Regex.Matches(original, @"\bFOR\s+SHARE(?:\s+NOWAIT)?\b", RegexOptions.IgnoreCase);
         Assert.Equal(3, locks.Count);
         var selected = locks[membership ? 0 : 2];
         var mutant = original.Remove(selected.Index, selected.Length);

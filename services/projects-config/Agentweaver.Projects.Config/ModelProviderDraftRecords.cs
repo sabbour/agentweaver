@@ -110,6 +110,7 @@ public sealed record ModelProviderDraft(
     ModelProviderBindingRevision Binding)
 {
     public string? Reference { get; init; }
+    public ModelProviderEgressStatus? Egress { get; init; }
 }
 
 public sealed record ModelProviderDraftPage(
@@ -204,4 +205,38 @@ public sealed class ModelProviderCredentialPreflightRecord
     public DateTimeOffset IssuedAt { get; set; }
     public DateTimeOffset? ConsumedAt { get; set; }
     public ModelProviderCredentialOperationKind? ConsumedByKind { get; set; }
+}
+
+public enum ModelProviderHostRequestDeliveryState
+{
+    Pending,
+    Delivered,
+    Failed,
+}
+
+public sealed class ModelProviderHostRequestRecord
+{
+    public Guid RequestId { get; set; }
+    public required string TenantId { get; set; }
+    public ModelProviderBindingScope Scope { get; set; }
+    public string? ProjectId { get; set; }
+    public required string ProviderId { get; set; }
+    public long ProviderRevision { get; set; }
+    public required string ConfigurationHash { get; set; }
+    public Guid OperationId { get; set; }
+    public required string ActorId { get; set; }
+    public required string Host { get; set; }
+    public int Port { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public ModelProviderHostRequestDeliveryState DeliveryState { get; set; }
+    public int AttemptCount { get; set; }
+    public DateTimeOffset NextAttemptAt { get; set; }
+    public string? LeaseOwner { get; set; }
+    public Guid? LeaseToken { get; set; }
+    public DateTimeOffset? LeaseExpiresAt { get; set; }
+    public Guid? EnvironmentDestinationId { get; set; }
+    public DateTimeOffset? DeliveredAt { get; set; }
+    public string? FailureCode { get; set; }
+    public DateTimeOffset? LastAttemptAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
 }

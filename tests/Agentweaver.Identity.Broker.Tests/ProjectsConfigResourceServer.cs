@@ -446,6 +446,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT, INSERT ON projects_config.model_provider_credential_operations TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.model_provider_credential_preflights TO \"{runtimeRole}\"",
             $"GRANT UPDATE (consumed_at, consumed_by_kind) ON projects_config.model_provider_credential_preflights TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT ON projects_config.model_provider_host_requests TO \"{runtimeRole}\"",
+            $"GRANT UPDATE (delivery_state, attempt_count, next_attempt_at, lease_owner, lease_token, lease_expires_at, environment_destination_id, delivered_at, failure_code, last_attempt_at, updated_at) ON projects_config.model_provider_host_requests TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.installation_identity TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",

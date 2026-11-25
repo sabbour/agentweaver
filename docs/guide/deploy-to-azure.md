@@ -603,6 +603,51 @@ ConfigMap, and restart the workloads.
 To make sure that a service uses a replaced certificate, restart the
 Deployment that mounts the Secret.
 
+#### Issue and rotate provider host-request channel certificates
+
+To enable the private provider host-request channel between Projects & Config
+and Environment, issue two separate leaf certificates from the same
+`service-backend-ca`:
+
+1. For `projects-config-host-request-tls`, set `NAME=projects-config.agentweaver.svc.cluster.local`
+   and `extendedKeyUsage=serverAuth,clientAuth`.
+2. For `environment-host-request-tls`, set `NAME=environment.agentweaver.svc.cluster.local`
+   and `extendedKeyUsage=serverAuth,clientAuth`.
+3. Include `crlDistributionPoints=URI:http://127.0.0.1:8445/ca.crl` on both
+   leaf certificates. Do not add this loopback URL to unrelated service
+   certificates.
+4. Sign a DER-encoded CRL (`ca.crl`) offline with the `service-backend-ca` key
+   and create or update the mutable `service-backend-crl` ConfigMap in
+   namespace `agentweaver`:
+
+   ```bash
+   kubectl create configmap service-backend-crl \
+     --from-file=ca.crl=ca.crl --namespace agentweaver \
+     --dry-run=client --output=yaml | kubectl apply --filename=-
+   ```
+
+   Renew `service-backend-crl` before `nextUpdate` expires. Both services fail
+   closed when `ca.crl` is expired or missing.
+5. Calculate the lowercase SHA-256 fingerprint of each DER leaf certificate:
+
+   ```bash
+   openssl x509 -in tls.crt -outform der | sha256sum
+   ```
+
+6. Write both distinct 64-character hex digests into an off-repo JSON file with
+   `kind` set to `agentweaver.provider-host-request-overlay`, `schemaVersion`
+   set to `1`, `projectsCertificateSha256`, and `environmentCertificateSha256`.
+   Keep private keys and Secret contents out of this file.
+7. Pass `--provider-host-request <file.json>` to `npm run deploy:kustomize` or
+   `npm run azure:deploy-from-commit`. Once enabled, every redeploy must pass
+   `--provider-host-request`; omitting it stops the deploy before cluster
+   writes.
+
+To rotate both fingerprints, issue new `projects-config-host-request-tls` and
+`environment-host-request-tls` Secrets, update the off-repo JSON file with the
+new digests, redeploy with `--provider-host-request`, and restart both
+Deployments.
+
 ## 7. Run the deployment
 
 Use the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)

@@ -82,7 +82,8 @@ internal sealed record ModelProviderDraftResponse(
     [property: JsonPropertyName("has_api_key")] bool HasApiKey,
     [property: JsonPropertyName("is_active")] bool IsActive,
     bool HasCredential,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Reference);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Reference,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ModelProviderEgressStatus? Egress = null);
 
 internal sealed record ModelProviderDraftPageResponse(
     string? SwitchMode,
@@ -537,7 +538,8 @@ internal static class ModelProviderDraftEndpoints
             false,
             binding.ProviderId == activeProviderId,
             binding.CredentialVersion is not null,
-            draft.Reference);
+            draft.Reference,
+            draft.Egress);
     }
 
     private static async Task<IResult> ActivateAsync(
