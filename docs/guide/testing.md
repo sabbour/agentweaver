@@ -685,9 +685,12 @@ dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.
 
 The test uses the production pull-request executor and authenticated Source
 Control owner with disposable PostgreSQL, a local Git repository, and fake
-GitHub. It drops a committed owner response and checks that concurrent retries
-retain one pull-request receipt. The test uses stub dispatch callbacks; it does
-not prove full dispatch or recovery after a real Host loss.
+GitHub. It drops a committed owner response, disposes the original Orchestrator
+and Events test hosts, and starts fresh hosts with the same schemas and GitHub
+state, local Git workspace, and origin. It reloads the durable intent, rejects a
+changed title, and checks that concurrent exact retries retain one pull-request
+receipt and make no second create attempt. The test uses stub callbacks. Live
+Host interruption acceptance remains open.
 
 Use the
 [checkpoint recovery observation case](./checkpoint-recovery-observation-acceptance.md)
