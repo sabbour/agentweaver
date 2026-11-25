@@ -285,30 +285,63 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var controls = new OwnerResponseLossControls(path + "/pull-requests");
         OrchestratorIntegrationFactory? ownerReference = null;
         EventsIntegrationFactory? eventsReference = null;
-        await using var owner = new OrchestratorIntegrationFactory(
-            _connectionString, ownerSchema, signingKey, projects.CreateHandler,
-            () => eventsReference!.Server.CreateHandler(),
-            sandboxProvider: new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId),
-            brokerHandler: () => _brokerFactory.Server.CreateHandler(),
-            sourceControlHandler: github.CreateHandler, providerCatalog: catalog,
-            policyOptions: SourceControlMergePolicyOptions(), gitWorkspaceManager: workspaceManager,
-            ownerHandler: () => new OwnerResponseLossHandler(ownerReference!.Server.CreateHandler(), controls));
-        ownerReference = owner;
-        await using var events = new EventsIntegrationFactory(
-            _connectionString, eventsSchema, signingKey, projects.CreateHandler,
-            () => owner.Server.CreateHandler());
-        eventsReference = events;
-        using var client = owner.CreateClient(new() { BaseAddress = new Uri("https://orchestrator.test/") });
-        using var eventsClient = events.CreateClient(new() { BaseAddress = new Uri("https://events.test/") });
-        using var rootResponse = await SendJsonAsync(client, HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/root", token, new AcceptRootRequest("root"));
-        await AssertStatusAsync(rootResponse, HttpStatusCode.Created);
-        var root = await ReadJsonAsync<AcceptedRoot>(rootResponse);
-        using var pinResponse = await SendAsync(client, HttpMethod.Post, path + "/pin", token, [TenantId]);
-        await AssertStatusAsync(pinResponse, HttpStatusCode.Accepted);
+        (OrchestratorIntegrationFactory Owner, EventsIntegrationFactory Events) CreateHosts()
+        {
+            var nextOwner = new OrchestratorIntegrationFactory(
+                _connectionString, ownerSchema, signingKey, projects.CreateHandler,
+                () => eventsReference!.Server.CreateHandler(),
+                sandboxProvider: new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId),
+                brokerHandler: () => _brokerFactory.Server.CreateHandler(),
+                sourceControlHandler: github.CreateHandler, providerCatalog: catalog,
+                policyOptions: SourceControlMergePolicyOptions(), gitWorkspaceManager: workspaceManager,
+                ownerHandler: () => new OwnerResponseLossHandler(ownerReference!.Server.CreateHandler(), controls));
+            ownerReference = nextOwner;
+            try
+            {
+                var nextEvents = new EventsIntegrationFactory(
+                    _connectionString, eventsSchema, signingKey, projects.CreateHandler,
+                    () => ownerReference!.Server.CreateHandler());
+                eventsReference = nextEvents;
+                return (nextOwner, nextEvents);
+            }
+            catch
+            {
+                nextOwner.Dispose();
+                throw;
+            }
+        }
 
-        await ExerciseRealOwnerResponseLossAsync(client, owner, dataSource, ownerSchema, project.ProjectId,
-            token, jwt, runner, root.ExecutionFence, path, baseSha, github, controls);
+        var hosts = CreateHosts();
+        HttpClient? client = null;
+        HttpClient? eventsClient = null;
+        try
+        {
+            client = hosts.Owner.CreateClient(new() { BaseAddress = new Uri("https://orchestrator.test/") });
+            eventsClient = hosts.Events.CreateClient(new() { BaseAddress = new Uri("https://events.test/") });
+            using var rootResponse = await SendJsonAsync(client, HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/root", token, new AcceptRootRequest("root"));
+            await AssertStatusAsync(rootResponse, HttpStatusCode.Created);
+            var root = await ReadJsonAsync<AcceptedRoot>(rootResponse);
+            using var pinResponse = await SendAsync(client, HttpMethod.Post, path + "/pin", token, [TenantId]);
+            await AssertStatusAsync(pinResponse, HttpStatusCode.Accepted);
+
+            await ExerciseRealOwnerResponseLossAsync(client, eventsClient, hosts.Owner, hosts.Events, CreateHosts,
+                dataSource, ownerSchema, project.ProjectId, token, jwt, runner, root.ExecutionFence,
+                path, baseSha, github, controls);
+        }
+        finally
+        {
+            client?.Dispose();
+            eventsClient?.Dispose();
+            try
+            {
+                await hosts.Events.DisposeAsync();
+            }
+            finally
+            {
+                await hosts.Owner.DisposeAsync();
+            }
+        }
     }
 
     private static async Task AssertOwnerResponseLossPassThroughAsync()
@@ -416,7 +449,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private async Task ExerciseRealOwnerResponseLossAsync(
         HttpClient client,
+        HttpClient eventsClient,
         OrchestratorIntegrationFactory owner,
+        EventsIntegrationFactory events,
+        Func<(OrchestratorIntegrationFactory Owner, EventsIntegrationFactory Events)> createHosts,
         NpgsqlDataSource dataSource,
         string schema,
         string projectId,
@@ -534,7 +570,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("source_control_owner_unavailable", error.Code);
         Assert.Equal(502, error.StatusCode);
         Assert.Equal(1, controls.Drops);
-        Assert.Equal(1, github.PullRequestCreateCount);
+        Assert.Equal(1, github.PullRequestCreateAttemptCount);
         var expectedLookup = "GET /repos/octo/agentweaver/pulls?state=all&per_page=100&page=1&head=" +
             Uri.EscapeDataString("octo:" + intent.Request.HeadBranch) +
             "&base=" + Uri.EscapeDataString(intent.Request.BaseBranch);
@@ -562,54 +598,128 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             pending.State.OpenPullRequestIntents["publish"]));
         Assert.Empty(pending.State.OpenPullRequestReceipts);
 
-        using var changed = await SendJsonAsync(client, HttpMethod.Post, sourcePath + "/pull-requests", token,
-            intent.Request with { Title = intent.Request.Title + " changed" });
-        Assert.Equal(HttpStatusCode.Conflict, changed.StatusCode);
-        Assert.Equal("source_control_run_binding_changed",
-            (await ReadJsonAsync<JsonElement>(changed)).GetProperty("error").GetString());
-        Assert.Equal(committedRow, await ReadResponseLossOperationAsync(dataSource, schema, intent));
-        Assert.Equal(running.Info.CheckpointId, (await execution.ReadLatestAsync(default))!.Info.CheckpointId);
-        Assert.Equal(1, github.PullRequestCreateCount);
-
-        controls.Arm();
-        Task<bool>[] retries = [];
+        client.Dispose();
+        eventsClient.Dispose();
+        await events.DisposeAsync();
+        await owner.DisposeAsync();
+        var restarted = createHosts();
+        HttpClient? restartedClient = null;
+        HttpClient? restartedEventsClient = null;
         try
         {
-            var first = executor.ExecuteAsync(intent, default);
-            retries = [first];
-            await controls.WaitForFirstArrivalAsync();
-            await Task.Delay(TimeSpan.FromSeconds(2));
-            retries = [first, executor.ExecuteAsync(intent, default)];
-            await controls.WaitForArrivalsAsync();
+            restartedClient = restarted.Owner.CreateClient(
+                new() { BaseAddress = new Uri("https://orchestrator.test/") });
+            restartedEventsClient = restarted.Events.CreateClient(
+                new() { BaseAddress = new Uri("https://events.test/") });
+            var restartedBinding = new MafCheckpointBinding(
+                identity, actor, fence, MafExecutionCheckpointStore.CurrentSdkVersion,
+                PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot), null,
+                StoreName: MafExecutionCheckpointContract.StoreName);
+            var restartedExecution = new MafExecutionCheckpointStore(
+                restarted.Owner.Services.GetRequiredService<PostgresMafCheckpointStore>(),
+                restartedBinding);
+            var restartedCheckpoints = restarted.Owner.Services.GetRequiredService<PostgresMafCheckpointStore>()
+                .ForRun(restartedBinding);
+            var reloaded = await restartedExecution.ReadLatestAsync(default);
+            Assert.NotNull(reloaded);
+            Assert.Equal(running.Info.CheckpointId, reloaded.Info.CheckpointId);
+            Assert.Equal(pending.PayloadHash, reloaded.PayloadHash);
+            Assert.Equal(pending.ParentCheckpointId, reloaded.ParentCheckpointId);
+            var reloadedIntent = reloaded.State.OpenPullRequestIntents["publish"];
+            Assert.True(MafExecutionCheckpointContract.OpenPullRequestIntentsMatch(intent, reloadedIntent));
+            Assert.Equal(intent.OperationId, reloadedIntent.OperationId);
+            Assert.Equal(version, reloadedIntent.DecisionStateVersion);
+            Assert.Equal(fence, reloadedIntent.ExecutionFence);
+
+            using var changed = await SendJsonAsync(restartedClient, HttpMethod.Post,
+                sourcePath + "/pull-requests", token,
+                reloadedIntent.Request with { Title = reloadedIntent.Request.Title + " changed" });
+            Assert.Equal(HttpStatusCode.Conflict, changed.StatusCode);
+            Assert.Equal("source_control_run_binding_changed",
+                (await ReadJsonAsync<JsonElement>(changed)).GetProperty("error").GetString());
+            Assert.Equal(committedRow, await ReadResponseLossOperationAsync(dataSource, schema, intent));
+            var changedCheckpoint = await restartedExecution.ReadLatestAsync(default);
+            Assert.NotNull(changedCheckpoint);
+            Assert.Equal(reloaded.Info.CheckpointId, changedCheckpoint.Info.CheckpointId);
+            Assert.Equal(reloaded.PayloadHash, changedCheckpoint.PayloadHash);
+            Assert.Equal(reloaded.ParentCheckpointId, changedCheckpoint.ParentCheckpointId);
+            Assert.Equal(1, github.PullRequestCreateAttemptCount);
+
+            var restartedExecutor = new MafOpenPullRequestExecutor(restartedExecution,
+                restarted.Owner.Services.GetRequiredService<MafSourceControlOwnerClient>(), dataSource,
+                _ => Task.FromResult(new RuntimeActorAuthorization(
+                    new SecretCredential(token, new DateTimeOffset(jwt.ValidTo)), TenantId)),
+                (current, _) =>
+                {
+                    MafOpenPullRequestContract.RequireCurrentSource(current, actor, identity, TenantId,
+                        version, fence, hash, pin);
+                    return Task.FromResult(current);
+                },
+                (_, _, _) => Task.CompletedTask, () => false, () => { }, _ => { });
+            var checkpointIdsBeforeRetries = (await restartedCheckpoints.RetrieveIndexAsync(identity.SessionId))
+                .Select(checkpoint => checkpoint.CheckpointId).ToArray();
+            Assert.Contains(reloaded.Info.CheckpointId, checkpointIdsBeforeRetries);
+            controls.Arm();
+            Task<bool>[] retries = [];
+            try
+            {
+                retries = [restartedExecutor.ExecuteAsync(reloadedIntent, default)];
+                await controls.WaitForFirstArrivalAsync();
+                retries = [retries[0], restartedExecutor.ExecuteAsync(reloadedIntent, default)];
+                await controls.WaitForArrivalsAsync();
+            }
+            finally
+            {
+                controls.Release();
+                await Task.WhenAll(retries);
+            }
+            Assert.All(await Task.WhenAll(retries), Assert.True);
+            Assert.Equal(2, github.Requests.Count(request => request == "GET /repos/octo/agentweaver/pulls/17"));
+            Assert.Single(github.Requests.Skip(requestOffset), request => request == expectedLookup);
+            Assert.Single(github.Requests.Skip(requestOffset),
+                request => request == "POST /repos/octo/agentweaver/pulls");
+            Assert.Equal(1, github.PullRequestCreateAttemptCount);
+            var completed = (await restartedExecution.ReadLatestAsync(default))!;
+            Assert.Equal(running.State.Revision + 1, completed.State.Revision);
+            Assert.Equal(MafExecutionTaskStatus.Succeeded, completed.State.Progress.NonModelSteps["publish"]);
+            var receipt = Assert.Single(completed.State.OpenPullRequestReceipts).Value;
+            Assert.Equal(intent.OperationId, receipt.OperationId);
+            Assert.Equal(17, receipt.PullRequestNumber);
+            Assert.Equal("https://github.com/octo/agentweaver/pull/17", receipt.HtmlUrl);
+            Assert.Equal(diff.HeadSha, receipt.HeadSha);
+            Assert.Equal(MafOpenPullRequestContract.Fingerprint(intent), receipt.RequestFingerprint);
+            var ownerPosts = controls.Posts;
+            Assert.Equal(3, ownerPosts);
+            Assert.Equal(committedRow, await ReadResponseLossOperationAsync(dataSource, schema, intent));
+            var checkpointIdsAfterRetries = (await restartedCheckpoints.RetrieveIndexAsync(identity.SessionId))
+                .Select(checkpoint => checkpoint.CheckpointId).ToArray();
+            Assert.Equal(checkpointIdsBeforeRetries.Length + 1, checkpointIdsAfterRetries.Length);
+            Assert.Equal(checkpointIdsBeforeRetries, checkpointIdsAfterRetries.Take(checkpointIdsBeforeRetries.Length));
+            Assert.Equal(completed.Info.CheckpointId, checkpointIdsAfterRetries[^1]);
+            Assert.False(await restartedExecutor.ExecuteAsync(reloadedIntent, default));
+            Assert.Equal(ownerPosts, controls.Posts);
+            Assert.Equal(1, github.PullRequestCreateAttemptCount);
+            var afterNoOp = (await restartedExecution.ReadLatestAsync(default))!;
+            Assert.Equal(completed.Info.CheckpointId, afterNoOp.Info.CheckpointId);
+            Assert.Equal(completed.PayloadHash, afterNoOp.PayloadHash);
+            Assert.Equal(receipt, afterNoOp.State.OpenPullRequestReceipts["publish"]);
+            Assert.Equal(checkpointIdsAfterRetries,
+                (await restartedCheckpoints.RetrieveIndexAsync(identity.SessionId))
+                .Select(checkpoint => checkpoint.CheckpointId).ToArray());
         }
         finally
         {
-            controls.Release();
-            await Task.WhenAll(retries);
+            restartedClient?.Dispose();
+            restartedEventsClient?.Dispose();
+            try
+            {
+                await restarted.Events.DisposeAsync();
+            }
+            finally
+            {
+                await restarted.Owner.DisposeAsync();
+            }
         }
-        Assert.All(await Task.WhenAll(retries), Assert.True);
-        Assert.Equal(2, github.Requests.Count(request => request == "GET /repos/octo/agentweaver/pulls/17"));
-        Assert.Single(github.Requests.Skip(requestOffset), request => request == expectedLookup);
-        Assert.Single(github.Requests.Skip(requestOffset),
-            request => request == "POST /repos/octo/agentweaver/pulls");
-        Assert.Equal(1, github.PullRequestCreateCount);
-        var completed = (await execution.ReadLatestAsync(default))!;
-        Assert.Equal(running.State.Revision + 1, completed.State.Revision);
-        Assert.Equal(MafExecutionTaskStatus.Succeeded, completed.State.Progress.NonModelSteps["publish"]);
-        var receipt = Assert.Single(completed.State.OpenPullRequestReceipts).Value;
-        Assert.Equal(intent.OperationId, receipt.OperationId);
-        Assert.Equal(17, receipt.PullRequestNumber);
-        Assert.Equal("https://github.com/octo/agentweaver/pull/17", receipt.HtmlUrl);
-        Assert.Equal(diff.HeadSha, receipt.HeadSha);
-        Assert.Equal(MafOpenPullRequestContract.Fingerprint(intent),
-            receipt.RequestFingerprint);
-        var ownerPosts = controls.Posts;
-        Assert.Equal(3, ownerPosts);
-        Assert.Equal(committedRow, await ReadResponseLossOperationAsync(dataSource, schema, intent));
-        Assert.False(await executor.ExecuteAsync(intent, default));
-        Assert.Equal(ownerPosts, controls.Posts);
-        Assert.Equal(1, github.PullRequestCreateCount);
-        Assert.Equal(receipt, (await execution.ReadLatestAsync(default))!.State.OpenPullRequestReceipts["publish"]);
     }
 
     private sealed record ResponseLossOperation(
@@ -7738,6 +7848,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         public string Credential => credential;
         public int PullRequestCreateCount => Volatile.Read(ref _pullRequestCreateCount);
+        public int PullRequestCreateAttemptCount
+        {
+            get
+            {
+                lock (_requests)
+                    return _requests.Count(request =>
+                        request == "POST /repos/octo/agentweaver/pulls" ||
+                        request.StartsWith("POST /repos/octo/agentweaver/pulls?",
+                            StringComparison.Ordinal));
+            }
+        }
         public void EnableCreate(MafExecutionOpenPullRequestIntent intent) => _createIntent = intent;
 
         public IReadOnlyList<string> Requests
