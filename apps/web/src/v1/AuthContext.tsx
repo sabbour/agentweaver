@@ -91,6 +91,7 @@ interface AuthContextValue {
   authorizationContext: ConfirmedAuthorizationContext | null;
   authorizationContextLoading: boolean;
   authorizationContextError: unknown;
+  getAuthorizationContextError?: () => unknown;
   busy: boolean;
   restoringSession: boolean;
   consent: BrokerConsentPrompt | null;
@@ -284,6 +285,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     binding: AuthorizationBinding | null;
     sessionGeneration: number;
   } | null>(null);
+  const authorizationContextErrorRef = useRef<unknown>(null);
   // One token refresh in flight per binding, so parallel calls do not spend the same
   // refresh token twice.
   const refreshPromisesRef = useRef(new Map<string, {
@@ -344,6 +346,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authorizationContextRequestRef.current += 1;
       contextBootstrapRequestGenerationRef.current = authorizationContextRequestRef.current;
       authorizationContextRef.current = null;
+      authorizationContextErrorRef.current = null;
       policyAccessRef.current = null;
       setAuthorizationContextState(null);
       setAuthorizationContextLoading(false);
@@ -1033,11 +1036,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const requestGeneration = ++authorizationContextRequestRef.current;
     const startingSession = sessionRef.current;
     authorizationContextRef.current = null;
+    authorizationContextErrorRef.current = null;
     setAuthorizationContextState(null);
     setAuthorizationContextLoading(true);
     setAuthorizationContextError(null);
     if (!startingSession) {
       const reason = new GatewayError(401, { code: 'unauthorized' }, 'Sign in to resolve a tenant context.');
+      authorizationContextErrorRef.current = reason;
       setAuthorizationContextError(reason);
       setAuthorizationContextLoading(false);
       return null;
@@ -1098,6 +1103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (reason) {
       if (requestGeneration === authorizationContextRequestRef.current) {
         authorizationContextRef.current = null;
+        authorizationContextErrorRef.current = reason;
         setAuthorizationContextState(null);
         setAuthorizationContextError(reason);
       }
@@ -1425,6 +1431,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRestoringSession(false);
   }, [setSession]);
 
+  const getAuthorizationContextError = useCallback(() => authorizationContextErrorRef.current, []);
+
   const value = useMemo<AuthContextValue>(() => ({
     session,
     authSessionGeneration,
@@ -1451,6 +1459,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authorizationContext,
     authorizationContextLoading,
     authorizationContextError,
+    getAuthorizationContextError,
     resolveAuthorizationContext,
   }), [
     apiCall,
@@ -1459,6 +1468,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authorizationContext,
     authorizationContextError,
     authorizationContextLoading,
+    getAuthorizationContextError,
     authorize,
     busy,
     configurationError,

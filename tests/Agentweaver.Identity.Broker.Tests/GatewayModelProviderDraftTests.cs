@@ -440,6 +440,39 @@ public sealed class GatewayModelProviderDraftTests
         Assert.Equal("Available", result.RootElement.GetProperty("state").GetString());
     }
 
+    [Fact]
+    public async Task ProjectDetailDraftReadPassesThroughSerializedEgressStatus()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = CreateToken(key);
+        const string body =
+            """{"id":"provider-a","name":"Customer model","type":"openai","base_url":"https://api.openai.com/v1","model":"gpt-5","wire_api":null,"azure_api_version":null,"reasoning_efforts":["low"],"prompt_capacity_tokens":null,"rate_card_id":null,"rate_card_version":null,"scope":"project","projectId":"project-a","state":"Draft","revision":1,"configurationHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","has_api_key":false,"is_active":false,"hasCredential":false,"egress":{"host":"api.openai.com","port":443,"destinationState":"requested","canApprove":false,"deliveryStatus":"delivered"}}""";
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key,
+            () => new DraftOwnerHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } },
+            })),
+            (_, _, _) => throw new InvalidOperationException("Draft metadata must call Projects."));
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, "/api/v1/projects/project-a/byok-providers/provider-a");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var egress = result.RootElement.GetProperty("egress");
+        Assert.Equal("api.openai.com", egress.GetProperty("host").GetString());
+        Assert.Equal(443, egress.GetProperty("port").GetInt32());
+        Assert.Equal("requested", egress.GetProperty("destinationState").GetString());
+        Assert.False(egress.GetProperty("canApprove").GetBoolean());
+        Assert.Equal("delivered", egress.GetProperty("deliveryStatus").GetString());
+    }
+
     [Theory]
     [InlineData("/api/v1/platform/byok-deployment-bindings", "/api/platform/byok-deployment-bindings")]
     [InlineData("/api/v1/platform/byok-providers?pageSize=1", "/api/platform/byok-providers?pageSize=1")]

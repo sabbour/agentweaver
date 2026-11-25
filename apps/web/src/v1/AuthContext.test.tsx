@@ -1414,4 +1414,115 @@ describe('Broker refresh coordination', () => {
     );
     expect(window.location.pathname).toBe('/projects/project-1/runs/run-1');
   });
+
+  it('completes in-flight detail refresh and save across real AuthContext token renewal', async () => {
+    vi.mocked(gatewayClient.getAuthorizationContext).mockImplementation(
+      async (_accessToken, tenantSelector) => ({
+        contractVersion: 1,
+        issuer: 'projects-config',
+        actorId: 'actor-1',
+        tenantId: tenantSelector ?? 'tenant-1',
+        membershipRevision: 1,
+        boundProjectId: 'project-1',
+        boundRunId: null,
+        effectiveAuthority: [],
+      }),
+    );
+    const baseProvider = {
+      id: 'provider-1',
+      name: 'Customer model',
+      type: 'openai',
+      base_url: 'https://provider.example/v1',
+      model: 'model-a',
+      wire_api: null,
+      azure_api_version: null,
+      reasoning_efforts: ['low'],
+      prompt_capacity_tokens: null,
+      scope: 'project' as const,
+      projectId: 'project-1',
+      state: 'Draft' as const,
+      revision: 1,
+      configurationHash: 'a'.repeat(64),
+      has_api_key: false,
+      is_active: false,
+      hasCredential: false,
+      egress: {
+        host: 'provider.example',
+        port: 443,
+        destinationState: null,
+        canApprove: false,
+        deliveryStatus: 'pending' as const,
+      },
+    };
+    vi.spyOn(gatewayClient, 'listProjectByokProviderDrafts').mockResolvedValue({
+      providers: [baseProvider],
+      nextAfterProviderId: null,
+    });
+    const readDraft = vi.spyOn(gatewayClient, 'getProjectByokProviderDraft')
+      .mockResolvedValueOnce(baseProvider)
+      .mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'expired'))
+      .mockResolvedValueOnce({
+        ...baseProvider,
+        egress: {
+          host: 'provider.example',
+          port: 443,
+          destinationState: 'requested',
+          canApprove: false,
+          deliveryStatus: 'delivered',
+        },
+      })
+      .mockResolvedValueOnce({
+        ...baseProvider,
+        name: 'Renamed model',
+        revision: 2,
+      });
+    const updateDraft = vi.spyOn(gatewayClient, 'updateProjectByokProviderDraft')
+      .mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'expired'))
+      .mockResolvedValueOnce({
+        ...baseProvider,
+        name: 'Renamed model',
+        revision: 2,
+      });
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('project-access-1', 'project-refresh-1'));
+    mocks.refreshBrokerToken
+      .mockResolvedValueOnce(token('project-access-2', 'project-refresh-2'))
+      .mockResolvedValueOnce(token('project-access-3', 'project-refresh-3'));
+
+    render(
+      <AuthProvider>
+        <ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />
+      </AuthProvider>,
+    );
+    await completeSilentSignIn({ code: 'project-code' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    expect(await screen.findByText('Waiting to send host request')).toBeTruthy();
+
+    // Detail Refresh status hits 401 -> real AuthContext token refresh -> retries with new token.
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByText('Waiting for platform admin approval')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Refresh status' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Edit metadata' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(readDraft.mock.calls.slice(1, 3).map(([access]) => access)).toEqual([
+      'project-access-1',
+      'project-access-2',
+    ]);
+
+    // Save metadata hits 401 -> real AuthContext token refresh -> retries with same operationId.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed model' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    expect(await screen.findByText('Provider draft saved.')).toBeTruthy();
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Edit metadata' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.getByText('Renamed model')).toBeTruthy();
+    expect(updateDraft).toHaveBeenCalledTimes(2);
+    expect(updateDraft.mock.calls[0][0]).toBe('project-access-2');
+    expect(updateDraft.mock.calls[1][0]).toBe('project-access-3');
+    expect(updateDraft.mock.calls[1][3].operationId).toBe(updateDraft.mock.calls[0][3].operationId);
+    expect(mocks.refreshBrokerToken).toHaveBeenCalledTimes(2);
+  });
 });

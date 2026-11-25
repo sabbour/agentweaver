@@ -23,21 +23,36 @@ Select **Create draft** to save. The owner creates the provider ID. Use that ID
 to find the provider later; you can change its name.
 
 To edit a provider, open it and select **Edit metadata**. The page shows the
-provider ID, state, and revision. Select **Save metadata** to save changes.
-The form does not accept or store API keys or other credentials.
+provider ID, state, revision, host-request status, host, and port from the
+server response. Select **Refresh status** to reload the current detail and
+host-request status without saving the provider. Select **Save metadata** to
+save changes. The form does not accept or store API keys or other credentials.
+
+| Host-request status label | Meaning |
+| --- | --- |
+| **Waiting to send host request** | The request is queued and has not reached Environment yet. |
+| **Waiting for platform admin approval** | Environment received the request for the shown host and port. |
+| **Host request delivery failed** | Delivery to Environment failed. |
+| **Host request status unavailable** | The response did not include a matching status. |
+
+This status describes the host request only. It does not approve the host,
+enforce network policy, or show that the provider is ready for runs.
 
 Projects checks your current role for every request. You need to be a project
 Owner or PlatformAdmin. The browser requests access for this project with no
 run binding. If the page asks you to sign in, select **Sign in for project
-access**. Use **Refresh** or **Retry** when a request fails. An empty list says
-**No provider drafts are set up for this project.**
+access**. Use **Refresh**, **Refresh status**, or **Retry** when a request
+fails. An empty list says **No provider drafts are set up for this project.**
 After a failed list or detail read, the page hides old data and shows **Retry**.
-If the project session expires, the page hides provider data and asks you to
-sign in for project access again.
+If the project session expires or returns `401` or `403`, the page clears
+loaded rows, selection, and editor fields, and asks you to sign in for project
+access again on `401`. Sign-in returns you to the list.
 
-After a save error, the form keeps your values. An unchanged retry uses the
-same operation ID. If an update returns `409`, select **Discard edits and
-reload latest**, then review the current provider and reapply your changes.
+After a save error, the form keeps your values. An unchanged retry by the same
+signed-in user, tenant, and project uses the same operation ID. If an update
+returns `409`, select **Discard edits and reload latest**, then review the
+current provider and reapply your changes. After a save succeeds, editing stays
+disabled until the current revision reloads.
 
 ## Connect GitHub Repo App
 
