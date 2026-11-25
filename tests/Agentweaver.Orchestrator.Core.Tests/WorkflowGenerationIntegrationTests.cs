@@ -1084,6 +1084,9 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             var runReadStore = new ProjectRunReadStore(fixture.DataSource, _schema);
             var actionGrants = new ExecutableActionGrantOwnerStore(
                 fixture.DataSource, _options, TimeProvider.System, endpointProjects, new HttpContextAccessor());
+            var sourceControlStore = new SourceControlOwnerStore(
+                fixture.DataSource, _schema, catalog, new ProviderResolver(catalog));
+            var usageSourceStore = new RuntimeUsageSourceStore(fixture.DataSource, _options, TimeProvider.System);
 
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseTestServer();
@@ -1101,6 +1104,9 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             builder.Services.AddSingleton(dispatcher);
             builder.Services.AddSingleton(runReadStore);
             builder.Services.AddSingleton(actionGrants);
+            builder.Services.AddSingleton(_registrationOwner);
+            builder.Services.AddSingleton(sourceControlStore);
+            builder.Services.AddSingleton(usageSourceStore);
             builder.Services.AddSingleton(TimeProvider.System);
             await using var endpointApp = builder.Build();
             endpointApp.UseAuthentication();
