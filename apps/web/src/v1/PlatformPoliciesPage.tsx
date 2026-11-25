@@ -7,6 +7,7 @@ import {
   comparePlatformPolicyDraft,
   escapePlatformPolicyInvisibleCharacters,
 } from './platformPolicyContracts';
+import { findPlatformPolicyDiagnosticDraftFile } from './platformPolicyDraftNavigation';
 import type {
   PlatformPolicyComparison,
   PlatformPolicyComparisonItem,
@@ -323,6 +324,7 @@ export function PlatformPoliciesPage() {
               </Field>
               <Field label="File content">
                 <PlatformPolicyTextarea
+                  draftFileId={file.id}
                   label={`Content for ${file.relativePath || 'policy file'}`}
                   buffer={file.content}
                   onChange={(content) => policy.setDraftFileContent(file.id, content)}
@@ -351,16 +353,35 @@ export function PlatformPoliciesPage() {
                 <p>The validator returned no diagnostic details.</p>
               ) : (
                 <ul>
-                  {policy.validation.diagnostics.map((diagnostic, index) => (
-                    <li key={`${diagnostic.code}-${index}`}>
-                      {diagnostic.relativePath && <code>{diagnostic.relativePath}</code>}
-                      {diagnostic.line !== null && ` line ${diagnostic.line}`}
-                      {diagnostic.column !== null && `, column ${diagnostic.column}`}
-                      {(diagnostic.relativePath || diagnostic.line !== null ||
-                        diagnostic.column !== null) && ': '}
-                      {diagnostic.message}
-                    </li>
-                  ))}
+                  {policy.validation.diagnostics.map((diagnostic, index) => {
+                    const matchingFile = findPlatformPolicyDiagnosticDraftFile(
+                      diagnostic.relativePath,
+                      policy.draftFiles,
+                    );
+                    return (
+                      <li key={`${diagnostic.code}-${index}`}>
+                        {diagnostic.relativePath && <code>{diagnostic.relativePath}</code>}
+                        {diagnostic.line !== null && ` line ${diagnostic.line}`}
+                        {diagnostic.column !== null && `, column ${diagnostic.column}`}
+                        {(diagnostic.relativePath || diagnostic.line !== null ||
+                          diagnostic.column !== null) && ': '}
+                        {diagnostic.message}
+                        {matchingFile && (
+                          <Button
+                            appearance="subtle"
+                            size="small"
+                            aria-label={`Go to draft file: ${matchingFile.relativePath}`}
+                            data-platform-policy-diagnostic-navigation
+                            onClick={() => document.querySelector<HTMLTextAreaElement>(
+                              `[data-platform-policy-draft-file-id="${matchingFile.id}"]`,
+                            )?.focus()}
+                          >
+                            Go to draft file
+                          </Button>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </section>

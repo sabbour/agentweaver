@@ -84,6 +84,11 @@ revision without editing it. The draft stays in browser memory and clears when
 the app reloads. Validation checks the draft; it does not save it or change
 the active policy.
 
+When a diagnostic path exactly matches one current draft file, select
+**Go to draft file** to focus that file's content editor. The action does not
+change the draft or send another request. Diagnostics without a path, with no
+matching file, or with more than one matching file remain text.
+
 The draft limit is 64 files, 65,536 bytes for the manifest, 262,144 bytes per
 file, and 1,048,576 bytes across the manifest and file contents. The editor
 measures UTF-8 bytes.
