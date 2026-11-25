@@ -212,7 +212,10 @@ public static partial class CoordinationEndpoints
         HttpContext context,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore sessions,
+        RuntimeRegistrationOwner registrations,
         WorkflowGenerationJobStore jobs,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
@@ -221,10 +224,13 @@ public static partial class CoordinationEndpoints
                 throw new CoordinationException("database_update_pending", StatusCodes.Status503ServiceUnavailable);
             var job = await jobs.ReadAsync(projectId, jobId, cancellationToken).ConfigureAwait(false)
                 ?? throw WorkflowGenerationExecution.NotFound();
-            await RequireJobReadAuthorityAsync(context, options, projects, job, cancellationToken)
-                .ConfigureAwait(false);
+            var (actor, selection) = await RequireJobReadAuthorityAsync(
+                context, options, projects, job, cancellationToken).ConfigureAwait(false);
             await RequireValidCompletedResultAsync(jobs, job, cancellationToken).ConfigureAwait(false);
-            return Results.Ok(WorkflowGenerationExecution.CreateEnvelope(job));
+            var zeroCreditNoSend = await TryReadZeroCreditNoSendAsync(
+                context, actor, selection, job, sessions, registrations, jobs, timeProvider, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(WorkflowGenerationExecution.CreateEnvelope(job, zeroCreditNoSend));
         }, cancellationToken);
 
     private static Task<IResult> ReadWorkflowGenerationResultAsync(
@@ -242,7 +248,7 @@ public static partial class CoordinationEndpoints
                 throw new CoordinationException("database_update_pending", StatusCodes.Status503ServiceUnavailable);
             var job = await jobs.ReadAsync(projectId, jobId, cancellationToken).ConfigureAwait(false)
                 ?? throw WorkflowGenerationExecution.NotFound();
-            await RequireJobReadAuthorityAsync(context, options, projects, job, cancellationToken)
+            _ = await RequireJobReadAuthorityAsync(context, options, projects, job, cancellationToken)
                 .ConfigureAwait(false);
             if (job.Status != "completed")
                 throw new CoordinationException(
@@ -250,6 +256,51 @@ public static partial class CoordinationEndpoints
             await RequireValidCompletedResultAsync(jobs, job, cancellationToken).ConfigureAwait(false);
             return Results.Ok(job.Result);
         }, cancellationToken);
+
+    private static async Task<WorkflowGenerationZeroCreditNoSendStatus?> TryReadZeroCreditNoSendAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        AuthorizedRunSelection selection,
+        WorkflowGenerationJob job,
+        CoordinationOwnerStore sessions,
+        RuntimeRegistrationOwner registrations,
+        WorkflowGenerationJobStore jobs,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        if (job.Status is "cancelled" or "completed")
+            return null;
+        try
+        {
+            var identity = new SessionIdentity(job.ProjectId, job.RunId, job.SessionId);
+            var status = await sessions.ReadSessionStatusAsync(actor, identity, cancellationToken)
+                .ConfigureAwait(false);
+            if (status.ExecutionFence != job.ExecutionFence)
+                return null;
+            var registration = await registrations.ReadCurrentForSessionAsync(
+                context, job.ProjectId, job.RunId, job.SessionId, cancellationToken).ConfigureAwait(false);
+            var selectionHash = CoordinationOwnerStore.HashSelection(selection.Selection).ToLowerInvariant();
+            RequireRegistrationBinding(
+                registration, job.ProjectId, job.RunId, job.SessionId,
+                status.ExecutionFence, selectionHash, selection.Selection.ProjectConfigurationRevision,
+                timeProvider);
+            if (registration.RuntimeInstanceId != job.RuntimeInstanceId ||
+                registration.Revision != job.RegistrationRevision ||
+                registration.Binding.ExecutionFence != job.ExecutionFence ||
+                registration.Binding.TenantId != job.TenantId ||
+                registration.Binding.ActorIssuer != job.ActorIssuer ||
+                registration.Binding.ActorId != job.ActorId ||
+                registration.Binding.ProjectConfigurationRevision != job.ConfigurationRevision ||
+                registration.Binding.AcceptedSelectionHash != job.AcceptedSelectionHash ||
+                registration.Binding.ModelSelectionReference != job.ModelSelectionReference)
+                return null;
+            return await jobs.ReadZeroCreditNoSendStatusAsync(job, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is CoordinationException or RuntimeAuthorizationException)
+        {
+            return null;
+        }
+    }
 
     private static async Task RequireValidCompletedResultAsync(
         WorkflowGenerationJobStore jobs,
@@ -263,7 +314,7 @@ public static partial class CoordinationEndpoints
                 "workflow_generation_result_unavailable", StatusCodes.Status503ServiceUnavailable);
     }
 
-    private static async Task RequireJobReadAuthorityAsync(
+    private static async Task<(CoordinationActor Actor, AuthorizedRunSelection Selection)> RequireJobReadAuthorityAsync(
         HttpContext context,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
@@ -283,6 +334,7 @@ public static partial class CoordinationEndpoints
                 !CoordinationOwnerStore.HashSelection(selection.Selection)
                     .Equals(job.AcceptedSelectionHash, StringComparison.OrdinalIgnoreCase))
                 throw WorkflowGenerationExecution.NotFound();
+            return (actor, selection);
         }
         // Hide forbidden or missing authority as not found so callers cannot probe job ownership.
         catch (CoordinationException exception) when (
@@ -1002,7 +1054,9 @@ internal static class WorkflowGenerationExecution
         return WorkflowGenerationJobStore.Hash(JsonSerializer.Serialize(identity));
     }
 
-    internal static WorkflowGenerationJobEnvelope CreateEnvelope(WorkflowGenerationJob job)
+    internal static WorkflowGenerationJobEnvelope CreateEnvelope(
+        WorkflowGenerationJob job,
+        WorkflowGenerationZeroCreditNoSendStatus? zeroCreditNoSend = null)
     {
         var statusUrl = $"/api/projects/{Uri.EscapeDataString(job.ProjectId)}/workflows/generation-jobs/{job.JobId:D}";
         var resultUrl = statusUrl + "/result";
@@ -1017,7 +1071,7 @@ internal static class WorkflowGenerationExecution
             : new WorkflowGenerationFailure(job.FailureCode, job.FailureMessage ?? "Workflow generation failed.");
         return new WorkflowGenerationJobEnvelope(
             job.JobId, job.Status, job.ProjectId, job.RunId, job.SessionId,
-            job.CreatedAt, job.UpdatedAt, statusUrl, resultUrl, artifact, failure);
+            job.CreatedAt, job.UpdatedAt, statusUrl, resultUrl, artifact, failure, zeroCreditNoSend);
     }
 
     internal static CoordinationException NotFound() =>

@@ -433,13 +433,18 @@ If the run becomes terminal while the job is being saved, POST can return
 `409 workflow_generation_run_unavailable`.
 
 Migration 046 adds the job table and closes queued work when a run is cancelled.
-It preserves an admitted native turn as unresolved until completion is verified.
+It preserves an admitted native turn as unresolved until completion or a
+verified no-send proof is confirmed. When AgentHost rejects a Hosted Copilot
+request at a zero hard-credit limit before queuing, Orchestrator records a
+job-scoped proof in the same transaction as the validated `hostPreQueue` /
+`hardLimitZero` no-send receipt without taking the job execution lock.
 Cleanup stays pending without holding a runtime-start worker. An authorized
-retry of the cancellation can schedule cleanup again after an in-flight worker
-verifies completion. Cancellation retries do not independently verify stored
-proof. If no worker verifies the turn, cleanup remains pending, even when a
-receipt was stored. If proof is lost before it is stored, the current contract
-cannot recover it after cancellation. Cleanup does not start another turn.
+retry of the cancellation schedules cleanup again; the terminal reconciler
+acquires the per-job lock, validates the stored completion or zero-credit
+no-send proof against the job's original fence, rechecks cancellation authority,
+and marks the job `quiesced` before continuing owned Environment cleanup. Older
+receipts without a job-scoped proof and missing or mismatched proofs leave the
+job unresolved. Cleanup does not start another turn.
 
 For an active run, an identical POST can attempt to reconcile the saved native
 request after a lost reply or a temporary storage failure. The result can remain
@@ -493,6 +498,7 @@ sequenceDiagram
         Gateway-->>CLI: Return job status or completed result
     end
     Note over CLI,Gateway: The acceptance case cancels the approved disposable run and verifies its terminal status.
+    Note over Core,DB: On a zero hard-credit pre-queue denial, Host records the linked no-send receipt and Orchestrator stores a job-scoped proof in the same transaction; terminal cleanup verifies that proof under the job lock before releasing owned runtime resources.
 ```
 
 ### Understand workflows, plans, and gates

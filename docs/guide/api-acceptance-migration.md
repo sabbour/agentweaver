@@ -231,7 +231,9 @@ result (exit code `0`) requires a completed generation, matching workflow
 definition hash and artifact ID, valid native completion evidence, a matching
 stored reply hash, and verified run cancellation. The result records generation
 and cancellation separately. This case checks that the run reached `cancelled`.
-It does not check whether runtime cleanup finished.
+It does not check whether runtime cleanup finished; to verify owned runtime
+cleanup after cancellation, check `readRunStatus.runtimeCleanup` for matching
+run identity, a positive total, all tracked cleanup complete, and zero pending.
 
 A missing sign-in, missing turn digest support, missing operation, or
 caller or selection mismatch is `blocked` (exit code `2`). A generation

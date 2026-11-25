@@ -494,6 +494,189 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
         Assert.False(await _store.HasUnresolvedNativeWorkAsync(ProjectId, RunId, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task TerminalReconciliationAcceptsExactZeroCreditNoSendProofAndRejectsTamperedOrStaleProof()
+    {
+        var job = (await _store.CreateOrGetAsync(Create("zero-credit-proof"), CancellationToken.None)).Job;
+        await _store.TryBeginExecutionAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+        await CancelRunAsync();
+        await InsertRootAdmissionsAsync(job);
+
+        var binding = new RuntimeBinding(
+            ActorIssuer, ActorId, TenantId, ProjectId, RunId, job.SessionId, "coordinator", "root-turn",
+            1, job.ConfigurationRevision, 1, "context-1", job.AcceptedSelectionHash, job.ExecutionFence,
+            "env-1", "placement-1", 1, "profile-1",
+            new Uri("https://runtime.test/runtime/v1/configure"),
+            new Uri("https://runtime.test/internal/runtime/observations"))
+        {
+            ModelSelectionReference = job.ModelSelectionReference,
+            ModelSourceMode = ModelSourceMode.HostedCopilot,
+            CopilotHardCreditLimit = 0m
+        };
+        var registration = new RuntimeRegistration(
+            job.RuntimeInstanceId, job.RegistrationRevision, binding,
+            RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(5));
+        var sdkFacts = new SdkSessionFacts(
+            registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(binding),
+            "1.0.18", "1.0.97", job.ModelSelectionReference, "gpt-5", new string('c', 64), 1,
+            "hosted-copilot", SdkMeterSources.CopilotNanoAiu, job.AcceptedSelectionHash,
+            registration.Revision);
+        var grantId = Guid.NewGuid();
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, grantId, sdkFacts,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, sdkFacts),
+            DateTimeOffset.UtcNow);
+        var requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
+            "message", job.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
+            "user", [new RuntimeA2ATextPart("text", job.Prompt)],
+            registration, RuntimeCredentialPurpose.Observe, AddressedMessageDeliveryMode.Immediate);
+        var guard = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+            1, RuntimeFixedCreditGuardStage.HostPreQueue, RuntimeFixedCreditGuardCode.HardLimitZero,
+            registration, RuntimeContractValidation.RegistrationHash(registration),
+            job.NativeRequestId, requestHash, sourceReceipt.CanonicalPayloadHash,
+            grantId, 1, DateTimeOffset.UtcNow, string.Empty));
+        var cursorHash = new string('c', 64);
+        var noSend = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
+            1, registration.RuntimeInstanceId, registration.Revision, binding.ExecutionFence,
+            job.NativeRequestId, RuntimeFixedCreditGuardStage.HostPreQueue, guard.CanonicalPayloadHash,
+            guard.RegistrationHash, sourceReceipt.CanonicalPayloadHash, grantId, 1,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(sdkFacts.SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        var proof = WorkflowGenerationZeroCreditNoSendProof.Seal(new WorkflowGenerationZeroCreditNoSendProof(
+            1, job.JobId, job.NativeRequestId, ProjectId, RunId, job.SessionId, TenantId,
+            ActorIssuer, ActorId, job.ExpectedDecisionStateVersion, job.ConfigurationRevision,
+            job.AcceptedSelectionHash, job.ExecutionFence, job.RuntimeInstanceId,
+            job.RegistrationRevision, job.ModelSelectionReference, job.PromptSha256,
+            requestHash, guard.CanonicalPayloadHash, noSend.CanonicalPayloadHash,
+            "hostPreQueue", "hardLimitZero", 0, true, cursorHash, cursorHash,
+            guard.RecordedAt, noSend.VerifiedAt, string.Empty));
+
+        var streamId = WorkflowGenerationZeroCreditNoSendProof.StreamId(ProjectId, RunId);
+        var outbox = new Agentweaver.Persistence.Postgres.PostgresOutbox(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            var guardEventId = Guid.NewGuid();
+            await outbox.EnqueueAsync(connection, transaction, new Agentweaver.Persistence.Postgres.OutboxEvent(
+                guardEventId, streamId, $"fixed-credit-denial/{guardEventId:D}",
+                "orchestrator.runtime.fixed_credit_denial", 1,
+                JsonSerializer.SerializeToElement(guard, JsonOptions), guard.RecordedAt));
+            var noSendEventId = Guid.NewGuid();
+            await outbox.EnqueueAsync(connection, transaction, new Agentweaver.Persistence.Postgres.OutboxEvent(
+                noSendEventId, streamId, $"fixed-credit-no-send/{noSendEventId:D}",
+                "orchestrator.runtime.fixed_credit_no_send", 1,
+                JsonSerializer.SerializeToElement(noSend, JsonOptions), noSend.VerifiedAt));
+            await transaction.CommitAsync();
+        }
+
+        // Older fixed-credit receipts without the job-scoped proof must leave the job unresolved.
+        await _store.ReconcileTerminalQuiescenceAsync(
+            ProjectId, RunId, _ => Task.CompletedTask, CancellationToken.None);
+        Assert.Equal("send-admitted", (await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None))!.ExecutionPhase);
+        Assert.True(await _store.HasUnresolvedNativeWorkAsync(ProjectId, RunId, CancellationToken.None));
+
+        // Add the job-scoped proof with a tampered fence first: must not reconcile.
+        var staleEventId = WorkflowGenerationZeroCreditNoSendProof.EventId(job.JobId, job.NativeRequestId);
+        var staleProof = proof with { ExecutionFence = job.ExecutionFence + 1 };
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await outbox.EnqueueAsync(connection, transaction, new Agentweaver.Persistence.Postgres.OutboxEvent(
+                staleEventId, streamId, $"workflow-generation-fixed-credit-no-send/{staleEventId:D}",
+                "orchestrator.workflow_generation.fixed_credit_no_send", 1,
+                JsonSerializer.SerializeToElement(staleProof, JsonOptions), noSend.VerifiedAt));
+            await transaction.CommitAsync();
+        }
+        await _store.ReconcileTerminalQuiescenceAsync(
+            ProjectId, RunId, _ => Task.CompletedTask, CancellationToken.None);
+        Assert.Equal("send-admitted", (await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None))!.ExecutionPhase);
+
+        // Replace with the exact sealed proof in a fresh job to verify exact reconciliation and idempotence.
+        var validJob = (await _store.CreateOrGetAsync(Create("zero-credit-proof-valid"), CancellationToken.None)).Job;
+        await _store.TryBeginExecutionAsync(ProjectId, validJob.JobId, CancellationToken.None);
+        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, validJob.JobId, CancellationToken.None));
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var update = new NpgsqlCommand($"""
+            UPDATE "{_schema}".workflow_generation_jobs
+            SET status = 'cancelled', failure_code = 'workflow_generation_cancelled', failure_message = 'Cancelled.'
+            WHERE project_id = @project AND job_id = @job
+            """, connection))
+        {
+            update.Parameters.AddWithValue("project", ProjectId);
+            update.Parameters.AddWithValue("job", validJob.JobId);
+            await update.ExecuteNonQueryAsync();
+        }
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var admission = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".maf_root_model_turn_admissions
+                (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
+                 accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
+            SELECT project_id, run_id, root_session_id, @request, actor_issuer, actor_id, tenant_id,
+                   accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version
+            FROM "{_schema}".maf_root_model_turn_admissions
+            WHERE project_id = @project AND run_id = @run AND request_id = @oldRequest
+            """, connection))
+        {
+            admission.Parameters.AddWithValue("project", ProjectId);
+            admission.Parameters.AddWithValue("run", RunId);
+            admission.Parameters.AddWithValue("request", validJob.NativeRequestId);
+            admission.Parameters.AddWithValue("oldRequest", job.NativeRequestId);
+            await admission.ExecuteNonQueryAsync();
+        }
+        var validRequestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
+            "message", validJob.NativeRequestId, RuntimeContractValidation.NativeSessionId(binding),
+            "user", [new RuntimeA2ATextPart("text", validJob.Prompt)],
+            registration, RuntimeCredentialPurpose.Observe, AddressedMessageDeliveryMode.Immediate);
+        var validGuard = RuntimeFixedCreditGuardContract.Seal(guard with
+        {
+            RequestId = validJob.NativeRequestId,
+            RequestHash = validRequestHash,
+            CanonicalPayloadHash = string.Empty
+        });
+        var validNoSend = RuntimeFixedCreditGuardContract.Seal(noSend with
+        {
+            RequestId = validJob.NativeRequestId,
+            GuardReceiptHash = validGuard.CanonicalPayloadHash,
+            CanonicalPayloadHash = string.Empty
+        });
+        var validProof = WorkflowGenerationZeroCreditNoSendProof.Seal(proof with
+        {
+            JobId = validJob.JobId,
+            NativeRequestId = validJob.NativeRequestId,
+            RequestHash = validRequestHash,
+            GuardReceiptHash = validGuard.CanonicalPayloadHash,
+            NoSendReceiptHash = validNoSend.CanonicalPayloadHash,
+            CanonicalPayloadHash = string.Empty
+        });
+        var validProofId = WorkflowGenerationZeroCreditNoSendProof.EventId(validJob.JobId, validJob.NativeRequestId);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            var gId = Guid.NewGuid();
+            await outbox.EnqueueAsync(connection, transaction, new Agentweaver.Persistence.Postgres.OutboxEvent(
+                gId, streamId, $"fixed-credit-denial/{gId:D}",
+                "orchestrator.runtime.fixed_credit_denial", 1,
+                JsonSerializer.SerializeToElement(validGuard, JsonOptions), validGuard.RecordedAt));
+            var nId = Guid.NewGuid();
+            await outbox.EnqueueAsync(connection, transaction, new Agentweaver.Persistence.Postgres.OutboxEvent(
+                nId, streamId, $"fixed-credit-no-send/{nId:D}",
+                "orchestrator.runtime.fixed_credit_no_send", 1,
+                JsonSerializer.SerializeToElement(validNoSend, JsonOptions), validNoSend.VerifiedAt));
+            await outbox.EnqueueAsync(connection, transaction, new Agentweaver.Persistence.Postgres.OutboxEvent(
+                validProofId, streamId, $"workflow-generation-fixed-credit-no-send/{validProofId:D}",
+                "orchestrator.workflow_generation.fixed_credit_no_send", 1,
+                JsonSerializer.SerializeToElement(validProof, JsonOptions), validNoSend.VerifiedAt));
+            await transaction.CommitAsync();
+        }
+
+        await _store.ReconcileTerminalQuiescenceAsync(
+            ProjectId, RunId, _ => Task.CompletedTask, CancellationToken.None);
+        var reconciledValid = await _store.ReadAsync(ProjectId, validJob.JobId, CancellationToken.None);
+        Assert.Equal("cancelled", reconciledValid!.Status);
+        Assert.Equal("quiesced", reconciledValid.ExecutionPhase);
+    }
+
     private async Task InsertRootAdmissionsAsync(params WorkflowGenerationJob[] jobs)
     {
         var decisionId = Guid.NewGuid();

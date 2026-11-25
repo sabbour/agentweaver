@@ -604,6 +604,449 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         }
     }
 
+    [Fact]
+    public async Task ZeroCreditStatusExposesRedactedProofBeforeCancelAndOmitsAfterFenceOrRegistrationChange()
+    {
+        var (zeroRegistration, sourceOwner, sourceContext, sourceServices, grant) =
+            await PrepareZeroCreditRuntimeAsync();
+        _host.ZeroCreditRegistration = zeroRegistration;
+        try
+        {
+            var hostDenied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseHost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _host.OnSendAsync = async (send, _, token) =>
+            {
+                await RecordZeroCreditHostDenialAsync(
+                    sourceOwner, sourceContext, zeroRegistration, grant, send, token);
+                hostDenied.TrySetResult();
+                await releaseHost.Task.WaitAsync(token);
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Headers = { CacheControl = new() { NoStore = true } }
+                };
+            };
+
+            using var submit = await SubmitAsync("zero-credit-status-1");
+            Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+            var jobId = (await submit.Content.ReadFromJsonAsync<WorkflowGenerationJobEnvelope>(JsonOptions))!.JobId;
+
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await using var reader = _queue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+            Assert.True(await reader.MoveNextAsync());
+            var execution = ExecuteAsync(reader.Current);
+
+            await hostDenied.Task.WaitAsync(deadline.Token);
+            using (var beforeCancel = await GetStatusAsync(jobId))
+            {
+                Assert.Equal(HttpStatusCode.OK, beforeCancel.StatusCode);
+                var body = await beforeCancel.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                var proof = json.RootElement.GetProperty("zeroCreditNoSend");
+                Assert.Equal(zeroRegistration.RuntimeInstanceId, proof.GetProperty("runtimeInstanceId").GetGuid());
+                Assert.Equal(zeroRegistration.Revision, proof.GetProperty("registrationRevision").GetInt64());
+                Assert.Equal(zeroRegistration.Binding.ExecutionFence, proof.GetProperty("executionFence").GetInt64());
+                Assert.Equal("hostPreQueue", proof.GetProperty("stage").GetString());
+                Assert.Equal("hardLimitZero", proof.GetProperty("code").GetString());
+                Assert.Equal(0, proof.GetProperty("observedEventCount").GetInt32());
+                Assert.True(proof.GetProperty("rangeComplete").GetBoolean());
+                Assert.DoesNotContain("Create a workflow.", body, StringComparison.Ordinal);
+                Assert.DoesNotContain(grant.GrantId.ToString("D"), body, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("sdk-zero-credit", body, StringComparison.Ordinal);
+                Assert.DoesNotContain("sourceGrant", body, StringComparison.OrdinalIgnoreCase);
+            }
+
+            releaseHost.TrySetResult();
+            await execution.WaitAsync(deadline.Token);
+
+            // Rotating registration/revoking it must omit zeroCreditNoSend on GET status without failing the read.
+            await _registrationOwner.RevokeAfterPlacementReleaseAsync(zeroRegistration, deadline.Token);
+            using (var afterRevoke = await GetStatusAsync(jobId))
+            {
+                Assert.Equal(HttpStatusCode.OK, afterRevoke.StatusCode);
+                using var json = JsonDocument.Parse(await afterRevoke.Content.ReadAsStringAsync());
+                Assert.False(json.RootElement.TryGetProperty("zeroCreditNoSend", out _));
+            }
+        }
+        finally
+        {
+            await sourceServices.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ZeroCreditHostCallbackRacesCancellationWithoutDeadlockAndReconcilesCleanup()
+    {
+        var (zeroRegistration, sourceOwner, sourceContext, sourceServices, grant) =
+            await PrepareZeroCreditRuntimeAsync();
+        _host.ZeroCreditRegistration = zeroRegistration;
+        var intentId = Guid.NewGuid();
+        try
+        {
+            var hostEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var callbackRecorded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseHost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _host.OnSendAsync = async (send, _, token) =>
+            {
+                hostEntered.TrySetResult();
+                await RecordZeroCreditHostDenialAsync(
+                    sourceOwner, sourceContext, zeroRegistration, grant, send, token);
+                callbackRecorded.TrySetResult();
+                await releaseHost.Task.WaitAsync(token);
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Headers = { CacheControl = new() { NoStore = true } }
+                };
+            };
+
+            using var submit = await SubmitAsync("zero-credit-race-1");
+            Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+            var jobId = (await submit.Content.ReadFromJsonAsync<WorkflowGenerationJobEnvelope>(JsonOptions))!.JobId;
+            var job = (await _jobs.ReadAsync(Project, jobId, CancellationToken.None))!;
+
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await using (var command = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".runtime_run_start_intents
+                    (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                     execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                     exchange_operation_id, state, current_step)
+                VALUES (@tenant, @project, @run, @root, @hash, @fence, @intent,
+                        @bootstrap, @consume, @exchange, 'ready', 'ready')
+                """, connection))
+            {
+                command.Parameters.AddWithValue("tenant", Tenant);
+                command.Parameters.AddWithValue("project", Project);
+                command.Parameters.AddWithValue("run", Run);
+                command.Parameters.AddWithValue("root", Root);
+                command.Parameters.AddWithValue("hash", job.AcceptedSelectionHash);
+                command.Parameters.AddWithValue("fence", job.ExecutionFence);
+                command.Parameters.AddWithValue("intent", intentId);
+                command.Parameters.AddWithValue("bootstrap", Guid.NewGuid());
+                command.Parameters.AddWithValue("consume", Guid.NewGuid());
+                command.Parameters.AddWithValue("exchange", Guid.NewGuid());
+                await command.ExecuteNonQueryAsync();
+            }
+
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await using var reader = _queue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+            Assert.True(await reader.MoveNextAsync());
+            var execution = ExecuteAsync(reader.Current);
+
+            // Worker now holds the job execution lock while waiting on Host; callback must succeed without deadlocking.
+            await hostEntered.Task.WaitAsync(deadline.Token);
+            await callbackRecorded.Task.WaitAsync(deadline.Token);
+
+            // Cancel and attempt cleanup concurrently while the worker still holds the job lock.
+            var cancellation = CancellationSelection();
+            var cancelProjects = new ProjectsRunSelectionClient(
+                Client(new ProjectsHandler(cancellation)), _options,
+                new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
+            var credential = new SecretCredential("cancel-token", DateTimeOffset.UtcNow.AddMinutes(5));
+            var actor = new RuntimeActorAuthorization(credential, Tenant);
+            try
+            {
+                await _sessions.CancelProjectRunAsync(
+                    _actor, cancellation, "cancel-zero-credit", new CancelProjectRunRequest(),
+                    async token =>
+                    {
+                        _ = await cancelProjects.ReadSelectionForCancelAsync(
+                            actor, _actor, Project, Run, token);
+                    },
+                    deadline.Token);
+
+                using (var afterCancel = await GetStatusAsync(jobId))
+                {
+                    Assert.Equal(HttpStatusCode.OK, afterCancel.StatusCode);
+                    using var json = JsonDocument.Parse(await afterCancel.Content.ReadAsStringAsync());
+                    Assert.Equal("cancelled", json.RootElement.GetProperty("status").GetString());
+                    Assert.False(json.RootElement.TryGetProperty("zeroCreditNoSend", out _));
+                }
+
+                var environmentCalls = 0;
+                var pendingHandler = new FixedHandler(request =>
+                {
+                    environmentCalls++;
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                });
+                var startStore = new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema);
+                var pendingCleanup = new RuntimeRunStartCleanupContinuation(
+                    startStore, cancelProjects, _registrationOwner, _jobs,
+                    new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+                    new HostClientFactory(pendingHandler));
+                var cleanupWork = new RuntimeRunStartCleanupWork(Project, Run, Tenant, _actor, actor);
+
+                // Concurrent cleanup while the worker holds the job lock returns without deadlocking or releasing Environment.
+                await pendingCleanup.ContinueAsync(cleanupWork, deadline.Token);
+                Assert.Equal(0, environmentCalls);
+                Assert.Equal("cleanup_pending",
+                    (await startStore.FindCleanupIntentAsync(Tenant, Project, Run, deadline.Token))!.State);
+                var lockedJob = await _jobs.ReadAsync(Project, jobId, deadline.Token);
+                Assert.Equal("cancelled", lockedJob!.Status);
+                Assert.Equal("send-admitted", lockedJob.ExecutionPhase);
+
+                // Unblock the worker so it releases the job lock, then verify cleanup settles the job and waits on Environment.
+                releaseHost.TrySetResult();
+                await execution.WaitAsync(deadline.Token);
+                await _registrationOwner.RevokeAfterPlacementReleaseAsync(zeroRegistration, deadline.Token);
+                await Assert.ThrowsAnyAsync<Exception>(() => pendingCleanup.ContinueAsync(cleanupWork, deadline.Token));
+                Assert.Equal(1, environmentCalls);
+                Assert.Equal("cleanup_pending",
+                    (await startStore.FindCleanupIntentAsync(Tenant, Project, Run, deadline.Token))!.State);
+                var quiesced = await _jobs.ReadAsync(Project, jobId, deadline.Token);
+                Assert.Equal("cancelled", quiesced!.Status);
+                Assert.Equal("quiesced", quiesced.ExecutionPhase);
+
+                // Matching Environment release completes cleanup; repeating reconciliation does not repeat Environment call.
+                var releaseCalls = 0;
+                var completeHandler = new FixedHandler(request =>
+                {
+                    releaseCalls++;
+                    return Response(request, new RuntimeRunStartCleanupReceipt(
+                        2, intentId, Guid.Empty, 0, 0, null, "absent", "cleanup_complete"));
+                });
+                var completeCleanup = new RuntimeRunStartCleanupContinuation(
+                    startStore, cancelProjects, _registrationOwner, _jobs,
+                    new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+                    new HostClientFactory(completeHandler));
+                await completeCleanup.ContinueAsync(cleanupWork, deadline.Token);
+                await completeCleanup.ContinueAsync(cleanupWork, deadline.Token);
+                Assert.Equal(1, releaseCalls);
+                Assert.Equal("cleanup_complete",
+                    (await startStore.FindCleanupIntentAsync(Tenant, Project, Run, deadline.Token))!.State);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }
+        finally
+        {
+            await sourceServices.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ZeroCreditCancellationWinningBeforeHostCallbackLeavesProofAbsentAndCleanupPending()
+    {
+        var (zeroRegistration, sourceOwner, sourceContext, sourceServices, grant) =
+            await PrepareZeroCreditRuntimeAsync();
+        _host.ZeroCreditRegistration = zeroRegistration;
+        var intentId = Guid.NewGuid();
+        try
+        {
+            var hostEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var allowCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var callbackFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseHost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Exception? callbackFailure = null;
+            _host.OnSendAsync = async (send, _, token) =>
+            {
+                hostEntered.TrySetResult();
+                await allowCallback.Task.WaitAsync(token);
+                try
+                {
+                    await RecordZeroCreditHostDenialAsync(
+                        sourceOwner, sourceContext, zeroRegistration, grant, send, token);
+                }
+                catch (Exception ex)
+                {
+                    callbackFailure = ex;
+                }
+                finally
+                {
+                    callbackFinished.TrySetResult();
+                }
+                await releaseHost.Task.WaitAsync(token);
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Headers = { CacheControl = new() { NoStore = true } }
+                };
+            };
+
+            using var submit = await SubmitAsync("zero-credit-cancel-wins-1");
+            Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+            var jobId = (await submit.Content.ReadFromJsonAsync<WorkflowGenerationJobEnvelope>(JsonOptions))!.JobId;
+            var job = (await _jobs.ReadAsync(Project, jobId, CancellationToken.None))!;
+
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await using (var command = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".runtime_run_start_intents
+                    (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                     execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                     exchange_operation_id, state, current_step)
+                VALUES (@tenant, @project, @run, @root, @hash, @fence, @intent,
+                        @bootstrap, @consume, @exchange, 'ready', 'ready')
+                """, connection))
+            {
+                command.Parameters.AddWithValue("tenant", Tenant);
+                command.Parameters.AddWithValue("project", Project);
+                command.Parameters.AddWithValue("run", Run);
+                command.Parameters.AddWithValue("root", Root);
+                command.Parameters.AddWithValue("hash", job.AcceptedSelectionHash);
+                command.Parameters.AddWithValue("fence", job.ExecutionFence);
+                command.Parameters.AddWithValue("intent", intentId);
+                command.Parameters.AddWithValue("bootstrap", Guid.NewGuid());
+                command.Parameters.AddWithValue("consume", Guid.NewGuid());
+                command.Parameters.AddWithValue("exchange", Guid.NewGuid());
+                await command.ExecuteNonQueryAsync();
+            }
+
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await using var reader = _queue.ReadAllAsync(deadline.Token).GetAsyncEnumerator();
+            Assert.True(await reader.MoveNextAsync());
+            var execution = ExecuteAsync(reader.Current);
+
+            await hostEntered.Task.WaitAsync(deadline.Token);
+
+            // Cancel and revoke registration before the Host callback validates source authority.
+            var cancellation = CancellationSelection();
+            var cancelProjects = new ProjectsRunSelectionClient(
+                Client(new ProjectsHandler(cancellation)), _options,
+                new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
+            var credential = new SecretCredential("cancel-token", DateTimeOffset.UtcNow.AddMinutes(5));
+            var actor = new RuntimeActorAuthorization(credential, Tenant);
+            try
+            {
+                await _sessions.CancelProjectRunAsync(
+                    _actor, cancellation, "cancel-before-callback", new CancelProjectRunRequest(),
+                    async token =>
+                    {
+                        _ = await cancelProjects.ReadSelectionForCancelAsync(
+                            actor, _actor, Project, Run, token);
+                    },
+                    deadline.Token);
+                await _registrationOwner.RevokeAfterPlacementReleaseAsync(zeroRegistration, deadline.Token);
+
+                allowCallback.TrySetResult();
+                await callbackFinished.Task.WaitAsync(deadline.Token);
+                Assert.NotNull(callbackFailure);
+
+                releaseHost.TrySetResult();
+                await execution.WaitAsync(deadline.Token);
+
+                Assert.Null(await _jobs.ReadZeroCreditNoSendStatusAsync(job, deadline.Token));
+                Assert.True(await _jobs.HasUnresolvedNativeWorkAsync(Project, Run, deadline.Token));
+
+                var environmentCalls = 0;
+                var startStore = new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema);
+                var cleanup = new RuntimeRunStartCleanupContinuation(
+                    startStore, cancelProjects, _registrationOwner, _jobs,
+                    new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+                    new HostClientFactory(new FixedHandler(_ =>
+                    {
+                        environmentCalls++;
+                        return new HttpResponseMessage(HttpStatusCode.OK);
+                    })));
+                await cleanup.ContinueAsync(
+                    new RuntimeRunStartCleanupWork(Project, Run, Tenant, _actor, actor), deadline.Token);
+                Assert.Equal(0, environmentCalls);
+                Assert.Equal("cleanup_pending",
+                    (await startStore.FindCleanupIntentAsync(Tenant, Project, Run, deadline.Token))!.State);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }
+        finally
+        {
+            await sourceServices.DisposeAsync();
+        }
+    }
+
+    private async Task<(
+        RuntimeRegistration Registration,
+        RuntimeUsageSourceOwner Owner,
+        HttpContext Context,
+        ServiceProvider Services,
+        RuntimeGrantReceipt Grant)> PrepareZeroCreditRuntimeAsync()
+    {
+        var zeroBinding = _registration.Binding with { CopilotHardCreditLimit = 0m };
+        var registrations = new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System);
+        var zeroRegistration = await registrations.RegisterAsync(
+            zeroBinding, DateTimeOffset.UtcNow.AddMinutes(10), CancellationToken.None);
+        var grant = new RuntimeGrantReceipt(
+            Guid.Parse("ad450d07-7317-45bc-88aa-df9b9be0e6f4"),
+            zeroRegistration.RuntimeInstanceId,
+            zeroRegistration.Revision,
+            1,
+            Issuer,
+            RuntimeCredentialPurpose.Observe,
+            zeroBinding.ObservationEndpoint,
+            RuntimeCredentialState.Active,
+            RuntimeContractValidation.RegistrationHash(zeroRegistration),
+            zeroRegistration.ExpiresAt,
+            DateTimeOffset.UtcNow);
+        var brokerHttp = Client(new FixedHandler(request => Response(request, grant)));
+        var sourceStore = new RuntimeUsageSourceStore(fixture.DataSource, _options, TimeProvider.System);
+        var sourceOwner = new RuntimeUsageSourceOwner(
+            sourceStore,
+            _registrationOwner,
+            new RuntimeUsageBrokerClient(brokerHttp, new(new Uri("https://broker.test/"))),
+            _projects,
+            _options,
+            TimeProvider.System);
+        var services = new ServiceCollection()
+            .AddSingleton<IAuthenticationService>(new FixedAuthentication())
+            .BuildServiceProvider();
+        var context = new DefaultHttpContext { User = Principal(), RequestServices = services };
+        context.Request.Headers.Authorization = "Bearer test-token";
+        context.Request.Headers["X-Agentweaver-Tenant"] = Tenant;
+
+        var proof = new RuntimeCredentialHttpRequest(
+            grant.GrantId, grant.RuntimeInstanceId, grant.Revision, RuntimeCredentialPurpose.Observe,
+            grant.Audience, grant.ConfigurationHash, new string('e', 64), grant.ExpiresAt, Guid.Empty);
+        var sdkFacts = new SdkSessionFacts(
+            zeroRegistration.RuntimeInstanceId,
+            RuntimeContractValidation.NativeSessionId(zeroBinding),
+            "1.0.18", "1.0.97", zeroBinding.ModelSelectionReference!, "gpt-5",
+            new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
+            zeroBinding.AcceptedSelectionHash, zeroRegistration.Revision);
+        await sourceOwner.RegisterAsync(
+            context, zeroRegistration.RuntimeInstanceId, new(proof, sdkFacts), CancellationToken.None);
+        return (zeroRegistration, sourceOwner, context, services, grant);
+    }
+
+    private static async Task RecordZeroCreditHostDenialAsync(
+        RuntimeUsageSourceOwner sourceOwner,
+        HttpContext context,
+        RuntimeRegistration registration,
+        RuntimeGrantReceipt grant,
+        RuntimeA2ASendRequest send,
+        CancellationToken cancellationToken)
+    {
+        var proof = new RuntimeCredentialHttpRequest(
+            grant.GrantId, grant.RuntimeInstanceId, grant.Revision, RuntimeCredentialPurpose.Observe,
+            grant.Audience, grant.ConfigurationHash, new string('e', 64), grant.ExpiresAt, Guid.Empty);
+        var sdkFacts = new SdkSessionFacts(
+            registration.RuntimeInstanceId,
+            RuntimeContractValidation.NativeSessionId(registration.Binding),
+            "1.0.18", "1.0.97", registration.Binding.ModelSelectionReference!, "gpt-5",
+            new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
+            registration.Binding.AcceptedSelectionHash, registration.Revision);
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, grant.GrantId, sdkFacts,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, sdkFacts),
+            DateTimeOffset.UtcNow);
+        var requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(send);
+        var guard = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+            1, RuntimeFixedCreditGuardStage.HostPreQueue, RuntimeFixedCreditGuardCode.HardLimitZero,
+            registration, RuntimeContractValidation.RegistrationHash(registration),
+            send.Message.MessageId, requestHash, sourceReceipt.CanonicalPayloadHash,
+            grant.GrantId, grant.Revision, DateTimeOffset.UtcNow, string.Empty));
+        var cursorHash = new string('c', 64);
+        var evidence = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            send.Message.MessageId, RuntimeFixedCreditGuardStage.HostPreQueue,
+            guard.CanonicalPayloadHash, guard.RegistrationHash, sourceReceipt.CanonicalPayloadHash,
+            grant.GrantId, grant.Revision,
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(sdkFacts.SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        _ = await sourceOwner.RecordFixedCreditGuardAsync(context, new(proof, guard), cancellationToken)
+            .ConfigureAwait(false);
+        _ = await sourceOwner.RecordFixedCreditNoSendAsync(
+            context, new(proof, guard, evidence), cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<Guid> SubmitAndExecuteAsync(string key)
     {
         using var response = await SubmitAsync(key);
@@ -868,6 +1311,8 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         public bool LoseResponse { get; set; }
         public TaskCompletionSource TurnAdmitted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseTurn { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Func<RuntimeA2ASendRequest, RuntimeGrantReceipt, CancellationToken, Task<HttpResponseMessage?>>? OnSendAsync { get; set; }
+        public RuntimeRegistration? ZeroCreditRegistration { get; set; }
         public string Output { get; set; } = JsonSerializer.Serialize(
             WorkflowTestData.Definition(
                 WorkflowDefinitionOrigin.Generated, WorkflowTestData.Fixed("setup", 0, [], ["docs/plan.md"])),
@@ -877,27 +1322,31 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
+            var activeRegistration = ZeroCreditRegistration ?? registration;
             var grant = new RuntimeGrantReceipt(
-                Guid.Parse("ad450d07-7317-45bc-88aa-df9b9be0e6f4"), registration.RuntimeInstanceId,
-                registration.Revision, 1, Issuer, RuntimeCredentialPurpose.Observe,
-                registration.Binding.ObservationEndpoint, RuntimeCredentialState.Active,
-                new string('d', 64), registration.ExpiresAt, registration.ExpiresAt.AddMinutes(-1));
+                Guid.Parse("ad450d07-7317-45bc-88aa-df9b9be0e6f4"), activeRegistration.RuntimeInstanceId,
+                activeRegistration.Revision, 1, Issuer, RuntimeCredentialPurpose.Observe,
+                activeRegistration.Binding.ObservationEndpoint, RuntimeCredentialState.Active,
+                new string('d', 64), activeRegistration.ExpiresAt, activeRegistration.ExpiresAt.AddMinutes(-1));
             if (request.RequestUri!.AbsolutePath.EndsWith("/readiness", StringComparison.Ordinal))
             {
                 var phases = Enum.GetValues<SandboxStartupPhase>()
                     .Select(phase => new SandboxStartupPhaseObservation(
                         phase, 1, DateTimeOffset.UtcNow,
-                        phase == SandboxStartupPhase.ImageReady ? registration.Binding.Image!.Digest : null,
-                        phase == SandboxStartupPhase.ImageReady ? registration.Binding.Image!.CompressedPullBytes : null))
+                        phase == SandboxStartupPhase.ImageReady ? activeRegistration.Binding.Image!.Digest : null,
+                        phase == SandboxStartupPhase.ImageReady ? activeRegistration.Binding.Image!.CompressedPullBytes : null))
                     .ToImmutableArray();
                 return Response(request, new RuntimeHostReadinessReceipt(
-                    1, registration.RuntimeInstanceId, registration.Revision,
-                    registration.Binding.ExecutionFence, registration.Binding.Image!, phases, grant));
+                    1, activeRegistration.RuntimeInstanceId, activeRegistration.Revision,
+                    activeRegistration.Binding.ExecutionFence, activeRegistration.Binding.Image!, phases, grant));
             }
 
             var send = (await request.Content!.ReadFromJsonAsync<RuntimeA2ASendRequest>(JsonOptions, token))!;
             var requestId = send.Message.MessageId;
             Requests.Add(requestId);
+            if (OnSendAsync is not null &&
+                await OnSendAsync(send, grant, token).ConfigureAwait(false) is { } customResponse)
+                return customResponse;
             if (!_responses.TryGetValue(requestId, out var result))
             {
                 Assert.NotNull(Job);

@@ -233,6 +233,84 @@ public sealed class WorkflowGenerationContractTests
         Assert.Equal("workflow_generation_decision_stale", stale.Code);
     }
 
+    [Fact]
+    public void ZeroCreditNoSendProofSealsValidatesAndRedactsSensitiveFields()
+    {
+        var jobId = Guid.NewGuid();
+        var nativeRequestId = Guid.NewGuid();
+        var runtimeId = Guid.NewGuid();
+        var selectionHash = new string('a', 64);
+        var promptHash = new string('b', 64);
+        var requestHash = new string('c', 64);
+        var guardHash = new string('d', 64);
+        var noSendHash = new string('e', 64);
+        var cursorHash = new string('f', 64);
+        var recordedAt = new DateTimeOffset(2026, 11, 25, 1, 0, 0, TimeSpan.Zero);
+        var verifiedAt = recordedAt.AddSeconds(2);
+
+        var proof = WorkflowGenerationZeroCreditNoSendProof.Seal(new WorkflowGenerationZeroCreditNoSendProof(
+            1,
+            jobId,
+            nativeRequestId,
+            "project",
+            "run",
+            "root",
+            "tenant",
+            "https://identity.example/",
+            "actor-1",
+            3,
+            2,
+            selectionHash,
+            4,
+            runtimeId,
+            5,
+            "model:selected",
+            promptHash,
+            requestHash,
+            guardHash,
+            noSendHash,
+            "hostPreQueue",
+            "hardLimitZero",
+            0,
+            true,
+            cursorHash,
+            cursorHash,
+            recordedAt,
+            verifiedAt,
+            string.Empty)).Validate();
+
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (proof with { ExecutionFence = 5 }).Validate());
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (proof with { ObservedEventCount = 1 }).Validate());
+
+        var status = proof.ToStatus();
+        Assert.Equal(nativeRequestId, status.NativeRequestId);
+        Assert.Equal(runtimeId, status.RuntimeInstanceId);
+        Assert.Equal(5, status.RegistrationRevision);
+        Assert.Equal(4, status.ExecutionFence);
+        Assert.Equal(noSendHash, status.ReceiptSha256);
+
+        var job = new WorkflowGenerationJob(
+            jobId, nativeRequestId, "project", "run", "root", "tenant",
+            "https://identity.example/", "actor-1", "key", new string('1', 64),
+            "prompt", promptHash, 3, 2, selectionHash, 4, runtimeId, 5, "model:selected",
+            "running", "send-admitted", null, null, null, recordedAt, verifiedAt);
+        Assert.True(proof.MatchesJob(job));
+        Assert.False(proof.MatchesJob(job with { ExecutionFence = 5 }));
+
+        var webJson = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var legacyEnvelopeJson = JsonSerializer.Serialize(WorkflowGenerationExecution.CreateEnvelope(job), webJson);
+        Assert.DoesNotContain("zeroCreditNoSend", legacyEnvelopeJson, StringComparison.Ordinal);
+
+        var proofEnvelopeJson = JsonSerializer.Serialize(
+            WorkflowGenerationExecution.CreateEnvelope(job, status), webJson);
+        Assert.Contains("zeroCreditNoSend", proofEnvelopeJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("sourceGrant", proofEnvelopeJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sdkSession", proofEnvelopeJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(promptHash, proofEnvelopeJson, StringComparison.Ordinal);
+    }
+
     private static CoordinatorDecisionState ProposedPlanState()
     {
         const string actor = "workflow-owner";

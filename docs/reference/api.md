@@ -1886,10 +1886,14 @@ The owner returns `202 Accepted` with a job envelope, public `Location`,
 `statusUrl`, and `resultUrl`. Acceptance means the job was saved or reattached;
 it does not mean generation is complete. Retry a request that needs scheduling
 with the same key and current authority. Read status with the run-bound bearer.
-Read result after status is `completed`; an earlier result request returns
-`409 workflow_generation_not_complete`. Both read routes recheck current
-run authority and job ownership and return `Cache-Control: no-store`; they do
-not require the project-writer bearer.
+Before the run is cancelled or the job completes, `readProjectWorkflowGenerationJob`
+includes an optional `zeroCreditNoSend` object when the current registration and
+execution fence match a verified `hostPreQueue` / `hardLimitZero` no-send proof
+for that job's native request. That object omits the prompt, native session,
+grant details, credentials, and raw receipts. Read result after status is
+`completed`; an earlier result request returns `409 workflow_generation_not_complete`.
+Both read routes recheck current run authority and job ownership and return
+`Cache-Control: no-store`; they do not require the project-writer bearer.
 
 The stored `WorkflowDefinition` is a draft. Generation does not select or
 confirm a workflow or work plan. The native CLI acceptance procedure is in
