@@ -219,6 +219,237 @@ public sealed class KubernetesPlatformPolicyProofTests
         Assert.Equal("policy_semantics_unsupported", error.Code);
     }
 
+    [Theory]
+    [InlineData("NetworkPolicy", "k8s-partial", "agentweaver", """{"podSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost","agentweaver.dev/sandbox-fence":"99"}},"policyTypes":["Egress"],"egress":[]}""")]
+    [InlineData("NetworkPolicy", "k8s-partial-expr", "agentweaver", """{"podSelector":{"matchExpressions":[{"key":"tier","operator":"In","values":["canary"]}]},"policyTypes":["Egress"],"egress":[]}""")]
+    [InlineData("NetworkPolicy", "k8s-ns-label", "agentweaver", """{"podSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost","io.kubernetes.pod.namespace":"agentweaver"}},"policyTypes":["Egress"],"egress":[]}""")]
+    [InlineData("CiliumNetworkPolicy", "cilium-partial", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost","agentweaver.dev/sandbox-fence":"99"}},"egress":[{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"kube-system","k8s:k8s-app":"kube-dns"}}],"toPorts":[{"ports":[{"port":"53","protocol":"UDP"}]}]}]}""")]
+    [InlineData("CiliumNetworkPolicy", "cilium-explicit-no-deny", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"enableDefaultDeny":{"egress":false},"egress":[{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"kube-system","k8s:k8s-app":"kube-dns"}}],"toPorts":[{"ports":[{"port":"53","protocol":"UDP"}]}]}]}""")]
+    [InlineData("CiliumClusterwideNetworkPolicy", "ccnp-partial", "", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost","agentweaver.dev/sandbox-fence":"99"}},"enableDefaultDeny":{"egress":true}}""")]
+    public void EvaluatorDoesNotCountPartialSelectorsAsFullPopulationDefaultDeny(
+        string kind, string name, string @namespace, string specJson)
+    {
+        var policy = Policy(kind, name, @namespace, specJson);
+        var error = Assert.Throws<PlatformPolicyProofException>(() =>
+            SystemOnlyPolicySetEvaluator.Evaluate(Inventory([policy]), Ceiling()));
+        Assert.Equal("policy_set_exceeds_system", error.Code);
+    }
+
+    [Fact]
+    public void EvaluatorSupportsPrefixedCiliumWorkloadKeyAndValidatesDisjointSelectors()
+    {
+        var prefixedFull = Policy(
+            "CiliumNetworkPolicy",
+            "prefixed-full",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"k8s:agentweaver.io/workload":"agenthost"}},
+              "egress":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"kube-system",
+                "k8s:k8s-app":"kube-dns"}}],
+                "toPorts":[{"ports":[{"port":"53","protocol":"UDP"}]}]}]
+            }
+            """);
+        var disjointPrefixed = Policy(
+            "CiliumNetworkPolicy",
+            "disjoint-prefixed",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"k8s:agentweaver.io/workload":"build-worker"}},
+              "egress":[{"toEntities":["world"]}]
+            }
+            """);
+        var conflictingPrefixed = Policy(
+            "CiliumNetworkPolicy",
+            "conflicting-prefixed",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost","k8s:agentweaver.io/workload":"other"}},
+              "egress":[{"toEntities":["world"]}]
+            }
+            """);
+        Assert.True(SystemOnlyPolicySetEvaluator.Evaluate(
+            Inventory([prefixedFull, disjointPrefixed, conflictingPrefixed]), Ceiling()).IsSafe);
+
+        var disjointWithBadExpr = SafePolicies().Add(Policy(
+            "CiliumNetworkPolicy",
+            "disjoint-invalid-later-expr",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{
+                "matchLabels":{"agentweaver.io/workload":"build-worker"},
+                "matchExpressions":[{"key":"tier","operator":"Gt","values":["1"]}]
+              },
+              "egress":[]
+            }
+            """));
+        var exprError = Assert.Throws<PlatformPolicyProofException>(() =>
+            SystemOnlyPolicySetEvaluator.Evaluate(Inventory(disjointWithBadExpr), Ceiling()));
+        Assert.Equal("policy_semantics_unsupported", exprError.Code);
+    }
+
+    [Fact]
+    public void EvaluatorRequiresFullOrIdenticalSourceForDenySubtraction()
+    {
+        var wideAllow = Policy(
+            "CiliumNetworkPolicy",
+            "wide-allow",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},
+              "egress":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"agentweaver",
+                "k8s:agentweaver.io/workload":"unapproved-backend"}}],
+                "toPorts":[{"ports":[{"port":"8443","protocol":"TCP"}]}]}]
+            }
+            """);
+        var narrowDeny = Policy(
+            "CiliumNetworkPolicy",
+            "narrow-deny",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost","agentweaver.dev/sandbox-fence":"99"}},
+              "egressDeny":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"agentweaver",
+                "k8s:agentweaver.io/workload":"unapproved-backend"}}],
+                "toPorts":[{"ports":[{"port":"8443","protocol":"TCP"}]}]}]
+            }
+            """);
+
+        var mismatch = Assert.Throws<PlatformPolicyProofException>(() =>
+            SystemOnlyPolicySetEvaluator.Evaluate(Inventory(SafePolicies().Add(wideAllow).Add(narrowDeny)), Ceiling()));
+        Assert.Equal("policy_set_exceeds_system", mismatch.Code);
+
+        var narrowAllow = Policy(
+            "CiliumNetworkPolicy",
+            "narrow-allow",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.dev/sandbox-fence":"99","agentweaver.io/workload":"agenthost"}},
+              "egress":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"agentweaver",
+                "k8s:agentweaver.io/workload":"unapproved-backend"}}],
+                "toPorts":[{"ports":[{"port":"8443","protocol":"TCP"}]}]}]
+            }
+            """);
+        Assert.True(SystemOnlyPolicySetEvaluator.Evaluate(
+            Inventory(SafePolicies().Add(narrowAllow).Add(narrowDeny)), Ceiling()).IsSafe);
+
+        var fullDeny = Policy(
+            "CiliumClusterwideNetworkPolicy",
+            "full-deny",
+            "",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},
+              "egressDeny":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"agentweaver",
+                "k8s:agentweaver.io/workload":"unapproved-backend"}}],
+                "toPorts":[{"ports":[{"port":"8443","protocol":"TCP"}]}]}]
+            }
+            """);
+        Assert.True(SystemOnlyPolicySetEvaluator.Evaluate(
+            Inventory(SafePolicies().Add(wideAllow).Add(fullDeny)), Ceiling()).IsSafe);
+    }
+
+    [Fact]
+    public void EvaluatorAcceptsExactSharedIdentityBrokerGatewayAndRejectsVariants()
+    {
+        var validGateway = Policy(
+            "CiliumNetworkPolicy",
+            "agenthost-gateway-egress",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},
+              "egress":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"agentweaver-gateway",
+                "k8s:gateway.networking.k8s.io/gateway-name":"identity-broker"}}],
+                "toPorts":[{"ports":[{"port":"443","protocol":"TCP"}]}]}]
+            }
+            """);
+        Assert.True(SystemOnlyPolicySetEvaluator.Evaluate(
+            Inventory(SafePolicies().Add(validGateway)), Ceiling()).IsSafe);
+
+        var wrongPort = Policy(
+            "CiliumNetworkPolicy",
+            "agenthost-gateway-wrong-port",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},
+              "egress":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"agentweaver-gateway",
+                "k8s:gateway.networking.k8s.io/gateway-name":"identity-broker"}}],
+                "toPorts":[{"ports":[{"port":"8443","protocol":"TCP"}]}]}]
+            }
+            """);
+        var portError = Assert.Throws<PlatformPolicyProofException>(() =>
+            SystemOnlyPolicySetEvaluator.Evaluate(Inventory(SafePolicies().Add(wrongPort)), Ceiling()));
+        Assert.Equal("policy_set_exceeds_system", portError.Code);
+
+        var wrongNamespace = Policy(
+            "CiliumNetworkPolicy",
+            "agenthost-gateway-wrong-ns",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},
+              "egress":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"other-gateway",
+                "k8s:gateway.networking.k8s.io/gateway-name":"identity-broker"}}],
+                "toPorts":[{"ports":[{"port":"443","protocol":"TCP"}]}]}]
+            }
+            """);
+        var nsError = Assert.Throws<PlatformPolicyProofException>(() =>
+            SystemOnlyPolicySetEvaluator.Evaluate(Inventory(SafePolicies().Add(wrongNamespace)), Ceiling()));
+        Assert.Equal("policy_set_exceeds_system", nsError.Code);
+
+        var wrongGatewayName = Policy(
+            "CiliumNetworkPolicy",
+            "agenthost-gateway-wrong-name",
+            "agentweaver",
+            """
+            {
+              "endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},
+              "egress":[{"toEndpoints":[{"matchLabels":{
+                "k8s:io.kubernetes.pod.namespace":"agentweaver-gateway",
+                "k8s:gateway.networking.k8s.io/gateway-name":"other-gateway"}}],
+                "toPorts":[{"ports":[{"port":"443","protocol":"TCP"}]}]}]
+            }
+            """);
+        var nameError = Assert.Throws<PlatformPolicyProofException>(() =>
+            SystemOnlyPolicySetEvaluator.Evaluate(Inventory(SafePolicies().Add(wrongGatewayName)), Ceiling()));
+        Assert.Equal("policy_set_exceeds_system", nameError.Code);
+    }
+
+    [Theory]
+    [InlineData("CiliumNetworkPolicy", "bad-enable-deny-type", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"enableDefaultDeny":true}""")]
+    [InlineData("CiliumNetworkPolicy", "bad-enable-deny-key", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"enableDefaultDeny":{"egress":true,"extra":false}}""")]
+    [InlineData("CiliumNetworkPolicy", "bad-enable-deny-bool", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"enableDefaultDeny":{"egress":"yes"}}""")]
+    [InlineData("CiliumNetworkPolicy", "extra-dest-labels", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"egress":[{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"agentweaver-gateway","k8s:gateway.networking.k8s.io/gateway-name":"identity-broker","extra":"bad"}}],"toPorts":[{"ports":[{"port":"443","protocol":"TCP"}]}]}]}""")]
+    [InlineData("CiliumNetworkPolicy", "deny-dest-match-expr", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"egressDeny":[{"toEndpoints":[{"matchExpressions":[{"key":"k8s:k8s-app","operator":"In","values":["kube-dns"]}]}],"toPorts":[{"ports":[{"port":"53","protocol":"UDP"}]}]}]}""")]
+    [InlineData("CiliumNetworkPolicy", "deny-l7-rules", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"egressDeny":[{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"kube-system","k8s:k8s-app":"kube-dns"}}],"toPorts":[{"ports":[{"port":"53","protocol":"UDP"}],"rules":{"dns":[{"matchName":"api.example.com"}]}}]}]}""")]
+    [InlineData("CiliumNetworkPolicy", "bad-port", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"egress":[{"toFQDNs":[{"matchName":"api.example.com"}],"toPorts":[{"ports":[{"port":"https","protocol":"TCP"}]}]}]}""")]
+    [InlineData("CiliumNetworkPolicy", "bad-match-expr", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"},"matchExpressions":[{"key":"tier","operator":"Gt","values":["1"]}]},"egress":[]}""")]
+    [InlineData("CiliumNetworkPolicy", "wrong-policy-ns", "other-ns", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"egress":[]}""")]
+    [InlineData("CiliumClusterwideNetworkPolicy", "ccnp-with-ns", "agentweaver", """{"endpointSelector":{"matchLabels":{"agentweaver.io/workload":"agenthost"}},"egress":[]}""")]
+    public void EvaluatorFailsClosedOnMalformedAndNamespaceMismatchedInputs(
+        string kind, string name, string @namespace, string specJson)
+    {
+        var policy = Policy(kind, name, @namespace, specJson);
+        var error = Assert.Throws<PlatformPolicyProofException>(() =>
+            SystemOnlyPolicySetEvaluator.Evaluate(Inventory(SafePolicies().Add(policy)), Ceiling()));
+        Assert.Equal("policy_semantics_unsupported", error.Code);
+    }
+
     private static ImmutableArray<KubernetesPlatformPolicyRecord> SafePolicies() =>
     [
         Policy(

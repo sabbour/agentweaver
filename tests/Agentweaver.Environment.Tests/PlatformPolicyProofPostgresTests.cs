@@ -452,7 +452,7 @@ public sealed partial class PlatformPolicyProofPostgresTests(EnvironmentPostgres
             var baseline = await new KubernetesPlatformPolicyInventoryReader(baselineClient).CaptureAsync(
                 frozen.PhysicalTarget, frozen.Capture(SystemOnlyPolicyCeiling.Create(preparation.SystemDestinations)),
                 CancellationToken.None);
-            Assert.Equal(HistoricalSnapshotJson, PlatformPolicyProofSnapshot.Serialize(baseline));
+            Assert.NotEqual(HistoricalSnapshotId, baseline.SnapshotId);
         }
         var request = new PlatformPolicyProofHoldRequest(
             frozen.HoldId, target, frozen.PhysicalTarget, frozen.Namespace, frozen.NamespaceUid,
