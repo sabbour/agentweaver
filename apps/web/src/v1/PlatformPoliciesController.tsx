@@ -214,7 +214,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         (activeElement instanceof HTMLElement &&
          (activeElement.closest('[data-platform-policy-comparison]') ||
           activeElement.closest('[data-platform-policy-compare]') ||
-          activeElement.closest('[data-platform-policy-diagnostic-navigation]'))))
+          activeElement.closest('[data-platform-policy-diagnostic-navigation]') ||
+          activeElement.closest('[data-project-skill-trust-form]'))))
       focusAfterHideRef.current = true;
   }, []);
 

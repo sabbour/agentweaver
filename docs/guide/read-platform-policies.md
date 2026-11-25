@@ -62,6 +62,25 @@ Policy syntax or enforcement. Edit the draft or reload the page, and select
    editor.
 5. Select **Validate draft**. Review the result and any diagnostics.
 
+## Raise the Project Skill minimum trust score
+
+After a Project Policy draft passes validation and contains a single supported
+`policy/skills/data.json` file, the **Project Skill trust score** form opens.
+The file must contain only `schemaVersion` (`1`), `minimumScore` (`0` to
+`1000`), and `requireCompletedEvidence` (`true` or `false`), with no duplicate
+keys or ambiguous number tokens. Unsupported files stay in the raw editor.
+
+1. In **New minimum trust score**, enter a whole number greater than the
+   current score and no greater than `1000`.
+2. Select **Update draft**.
+
+**Update draft** replaces only the score token in `policy/skills/data.json`,
+preserves all other bytes and files, clears the validation result, and moves
+focus to **Validate draft**. It sends no request, and the Platform minimum and
+built-in Skill exemption stay unchanged. Select **Validate draft** to validate
+the updated draft. Editing the draft, importing another file, or changing
+access or context clears the form.
+
 The import checks the artifact hash and preserves the artifact bytes, including
 the UTF-8 byte-order mark and line endings. A failed import leaves the current
 draft unchanged. The draft stays in browser memory. No Project Policy head or

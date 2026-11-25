@@ -391,7 +391,10 @@ not report runtime enforcement. For the full task, see
 [Read and validate Policies](./read-platform-policies.md).
 
 In Project mode, select an exact Project and import a local validation request.
-The page keeps the draft in browser memory and sends it to the Project Policy
+After a Project draft passes validation with a supported `policy/skills/data.json`
+file, the **Project Skill trust score** form lets you raise the third-party
+Skill minimum score up to `1000` in the draft without sending a request. The
+page keeps the draft in browser memory and sends it to the Project Policy
 validation endpoint. It does not read a Project Policy head, save, apply, or
 preview Policy.
 
