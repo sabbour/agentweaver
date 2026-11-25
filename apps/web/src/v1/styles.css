@@ -629,11 +629,13 @@
 
 /* Data tables use 0.x list density and theme tokens. */
 .v1-table-wrap { overflow-x: auto; }
+.v1-egress-table-wrap:focus-visible { outline: 2px solid var(--colorStrokeFocus2); outline-offset: -2px; }
 .v1-table { width: 100%; border-collapse: collapse; font-size: var(--fontSizeBase300); }
 .v1-table caption { text-align: start; font-weight: var(--fontWeightSemibold); padding-block-end: var(--spacingVerticalS); }
 .v1-table th, .v1-table td { text-align: start; vertical-align: top; padding: var(--spacingVerticalS) var(--spacingHorizontalM); border-block-end: 1px solid var(--colorNeutralStroke2); }
 .v1-table thead th { color: var(--colorNeutralForeground3); font-weight: var(--fontWeightRegular); }
 .v1-table tbody th { font-weight: var(--fontWeightSemibold); }
+.v1-egress-timestamp { overflow-wrap: anywhere; }
 .v1-policy-source {
   max-block-size: 32rem;
   overflow: auto;

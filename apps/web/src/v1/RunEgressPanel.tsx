@@ -362,7 +362,12 @@ export function RunEgressPanel({ projectId, runId }: { projectId: string; runId:
           {visible.loaded && <p className="v1-muted">{COVERAGE_NOTICE}</p>}
           {visible.loaded && visible.items.length === 0 && <p className="v1-muted">No stored records</p>}
           {visible.items.length > 0 && (
-            <div className="v1-table-wrap">
+            <div
+              className="v1-table-wrap v1-egress-table-wrap"
+              role="region"
+              aria-label="Stored run egress records"
+              tabIndex={0}
+            >
               <table className="v1-table" aria-label="Stored run egress">
                 <thead>
                   <tr>
@@ -382,8 +387,8 @@ export function RunEgressPanel({ projectId, runId }: { projectId: string; runId:
                       <td>{item.address ?? '—'}</td>
                       <td>{item.port}</td>
                       <td>{item.verdict}</td>
-                      <td>{new Date(item.firstSeen).toLocaleString()}</td>
-                      <td>{new Date(item.lastSeen).toLocaleString()}</td>
+                      <td className="v1-egress-timestamp"><time dateTime={item.firstSeen}>{item.firstSeen}</time></td>
+                      <td className="v1-egress-timestamp"><time dateTime={item.lastSeen}>{item.lastSeen}</time></td>
                       <td>{item.count}</td>
                     </tr>
                   ))}
