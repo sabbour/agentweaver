@@ -436,30 +436,50 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   }, [bindDraftToCurrentIdentity, clearDraftValidation, invalidateDraftComparison]);
 
   const importDraft = useCallback(async (file: File) => {
-    if (scopeRef.current !== 'project' ||
-        !authorizedRef.current ||
+    const importScope = scopeRef.current;
+    if (!authorizedRef.current ||
         statusRef.current !== 'ready' ||
         !policyIdentityRef.current ||
-        !projectRef.current)
+        (importScope === 'project' && !projectRef.current))
       return;
     downloadGenerationRef.current += 1;
     const importIdentityEpoch = identityEpochRef.current;
-    const importScope = scopeRef.current;
+    const importIdentity = policyIdentityRef.current;
     const importTenant = tenantRef.current;
-    const importProject = projectRef.current;
+    const importProject = importScope === 'project' ? projectRef.current : null;
+    const importRoute = routePathRef.current;
     const importGeneration = ++importGenerationRef.current;
+    const session = latestAuthRef.current.session;
+    const authSessionEpoch = latestAuthRef.current.authSessionEpoch;
+    const authSessionGeneration = latestAuthRef.current.authSessionGeneration;
+    const unboundSessionGeneration = latestAuthRef.current.unboundSessionGeneration;
+    const authorizationContext = latestAuthRef.current.authorizationContext;
+    const isCurrentImport = () =>
+      identityEpochRef.current === importIdentityEpoch &&
+      scopeRef.current === importScope &&
+      tenantRef.current === importTenant &&
+      (importScope !== 'project' || projectRef.current === importProject) &&
+      routePathRef.current === importRoute &&
+      importGenerationRef.current === importGeneration &&
+      statusRef.current === 'ready' &&
+      authorizedRef.current &&
+      policyIdentityRef.current !== null &&
+      sameIdentity(policyIdentityRef.current, importIdentity) &&
+      latestAuthRef.current.session === session &&
+      latestAuthRef.current.authSessionEpoch === authSessionEpoch &&
+      latestAuthRef.current.authSessionGeneration === authSessionGeneration &&
+      latestAuthRef.current.unboundSessionGeneration === unboundSessionGeneration &&
+      latestAuthRef.current.authorizationContext?.issuer === authorizationContext?.issuer &&
+      latestAuthRef.current.authorizationContext?.actorId === authorizationContext?.actorId &&
+      latestAuthRef.current.authorizationContext?.tenantId === authorizationContext?.tenantId &&
+      latestAuthRef.current.authorizationContext?.membershipRevision ===
+        authorizationContext?.membershipRevision;
     try {
       if (file.size > 5 * 1024 * 1024)
         throw new Error('The Policy validation request exceeds 5,242,880 bytes.');
       const bytes = new Uint8Array(await file.arrayBuffer());
       const imported = await parsePlatformPolicyValidationRequestFile(bytes);
-      if (identityEpochRef.current !== importIdentityEpoch ||
-          scopeRef.current !== importScope ||
-          tenantRef.current !== importTenant ||
-          projectRef.current !== importProject ||
-          importGenerationRef.current !== importGeneration ||
-          !authorizedRef.current)
-        return;
+      if (!isCurrentImport()) return;
       bindDraftToCurrentIdentity();
       clearDraftValidation();
       invalidateDraftComparison();
@@ -470,12 +490,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         content: importedFile.content,
       })));
     } catch (reason) {
-      if (identityEpochRef.current !== importIdentityEpoch ||
-          scopeRef.current !== importScope ||
-          tenantRef.current !== importTenant ||
-          projectRef.current !== importProject ||
-          importGenerationRef.current !== importGeneration)
-        return;
+      if (!isCurrentImport()) return;
       setDraftError(reason instanceof Error
         ? reason.message
         : 'The selected Policy validation request could not be imported.');
@@ -498,7 +513,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
 
   const downloadDraft = useCallback(() => {
     const identity = policyIdentityRef.current;
-    const activeProject = projectRef.current;
+    const activeScope = scopeRef.current;
+    const activeProject = activeScope === 'project' ? projectRef.current : null;
     const selectedTenant = tenantRef.current.trim();
     const session = latestAuthRef.current.session;
     const authSessionEpoch = latestAuthRef.current.authSessionEpoch;
@@ -513,10 +529,10 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       identityEpochRef.current === identityEpoch &&
       draftGenerationRef.current === draftGeneration &&
       routePathRef.current === '/policies' &&
-      scopeRef.current === 'project' &&
+      scopeRef.current === activeScope &&
       authorizedRef.current &&
       statusRef.current === 'ready' &&
-      projectRef.current === activeProject &&
+      (activeScope !== 'project' || projectRef.current === activeProject) &&
       tenantRef.current.trim() === selectedTenant &&
       identity !== null &&
       policyIdentityRef.current !== null &&
@@ -531,7 +547,10 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       latestAuthRef.current.authorizationContext?.membershipRevision ===
         authorizationContext?.membershipRevision;
 
-    if (!isCurrentDownload()) return;
+    if (!isCurrentDownload() ||
+        (activeScope === 'project' && !activeProject))
+      return;
+    importGenerationRef.current += 1;
     setDraftError(null);
     void (async () => {
       let url: string | null = null;
@@ -547,14 +566,16 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = 'project-policy-draft.json';
+        link.download = activeScope === 'platform'
+          ? 'platform-policy-draft.json'
+          : 'project-policy-draft.json';
         if (!isCurrentDownload()) return;
         link.click();
       } catch (reason) {
         if (!isCurrentDownload()) return;
         setDraftError(reason instanceof Error
           ? reason.message
-          : 'The Project Policy draft could not be downloaded.');
+          : `The ${activeScope === 'platform' ? 'Platform' : 'Project'} Policy draft could not be downloaded.`);
       } finally {
         if (url !== null) URL.revokeObjectURL(url);
       }

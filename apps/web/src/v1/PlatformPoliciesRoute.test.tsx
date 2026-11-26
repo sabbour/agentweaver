@@ -265,6 +265,16 @@ async function openProjectPolicyDraft(): Promise<void> {
   ).toBe(false));
 }
 
+async function openPlatformPolicyDraft(): Promise<void> {
+  render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  await completeSignIn();
+  await screen.findByText('Saved Platform Policy revisions');
+  await waitFor(() => expect(
+    (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+  ).toBe(false));
+}
+
 async function startRunBoundPolicySession(): Promise<void> {
   renderPolicyRecoveryHarness();
   fireEvent.click(screen.getByRole('button', { name: 'Sign in for active run' }));
@@ -664,6 +674,299 @@ describe('Platform Policies served route', () => {
     expect(JSON.parse(String(validationCall?.init?.body))).toEqual({ artifact });
     expect(requests.some(({ url }) =>
       url.includes('/policies/projects/project-1') && !url.endsWith('/validate'))).toBe(false);
+  });
+
+  it('downloads and reopens an exact Platform draft without changing the viewed revision', async () => {
+    await openPlatformPolicyDraft();
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByText(policyText);
+    const expected = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer('\uFEFFname: platform-download\r\n'),
+      [
+        {
+          relativePath: 'rules/mixed.rego',
+          content: createPlatformPolicyTextBuffer('allow: true\r'),
+        },
+        {
+          relativePath: 'rules/crlf.rego',
+          content: createPlatformPolicyTextBuffer('deny: false\r\n'),
+        },
+      ],
+    );
+    const importInput = screen.getByLabelText(
+      'Platform Policy validation request',
+    ) as HTMLInputElement;
+    fireEvent.change(importInput, {
+      target: {
+        files: [new File([JSON.stringify({ artifact: expected })], 'import.json', {
+          type: 'application/json',
+        })],
+      },
+    });
+    expect(importInput.value).toBe('');
+    await waitFor(() => expect(
+      (screen.getByRole('textbox', { name: 'Platform Policy manifest' }) as HTMLTextAreaElement).value,
+    ).toBe('\uFEFFname: platform-download\n'));
+    expect(screen.getByText(policyText)).toBeTruthy();
+
+    let downloaded: Blob | null = null;
+    Object.assign(URL, {
+      createObjectURL: vi.fn((blob: Blob) => {
+        downloaded = blob;
+        return 'blob:platform-policy';
+      }),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      expect(this.download).toBe('platform-policy-draft.json');
+    });
+    const requestCount = requests.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(requests).toHaveLength(requestCount);
+    const downloadedBytes = new Uint8Array(await downloaded!.arrayBuffer());
+    const imported = await parsePlatformPolicyValidationRequestFile(downloadedBytes);
+    expect(await buildPlatformPolicyValidationArtifact(
+      imported.manifest,
+      imported.files,
+    )).toEqual(expected);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate draft' }));
+    await screen.findByText('The Platform Policy draft is valid.');
+    fireEvent.click(screen.getByRole('button', { name: 'Compare draft' }));
+    expect(await screen.findByRole('heading', {
+      name: 'Compare draft with revision 2',
+    })).toBeTruthy();
+
+    const invalidArtifact = { ...expected, contentSha256: 'b'.repeat(64) };
+    fireEvent.change(importInput, {
+      target: {
+        files: [new File([JSON.stringify({ artifact: invalidArtifact })], 'invalid.json', {
+          type: 'application/json',
+        })],
+      },
+    });
+    expect(await screen.findByText(
+      'The Policy validation request hash does not match its artifact bytes.',
+    )).toBeTruthy();
+    expect(screen.getByText('The Platform Policy draft is valid.')).toBeTruthy();
+    expect(screen.getByRole('heading', {
+      name: 'Compare draft with revision 2',
+    })).toBeTruthy();
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('\uFEFFname: platform-download\n');
+
+    fireEvent.change(importInput, {
+      target: {
+        files: [new File([downloaded!], 'platform-policy-draft.json', {
+          type: 'application/json',
+        })],
+      },
+    });
+    await waitFor(() => expect(
+      screen.queryByText('The Platform Policy draft is valid.'),
+    ).toBeNull());
+    expect(screen.queryByRole('heading', {
+      name: 'Compare draft with revision 2',
+    })).toBeNull();
+    expect(screen.getByText(policyText)).toBeTruthy();
+    expect(importInput.value).toBe('');
+  });
+
+  it('retains the Platform draft after invalid and oversized local files without a request', async () => {
+    await openPlatformPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'name: retained' },
+    });
+    const requestCount = requests.length;
+    const input = screen.getByLabelText('Platform Policy validation request');
+
+    fireEvent.change(input, {
+      target: {
+        files: [new File(['not-json'], 'invalid.json', { type: 'application/json' })],
+      },
+    });
+    expect(await screen.findByText(
+      'The selected Policy validation request is not valid JSON.',
+    )).toBeTruthy();
+
+    fireEvent.change(input, {
+      target: {
+        files: [new File(['x'.repeat(5 * 1024 * 1024 + 1)], 'large.json', {
+          type: 'application/json',
+        })],
+      },
+    });
+    expect(await screen.findByText(
+      'The Policy validation request exceeds 5,242,880 bytes.',
+    )).toBeTruthy();
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('name: retained');
+    expect(requests).toHaveLength(requestCount);
+  });
+
+  it('ignores stale Platform local-file work after edits and scope changes', async () => {
+    await openPlatformPolicyDraft();
+    const artifact = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer('name: delayed-import'),
+      [],
+    );
+    const reading = deferred<ArrayBuffer>();
+    const delayedFile = new File([], 'delayed.json', { type: 'application/json' });
+    vi.spyOn(delayedFile, 'arrayBuffer').mockReturnValue(reading.promise);
+
+    fireEvent.change(screen.getByLabelText('Platform Policy validation request'), {
+      target: { files: [delayedFile] },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'newer edit' },
+    });
+    await act(async () => {
+      reading.resolve(new TextEncoder().encode(
+        JSON.stringify({ artifact }),
+      ).buffer);
+      await reading.promise;
+    });
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('newer edit');
+
+    const secondReading = deferred<ArrayBuffer>();
+    const secondFile = new File([], 'second.json', { type: 'application/json' });
+    vi.spyOn(secondFile, 'arrayBuffer').mockReturnValue(secondReading.promise);
+    fireEvent.change(screen.getByLabelText('Platform Policy validation request'), {
+      target: { files: [secondFile] },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    await screen.findByRole('combobox', { name: 'Project' });
+    await act(async () => {
+      secondReading.resolve(new TextEncoder().encode(
+        JSON.stringify({ artifact }),
+      ).buffer);
+      await secondReading.promise;
+    });
+    expect(screen.queryByRole('textbox', {
+      name: 'Platform Policy manifest',
+    })).toBeNull();
+    expect(screen.queryByText('name: delayed-import')).toBeNull();
+  });
+
+  it('does not import or report errors after the Platform sign-in session changes', async () => {
+    const artifact = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer('name: stale-session-import'),
+      [],
+    );
+    await openPlatformPolicyDraft();
+    const hashing = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValue(hashing.promise);
+
+    fireEvent.change(screen.getByLabelText('Platform Policy validation request'), {
+      target: {
+        files: [new File([JSON.stringify({ artifact })], 'stale-session.json', {
+          type: 'application/json',
+        })],
+      },
+    });
+    await waitFor(() => expect(globalThis.crypto.subtle.digest).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'Account' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await screen.findByRole('button', { name: 'Sign in' });
+    await act(async () => {
+      hashing.resolve(new ArrayBuffer(32));
+      await hashing.promise;
+    });
+
+    expect(screen.queryByText(
+      'The selected Policy validation request hash does not match its artifact bytes.',
+    )).toBeNull();
+    expect(screen.queryByText('name: stale-session-import')).toBeNull();
+    expect(screen.queryByLabelText('Platform Policy validation request')).toBeNull();
+  });
+
+  it('lets a newer Platform download cancel an earlier import', async () => {
+    const artifact = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer('name: canceled-import'),
+      [],
+    );
+    await openPlatformPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'name: retained-download-source' },
+    });
+    const reading = deferred<ArrayBuffer>();
+    const delayedFile = new File([], 'delayed.json', { type: 'application/json' });
+    vi.spyOn(delayedFile, 'arrayBuffer').mockReturnValue(reading.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:platform-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.change(screen.getByLabelText('Platform Policy validation request'), {
+      target: { files: [delayedFile] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    await act(async () => {
+      reading.resolve(new TextEncoder().encode(
+        JSON.stringify({ artifact }),
+      ).buffer);
+      await reading.promise;
+    });
+
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('name: retained-download-source');
+  });
+
+  it('cancels stale Platform downloads after tenant and access changes', async () => {
+    await openPlatformPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'name: platform-download' },
+    });
+    const tenantHash = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValueOnce(tenantHash.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:platform-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), {
+      target: { value: 'tenant-2' },
+    });
+    await act(async () => {
+      tenantHash.resolve(new ArrayBuffer(32));
+      await tenantHash.promise;
+    });
+    expect(click).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'name: platform-download-two' },
+    });
+    const accessHash = deferred<ArrayBuffer>();
+    vi.mocked(globalThis.crypto.subtle.digest).mockReturnValueOnce(accessHash.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    policyStatus = 403;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(
+      'You do not have permission to access Platform Policies.',
+    )).toBeTruthy();
+    await act(async () => {
+      accessHash.resolve(new ArrayBuffer(32));
+      await accessHash.promise;
+    });
+    expect(click).not.toHaveBeenCalled();
   });
 
   it('downloads the exact Project draft as an importable compact JSON file without a request', async () => {
