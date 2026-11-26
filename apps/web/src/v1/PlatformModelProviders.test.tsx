@@ -229,6 +229,372 @@ describe('PlatformModelProviders', () => {
     expect(screen.getByText(/Initialize platform model settings/)).toBeTruthy();
   });
 
+  it('separates missing, attached, and malformed pricing without implying provider readiness', async () => {
+    setPage({
+      activeProviderId: null,
+      providers: [
+        provider({
+          id: 'missing', name: 'Missing pricing', state: 'Draft', is_active: false,
+          rate_card_id: null, rate_card_version: null,
+        }),
+        provider({
+          id: 'attached', name: 'Attached pricing', state: 'Draft', is_active: false,
+          rate_card_id: 'card-attached', rate_card_version: '7',
+        }),
+        provider({
+          id: 'malformed', name: 'Malformed pricing', state: 'Draft', is_active: false,
+          rate_card_id: 'card-without-version', rate_card_version: null,
+        }),
+      ],
+    });
+    render(<PlatformModelProviders />);
+
+    const missing = (await screen.findByText('Missing pricing')).closest('li')!;
+    expect(within(missing).getByText('Pricing required')).toBeTruthy();
+    expect(within(missing).getByRole('button', { name: 'Set pricing for Missing pricing' })).toBeTruthy();
+    expect(within(missing).queryByRole('button', { name: 'Edit Missing pricing' })).toBeNull();
+    const attached = screen.getByText('Attached pricing').closest('li')!;
+    expect(within(attached).getByText('Rate card: card-attached / 7')).toBeTruthy();
+    expect(within(attached).queryByText('Pricing required')).toBeNull();
+    const malformed = screen.getByText('Malformed pricing').closest('li')!;
+    expect(within(malformed).getByText('Pricing status unavailable')).toBeTruthy();
+    expect(within(malformed).queryByRole('button', { name: /Set pricing/ })).toBeNull();
+    expect(screen.queryByText(/verified/i)).toBeNull();
+  });
+
+  it('opens the existing pricing editor without a write, focuses pricing, and saves the current Draft revision', async () => {
+    const missing = provider({
+      id: 'provider-2', name: 'Needs pricing', state: 'Draft', is_active: false,
+      revision: 7, rate_card_id: null, rate_card_version: null,
+    });
+    const refreshed = {
+      ...missing,
+      revision: 8,
+      rate_card_id: 'saved-prices',
+      rate_card_version: '3',
+    };
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([missing], { activeProviderId: null }))
+      .mockResolvedValueOnce(providerPage([refreshed], { activeProviderId: null }));
+    api.getPlatformByokProviderDraft.mockResolvedValue(missing);
+    api.updatePlatformByokProviderDraft.mockResolvedValue(refreshed);
+    render(<PlatformModelProviders />);
+    await screen.findByText('Needs pricing');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Needs pricing' }));
+
+    const pricingGroup = await screen.findByRole('group', { name: 'Pricing' });
+    await waitFor(() => expect(document.activeElement).toBe(pricingGroup));
+    expect(api.savePlatformManualRuntimeRateCard).not.toHaveBeenCalled();
+    expect(api.createPlatformByokProviderDraft).not.toHaveBeenCalled();
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByLabelText('Use a saved rate card'));
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: 'saved-prices' } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updatePlatformByokProviderDraft).toHaveBeenCalledOnce());
+    expect(api.updatePlatformByokProviderDraft.mock.calls[0].slice(1, 3)).toEqual([
+      'provider-2',
+      expect.objectContaining({
+        expectedRevision: 7,
+        rate_card_id: 'saved-prices',
+        rate_card_version: '3',
+      }),
+    ]);
+    expect(await screen.findByText('Rate card: saved-prices / 3')).toBeTruthy();
+    expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores an older detail response and a new-provider form fence', async () => {
+    const first = provider({
+      id: 'first', name: 'First', state: 'Draft', is_active: false,
+      rate_card_id: null, rate_card_version: null,
+    });
+    const second = provider({
+      id: 'second', name: 'Second', state: 'Draft', is_active: false,
+      rate_card_id: null, rate_card_version: null,
+    });
+    let finishFirst!: (value: ReturnType<typeof provider>) => void;
+    let finishSecond!: (value: ReturnType<typeof provider>) => void;
+    setPage({ activeProviderId: null, providers: [first, second] });
+    api.getPlatformByokProviderDraft.mockImplementation((_token, providerId) =>
+      new Promise((resolve) => {
+        if (providerId === 'first') finishFirst = resolve;
+        else finishSecond = resolve;
+      }));
+    const view = render(<PlatformModelProviders />);
+    await screen.findByText('First');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for First' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Second' }));
+    await act(async () => finishSecond(second));
+    expect(await screen.findByDisplayValue('Second')).toBeTruthy();
+    await act(async () => finishFirst(first));
+    expect(screen.queryByDisplayValue('First')).toBeNull();
+    expect(screen.getByDisplayValue('Second')).toBeTruthy();
+
+    let finishNewFence!: (value: ReturnType<typeof provider>) => void;
+    api.getPlatformByokProviderDraft.mockImplementationOnce(
+      () => new Promise((resolve) => { finishNewFence = resolve; }));
+    view.unmount();
+    render(<PlatformModelProviders />);
+    await screen.findByText('First');
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for First' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+    fireEvent.click(screen.getByRole('button', { name: /Custom endpoint/ }));
+    await act(async () => finishNewFence(first));
+    expect(screen.getByText('Add Custom endpoint')).toBeTruthy();
+    expect(screen.queryByDisplayValue('First')).toBeNull();
+  });
+
+  it.each([
+    ['provider ID', provider({ id: 'other' })],
+    ['provider state', provider({ id: 'provider-1', state: 'Available' })],
+  ])('refreshes instead of opening when the detail has the wrong %s', async (_label, detail) => {
+    const selected = provider({
+      state: 'Draft', is_active: false, rate_card_id: null, rate_card_version: null,
+    });
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([selected], { activeProviderId: null }))
+      .mockResolvedValueOnce(providerPage([
+        provider({
+          state: 'Draft', is_active: false,
+          rate_card_id: 'refreshed-card', rate_card_version: '1',
+        }),
+      ], { activeProviderId: null }));
+    api.getPlatformByokProviderDraft.mockResolvedValue(detail);
+    render(<PlatformModelProviders />);
+    await screen.findByText('Primary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Primary' }));
+
+    expect(await screen.findByText('Rate card: refreshed-card / 1')).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Pricing' })).toBeNull();
+    expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2);
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+  });
+
+  it('does not open an old detail after a newer list refresh returns an Available provider', async () => {
+    const draft = provider({
+      state: 'Draft', is_active: false, rate_card_id: null, rate_card_version: null,
+    });
+    let finishDetail!: (value: ReturnType<typeof provider>) => void;
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([draft], { activeProviderId: null }))
+      .mockResolvedValueOnce(providerPage([provider({
+        state: 'Available', is_active: true, rate_card_id: 'new-card', rate_card_version: '2',
+      })], { activeProviderId: 'provider-1' }));
+    api.getPlatformByokProviderDraft.mockImplementation(
+      () => new Promise((resolve) => { finishDetail = resolve; }));
+    render(<PlatformModelProviders />);
+    await screen.findByText('Pricing required');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Primary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Available')).toBeTruthy();
+    await act(async () => finishDetail(draft));
+
+    expect(screen.queryByRole('group', { name: 'Pricing' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Set pricing/ })).toBeNull();
+    expect(screen.getByText('Rate card: new-card / 2')).toBeTruthy();
+  });
+
+  it('ignores a normal old detail failure after a newer refresh succeeds', async () => {
+    const draft = provider({
+      state: 'Draft', is_active: false, rate_card_id: null, rate_card_version: null,
+    });
+    let rejectDetail!: (reason: unknown) => void;
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([draft], { activeProviderId: null }))
+      .mockResolvedValueOnce(providerPage([provider({
+        state: 'Available', rate_card_id: 'new-card', rate_card_version: '2',
+      })], { activeProviderId: 'provider-1' }));
+    api.getPlatformByokProviderDraft.mockImplementation(
+      () => new Promise((_resolve, reject) => { rejectDetail = reject; }));
+    render(<PlatformModelProviders />);
+    await screen.findByText('Pricing required');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Primary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Rate card: new-card / 2')).toBeTruthy();
+    await act(async () => rejectDetail(new Error('Old detail failed.')));
+
+    expect(screen.queryByText('Old detail failed.')).toBeNull();
+    expect(screen.getByText('Rate card: new-card / 2')).toBeTruthy();
+  });
+
+  it('clears editor access after a provider detail read is forbidden', async () => {
+    const draft = provider({
+      state: 'Draft', is_active: false, rate_card_id: null, rate_card_version: null,
+    });
+    setPage({ activeProviderId: null, providers: [draft] });
+    api.getPlatformByokProviderDraft.mockRejectedValue(
+      new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    render(<PlatformModelProviders />);
+    await screen.findByText('Primary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Primary' }));
+
+    expect(await screen.findByText(/rest of Platform Settings remains available/)).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Pricing' })).toBeNull();
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+  });
+
+  it('clears a newer form when an older detail read returns current access loss', async () => {
+    const draft = provider({
+      state: 'Draft', is_active: false, rate_card_id: null, rate_card_version: null,
+    });
+    let rejectDetail!: (reason: unknown) => void;
+    setPage({ activeProviderId: null, providers: [draft] });
+    api.getPlatformByokProviderDraft.mockImplementation(
+      () => new Promise((_resolve, reject) => { rejectDetail = reject; }));
+    render(<PlatformModelProviders />);
+    await screen.findByText('Primary');
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Primary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+    fireEvent.click(screen.getByRole('button', { name: /Custom endpoint/ }));
+    expect(screen.getByText('Add Custom endpoint')).toBeTruthy();
+
+    await act(async () => rejectDetail(
+      new GatewayError(403, { code: 'forbidden' }, 'Forbidden')));
+
+    expect(await screen.findByText(/rest of Platform Settings remains available/)).toBeTruthy();
+    expect(screen.queryByText('Add Custom endpoint')).toBeNull();
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+  });
+
+  it('uses safe detail defaults for malformed optional fields and still requires pricing input', async () => {
+    const draft = provider({
+      state: 'Draft', is_active: false,
+      rate_card_id: 'partial-card', rate_card_version: null,
+    });
+    setPage({ activeProviderId: null, providers: [draft] });
+    api.getPlatformByokProviderDraft.mockResolvedValue({
+      ...draft,
+      name: 42,
+      base_url: {},
+      model: null,
+      wire_api: 'invalid',
+      azure_api_version: 7,
+      reasoning_efforts: null,
+      prompt_capacity_tokens: {},
+    });
+    render(<PlatformModelProviders />);
+    await screen.findByText('Primary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Primary' }));
+    expect(await screen.findByRole('group', { name: 'Pricing' })).toBeTruthy();
+    expect(screen.getByLabelText('Display name')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Base URL')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Model or deployment')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Reasoning efforts')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Prompt capacity tokens')).toHaveProperty('value', '');
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Recovered draft' } });
+    fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://api.example.test/v1' } });
+    fireEvent.change(screen.getByLabelText('Model or deployment'), { target: { value: 'model-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText(/Choose whether to save manual prices/)).toBeTruthy();
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['invalid ID characters', { rate_card_id: 'bad card', rate_card_version: '1' }],
+    ['invalid version characters', { rate_card_id: 'valid-card', rate_card_version: '1/2' }],
+    ['long ID', { rate_card_id: 'a'.repeat(129), rate_card_version: '1' }],
+    ['long version', { rate_card_id: 'valid-card', rate_card_version: 'a'.repeat(65) }],
+    ['ID without version', { rate_card_id: 'valid-card', rate_card_version: null }],
+    ['version without ID', { rate_card_id: null, rate_card_version: '1' }],
+  ])('marks a %s as unavailable and blanks both saved-card fields', async (_label, rateCard) => {
+    const draft = provider({
+      state: 'Draft', is_active: false, ...rateCard,
+    });
+    setPage({ activeProviderId: null, providers: [draft] });
+    api.getPlatformByokProviderDraft.mockResolvedValue(draft);
+    render(<PlatformModelProviders />);
+    await screen.findByText('Pricing status unavailable');
+
+    expect(screen.getByRole('button', { name: 'Edit Primary' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Set pricing for Primary' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Primary' }));
+    await screen.findByRole('group', { name: 'Pricing' });
+    fireEvent.click(screen.getByLabelText('Use a saved rate card'));
+
+    expect(screen.getByLabelText('Rate-card ID')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Rate-card version')).toHaveProperty('value', '');
+    fireEvent.submit(screen.getByRole('group', { name: 'Pricing' }).closest('form')!);
+    expect(await screen.findByText(/Enter the saved rate-card ID and version/)).toBeTruthy();
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+  });
+
+  it('points a saved-key Draft to the documented recheck after pricing saves', async () => {
+    const draft = provider({
+      id: 'provider-2', name: 'Saved key', state: 'Draft', is_active: false,
+      hasCredential: true, has_api_key: true,
+      rate_card_id: null, rate_card_version: null, revision: 4,
+    });
+    const saved = {
+      ...draft,
+      revision: 5,
+      rate_card_id: 'new-card',
+      rate_card_version: '2',
+    };
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([draft], { activeProviderId: null }))
+      .mockResolvedValueOnce(providerPage([saved], { activeProviderId: null }));
+    api.getPlatformByokProviderDraft.mockResolvedValue(draft);
+    api.updatePlatformByokProviderDraft.mockResolvedValue(saved);
+    render(<PlatformModelProviders />);
+    await screen.findByText('Saved key');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set pricing for Saved key' }));
+    fireEvent.click(await screen.findByLabelText('Use a saved rate card'));
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: 'new-card' } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(await screen.findByText(
+      'Pricing was saved. Run the documented platform byok recheck-key procedure to apply the current pricing to the saved key.',
+    )).toBeTruthy();
+    expect(screen.queryByText(/Add a key before this provider/)).toBeNull();
+    expect(api.setPlatformByokProviderCredential).not.toHaveBeenCalled();
+  });
+
+  it('points a saved-key Draft to Set pricing after clearing its rate card', async () => {
+    const draft = provider({
+      id: 'provider-2', name: 'Clear prices', state: 'Draft', is_active: false,
+      hasCredential: true, has_api_key: true,
+      rate_card_id: 'old-card', rate_card_version: '1', revision: 4,
+    });
+    const cleared = {
+      ...draft,
+      revision: 5,
+      rate_card_id: null,
+      rate_card_version: null,
+    };
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([draft], { activeProviderId: null }))
+      .mockResolvedValueOnce(providerPage([cleared], { activeProviderId: null }));
+    api.getPlatformByokProviderDraft.mockResolvedValue(draft);
+    api.updatePlatformByokProviderDraft.mockResolvedValue(cleared);
+    render(<PlatformModelProviders />);
+    await screen.findByText('Clear prices');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Clear prices' }));
+    fireEvent.click(await screen.findByLabelText('Clear the saved rate card'));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Clear the saved rate-card link/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(await screen.findByText(
+      'Pricing was cleared. Select Set pricing to add prices before the provider can become Available.',
+    )).toBeTruthy();
+    expect(screen.getByText('Pricing required')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Set pricing for Clear prices' })).toBeTruthy();
+    expect(screen.queryByText(/recheck-key/)).toBeNull();
+    expect(api.setPlatformByokProviderCredential).not.toHaveBeenCalled();
+  });
+
   it('saves exact manual prices, metadata, then the first write-only key', async () => {
     api.savePlatformManualRuntimeRateCard
       .mockRejectedValueOnce(new GatewayError(409, { code: 'rate_card_conflict' }, 'Conflict'))
@@ -368,7 +734,7 @@ describe('PlatformModelProviders', () => {
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'secret-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Saved Draft' }));
     fireEvent.click(await screen.findByLabelText('Use a saved rate card'));
     fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -529,7 +895,7 @@ describe('PlatformModelProviders', () => {
       });
       render(<PlatformModelProviders />);
       await screen.findByText('Primary');
-      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Primary' }));
       fireEvent.click(await screen.findByRole('button', { name: 'Save changes' }));
       expect(await screen.findByText(/Choose whether to save manual prices/)).toBeTruthy();
       fireEvent.click(screen.getByLabelText('Clear the saved rate card'));
@@ -683,7 +1049,7 @@ describe('PlatformModelProviders', () => {
     expect(JSON.stringify(window.sessionStorage)).not.toContain('super-secret-value');
 
     // Reopen Edit: API key field is blocked, metadata-only edit still works.
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Primary' }));
     expect(await screen.findByText(/New key entry is blocked until this operation is resolved/)).toBeTruthy();
     expect(screen.queryByLabelText('API key')).toBeNull();
     fireEvent.click(screen.getByLabelText('Use a saved rate card'));
