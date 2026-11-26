@@ -345,7 +345,9 @@ internal static class ByokDraftCommands
             throw ContractMismatch();
 
         var expected = SchemaProperties(name);
-        if (!properties.Select(item => item.Key).Order(StringComparer.Ordinal)
+        var actualProperties = properties.Select(item => item.Key)
+            .Where(key => !(name == "ModelProviderDraftPage" && key == "activeProviderRevision"));
+        if (!actualProperties.Order(StringComparer.Ordinal)
                 .SequenceEqual(expected.Properties.Order(StringComparer.Ordinal), StringComparer.Ordinal) ||
             schema["required"] is not JsonArray required ||
             !required.Select(value => value?.GetValue<string>()).Order(StringComparer.Ordinal)
@@ -430,7 +432,7 @@ internal static class ByokDraftCommands
                 ["host", "port", "destinationState", "canApprove", "deliveryStatus"],
                 ["host", "port", "destinationState", "canApprove", "deliveryStatus"]),
             "ModelProviderDraftPage" => new(
-                ["switchMode", "activeProviderId", "activeProviderRevision", "settingsRevision", "providers", "nextAfterProviderId"],
+                ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"],
                 ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"]),
             "ModelProviderCredentialOperationResponse" => new(
                 ["operationId", "status", "scope", "projectId", "providerId", "providerRevision",
@@ -607,7 +609,8 @@ internal static class ByokDraftCommands
             case "ModelProviderDraftPage":
                 RequireNullableType(properties, "switchMode", "string");
                 RequireNullableType(properties, "activeProviderId", "string");
-                RequireNullableType(properties, "activeProviderRevision", "integer");
+                if (properties.ContainsKey("activeProviderRevision"))
+                    RequireNullableType(properties, "activeProviderRevision", "integer");
                 RequireNullableType(properties, "settingsRevision", "integer");
                 RequireArrayReference(properties, "providers", "ModelProviderDraft");
                 RequireNullableType(properties, "nextAfterProviderId", "string");
