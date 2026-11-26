@@ -274,7 +274,7 @@ export function PlatformPoliciesPage() {
       <PageHeading
         title={`${scopeName} Policies`}
         description={policy.scope === 'platform'
-          ? 'Read saved source and revisions, edit a raw draft, and validate it.'
+          ? 'Read saved source and revisions, then import, edit, validate, and download a local Platform Policy draft.'
           : 'Import, edit, validate, and download a local Project Policy draft.'}
         breadcrumb={false}
       />
@@ -359,22 +359,21 @@ export function PlatformPoliciesPage() {
         <section aria-label={`${scopeName} Policy draft`}>
           <h2>Draft editor</h2>
           <p>Validation checks this draft. It does not save or apply changes.</p>
-          {policy.scope === 'project' && (
-            <Field label="Validation request">
-              <input
-                className="v1-select"
-                type="file"
-                accept=".json,application/json"
-                aria-label="Project Policy validation request"
-                onChange={async (event) => {
-                  const input = event.currentTarget;
-                  const file = input.files?.[0];
-                  if (file) await policy.importDraft(file);
-                  input.value = '';
-                }}
-              />
-            </Field>
-          )}
+          <Field label="Validation request">
+            <input
+              className="v1-select"
+              type="file"
+              accept=".json,application/json"
+              aria-label={`${scopeName} Policy validation request`}
+              disabled={policy.status !== 'ready'}
+              onChange={(event) => {
+                const input = event.currentTarget;
+                const file = input.files?.[0];
+                input.value = '';
+                if (file) void policy.importDraft(file);
+              }}
+            />
+          </Field>
           {policy.scope === 'platform' && policy.detail && (
             <Button appearance="secondary" onClick={policy.loadDraftFromSavedSource}>
               Load viewed revision into draft
@@ -440,11 +439,13 @@ export function PlatformPoliciesPage() {
             >
               {policy.validationLoading ? 'Validating…' : 'Validate draft'}
             </Button>
-            {policy.scope === 'project' && (
-              <Button appearance="secondary" onClick={policy.downloadDraft}>
-                Download draft
-              </Button>
-            )}
+            <Button
+              appearance="secondary"
+              disabled={policy.status !== 'ready'}
+              onClick={policy.downloadDraft}
+            >
+              Download draft
+            </Button>
           </div>
           {policy.validation?.isValid && (
             <p role="status">The {scopeName} Policy draft is valid.</p>

@@ -1,8 +1,9 @@
 # Read and validate Policies
 
 Use the Policies page to read saved Platform Policy source, compare it with a
-local draft, or validate a local Project Policy draft. The page does not save,
-apply, preview, or report runtime enforcement.
+local draft, or download, reopen, and validate a local Platform or Project
+Policy draft. The page does not save, apply, preview, or report runtime
+enforcement.
 
 ## Before you begin
 
@@ -51,19 +52,44 @@ drafts keep their content and show a fixed error. Comparison does not check
 Policy syntax or enforcement. Edit the draft or reload the page, and select
 **Compare draft** again to refresh the result.
 
+## Download and reopen a local draft
+
+The same controls are available in authorized, ready Platform and Project
+scopes.
+
+1. Open or edit a local draft.
+2. Select **Download draft**. The page names a Platform file
+   `platform-policy-draft.json` and a Project file
+   `project-policy-draft.json`.
+3. To reopen a draft, select the downloaded file under **Validation request**.
+   A successful import replaces the local manifest and files. A failed import
+   leaves the current draft, validation, and comparison unchanged.
+
+The file is compact JSON with one `artifact` field. The artifact contains
+`manifestBytes`, `files`, and `contentSha256`. Each file contains
+`relativePath` and `bytes`. Reopening checks the artifact hash before it
+replaces the editor. It preserves the UTF-8 byte-order mark, mixed line
+endings, and final newline in the source bytes.
+
+The request file limit is 5 MiB. The artifact limit is 1 MiB, with the same
+manifest and file limits described below. A download requires a non-empty
+manifest and stays within the request, artifact, path, file-count, and file
+size limits. It preserves the current UTF-8 bytes and content hash.
+
+Downloading creates a browser file only. It sends no request and does not save,
+apply, activate, or change a Platform or Project Policy. If the download fails,
+the draft stays in the editor. A pending download or import stops when you
+edit, change scope, tenant, Project, access, route, or sign-in session, or start
+a newer local-file operation. A successful reopen clears old validation and
+comparison results but keeps the selected viewed Platform revision.
+
 ## Validate a Project Policy draft
 
 1. Open `/policies`.
 2. Select **Project** in **Policy scope** and choose a Project.
-3. Select a local JSON file under **Validation request**. The JSON object must
-   contain only `artifact`. The artifact must contain `manifestBytes`, `files`,
-   and `contentSha256`. Each file must contain `relativePath` and `bytes`.
-4. Edit the imported manifest, file paths, and file content in the draft
-   editor.
-5. Select **Download draft** to keep a portable copy named
-   `project-policy-draft.json`. The file uses the same compact JSON format as
-   **Validation request**, so you can select it again later.
-6. Select **Validate draft**. Review the result and any diagnostics.
+3. Select a local JSON file under **Validation request**, then edit the
+   manifest, file paths, and file content in the draft editor.
+4. Select **Validate draft**. Review the result and any diagnostics.
 
 ## Raise the Project Skill minimum trust score
 
@@ -84,21 +110,8 @@ built-in Skill exemption stay unchanged. Select **Validate draft** to validate
 the updated draft. Editing the draft, importing another file, or changing
 access or context clears the form.
 
-The import checks the artifact hash and preserves the artifact bytes, including
-the UTF-8 byte-order mark and line endings. A failed import leaves the current
-draft unchanged. The draft stays in browser memory. No Project Policy head or
-history request runs, and validation does not save or apply the draft.
-
-The request file limit is 5 MiB. The artifact limit is 1 MiB, with the same
-manifest and file limits described below. A download requires a non-empty
-manifest and stays within the request, artifact, path, file-count, and file
-size limits. It preserves the current UTF-8 bytes and content hash.
-
-Downloading creates a browser file only. It sends no request and does not save,
-apply, activate, or change a Project Policy. If the download fails, the draft
-stays in the editor. A pending download stops when you edit, import, change
-Project or access context, leave the route, change the sign-in session, or
-start a newer download.
+The draft stays in browser memory. No Project Policy head or history request
+runs, and validation does not save or apply the draft.
 
 ## Edit and validate a Platform Policy draft
 
