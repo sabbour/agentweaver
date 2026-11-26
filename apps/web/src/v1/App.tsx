@@ -124,16 +124,7 @@ import { clearPendingChat } from './chiefOfStaff';
 import { StopRunButton } from './StopRunButton';
 import { RunEgressPanel } from './RunEgressPanel';
 import { AgentsView, type ConfigurationSaveResult } from './AgentsView';
-
-export function retainNewerConfigurationSave(
-  current: { scope: string; response: UpdateProjectConfigurationResponse } | null,
-  scope: string,
-  response: UpdateProjectConfigurationResponse,
-) {
-  return !current || current.scope !== scope || response.revision > current.response.revision
-    ? { scope, response }
-    : current;
-}
+import { retainNewerConfigurationSave } from './configurationSave';
 import { CastTeamPage } from './CastTeamPage';
 import { PlatformSettingsPage } from './PlatformSettingsPage';
 import { useProjectConfiguration, useProjectSummary } from './projectData';

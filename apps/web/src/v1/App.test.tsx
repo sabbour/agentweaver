@@ -282,7 +282,8 @@ vi.mock('./config', async (importOriginal) => {
   return { ...actual, brokerIssuer: 'https://identity.example.test/' };
 });
 
-import App, { retainNewerConfigurationSave } from './App';
+import App from './App';
+import { retainNewerConfigurationSave } from './configurationSave';
 import { GatewayError } from './api';
 import { PENDING_CHAT_STORAGE_KEY } from './chiefOfStaff';
 import { PENDING_RUN_STORAGE_KEY } from './pendingRun';
