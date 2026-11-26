@@ -708,6 +708,7 @@ public static class ProjectConfigurationValidator
             throw Invalid("Model credential references must contain an exact secret ID and version.");
         if (defaults.ModelDefaultSwitch is null ||
             defaults.ModelDefaultSwitch.ManagedTaskKinds.IsDefault ||
+            defaults.ModelDefaultSwitch.ManagedTaskKinds.Any(kind => !Enum.IsDefined(kind)) ||
             defaults.ModelDefaultSwitch.ManagedTaskKinds.Distinct().Count() !=
                 defaults.ModelDefaultSwitch.ManagedTaskKinds.Length ||
             !Enum.IsDefined(defaults.ModelDefaultSwitch.Mode))

@@ -1759,15 +1759,23 @@ public sealed partial class ProjectsConfigService
 
         var shipped = ModelTaskSelectionDefaults.Create()
             .ToDictionary(item => item.TaskKind);
+        var isSameProvider =
+            current.ModelDefaultSwitch.Mode == PlatformModelDefaultSwitchMode.Active &&
+            string.Equals(
+                current.ModelDefaultSwitch.ActiveProviderId,
+                binding.ProviderId,
+                StringComparison.Ordinal);
         var previousManaged = current.ModelDefaultSwitch.Mode == PlatformModelDefaultSwitchMode.Active
             ? current.ModelDefaultSwitch.ManagedTaskKinds
             : [];
-        var managed = current.ModelTaskDefaults
-            .Where(item => previousManaged.Contains(item.TaskKind) ||
-                shipped.TryGetValue(item.TaskKind, out var installation) &&
-                item.Selection == installation.Selection)
-            .Select(item => item.TaskKind)
-            .ToImmutableHashSet();
+        var managed = isSameProvider
+            ? previousManaged.ToImmutableHashSet()
+            : current.ModelTaskDefaults
+                .Where(item => previousManaged.Contains(item.TaskKind) ||
+                    shipped.TryGetValue(item.TaskKind, out var installation) &&
+                    item.Selection == installation.Selection)
+                .Select(item => item.TaskKind)
+                .ToImmutableHashSet();
         var taskDefaults = current.ModelTaskDefaults
             .Select(item =>
             {

@@ -496,4 +496,301 @@ public sealed partial class ProjectsConfigPostgresTests
             }
         });
     }
+
+    [Fact]
+    public async Task SameProviderRefreshAdvancesManagedTasksAndPreservesRestoredUnmanagedAndCustomTasks()
+    {
+        await RunWithIsolatedProjectsAsync(async tests =>
+        {
+            await using var db = tests.CreateDbContext();
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(
+                tests.CreateDbContextOptions(), TimeProvider.System);
+            var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+            var suffix = Guid.NewGuid().ToString("N")[..12];
+            var tenantId = "refresh-tenant-" + suffix;
+            var admin = await SeedCallerAsync(db, authority, "refresh-admin-" + suffix, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+            var owner = await SeedCallerAsync(db, authority, "refresh-owner-" + suffix, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+                tenantId, ProjectAuthorityRole.TenantAdmin);
+
+            var shipped = ModelTaskSelectionDefaults.Create().ToDictionary(item => item.TaskKind);
+            var initial = await service.UpdatePlatformRuntimeDefaultsAsync(
+                admin,
+                (await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None)).Revision,
+                PlatformDefaults() with
+                {
+                    ModelTaskDefaults =
+                    [
+                        .. ModelTaskSelectionDefaults.Create().Select(item => item.TaskKind switch
+                        {
+                            ModelTaskKind.Planning => new ModelTaskSelectionOverride(
+                                item.TaskKind, new ModelSelectionOverride("explicit-planning", "low")),
+                            ModelTaskKind.Review => new ModelTaskSelectionOverride(
+                                item.TaskKind, new ModelSelectionOverride("explicit-review", "high")),
+                            _ => item,
+                        }),
+                    ],
+                },
+                CancellationToken.None);
+
+            var providerA = await SeedAvailablePlatformByokProviderAsync(
+                tests, db, admin, "refresh-a-" + suffix);
+            var providerB = await SeedAvailablePlatformByokProviderAsync(
+                tests, db, admin, "refresh-b-" + suffix);
+
+            var activated1 = await service.ActivatePlatformModelProviderAsync(
+                admin, providerA.ProviderId, initial.Revision, 1, CancellationToken.None);
+
+            var project = await service.CreateProjectAsync(owner, "Refresh project", CancellationToken.None);
+            var projectSettings = await service.UpdateProjectConfigurationAsync(
+                owner, project.ProjectId, project.ConfigurationRevision,
+                ProjectSettings() with
+                {
+                    ModelSelection = null,
+                    ModelTaskOverrides =
+                    [
+                        new(ModelTaskKind.CodeWriting, new ModelSelectionOverride(ReasoningEffort: "low")),
+                    ],
+                },
+                CancellationToken.None);
+
+            var orchestratorId = "refresh-orch-" + suffix;
+            var membership = await SeedMembershipAsync(authority, orchestratorId, tenantId);
+            await authority.AssignRoleAsync(
+                membership, ProjectAuthorityResourceType.Project, project.ProjectId,
+                ProjectAuthorityRole.Orchestrator, "test", CancellationToken.None);
+
+            var runBeforeId = "refresh-before-" + suffix;
+            var orchBefore = await ResolveCallerAsync(
+                db, orchestratorId, tenantId, ["api.read", "projects.orchestrator"],
+                project.ProjectId, runBeforeId);
+            var acceptedBefore = await service.AcceptInteractiveRunSelectionAsync(
+                orchBefore, project.ProjectId, runBeforeId,
+                new InteractiveRunSelectionRequest(projectSettings.Revision), CancellationToken.None);
+            Assert.Equal(1,
+                Assert.Single(acceptedBefore.ModelSelections,
+                    item => item.Selection.Reference == providerA.ProviderId &&
+                        item.Selection.ReasoningEffort == "low")
+                    .Selection.ProviderBindingRevision!.ProviderRevision);
+
+            // Restore Planning back to the shipped installation default while keeping Review custom.
+            var activeBeforeRestore = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+            var restored = await service.UpdatePlatformRuntimeDefaultsAsync(
+                admin,
+                activeBeforeRestore.Revision,
+                activeBeforeRestore.Defaults! with
+                {
+                    ModelTaskDefaults =
+                    [
+                        .. activeBeforeRestore.Defaults.ModelTaskDefaults.Select(item =>
+                            item.TaskKind == ModelTaskKind.Planning ? shipped[ModelTaskKind.Planning] : item),
+                    ],
+                },
+                CancellationToken.None);
+            Assert.DoesNotContain(ModelTaskKind.Planning, restored.Defaults!.ModelDefaultSwitch.ManagedTaskKinds);
+            Assert.DoesNotContain(ModelTaskKind.Review, restored.Defaults.ModelDefaultSwitch.ManagedTaskKinds);
+
+            // Bump providerA to revision 2 (rotated key + rechecked revision).
+            await using (var ownerConnection = await tests.OpenOwnerConnectionAsync())
+            {
+                await using var bump = new NpgsqlCommand(
+                    """
+                    ALTER TABLE projects_config.model_providers DISABLE TRIGGER USER;
+                    ALTER TABLE projects_config.model_provider_revisions DISABLE TRIGGER USER;
+                    INSERT INTO projects_config.model_provider_revisions
+                      (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                       display_name, type, base_url, deployment, wire_api, reasoning_efforts,
+                       prompt_capacity_tokens, configuration_hash, credential_version, credential_slot_id,
+                       credential_secret_id, rate_card_id, rate_card_version, rate_card_pin_json,
+                       created_by_actor_id, created_at)
+                    SELECT provider_id, 2, scope, project_id, gen_random_uuid(), repeat('f', 64),
+                           display_name, type, base_url, 'deployment-2', wire_api, reasoning_efforts,
+                           prompt_capacity_tokens, repeat('1', 64), 'v2', credential_slot_id,
+                           credential_secret_id, rate_card_id, rate_card_version, rate_card_pin_json,
+                           created_by_actor_id, now()
+                    FROM projects_config.model_provider_revisions
+                    WHERE provider_id = @provider AND provider_revision = 1;
+                    UPDATE projects_config.model_providers
+                    SET current_revision = 2
+                    WHERE provider_id = @provider;
+                    ALTER TABLE projects_config.model_providers ENABLE TRIGGER USER;
+                    ALTER TABLE projects_config.model_provider_revisions ENABLE TRIGGER USER;
+                    """,
+                    ownerConnection);
+                bump.Parameters.AddWithValue("provider", providerA.ProviderId);
+                await bump.ExecuteNonQueryAsync();
+            }
+
+            // Positive stale settings revision and stale provider revision both fail with 409.
+            var staleSettings = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.ActivatePlatformModelProviderAsync(
+                    admin, providerA.ProviderId, activated1.SettingsRevision, 2, CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, staleSettings.StatusCode);
+
+            var staleProvider = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.ActivatePlatformModelProviderAsync(
+                    admin, providerA.ProviderId, restored.Revision, 1, CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, staleProvider.StatusCode);
+
+            // Same-provider refresh to revision 2 advances base + managed tasks, preserves Planning and Review.
+            var refreshed = await service.ActivatePlatformModelProviderAsync(
+                admin, providerA.ProviderId, restored.Revision, 2, CancellationToken.None);
+            var afterRefresh = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+            Assert.Equal(2, afterRefresh.Defaults!.ModelDefaultSwitch.ProviderRevision);
+            Assert.Equal("2", afterRefresh.Defaults.ModelSelection!.ModelBindingPin!.ConfigurationRevision);
+            Assert.Equal("v2", afterRefresh.Defaults.ModelSelection.CredentialReference!.Version);
+            Assert.Equal(restored.Defaults.ModelDefaultSwitch.ManagedTaskKinds.ToArray(),
+                afterRefresh.Defaults.ModelDefaultSwitch.ManagedTaskKinds.ToArray());
+
+            var refreshedCodeWriting = Assert.Single(afterRefresh.Defaults.ModelTaskDefaults,
+                item => item.TaskKind == ModelTaskKind.CodeWriting);
+            Assert.Equal(providerA.ProviderId, refreshedCodeWriting.Selection.Reference);
+            Assert.Equal("2", refreshedCodeWriting.Selection.ModelBindingPin!.ConfigurationRevision);
+
+            var preservedPlanning = Assert.Single(afterRefresh.Defaults.ModelTaskDefaults,
+                item => item.TaskKind == ModelTaskKind.Planning);
+            Assert.Equal(shipped[ModelTaskKind.Planning].Selection, preservedPlanning.Selection);
+
+            var preservedReview = Assert.Single(afterRefresh.Defaults.ModelTaskDefaults,
+                item => item.TaskKind == ModelTaskKind.Review);
+            Assert.Equal("explicit-review", preservedReview.Selection.Reference);
+
+            // New run gets revision 2 for managed tasks and keeps shipped Planning; old run retains revision 1.
+            var runAfterId = "refresh-after-" + suffix;
+            var orchAfter = await ResolveCallerAsync(
+                db, orchestratorId, tenantId, ["api.read", "projects.orchestrator"],
+                project.ProjectId, runAfterId);
+            var acceptedAfter = await service.AcceptInteractiveRunSelectionAsync(
+                orchAfter, project.ProjectId, runAfterId,
+                new InteractiveRunSelectionRequest(projectSettings.Revision), CancellationToken.None);
+            Assert.Equal(2,
+                Assert.Single(acceptedAfter.ModelSelections,
+                    item => item.Selection.Reference == providerA.ProviderId &&
+                        item.Selection.ReasoningEffort == "low")
+                    .Selection.ProviderBindingRevision!.ProviderRevision);
+            Assert.Contains(acceptedAfter.ModelSelections,
+                item => item.Selection.Reference == shipped[ModelTaskKind.Planning].Selection.Reference);
+
+            var replayBefore = await service.AcceptInteractiveRunSelectionAsync(
+                orchBefore, project.ProjectId, runBeforeId,
+                new InteractiveRunSelectionRequest(projectSettings.Revision), CancellationToken.None);
+            Assert.Equal(1,
+                Assert.Single(replayBefore.ModelSelections,
+                    item => item.Selection.Reference == providerA.ProviderId &&
+                        item.Selection.ReasoningEffort == "low")
+                    .Selection.ProviderBindingRevision!.ProviderRevision);
+
+            // Switching to a DIFFERENT provider still takes over tasks at shipped installation defaults.
+            var switchedOther = await service.ActivatePlatformModelProviderAsync(
+                admin, providerB.ProviderId, refreshed.SettingsRevision, 1, CancellationToken.None);
+            var afterOther = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+            Assert.Contains(ModelTaskKind.Planning, afterOther.Defaults!.ModelDefaultSwitch.ManagedTaskKinds);
+            Assert.Equal(providerB.ProviderId,
+                Assert.Single(afterOther.Defaults.ModelTaskDefaults,
+                    item => item.TaskKind == ModelTaskKind.Planning).Selection.Reference);
+            Assert.Equal("explicit-review",
+                Assert.Single(afterOther.Defaults.ModelTaskDefaults,
+                    item => item.TaskKind == ModelTaskKind.Review).Selection.Reference);
+
+            // Revoked PlatformAdmin authority fails.
+            var adminGrant = Assert.Single(admin.Grants, item => item.Role == ProjectAuthorityRole.PlatformAdmin);
+            await authority.RevokeRoleAssignmentAsync(
+                adminGrant.AssignmentId, adminGrant.Revision, "test", CancellationToken.None);
+            var forbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.ActivatePlatformModelProviderAsync(
+                    admin, providerB.ProviderId, switchedOther.SettingsRevision, 1, CancellationToken.None));
+            Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+        });
+    }
+
+    [Fact]
+    public async Task PlatformSwitchRejectsMalformedManagedTaskKindsAndHandlesMissingTaskDefaults()
+    {
+        var invalidDefaults = PlatformDefaults() with
+        {
+            ModelDefaultSwitch = new PlatformModelDefaultSwitch
+            {
+                Mode = PlatformModelDefaultSwitchMode.Active,
+                ActiveProviderId = "provider-1",
+                ProviderRevision = 1,
+                ManagedTaskKinds = [(ModelTaskKind)999],
+            },
+        };
+        var invalidError = Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.Validate(invalidDefaults));
+        Assert.Equal(StatusCodes.Status400BadRequest, invalidError.StatusCode);
+
+        await RunWithIsolatedProjectsAsync(async tests =>
+        {
+            await using var db = tests.CreateDbContext();
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(
+                tests.CreateDbContextOptions(), TimeProvider.System);
+            var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+            var suffix = Guid.NewGuid().ToString("N")[..12];
+            var tenantId = "missing-task-tenant-" + suffix;
+            var admin = await SeedCallerAsync(db, authority, "missing-task-admin-" + suffix, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+
+            var initial = await service.UpdatePlatformRuntimeDefaultsAsync(
+                admin,
+                0,
+                PlatformDefaults() with
+                {
+                    ModelTaskDefaults =
+                    [
+                        new(ModelTaskKind.Planning, new("explicit-planning", "low")),
+                        new(ModelTaskKind.CodeWriting, ModelTaskSelectionDefaults.Create()
+                            .Single(item => item.TaskKind == ModelTaskKind.CodeWriting).Selection),
+                        new(ModelTaskKind.Straightforward, ModelTaskSelectionDefaults.Create()
+                            .Single(item => item.TaskKind == ModelTaskKind.Straightforward).Selection),
+                    ],
+                },
+                CancellationToken.None);
+
+            var provider = await SeedAvailablePlatformByokProviderAsync(
+                tests, db, admin, "missing-task-provider-" + suffix);
+            var activated = await service.ActivatePlatformModelProviderAsync(
+                admin, provider.ProviderId, initial.Revision, 1, CancellationToken.None);
+
+            // Simulate a stored revision where Straightforward is in ManagedTaskKinds but missing from ModelTaskDefaults.
+            await using (var ownerConnection = await tests.OpenOwnerConnectionAsync())
+            {
+                await using var updateRevision = new NpgsqlCommand(
+                    """
+                    ALTER TABLE projects_config.platform_runtime_revisions DISABLE TRIGGER USER;
+                    UPDATE projects_config.platform_runtime_revisions
+                    SET configuration = jsonb_set(
+                        configuration,
+                        '{modelTaskDefaults}',
+                        COALESCE(
+                            (SELECT jsonb_agg(item)
+                             FROM jsonb_array_elements(configuration->'modelTaskDefaults') AS item
+                             WHERE item->>'taskKind' <> 'straightforward'),
+                            '[]'::jsonb))
+                    WHERE revision = @revision;
+                    ALTER TABLE projects_config.platform_runtime_revisions ENABLE TRIGGER USER;
+                    """,
+                    ownerConnection);
+                updateRevision.Parameters.AddWithValue("revision", activated.SettingsRevision);
+                await updateRevision.ExecuteNonQueryAsync();
+            }
+
+            await service.ActivatePlatformModelProviderAsync(
+                admin, provider.ProviderId, activated.SettingsRevision, 1, CancellationToken.None);
+            var after = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+            Assert.Equal([ModelTaskKind.CodeWriting, ModelTaskKind.Straightforward],
+                after.Defaults!.ModelDefaultSwitch.ManagedTaskKinds.ToArray());
+            Assert.DoesNotContain(after.Defaults.ModelTaskDefaults,
+                item => item.TaskKind == ModelTaskKind.Straightforward);
+            Assert.Equal("explicit-planning",
+                Assert.Single(after.Defaults.ModelTaskDefaults,
+                    item => item.TaskKind == ModelTaskKind.Planning).Selection.Reference);
+            Assert.Equal(provider.ProviderId,
+                Assert.Single(after.Defaults.ModelTaskDefaults,
+                    item => item.TaskKind == ModelTaskKind.CodeWriting).Selection.Reference);
+        });
+    }
 }

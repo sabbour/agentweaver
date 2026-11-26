@@ -103,6 +103,9 @@ efforts. It does not remove or disable the saved provider.
 
 The switch replaces only installation fallbacks. Explicit project, role,
 agent, and task model choices and effort-only overrides remain effective.
+Re-activating the same active provider refreshes the base selection and only
+the already managed task kinds, so restored or unmanaged task defaults stay
+untouched.
 Fresh interactive and non-interactive starts resolve the selected binding under
 the Projects transaction and pin it to the accepted run. An exact authorized
 retry reads the saved selection before mutable platform settings. The
