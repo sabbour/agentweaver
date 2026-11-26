@@ -109,7 +109,7 @@ internal static partial class GatewayOpenApi
             ["validateProjectNativeAcsPolicy"] = C(
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
             ["writePlatformNativeAcsPolicy"] = C(
-                "NativeAcsPolicyWriteRequest", "NativeAcsPolicyWriteReceipt", "200"),
+                "NativeAcsPolicyWriteRequest", "NativeAcsPolicyPreparationResponse", "200"),
             ["listPlatformByokProviderDrafts"] = C(null, "ModelProviderDraftPage", "200"),
             ["activatePlatformByokProviderDraft"] = C(
                 "ActivatePlatformModelProviderRequest", "PlatformModelDefaultSwitchResult", "200"),
@@ -2690,6 +2690,32 @@ else if (route.OperationId is
             ("scopeType", Ref("NativeAcsPolicyScopeType")), ("scopeId", Str()), ("policyId", Str()),
             ("revision", Int()), ("contentSha256", Str()), ("auditId", Uuid()), ("outboxId", Uuid()),
             ("replayed", Bool())),
+        ["NativeAcsPolicyPreparationReceipt"] = StrictObj(
+            ["preparationId", "scopeType", "scopeId", "policyId", "expectedHeadPolicyId",
+                "expectedHeadRevision", "expectedHeadContentSha256", "proposedContentSha256", "state",
+                "checkpoint", "createdAt", "replayed"],
+            ("preparationId", Uuid()),
+            ("scopeType", Enum("platform")),
+            ("scopeId", Str()),
+            ("policyId", Str()),
+            ("expectedHeadPolicyId", NullableStr()),
+            ("expectedHeadRevision", NullableInt()),
+            ("expectedHeadContentSha256", Nullable(new { type = "string", pattern = "^[0-9a-f]{64}$" })),
+            ("proposedContentSha256", new { type = "string", pattern = "^[0-9a-f]{64}$" }),
+            ("state", Enum("pending")),
+            ("checkpoint", NullableStr()),
+            ("createdAt", Date()),
+            ("replayed", Bool()),
+            ("governanceDecisionId", NullableUuid()),
+            ("governanceDecisionHash", Nullable(new { type = "string", pattern = "^[0-9a-f]{64}$" }))),
+        ["NativeAcsPolicyPreparationResponse"] = new
+        {
+            oneOf = new[]
+            {
+                Ref("NativeAcsPolicyPreparationReceipt"),
+                Ref("NativeAcsPolicyWriteReceipt"),
+            },
+        },
         ["ModelProviderDraftSaveRequest"] = WithRateCardPair(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64",

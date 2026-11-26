@@ -613,7 +613,7 @@ jobs:
           key: v1-nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', '**/packages.lock.json', '**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.Config') }}
           restore-keys: v1-nuget-${{ runner.os }}-${{ runner.arch }}-
       - name: Download and verify pinned OPA for native ACS tests
-        if: matrix.name == 'native-acs' || matrix.name == 'projects-config'
+        if: matrix.name == 'native-acs' || matrix.name == 'projects-config' || matrix.project == 'Agentweaver.Identity.Broker.Tests'
         run: |
           mkdir -p "$RUNNER_TEMP/agentweaver-native-acs"
           curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 \

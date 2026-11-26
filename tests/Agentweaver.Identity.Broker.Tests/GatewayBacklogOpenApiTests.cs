@@ -280,7 +280,9 @@ public sealed class GatewayBacklogOpenApiTests
                 MatchesSchema(value, referencedSchema, schemas);
         }
 
-        if (schema.TryGetProperty("anyOf", out var alternatives))
+        if (schema.TryGetProperty("oneOf", out var alternatives))
+            return alternatives.EnumerateArray().Count(alternative => MatchesSchema(value, alternative, schemas)) == 1;
+        if (schema.TryGetProperty("anyOf", out alternatives))
             return alternatives.EnumerateArray().Any(alternative => MatchesSchema(value, alternative, schemas));
         if (!schema.TryGetProperty("type", out var type))
             return true;

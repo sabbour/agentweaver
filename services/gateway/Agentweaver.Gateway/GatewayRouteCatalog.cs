@@ -617,7 +617,7 @@ public static class GatewayRouteCatalog
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
         Add("PUT", GatewayOwner.Projects, "/policies/platform", "/api/policies/platform/",
-            "writePlatformNativeAcsPolicy", "Write a complete Platform Policy at an expected revision",
+            "writePlatformNativeAcsPolicy", "Prepare a Platform Policy at an expected revision",
             body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
