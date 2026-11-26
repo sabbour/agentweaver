@@ -1,14 +1,20 @@
 extern alias ProjectsConfig;
 
+using System.Collections.Immutable;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Policy.Acs;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using ProjectsConfig::Agentweaver.Projects.Config;
@@ -18,6 +24,235 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class GatewayModelProviderDraftPostgresTests
 {
+    [LinuxOnlyFact]
+    public async Task GatewayPlatformPolicyPreparationOpenApiMatchesNewAndRetryReceipts()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var opaPath = Environment.GetEnvironmentVariable("ACS_OPA_PATH");
+        Assert.True(File.Exists(opaPath), "Set ACS_OPA_PATH to the pinned OPA 0.70.0 executable.");
+        var storeOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(connectionString, config =>
+                config.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+        var store = new NativeAcsPolicyStore(
+            new PooledDbContextFactory<ProjectsConfigDbContext>(storeOptions),
+            TimeProvider.System,
+            new EphemeralDataProtectionProvider());
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            connectionString, key, grantRoleAssignmentWrites: false,
+            configureServices: services =>
+            {
+                services.AddSingleton(store);
+                services.AddSingleton(new NativeAcsArtifactValidator(opaPath));
+                services.AddSingleton(new NativeAcsPolicyRequestGate(
+                    new MemoryCache(new MemoryCacheOptions()),
+                    TimeProvider.System));
+                services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        [NativeAcsPolicyEndpoints.HeadWritesEnabledSetting] = "true",
+                    })
+                    .Build());
+            });
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key, projects.CreateHandler, (_, _, _) => throw new InvalidOperationException());
+
+        var tenant = "policy-receipt-tenant-" + Guid.NewGuid().ToString("N");
+        var subject = "policy-receipt-owner-" + Guid.NewGuid().ToString("N");
+        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(projects.PrivilegedFixtureDataSource, config =>
+                config.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var membership = await authority.GrantMembershipAsync(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri, subject, tenant, "fixture");
+        var assignment = await authority.AssignRoleAsync(
+            membership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin,
+            "fixture");
+        var caller = new ProjectAuthorizationContext(
+            membership.Issuer,
+            subject,
+            tenant,
+            membership.MembershipId,
+            membership.Revision,
+            [new ProjectAuthorizationGrant(
+                assignment.AssignmentId,
+                assignment.ResourceType,
+                assignment.ResourceId,
+                assignment.Role,
+                assignment.Revision)],
+            ImmutableHashSet.Create(StringComparer.Ordinal, "api.read", "projects.admin"),
+            null,
+            null,
+            null);
+        var pendingArtifact = PolicyReceiptArtifact();
+        var pendingRequest = new NativeAcsPolicyWriteRequest(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            "canonical",
+            null,
+            pendingArtifact,
+            "policy-preparation-" + Guid.NewGuid().ToString("N"),
+            "Prepare policy",
+            "policy-preparation-correlation-" + Guid.NewGuid().ToString("N"));
+        using var openApiResponse = await gateway.Client.GetAsync("/openapi/v1.json");
+        openApiResponse.EnsureSuccessStatusCode();
+        using var openApi = JsonDocument.Parse(await openApiResponse.Content.ReadAsStringAsync());
+        var operation = openApi.RootElement.GetProperty("paths")
+            .GetProperty("/api/v1/policies/platform").GetProperty("put");
+        Assert.Equal(
+            "Prepare a Platform Policy at an expected revision",
+            operation.GetProperty("summary").GetString());
+        var responseSchema = operation.GetProperty("responses").GetProperty("200")
+            .GetProperty("content").GetProperty("application/json").GetProperty("schema");
+        Assert.Equal(
+            "#/components/schemas/NativeAcsPolicyPreparationResponse",
+            responseSchema.GetProperty("$ref").GetString());
+        var schemas = openApi.RootElement.GetProperty("components").GetProperty("schemas");
+        var pendingUnion = schemas.GetProperty("NativeAcsPolicyPreparationResponse");
+        Assert.False(pendingUnion.TryGetProperty("anyOf", out _));
+        Assert.Equal(
+            [
+                "#/components/schemas/NativeAcsPolicyPreparationReceipt",
+                "#/components/schemas/NativeAcsPolicyWriteReceipt",
+            ],
+            pendingUnion.GetProperty("oneOf").EnumerateArray()
+                .Select(branch => branch.GetProperty("$ref").GetString()!).ToArray());
+        var preparationSchema = schemas.GetProperty("NativeAcsPolicyPreparationReceipt");
+        var required = preparationSchema.GetProperty("required").EnumerateArray()
+            .Select(item => item.GetString()).ToArray();
+        Assert.Contains("expectedHeadPolicyId", required);
+        Assert.Contains("expectedHeadRevision", required);
+        Assert.Contains("expectedHeadContentSha256", required);
+        Assert.Contains("checkpoint", required);
+        Assert.DoesNotContain("governanceDecisionId", required);
+        Assert.DoesNotContain("governanceDecisionHash", required);
+
+        var bearer = CreateToken(key, subject, "api.read projects.admin");
+        using var newPreparation = PolicyReceiptRequest(
+            bearer, tenant, pendingRequest);
+        using var newResponse = await gateway.Client.SendAsync(newPreparation);
+        var newResponseBody = await newResponse.Content.ReadAsStringAsync();
+        Assert.True(
+            newResponse.StatusCode == HttpStatusCode.OK,
+            $"Status: {newResponse.StatusCode}; body: {newResponseBody}");
+        Assert.True(newResponse.Headers.CacheControl?.NoStore);
+        using var newPayload = JsonDocument.Parse(newResponseBody);
+        Assert.False(newPayload.RootElement.GetProperty("replayed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null,
+            newPayload.RootElement.GetProperty("expectedHeadPolicyId").ValueKind);
+        Assert.Equal(JsonValueKind.Null,
+            newPayload.RootElement.GetProperty("expectedHeadRevision").ValueKind);
+        Assert.Equal(JsonValueKind.Null,
+            newPayload.RootElement.GetProperty("expectedHeadContentSha256").ValueKind);
+        Assert.Equal(JsonValueKind.Null, newPayload.RootElement.GetProperty("checkpoint").ValueKind);
+        Assert.True(GatewayBacklogOpenApiTests.MatchesSchema(
+            newPayload.RootElement, pendingUnion, schemas));
+        Assert.Null(await store.ReadAsync(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            CancellationToken.None));
+
+        using var pendingRetry = PolicyReceiptRequest(
+            bearer, tenant, pendingRequest);
+        using var pendingResponse = await gateway.Client.SendAsync(pendingRetry);
+        Assert.Equal(HttpStatusCode.OK, pendingResponse.StatusCode);
+        Assert.True(pendingResponse.Headers.CacheControl?.NoStore);
+        using var pendingPayload = JsonDocument.Parse(await pendingResponse.Content.ReadAsStringAsync());
+        Assert.True(pendingPayload.RootElement.GetProperty("replayed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null,
+            pendingPayload.RootElement.GetProperty("expectedHeadPolicyId").ValueKind);
+        Assert.Equal(JsonValueKind.Null,
+            pendingPayload.RootElement.GetProperty("expectedHeadRevision").ValueKind);
+        Assert.Equal(JsonValueKind.Null,
+            pendingPayload.RootElement.GetProperty("expectedHeadContentSha256").ValueKind);
+        Assert.Equal(JsonValueKind.Null, pendingPayload.RootElement.GetProperty("checkpoint").ValueKind);
+        Assert.True(GatewayBacklogOpenApiTests.MatchesSchema(
+            pendingPayload.RootElement, pendingUnion, schemas));
+        Assert.Null(await store.ReadAsync(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            CancellationToken.None));
+
+        var committedArtifact = PolicyReceiptArtifact();
+        var committedRequest = new NativeAcsPolicyWriteRequest(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            "canonical",
+            null,
+            committedArtifact,
+            "policy-committed-" + Guid.NewGuid().ToString("N"),
+            "Commit legacy policy",
+            "policy-committed-correlation-" + Guid.NewGuid().ToString("N"));
+        var committedReceipt = await store.WriteAsync(
+            caller, committedRequest, CancellationToken.None);
+        using var committedRetry = PolicyReceiptRequest(
+            bearer, tenant, committedRequest);
+        using var committedResponse = await gateway.Client.SendAsync(committedRetry);
+        Assert.Equal(HttpStatusCode.OK, committedResponse.StatusCode);
+        Assert.True(committedResponse.Headers.CacheControl?.NoStore);
+        using var committedPayload = JsonDocument.Parse(await committedResponse.Content.ReadAsStringAsync());
+        Assert.True(committedPayload.RootElement.GetProperty("replayed").GetBoolean());
+        Assert.Equal(committedReceipt.Revision,
+            committedPayload.RootElement.GetProperty("revision").GetInt64());
+        Assert.Equal(committedReceipt.AuditId,
+            committedPayload.RootElement.GetProperty("auditId").GetGuid());
+        Assert.True(GatewayBacklogOpenApiTests.MatchesSchema(
+            committedPayload.RootElement, pendingUnion, schemas));
+    }
+
+    private static HttpRequestMessage PolicyReceiptRequest(
+        string bearer,
+        string tenant,
+        NativeAcsPolicyWriteRequest request)
+    {
+        var message = new HttpRequestMessage(HttpMethod.Put, "/api/v1/policies/platform");
+        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        message.Headers.Add("X-Agentweaver-Tenant", tenant);
+        message.Content = JsonContent.Create(new
+        {
+            request.ExpectedRevision,
+            request.Artifact,
+            request.IdempotencyKey,
+            request.Reason,
+            request.CorrelationId,
+        });
+        return message;
+    }
+
+    private static NativeAcsArtifact PolicyReceiptArtifact()
+    {
+        return NativeAcsFiniteNetworkProfile.CreateArtifact(
+            """
+            {
+              "agentweaver": {
+                "platform_egress": {
+                  "profile": "finite-network-v1",
+                  "mode": "Allowlist",
+                  "approved": [
+                    { "host": "approved.example.com", "port": 443 }
+                  ],
+                  "system": {
+                    "catalog": "hosted-copilot-v1",
+                    "destinations": [
+                      { "host": "api.business.githubcopilot.com", "port": 443 },
+                      { "host": "api.enterprise.githubcopilot.com", "port": 443 },
+                      { "host": "api.github.com", "port": 443 },
+                      { "host": "api.githubcopilot.com", "port": 443 },
+                      { "host": "api.individual.githubcopilot.com", "port": 443 }
+                    ]
+                  }
+                }
+              }
+            }
+            """);
+    }
+
     [Fact]
     public async Task GatewayGovernanceDecisionHistoryEnforcesScopeRolesValidationAndPaging()
     {

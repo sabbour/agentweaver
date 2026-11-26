@@ -81,6 +81,9 @@ dispatch and does not forward `Idempotency-Key` or `If-Match` for the two new
 read routes. Projects & Config owns authorization, validation, and policy
 state. See the
 [Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
+For the `PUT` route, the `200` response is a named OpenAPI union. A new or
+pending-retry response is a preparation receipt. A retry of a legacy committed
+write is a write receipt.
 
 The four Project Policy source and history reads are also fixed catalog routes.
 They forward the optional tenant selector, expose `Cache-Control`, accept
