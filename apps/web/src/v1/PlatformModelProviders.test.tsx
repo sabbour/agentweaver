@@ -1423,4 +1423,96 @@ describe('PlatformModelProviders', () => {
     await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('button', { name: 'Use latest revision for Primary' })).toBeNull();
   });
+
+  it('recovers when authorizationContext becomes null mid-flight during deferred conflict reload', async () => {
+    let resolveDeferredReload!: (value: unknown) => void;
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 3, settingsRevision: 9 },
+      ))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveDeferredReload = resolve; }))
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 5, settingsRevision: 10 },
+      ));
+    api.activatePlatformByokProvider.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'Deferred reload conflict'),
+    );
+
+    const view = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use latest revision for Primary' }));
+    await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2));
+
+    // Token refresh clears authorizationContext after loadPage began, before deferred list response resolves.
+    auth.authorizationContext = null;
+    view.rerender(<PlatformModelProviders />);
+    resolveDeferredReload(providerPage(
+      [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+      { activeProviderRevision: 5, settingsRevision: 10 },
+    ));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Restoring same identity triggers recovery reload without retrying switch, preserving 409 notice.
+    auth.authorizationContext = { tenantId: 'tenant-1' };
+    view.rerender(<PlatformModelProviders />);
+    expect(await screen.findByText('Primary')).toBeTruthy();
+    expect(screen.getByText('HTTP 409: Deferred reload conflict')).toBeTruthy();
+    expect(api.activatePlatformByokProvider).toHaveBeenCalledOnce();
+    await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(3));
+  });
+
+  it('shows 403 denied message when deferred list reload fails with 403 while authorizationContext is temporarily null, and isolates stale identity', async () => {
+    let rejectDeferredReload!: (reason: unknown) => void;
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 3, settingsRevision: 9 },
+      ))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectDeferredReload = reject; }));
+    api.activatePlatformByokProvider.mockResolvedValueOnce({
+      mode: 'active',
+      activeProviderId: 'provider-1',
+      settingsRevision: 10,
+    });
+
+    const view = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use latest revision for Primary' }));
+    await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2));
+
+    auth.authorizationContext = null;
+    view.rerender(<PlatformModelProviders />);
+    rejectDeferredReload(new GatewayError(403, { code: 'forbidden' }, 'Denied'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    auth.authorizationContext = { tenantId: 'tenant-1' };
+    view.rerender(<PlatformModelProviders />);
+    expect(await screen.findByText(/Your role cannot manage platform providers/)).toBeTruthy();
+
+    // Stale identity (different authSessionEpoch) must ignore a late 403 from the old session.
+    api.listPlatformByokProviderDrafts.mockReset();
+    let rejectStaleReload!: (reason: unknown) => void;
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 3, settingsRevision: 9 },
+      ))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectStaleReload = reject; }));
+    api.activatePlatformByokProvider.mockResolvedValueOnce({
+      mode: 'active',
+      activeProviderId: 'provider-1',
+      settingsRevision: 10,
+    });
+    auth.authSessionEpoch = 2;
+    view.rerender(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use latest revision for Primary' }));
+    await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2));
+
+    auth.authSessionEpoch = 3;
+    auth.authorizationContext = null;
+    view.rerender(<PlatformModelProviders />);
+    rejectStaleReload(new GatewayError(403, { code: 'forbidden' }, 'Stale denied'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText(/Your role cannot manage platform providers/)).toBeNull();
+  });
 });

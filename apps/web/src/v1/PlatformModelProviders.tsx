@@ -277,7 +277,8 @@ export function PlatformModelProviders() {
   const [switching, setSwitching] = useState<string | 'copilot' | null>(null);
   const [pendingSwitchReload, setPendingSwitchReload] = useState<{
     snapshot: AccessSnapshot;
-    conflictError: unknown;
+    preserveConflict: boolean;
+    conflictError?: unknown;
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [credentialStatus, setCredentialStatus] = useState<{
@@ -493,6 +494,17 @@ export function PlatformModelProviders() {
     return mountedRef.current && isSameConfirmedIdentity(snapshot);
   }, [isSameConfirmedIdentity]);
 
+  const isTemporarilyUnconfirmedSameSession = useCallback((snapshot: AccessSnapshot): boolean => {
+    const liveSession = sessionRef.current;
+    const liveIdentity = confirmedIdentityRef.current;
+    return (
+      mountedRef.current &&
+      Boolean(liveSession && !liveSession.binding && isActiveSession(liveSession)) &&
+      authSessionEpochRef.current === snapshot.sessionEpoch &&
+      liveIdentity.tenantId === null
+    );
+  }, [isActiveSession]);
+
   const boundCall = useCallback(async <T,>(
     snapshot: AccessSnapshot,
     operation: (token: string) => Promise<T>,
@@ -543,7 +555,7 @@ export function PlatformModelProviders() {
   ): Promise<boolean> => {
     if (!snapshot || !isCurrent(snapshot)) return false;
     const generation = ++requestGeneration.current;
-    if (!append) {
+    const resetToFirstPage = (preserveConflict: boolean) => {
       loadedSwitchSnapshotRef.current = null;
       setProviders([]);
       setNextAfterProviderId(null);
@@ -552,47 +564,77 @@ export function PlatformModelProviders() {
       setActiveProviderId(null);
       setActiveProviderRevision(null);
       setDetailReplacedProviderIds(new Set());
-      if (!options?.preserveConflict) setSwitchConflictError(null);
-    }
+      if (!preserveConflict) setSwitchConflictError(null);
+    };
+    if (!append) resetToFirstPage(Boolean(options?.preserveConflict));
     setLoading(true);
     setLoadError(null);
     try {
-      const page = await boundCall(snapshot, (token) =>
-        gatewayClient.listPlatformByokProviderDrafts(
-          token, PAGE_SIZE, afterProviderId, snapshot.tenant,
-        ));
-      if (generation !== requestGeneration.current || !isCurrent(snapshot)) return false;
-      const rows = page.providers.map(requirePlatformProvider);
-      const nextMode = switchMode(page.switchMode);
-      const nextActiveProviderRevision = page.activeProviderRevision ?? null;
-      if (append) {
-        const baseline = loadedSwitchSnapshotRef.current;
-        if (!baseline ||
-            baseline.mode !== nextMode ||
-            baseline.activeProviderId !== page.activeProviderId ||
-            baseline.activeProviderRevision !== nextActiveProviderRevision ||
-            baseline.settingsRevision !== page.settingsRevision) {
-          await loadPage(snapshot);
+      let targetAfter = afterProviderId;
+      let isAppend = append;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const page = await boundCall(snapshot, (token) =>
+          gatewayClient.listPlatformByokProviderDrafts(
+            token, PAGE_SIZE, targetAfter, snapshot.tenant,
+          ));
+        if (generation !== requestGeneration.current) return false;
+        if (!isCurrent(snapshot)) {
+          if (isTemporarilyUnconfirmedSameSession(snapshot)) {
+            setPendingSwitchReload((current) => current ?? {
+              snapshot,
+              preserveConflict: Boolean(options?.preserveConflict),
+            });
+          }
           return false;
         }
+        const rows = page.providers.map(requirePlatformProvider);
+        const nextMode = switchMode(page.switchMode);
+        const nextActiveProviderRevision = page.activeProviderRevision ?? null;
+        if (isAppend) {
+          const baseline = loadedSwitchSnapshotRef.current;
+          if (!baseline ||
+              baseline.mode !== nextMode ||
+              baseline.activeProviderId !== page.activeProviderId ||
+              baseline.activeProviderRevision !== nextActiveProviderRevision ||
+              baseline.settingsRevision !== page.settingsRevision) {
+            resetToFirstPage(false);
+            targetAfter = null;
+            isAppend = false;
+            continue;
+          }
+        }
+        loadedSwitchSnapshotRef.current = {
+          mode: nextMode,
+          activeProviderId: page.activeProviderId,
+          activeProviderRevision: nextActiveProviderRevision,
+          settingsRevision: page.settingsRevision,
+        };
+        setProviders((current) => isAppend ? [...current, ...rows] : rows);
+        setNextAfterProviderId(page.nextAfterProviderId);
+        setSettingsRevision(page.settingsRevision);
+        setMode(nextMode);
+        setActiveProviderId(page.activeProviderId);
+        setActiveProviderRevision(nextActiveProviderRevision);
+        if (!isAppend) setDetailReplacedProviderIds(new Set());
+        setForbidden(false);
+        return true;
       }
-      loadedSwitchSnapshotRef.current = {
-        mode: nextMode,
-        activeProviderId: page.activeProviderId,
-        activeProviderRevision: nextActiveProviderRevision,
-        settingsRevision: page.settingsRevision,
-      };
-      setProviders((current) => append ? [...current, ...rows] : rows);
-      setNextAfterProviderId(page.nextAfterProviderId);
-      setSettingsRevision(page.settingsRevision);
-      setMode(nextMode);
-      setActiveProviderId(page.activeProviderId);
-      setActiveProviderRevision(nextActiveProviderRevision);
-      if (!append) setDetailReplacedProviderIds(new Set());
-      setForbidden(false);
-      return true;
+      return false;
     } catch (reason) {
-      if (generation !== requestGeneration.current || !isCurrent(snapshot)) return false;
+      if (generation !== requestGeneration.current) return false;
+      if (!isCurrent(snapshot)) {
+        if (isTemporarilyUnconfirmedSameSession(snapshot)) {
+          if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
+            handleAccessFailure(reason);
+            return false;
+          }
+          setPendingSwitchReload((current) => current ?? {
+            snapshot,
+            preserveConflict: Boolean(options?.preserveConflict),
+          });
+        }
+        return false;
+      }
       if (!handleAccessFailure(reason)) {
         setLoadError(reason);
       }
@@ -600,7 +642,7 @@ export function PlatformModelProviders() {
     } finally {
       if (generation === requestGeneration.current && mountedRef.current) setLoading(false);
     }
-  }, [access, boundCall, handleAccessFailure, isCurrent]);
+  }, [access, boundCall, handleAccessFailure, isCurrent, isTemporarilyUnconfirmedSameSession]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1423,16 +1465,6 @@ export function PlatformModelProviders() {
     setSwitching(selected);
     setLoadError(null);
     setSwitchConflictError(null);
-    const isTemporarilyUnconfirmedSameSession = (): boolean => {
-      const liveSession = sessionRef.current;
-      const liveIdentity = confirmedIdentityRef.current;
-      return (
-        mountedRef.current &&
-        Boolean(liveSession && !liveSession.binding && isActiveSession(liveSession)) &&
-        authSessionEpochRef.current === snapshot.sessionEpoch &&
-        liveIdentity.tenantId === null
-      );
-    };
     try {
       await boundCall(snapshot, (token) => provider
         ? gatewayClient.activatePlatformByokProvider(token, provider.id, {
@@ -1445,8 +1477,8 @@ export function PlatformModelProviders() {
       if (switchGeneration !== switchGenerationRef.current) return;
       if (isCurrent(snapshot)) {
         await loadPage(snapshot);
-      } else if (isTemporarilyUnconfirmedSameSession()) {
-        setPendingSwitchReload({ snapshot, conflictError: null });
+      } else if (isTemporarilyUnconfirmedSameSession(snapshot)) {
+        setPendingSwitchReload({ snapshot, preserveConflict: false });
       }
     } catch (reason) {
       if (switchGeneration !== switchGenerationRef.current) return;
@@ -1458,14 +1490,14 @@ export function PlatformModelProviders() {
         } else {
           setLoadError(reason);
         }
-      } else if (isTemporarilyUnconfirmedSameSession()) {
+      } else if (isTemporarilyUnconfirmedSameSession(snapshot)) {
         if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
           handleAccessFailure(reason);
           return;
         }
         if (reason instanceof GatewayError && reason.status === 409) {
           setSwitchConflictError(reason);
-          setPendingSwitchReload({ snapshot, conflictError: reason });
+          setPendingSwitchReload({ snapshot, preserveConflict: true, conflictError: reason });
         } else {
           setLoadError(reason);
         }
@@ -1480,15 +1512,13 @@ export function PlatformModelProviders() {
 
   useEffect(() => {
     if (!pendingSwitchReload || !access || !isCurrent(pendingSwitchReload.snapshot)) return;
-    const { snapshot, conflictError } = pendingSwitchReload;
+    const { snapshot, preserveConflict, conflictError } = pendingSwitchReload;
     const timer = window.setTimeout(() => {
       setPendingSwitchReload(null);
-      if (conflictError !== null) {
+      if (conflictError !== undefined) {
         setSwitchConflictError(conflictError);
-        void loadPage(snapshot, null, false, { preserveConflict: true });
-      } else {
-        void loadPage(snapshot);
       }
+      void loadPage(snapshot, null, false, { preserveConflict });
     }, 0);
     return () => window.clearTimeout(timer);
   }, [access, authorizationContext, isCurrent, loadPage, pendingSwitchReload]);
