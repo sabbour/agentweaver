@@ -14,6 +14,7 @@ into a deployed or selectable provider.
 | Periodic issue sync | [Service TLS profiles and listeners](#optional-periodic-issue-sync-service-channels) |
 | Hosted model catalog | [AgentHost certificate pin](#hosted-model-catalog-publication) |
 | Provider host requests | [Projects-Environment private channel](#private-provider-host-request-channel) |
+| Provider rate-card reads | [Projects-Events private channel](#private-projects-to-events-rate-card-channel) |
 | Configuration rules | [Key names, snapshots, and Secret boundaries](#configuration-rules) |
 | PostgreSQL and workload identity | [Connection strings and identity settings](#postgresql-connection-and-workload-identity) |
 | Identity Broker | [Broker settings](#identity-broker-settings) |
@@ -756,9 +757,40 @@ of `knowledge-runtime-config`.
 
 `GET /api/platform/components` works without these settings, but Projects then
 reports every area that has a backend owner as `unknown` with reason
-`ownerUnavailable`. The current runtime maps don't include these settings.
-Adding them is a separate live configuration change. For the request flow, see
-[Platform components](../guide/platform-components.md).
+`ownerUnavailable`. The base runtime maps in `deploy/k8s/runtime-configs/` do
+not include these settings.
+
+### Private Projects-to-Events rate-card channel
+
+Pass `--provider-rate-card <file.json>` to `npm run deploy:kustomize` or
+`npm run azure:deploy-from-commit` to wire private Projects-to-Events rate-card
+reads for BYOK provider availability. The overlay adds:
+
+- `PlatformComponents__ServiceToken__TokenFile` (`/var/run/projects-config-platform-components/token`)
+  and `PlatformComponents__Owners__eventsAndSessions__BaseAddress`
+  (`https://events-and-sessions.agentweaver.svc.cluster.local:8443/`) to
+  `projects-config-runtime-config`.
+- A projected `serviceAccountToken` volume on `Deployment/projects-config`
+  with the configured `audience` and a 3600-second lifetime.
+- `PlatformComponents__ServiceAuthentication__Authority`, `Audience`, and
+  `CallerSubject` (`system:serviceaccount:agentweaver:projects-config`) to
+  `events-and-sessions-runtime-config`.
+- Scoped Cilium policies `projects-config-events-network` (egress from
+  `projects-config` to `events-and-sessions` on TCP `8443` and DNS for
+  `events-and-sessions.agentweaver.svc.cluster.local`) and
+  `events-and-sessions-projects-network` (ingress on TCP `8443` from
+  `projects-config` and HTTPS egress on TCP `443` and DNS for the `authority`
+  and optional `jwksUri` hostnames).
+
+Enabling this overlay also makes the Events & Sessions component areas
+(`sessions`, `cost`, `messaging`, `telemetry`, and `objectStore`) visible on
+`GET /api/platform/components`. Other backend owners remain `unknown` unless
+configured separately. Enabling this internal channel does not approve runtime
+external egress for model providers.
+
+Once enabled, every later deploy must pass `--provider-rate-card`; omitting it
+stops the deploy before cluster writes. For the off-repo JSON file format, see
+[Enable private Projects-to-Events rate-card reads](../guide/deploy-to-azure.md#enable-private-projects-to-events-rate-card-reads).
 
 Projects & Config reads these optional settings:
 

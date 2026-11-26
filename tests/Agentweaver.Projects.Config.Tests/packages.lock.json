@@ -886,10 +886,38 @@
           "OpenIddict.Validation": "7.7.1"
         }
       },
+      "OpenTelemetry": {
+        "type": "Transitive",
+        "resolved": "1.15.3",
+        "contentHash": "N0i6WjPoHPbZyms1ugbDIFAJFuGlpeExJMU/+XSL0lQRUkg/D0utFkDoLXf8Z1km5B+xVZ2GyMXXiX8qdeNmPg==",
+        "dependencies": {
+          "Microsoft.Extensions.Diagnostics.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging.Configuration": "10.0.0",
+          "OpenTelemetry.Api.ProviderBuilderExtensions": "1.15.3"
+        }
+      },
       "OpenTelemetry.Api": {
         "type": "Transitive",
         "resolved": "1.15.3",
         "contentHash": "fX+fkCysfPut+qCcT3bKqyX4QN9Saf4CgX8HLOHywEVD+Xr7sULtfuypITpoDysjx8R59dn/3mWhgimMH8cm/g=="
+      },
+      "OpenTelemetry.Api.ProviderBuilderExtensions": {
+        "type": "Transitive",
+        "resolved": "1.15.3",
+        "contentHash": "SYn0lqYDwLMWhv/zlNGsQcl2yX++yTumanX46bmOZE/ZDOd1WjPBO2kZaZgKLEZTZk48pavIFGJ6vOvxXgWVFQ==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "OpenTelemetry.Api": "1.15.3"
+        }
+      },
+      "OpenTelemetry.Extensions.Hosting": {
+        "type": "Transitive",
+        "resolved": "1.15.3",
+        "contentHash": "u8n/W8yIlqv0BXZmvId1iVaeWXG42tGKdTkuLYg5g57Y/r9CeUNzqtrSHNdG5IoO8iPX79w3v+WsbAHgUQbfeg==",
+        "dependencies": {
+          "Microsoft.Extensions.Hosting.Abstractions": "10.0.0",
+          "OpenTelemetry": "1.15.3"
+        }
       },
       "Polly": {
         "type": "Transitive",
@@ -1066,6 +1094,21 @@
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )"
         }
       },
+      "agentweaver.eventsandsessions": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
+          "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.3, )",
+          "Agentweaver.Providers": "[1.1.0, )",
+          "Agentweaver.Telemetry": "[1.0.2, )",
+          "Azure.Identity": "[1.17.1, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
+          "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
+          "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
+        }
+      },
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
@@ -1160,6 +1203,12 @@
         "dependencies": {
           "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Providers": "[1.1.0, )"
+        }
+      },
+      "agentweaver.telemetry": {
+        "type": "Project",
+        "dependencies": {
+          "OpenTelemetry.Extensions.Hosting": "[1.15.3, )"
         }
       }
     }

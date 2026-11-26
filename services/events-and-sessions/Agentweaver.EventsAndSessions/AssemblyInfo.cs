@@ -2,3 +2,4 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Agentweaver.EventsAndSessions.Tests")]
+[assembly: InternalsVisibleTo("Agentweaver.Projects.Config.Tests")]
