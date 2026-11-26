@@ -1952,6 +1952,10 @@ Caller configure JSON cannot set these fields.
 
 An accepted revision-backed BYOK selection also carries its
 `ModelProviderBindingRevision` and immutable Events `RuntimeRateCardPin`.
+Public Gateway `acceptRunSelection` and `getRunSelection` responses omit
+`credentialReference` and `providerBindingRevision.credentialVersion` while
+preserving identity, pricing pins, and unrelated `sourceControl` fields;
+Projects & Config and internal Orchestrator reads retain the full snapshot.
 Both `PUT /api/projects/{projectId}/runs/{runId}/selection` and
 `PUT /api/projects/{projectId}/runs/{runId}/interactive-selection` lock the
 distinct slot-backed BYOK provider heads used by the primary and task selections

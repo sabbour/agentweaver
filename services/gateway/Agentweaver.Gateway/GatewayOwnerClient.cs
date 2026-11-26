@@ -68,6 +68,9 @@ public sealed partial class GatewayOwnerClient(
             "createPlatformByokProviderDraft" or "updatePlatformByokProviderDraft" or
             "listProjectByokProviderDrafts" or "readProjectByokProviderDraft" or
             "createProjectByokProviderDraft" or "updateProjectByokProviderDraft";
+    private static bool IsRunSelectionRoute(GatewayRoute route) =>
+        route.Owner == GatewayOwner.Projects &&
+        route.OperationId is "acceptRunSelection" or "getRunSelection";
     private const long MaximumOwnerErrorBytes = 64 * 1024;
     private const long MaximumRunEventPageBytes = 1024 * 1024;
     private const int MaximumSseCursorLength = 8192;
@@ -99,7 +102,8 @@ public sealed partial class GatewayOwnerClient(
                 route.OperationId is "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions" ||
                 IsRateCardWriteRoute(route) ||
                 IsCredentialPutRoute(route) ||
-                IsModelProviderDraftRoute(route))
+                IsModelProviderDraftRoute(route) ||
+                IsRunSelectionRoute(route))
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(
@@ -279,6 +283,45 @@ public sealed partial class GatewayOwnerClient(
                 context.Response.Headers.CacheControl = "no-store";
                 context.Response.Headers.XContentTypeOptions = "nosniff";
                 CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
+                context.Response.ContentType = response.Content.Headers.ContentType!.ToString();
+                context.Response.ContentLength = projectedBody.Length;
+                await context.Response.Body.WriteAsync(projectedBody, timeout.Token).ConfigureAwait(false);
+                return;
+            }
+            if (IsRunSelectionRoute(route) && response.IsSuccessStatusCode)
+            {
+                if (response.StatusCode != HttpStatusCode.OK ||
+                    response.Content.Headers.ContentType?.MediaType is not { } mediaType ||
+                    !(mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+                      mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
+                    throw OwnerContractFailure("run_selection_owner_contract_invalid");
+
+                byte[] ownerBody;
+                try
+                {
+                    ownerBody = await ReadBoundedAsync(
+                        response.Content, MaximumResponseBytes(route), timeout.Token).ConfigureAwait(false);
+                }
+                catch (InvalidDataException)
+                {
+                    throw OwnerContractFailure("owner_response_too_large");
+                }
+
+                byte[] projectedBody;
+                try
+                {
+                    projectedBody = GatewayRunSelectionProjection.Project(ownerBody);
+                }
+                catch (GatewayRunSelectionProjectionException exception)
+                {
+                    throw OwnerContractFailure(exception.Code);
+                }
+
+                context.Response.StatusCode = (int)response.StatusCode;
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.XContentTypeOptions = "nosniff";
+                CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
+                CopyExposedResponseHeaders(context, response, route);
                 context.Response.ContentType = response.Content.Headers.ContentType!.ToString();
                 context.Response.ContentLength = projectedBody.Length;
                 await context.Response.Body.WriteAsync(projectedBody, timeout.Token).ConfigureAwait(false);

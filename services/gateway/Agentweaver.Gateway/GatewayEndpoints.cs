@@ -405,10 +405,12 @@ public static class GatewayEndpoints
                 .WithDescription(
                     route.OperationId == "getAuthorizationTargetContext"
                         ? "Validates the Projects database identity and returns static errors."
-                        : $"Delegates to the {route.Owner} owner API without changing its response status or JSON body. " +
-                          (route.AcceptsOnly
-                            ? "An accepted response means the owner accepted work; it does not mean that work completed."
-                            : "The owner remains authoritative for request validation and current resource authorization."));
+                        : route.OperationId is "acceptRunSelection" or "getRunSelection"
+                            ? "Delegates to the Projects owner API and projects successful responses to omit BYOK credential references and versions. The owner remains authoritative for request validation and current resource authorization."
+                            : $"Delegates to the {route.Owner} owner API without changing its response status or JSON body. " +
+                              (route.AcceptsOnly
+                                ? "An accepted response means the owner accepted work; it does not mean that work completed."
+                                : "The owner remains authoritative for request validation and current resource authorization."));
             if (route.MaximumRequestBodyBytes is { } maximumRequestBodyBytes)
                 endpoint.WithMetadata(new RequestSizeLimitAttribute(maximumRequestBodyBytes));
         }
