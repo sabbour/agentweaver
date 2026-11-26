@@ -584,6 +584,7 @@ public static class CliApplication
           agentweaver policy validate --scope project --project-id <id> --input <export-file> [target options]
           agentweaver policy apply --scope platform --input <export-file> --expected-revision <revision|none> --reason <text> [target options]
           agentweaver policy history --scope platform [--page-size <1-100>] [--cursor <token>] [target options]
+          agentweaver policy decisions --scope platform [--policy-id <id>] [--page-size <1-100>] [--before-sequence <sequence>] [target options]
           agentweaver run egress <runId> [--limit <1-100>] [--cursor <cursor>]
               [--scope projects.admin] [target options without project/run binding]
           agentweaver platform byok list [target options]

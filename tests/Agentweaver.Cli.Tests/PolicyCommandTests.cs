@@ -2175,6 +2175,223 @@ public sealed class PolicyCommandTests
         return receipt.ToJsonString();
     }
 
+    [Fact]
+    public async Task DecisionsProjectsAllowlistedFieldsPreservesPendingAndNullRevisionAndRedactsIdentity()
+    {
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Body = DecisionHistoryBody(
+                resourceId: "canonical",
+                nextBeforeSequence: 5,
+                items:
+                [
+                    DecisionHistoryItemJson(
+                        sequence: 6,
+                        outcome: "allow",
+                        approvalState: "approved",
+                        policyRevision: 4,
+                        includeSensitive: true),
+                    DecisionHistoryItemJson(
+                        sequence: 5,
+                        outcome: "pending",
+                        approvalState: "pending",
+                        policyRevision: null,
+                        includeSensitive: true),
+                ]),
+        };
+
+        Assert.Equal(0, await fixture.Run("decisions", "--scope", "platform", "--page-size", "2"));
+
+        var stdout = fixture.Output.ToString();
+        var output = JsonNode.Parse(stdout)!.AsObject();
+        Assert.Equal("platform", output["scopeType"]!.GetValue<string>());
+        Assert.Equal("default", output["scopeId"]!.GetValue<string>());
+        Assert.Equal("platform_policy", output["resourceType"]!.GetValue<string>());
+        Assert.Equal("canonical", output["resourceId"]!.GetValue<string>());
+        Assert.Equal(5, output["nextBeforeSequence"]!.GetValue<long>());
+
+        var items = output["items"]!.AsArray();
+        Assert.Equal(2, items.Count);
+        Assert.Equal(6, items[0]!["sequence"]!.GetValue<long>());
+        Assert.Equal(4, items[0]!["decision"]!["policyRevision"]!.GetValue<long>());
+        Assert.Equal("allow", items[0]!["decision"]!["outcome"]!.GetValue<string>());
+        Assert.Equal(5, items[1]!["sequence"]!.GetValue<long>());
+        Assert.Equal("pending", items[1]!["decision"]!["outcome"]!.GetValue<string>());
+        Assert.Equal("pending", items[1]!["decision"]!["approvalState"]!.GetValue<string>());
+        Assert.Null(items[1]!["decision"]!["policyRevision"]);
+
+        foreach (var forbidden in new[]
+        {
+            "brokerIssuer", "brokerSubject", "humanEntraOid", "tenantId",
+            "effectiveRoleRevisions", "assignmentId", Canary, "https://sensitive.example/",
+        })
+        {
+            Assert.DoesNotContain(forbidden, stdout, StringComparison.Ordinal);
+        }
+
+        Assert.Equal("/api/v1/policies/platform/decisions", fixture.PolicyPath);
+        Assert.Contains("resourceType=platform_policy", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("resourceId=canonical", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("pageSize=2", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+        Assert.Null(fixture.Authentication.Identity!.ProjectId);
+        Assert.Null(fixture.Authentication.Identity.RunId);
+        Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
+    }
+
+    [Fact]
+    public async Task DecisionsSupportsCustomPolicyIdLargeBeforeSequenceAndEmptyHistory()
+    {
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Body = DecisionHistoryBody(resourceId: "custom.policy-1", nextBeforeSequence: null, items: []),
+        };
+        var maxSequence = long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await fixture.Run(
+            "decisions", "--scope", "platform", "--policy-id", "custom.policy-1",
+            "--page-size", "25", "--before-sequence", maxSequence));
+
+        var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Equal("custom.policy-1", output["resourceId"]!.GetValue<string>());
+        Assert.Empty(output["items"]!.AsArray());
+        Assert.Null(output["nextBeforeSequence"]);
+        Assert.Contains("resourceType=platform_policy", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("resourceId=custom.policy-1", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("pageSize=25", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains($"beforeSequence={maxSequence}", fixture.PolicyQuery, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, "native_acs_forbidden", "denied (HTTP 403)")]
+    [InlineData(HttpStatusCode.BadRequest, "governance_decision_history_request_invalid", "HTTP 400, governance_decision_history_request_invalid")]
+    [InlineData(HttpStatusCode.InternalServerError, "governance_decision_corrupt", "HTTP 500, governance_decision_corrupt")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "governance_decision_source_unavailable", "HTTP 503, governance_decision_source_unavailable")]
+    public async Task DecisionsReportsControlledRedactedErrors(
+        HttpStatusCode status, string code, string expectedMessage)
+    {
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Status = status,
+            MediaType = "application/problem+json",
+            Body = $$"""{"code":"{{code}}","detail":"{{Canary}}","brokerSubject":"{{Canary}}"}""",
+        };
+
+        Assert.Equal(1, await fixture.Run("decisions", "--scope", "platform"));
+        Assert.Contains(expectedMessage, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("wrongScope")]
+    [InlineData("wrongResourceType")]
+    [InlineData("wrongResourceId")]
+    [InlineData("outOfOrder")]
+    [InlineData("sequenceAtCursor")]
+    [InlineData("missingNextCursor")]
+    [InlineData("cursorOnShortPage")]
+    [InlineData("cursorOne")]
+    [InlineData("nonScalarSelectedRule")]
+    [InlineData("nonCanonicalDecisionId")]
+    [InlineData("invalidOutcome")]
+    public async Task DecisionsFailsClosedOnWrongStreamOrMalformedData(string mode)
+    {
+        var body = mode switch
+        {
+            "wrongScope" => DecisionHistoryBody("canonical", null, [], scopeType: "project"),
+            "wrongResourceType" => DecisionHistoryBody("canonical", null, [], resourceType: "project_policy"),
+            "wrongResourceId" => DecisionHistoryBody("other", null, []),
+            "outOfOrder" => DecisionHistoryBody("canonical", null,
+                [DecisionHistoryItemJson(4), DecisionHistoryItemJson(5)]),
+            "sequenceAtCursor" => DecisionHistoryBody("canonical", null,
+                [DecisionHistoryItemJson(10)]),
+            "missingNextCursor" => """{"scopeType":"platform","scopeId":"default","resourceType":"platform_policy","resourceId":"canonical","items":[]}""",
+            "cursorOnShortPage" => DecisionHistoryBody("canonical", nextBeforeSequence: 5,
+                items: [DecisionHistoryItemJson(5)]),
+            "cursorOne" => DecisionHistoryBody("canonical", nextBeforeSequence: 1,
+                items: [DecisionHistoryItemJson(2), DecisionHistoryItemJson(1)]),
+            "nonScalarSelectedRule" => DecisionHistoryBody("canonical", null,
+                [DecisionHistoryItemJson(5, selectedRuleJson: """{"brokerIssuer":"leak"}""")]),
+            "nonCanonicalDecisionId" => DecisionHistoryBody("canonical", null,
+                [DecisionHistoryItemJson(5).Replace("00000000-0000-0000-0000-000000000005", " 00000000-0000-0000-0000-000000000005 ", StringComparison.Ordinal)]),
+            _ => DecisionHistoryBody("canonical", null,
+                [DecisionHistoryItemJson(5, outcome: "unknown")]),
+        };
+        var args = mode == "cursorOnShortPage"
+            ? new[] { "decisions", "--scope", "platform", "--page-size", "2" }
+            : mode == "cursorOne"
+                ? new[] { "decisions", "--scope", "platform", "--page-size", "2" }
+                : mode == "sequenceAtCursor"
+                    ? new[] { "decisions", "--scope", "platform", "--before-sequence", "10" }
+                    : new[] { "decisions", "--scope", "platform" };
+        var fixture = new Fixture { UseGatewayContract = true, Body = body };
+
+        Assert.Equal(1, await fixture.Run(args));
+        Assert.Contains("invalid policy response", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("brokerIssuer", fixture.Output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("--scope", "project")]
+    [InlineData("--project-id", ProjectId)]
+    [InlineData("--run-id", "run-1")]
+    [InlineData("--policy-id", "bad/id")]
+    [InlineData("--before-sequence", "0")]
+    [InlineData("--before-sequence", "01")]
+    [InlineData("--page-size", "101")]
+    public async Task DecisionsRejectsInvalidArgumentsBeforeNetwork(string flag, string value)
+    {
+        var fixture = new Fixture();
+        var args = flag == "--scope"
+            ? new[] { "decisions", flag, value }
+            : new[] { "decisions", "--scope", "platform", flag, value };
+
+        Assert.Equal(1, await fixture.Run(args));
+        Assert.Equal(0, fixture.RequestCount);
+    }
+
+    [Fact]
+    public async Task HelpIncludesPlatformPolicyDecisionsCommand()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = await CliApplication.RunAsync(["--help"], new CliRuntimeOptions { Output = output, Error = error });
+        Assert.Equal(0, exitCode);
+        Assert.Contains("agentweaver policy decisions --scope platform", output.ToString(), StringComparison.Ordinal);
+    }
+
+    private static string DecisionHistoryBody(
+        string resourceId,
+        long? nextBeforeSequence,
+        string[] items,
+        string scopeType = "platform",
+        string resourceType = "platform_policy")
+    {
+        var next = nextBeforeSequence is null ? "null" : nextBeforeSequence.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return $$"""{"scopeType":"{{scopeType}}","scopeId":"default","resourceType":"{{resourceType}}","resourceId":"{{resourceId}}","items":[{{string.Join(",", items)}}],"nextBeforeSequence":{{next}}}""";
+    }
+
+    private static string DecisionHistoryItemJson(
+        long sequence,
+        string outcome = "allow",
+        string approvalState = "notRequired",
+        long? policyRevision = 4,
+        bool includeSensitive = false,
+        string selectedRuleJson = "\"platform.allow\"")
+    {
+        var rev = policyRevision is null ? "null" : policyRevision.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sensitive = includeSensitive
+            ? $$"""
+                ,"humanEntraOid":"00000000-0000-0000-0000-000000000099","tenantId":"00000000-0000-0000-0000-000000000088","brokerIssuer":"https://sensitive.example/","brokerSubject":"{{Canary}}","effectiveRoleRevisions":[{"assignmentId":"00000000-0000-0000-0000-000000000077","revision":2}]
+                """
+            : string.Empty;
+        return $$$"""{"decisionId":"00000000-0000-0000-0000-00000000000{{{sequence % 10}}}","sequence":{{{sequence}}},"previousHash":"{{{ArtifactHash(1)}}}","recordHash":"{{{ArtifactHash(2)}}}","recordedAt":"{{{Time}}}","decision":{"decisionType":"platform_policy_preparation","outcome":"{{{outcome}}}","approvalState":"{{{approvalState}}}","policyRevision":{{{rev}}},"policyArtifactSha256":"{{{Hash}}}","selectedRule":{{{selectedRuleJson}}},"interventionPoint":null,"requestId":"req-1","actionId":null,"runId":null,"agentId":null,"roleId":null,"ownerReceiptId":"prep-1","ownerReceiptPosition":{{{sequence}}},"compilerGeneration":null,"applicationGeneration":null,"correlationId":"corr-1","decidedAt":"{{{Time}}}"{{{sensitive}}}}}""";
+    }
+
     private sealed class FailingTextWriter : TextWriter
     {
         public override Encoding Encoding => Encoding.UTF8;

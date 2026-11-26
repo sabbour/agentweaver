@@ -329,6 +329,21 @@ hashes without verifying each artifact. `show` and `history` return metadata,
 not artifact files or enforcement status. `export` writes source data; it does
 not activate or enforce policy.
 
+To read Platform Policy governance decision history, use `decisions`:
+
+```powershell
+agentweaver policy decisions --scope platform --page-size 20
+agentweaver policy decisions --scope platform --policy-id canonical --page-size 20 --before-sequence SEQUENCE
+```
+
+`--policy-id` defaults to `canonical`. `--page-size` defaults to 20 and ranges
+from 1 to 100. Pass the returned `nextBeforeSequence` integer as
+`--before-sequence` to read older records. The output projects the stream
+identity, `nextBeforeSequence`, and allowlisted decision fields, including
+`pending` outcomes and `null` `policyRevision` values, while omitting identity
+and role-assignment metadata. Decision history records past governance events;
+it does not show that a policy revision is active or enforced.
+
 ### Read Project Policy sources
 
 Project Policy reads use your current server-side project access. Sign in with
