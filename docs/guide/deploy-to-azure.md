@@ -648,6 +648,34 @@ To rotate both fingerprints, issue new `projects-config-host-request-tls` and
 new digests, redeploy with `--provider-host-request`, and restart both
 Deployments.
 
+### Enable private Projects-to-Events rate-card reads
+
+To allow Projects & Config to verify Events-owned rate cards during BYOK
+credential publication, supply an off-repo JSON file with
+`--provider-rate-card <file.json>`:
+
+1. Read your AKS cluster's OIDC issuer URL:
+
+   ```bash
+   az aks show --resource-group <resource-group> --name <aks-cluster> \
+     --query oidcIssuerProfile.issuerUrl -o tsv
+   ```
+
+2. Create an off-repo JSON file with `kind` set to
+   `agentweaver.provider-rate-card-overlay`, `schemaVersion` set to `1`,
+   `authority` set to the HTTPS OIDC issuer URL, and `audience` set to a
+   distinct private HTTPS URI (different from the Projects and Events public
+   audiences, the Broker run-binding audience, and `api://AzureADTokenExchange`).
+   If the cluster's OIDC `jwks_uri` uses a different hostname from `authority`,
+   also set `jwksUri` to that HTTPS URL. Keep tokens and Secret data out of
+   this file.
+3. Pass `--provider-rate-card <file.json>` to `npm run deploy:kustomize` or
+   `npm run azure:deploy-from-commit`. The deploy command verifies that
+   `authority` (and `jwksUri` when required) matches the selected cluster's
+   `/.well-known/openid-configuration` before any cluster write. Once enabled,
+   every later redeploy must pass `--provider-rate-card`; omitting it stops the
+   deploy before cluster writes.
+
 ## 7. Run the deployment
 
 Use the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)

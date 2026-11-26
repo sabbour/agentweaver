@@ -97,7 +97,7 @@ function setup({
 
 function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true,
   modelOptions = {}, modelAwareHelper = true, targetAwareHelper = true, auditAwareHelper = true,
-  providerHostRequestAwareHelper = true) {
+  providerHostRequestAwareHelper = true, providerRateCardAwareHelper = true) {
   return deployFromCommit({ sourceSha, registry, ...modelOptions }, {
     root,
     worktreePath: fixture.worktreePath,
@@ -108,6 +108,7 @@ function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = 
       DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper,
       DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION: modelAwareHelper,
       DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION: providerHostRequestAwareHelper,
+      DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION: providerRateCardAwareHelper,
       DEPLOY_KUSTOMIZE_TARGET_OPTION: targetAwareHelper,
       DEPLOY_KUSTOMIZE_AUDIT_OPTION: auditAwareHelper,
     },

@@ -89,6 +89,12 @@ overlay.
 npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
+Optional overlays such as `--provider-host-request <file.json>` and
+`--provider-rate-card <file.json>` can be passed to `npm run deploy:kustomize`
+and `npm run azure:deploy-from-commit`. See
+[Deploy Agentweaver to Azure](../../docs/guide/deploy-to-azure.md) for their
+off-repo JSON schemas and redeploy rules.
+
 The command resolves selected published images to GHCR digests, runs
 migrations for selected services, renders the root overlay, applies it to the
 selected `kubectl` context in namespace `agentweaver`, then waits for the nine

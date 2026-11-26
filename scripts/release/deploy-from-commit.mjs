@@ -7,6 +7,11 @@ import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
 import { DEFAULT_REGISTRY, parseRegistryTarget, verifyServiceRegistryImage } from './registry.mjs';
 import { assertTargetContext } from './deploy-kustomize.mjs';
 import { hasHostRequestKeys } from './provider-host-request-overlay.mjs';
+import {
+  EVENTS_RATE_CARD_KEYS,
+  hasRateCardKeys,
+  PROJECTS_RATE_CARD_KEYS,
+} from './provider-rate-card-overlay.mjs';
 import { run } from '../azure/lib/exec.mjs';
 import { installTarget } from '../azure/lib/targets.mjs';
 
@@ -17,7 +22,7 @@ export const DEPLOY_FROM_COMMIT_USAGE =
   'Usage: npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> ' +
   '[--registry <registry>] [--resource-group <name>] [--model-bindings <file.json>] ' +
   '[--remove-model-binding <reference>]... [--provider-host-request <file.json>] ' +
-  '[--agenthost-egress-audit <mode>] --execute\n' +
+  '[--provider-rate-card <file.json>] [--agenthost-egress-audit <mode>] --execute\n' +
   'Audit mode: off, allowed, or denied. Default: off.';
 
 function fail(message) {
@@ -33,6 +38,7 @@ export function parseDeployFromCommitArgs(argv) {
   let execute = false;
   let modelBindings;
   let providerHostRequest;
+  let providerRateCard;
   let resourceGroup;
   let agentHostEgressAudit;
   let hasAgentHostEgressAudit = false;
@@ -62,6 +68,10 @@ export function parseDeployFromCommitArgs(argv) {
       if (providerHostRequest !== undefined || argv[index + 1] === undefined ||
           argv[index + 1].startsWith('--')) fail(DEPLOY_FROM_COMMIT_USAGE);
       providerHostRequest = path.resolve(argv[++index]);
+    } else if (argv[index] === '--provider-rate-card') {
+      if (providerRateCard !== undefined || argv[index + 1] === undefined ||
+          argv[index + 1].startsWith('--')) fail(DEPLOY_FROM_COMMIT_USAGE);
+      providerRateCard = path.resolve(argv[++index]);
     } else if (argv[index] === '--remove-model-binding') {
       const reference = argv[index + 1];
       if (reference === undefined || reference.startsWith('--') ||
@@ -85,6 +95,7 @@ export function parseDeployFromCommitArgs(argv) {
     ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
     ...(modelBindings === undefined ? {} : { modelBindings }),
     ...(providerHostRequest === undefined ? {} : { providerHostRequest }),
+    ...(providerRateCard === undefined ? {} : { providerRateCard }),
     ...(removeModelBindings.length ? { removeModelBindings } : {}),
     ...(agentHostEgressAudit === undefined ? {} : { agentHostEgressAudit }),
     ...(resourceGroup === undefined || resourceGroup === 'agentweaver' ? {} : { resourceGroup }),
@@ -136,9 +147,46 @@ function requireLiveProviderHostRequestDisabledForOlderDeployer(exec, worktreePa
   }
 }
 
+function requireLiveProviderRateCardDisabledForOlderDeployer(exec, worktreePath, resourceGroup, sourceSha) {
+  const context = command(
+    exec,
+    'kubectl',
+    ['config', 'current-context'],
+    worktreePath,
+    'Could not read the selected kubectl context').stdout.trim();
+  if (!context) fail('No kubectl context is selected.');
+  assertTargetContext(exec, context, worktreePath, resourceGroup ?? 'agentweaver');
+  for (const [name, keys] of [
+    ['projects-config-runtime-config', PROJECTS_RATE_CARD_KEYS],
+    ['events-and-sessions-runtime-config', EVENTS_RATE_CARD_KEYS],
+  ]) {
+    const read = command(
+      exec,
+      'kubectl',
+      [
+        'get', 'configmap', name, '--ignore-not-found=true', '--output=json',
+        '--context', context, '--namespace', 'agentweaver',
+      ],
+      worktreePath,
+      `Could not read ConfigMap/${name}`);
+    if (!read.stdout.trim()) continue;
+    let configMap;
+    try {
+      configMap = JSON.parse(read.stdout);
+    } catch {
+      fail(`Kubernetes returned invalid JSON for ConfigMap/${name}.`);
+    }
+    if (hasRateCardKeys(configMap, keys)) {
+      fail(
+        `The live cluster has private Projects-to-Events rate-card wiring enabled, and source ${sourceSha} ` +
+        'predates provider rate-card support; select a newer source commit.');
+    }
+  }
+}
+
 export async function deployFromCommit({
   sourceSha, registry = DEFAULT_REGISTRY, modelBindings, removeModelBindings, providerHostRequest,
-  resourceGroup, agentHostEgressAudit = 'off',
+  providerRateCard, resourceGroup, agentHostEgressAudit = 'off',
 }, overrides = {}) {
   if (!SHA.test(sourceSha ?? '')) fail('source SHA must be a lowercase full 40-character commit SHA.');
   try {
@@ -158,11 +206,17 @@ export async function deployFromCommit({
   const hostRequestOptions = {
     ...(providerHostRequest === undefined ? {} : { providerHostRequest: path.resolve(providerHostRequest) }),
   };
+  const rateCardOptions = {
+    ...(providerRateCard === undefined ? {} : { providerRateCard: path.resolve(providerRateCard) }),
+  };
   if (modelOptions.modelBindings !== undefined && !existsSync(modelOptions.modelBindings)) {
     fail(`model bindings file does not exist: ${modelOptions.modelBindings}`);
   }
   if (hostRequestOptions.providerHostRequest !== undefined && !existsSync(hostRequestOptions.providerHostRequest)) {
     fail(`provider host-request file does not exist: ${hostRequestOptions.providerHostRequest}`);
+  }
+  if (rateCardOptions.providerRateCard !== undefined && !existsSync(rateCardOptions.providerRateCard)) {
+    fail(`provider rate-card file does not exist: ${rateCardOptions.providerRateCard}`);
   }
   const exec = overrides.exec ?? run;
   const verifyImage = overrides.verifyImage ?? verifyServiceRegistryImage;
@@ -231,6 +285,10 @@ export async function deployFromCommit({
         deployModule?.DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION !== true) {
       fail(`source ${sourceSha} predates the Kustomize provider host-request option; select a newer source commit.`);
     }
+    if (Object.keys(rateCardOptions).length &&
+        deployModule?.DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION !== true) {
+      fail(`source ${sourceSha} predates the Kustomize provider rate-card option; select a newer source commit.`);
+    }
     if (resourceGroup !== undefined && deployModule?.DEPLOY_KUSTOMIZE_TARGET_OPTION !== true) {
       fail(`source ${sourceSha} predates install target selection; select a newer source commit.`);
     }
@@ -240,9 +298,12 @@ export async function deployFromCommit({
     if (deployModule?.DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION !== true) {
       requireLiveProviderHostRequestDisabledForOlderDeployer(exec, worktreePath, resourceGroup, sourceSha);
     }
+    if (deployModule?.DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION !== true) {
+      requireLiveProviderRateCardDisabledForOlderDeployer(exec, worktreePath, resourceGroup, sourceSha);
+    }
     const deployKustomize = overrides.deployKustomize ?? deployModule.deployKustomize;
     result = await deployKustomize(
-      { imageManifest, registry, ...modelOptions, ...hostRequestOptions, agentHostEgressAudit,
+      { imageManifest, registry, ...modelOptions, ...hostRequestOptions, ...rateCardOptions, agentHostEgressAudit,
         ...(resourceGroup === undefined ? {} : { resourceGroup }) },
       { root: worktreePath, registryOptions: overrides.registryOptions });
   } catch (error) {

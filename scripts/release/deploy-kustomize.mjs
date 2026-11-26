@@ -31,6 +31,13 @@ import {
   requireFirstEnablementImages,
   requireLiveProviderHostRequestPreserved,
 } from './provider-host-request-overlay.mjs';
+import {
+  applyProviderRateCardOverlay,
+  parseProviderRateCardOverlay,
+  requireFirstEnablementRateCardImages,
+  requireLiveProviderRateCardPreserved,
+  verifyClusterOidcIssuer,
+} from './provider-rate-card-overlay.mjs';
 
 const NAMESPACE = 'agentweaver';
 const BROKER_RUNTIME_CONFIG = 'identity-broker-runtime-config-v4';
@@ -132,6 +139,7 @@ Model options:
   --model-bindings <file.json>         Add the environment BYOK model bindings in this file.
   --remove-model-binding <reference>   Remove this live BYOK model binding. You can repeat it.
   --provider-host-request <file.json>  Enable the private provider host-request channel with these pins.
+  --provider-rate-card <file.json>     Enable the private Projects-to-Events rate-card channel.
 
 Audit option:
   --agenthost-egress-audit <mode>      off, allowed, or denied. Default off.
@@ -150,6 +158,7 @@ sandbox smoke check.
 export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
 export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
 export const DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION = true;
+export const DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION = true;
 export const DEPLOY_KUSTOMIZE_TARGET_OPTION = true;
 export const DEPLOY_KUSTOMIZE_AUDIT_OPTION = true;
 
@@ -165,6 +174,7 @@ export function parseDeployKustomizeArgs(argv) {
   let execute = false;
   let modelBindings;
   let providerHostRequest;
+  let providerRateCard;
   let resourceGroup;
   let agentHostEgressAudit = 'off';
   let hasAgentHostEgressAudit = false;
@@ -194,6 +204,12 @@ export function parseDeployKustomizeArgs(argv) {
       providerHostRequest = argv[++index];
       if (!providerHostRequest || providerHostRequest.startsWith('--')) {
         fail('--provider-host-request requires a file path.');
+      }
+    } else if (arg === '--provider-rate-card') {
+      if (providerRateCard !== undefined) fail('--provider-rate-card may be specified only once.');
+      providerRateCard = argv[++index];
+      if (!providerRateCard || providerRateCard.startsWith('--')) {
+        fail('--provider-rate-card requires a file path.');
       }
     } else if (arg === '--remove-model-binding') {
       const reference = argv[++index];
@@ -231,6 +247,7 @@ export function parseDeployKustomizeArgs(argv) {
     ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
     ...(modelBindings === undefined ? {} : { modelBindings }),
     ...(providerHostRequest === undefined ? {} : { providerHostRequest }),
+    ...(providerRateCard === undefined ? {} : { providerRateCard }),
     ...(removeModelBindings.length ? { removeModelBindings } : {}),
     ...(resourceGroup === undefined || resourceGroup === 'agentweaver' ? {} : { resourceGroup }),
     ...(hasAgentHostEgressAudit ? { agentHostEgressAudit } : {}),
@@ -2087,6 +2104,26 @@ export async function verifyImageCapability({
     }
     return;
   }
+  if (capability === 'projects-config-rate-card') {
+    const hasClient = exec('git', [
+      'cat-file', '-e', `${sourceSha}:services/projects-config/Agentweaver.Projects.Config/RuntimeRateCardOwnerClient.cs`,
+    ], { check: false, cwd: root });
+    if (hasClient.status !== 0) {
+      fail(`Projects & Config image ${image} (${sourceSha}) does not support private Events rate-card reads; ` +
+        'co-deploy a capable agentweaver.projects.config image.');
+    }
+    return;
+  }
+  if (capability === 'events-and-sessions-rate-card') {
+    const hasEndpoint = exec('git', [
+      'cat-file', '-e', `${sourceSha}:services/events-and-sessions/Agentweaver.EventsAndSessions/Cost/RuntimeRateCardOwnerReadEndpoint.cs`,
+    ], { check: false, cwd: root });
+    if (hasEndpoint.status !== 0) {
+      fail(`Events & Sessions image ${image} (${sourceSha}) does not support private Projects rate-card reads; ` +
+        'co-deploy a capable agentweaver.eventsandsessions image.');
+    }
+    return;
+  }
   fail(`Unknown image capability ${capability}.`);
 }
 
@@ -2224,6 +2261,8 @@ export async function deployKustomize(options, overrides = {}) {
     : parseModelBindingsOverlay(readFileSync(path.resolve(root, options.modelBindings), 'utf8'));
   const providerHostRequest = options.providerHostRequest === undefined ? undefined
     : parseProviderHostRequestOverlay(readFileSync(path.resolve(root, options.providerHostRequest), 'utf8'));
+  const providerRateCard = options.providerRateCard === undefined ? undefined
+    : parseProviderRateCardOverlay(readFileSync(path.resolve(root, options.providerRateCard), 'utf8'));
   const requestedImages = options.imageManifest === undefined
     ? new Map(IMAGE_REPOSITORIES.map(repository => [repository, options.imageTag]))
     : parseImageManifest(readFileSync(path.resolve(root, options.imageManifest), 'utf8'));
@@ -2240,6 +2279,9 @@ export async function deployKustomize(options, overrides = {}) {
   const resourceGroup = options.resourceGroup ?? 'agentweaver';
   const pairs = targetValuePairs(root, resourceGroup);
   assertTargetContext(exec, context, root, resourceGroup);
+  if (providerRateCard) {
+    verifyClusterOidcIssuer(exec, context, root, providerRateCard);
+  }
   verifyAuthorization(exec, context, root,
     [...requestedImages.keys()].some(repository => MIGRATION_IMAGES.has(repository)));
   verifyEnvironmentRuntimeAuthorization(exec, context, root);
@@ -2298,6 +2340,10 @@ export async function deployKustomize(options, overrides = {}) {
       applyProviderHostRequestOverlay(resources, providerHostRequest);
       log('Enabled private provider host-request channel between Projects and Environment.');
     }
+    if (providerRateCard) {
+      applyProviderRateCardOverlay(resources, providerRateCard);
+      log('Enabled private Projects-to-Events rate-card authentication and network wiring.');
+    }
     stampEventsRuntimeConfigDigest(resources);
     if (liveAgentHostSettings) {
       preserveLiveAgentHostSettings(resources, liveAgentHostSettings, agentHostTuple);
@@ -2344,8 +2390,20 @@ export async function deployKustomize(options, overrides = {}) {
       liveProjectsConfig,
       liveEnvironmentConfig,
       requestedImages);
-    requireLiveAzureCostPreserved(readExistingNamedRuntimeConfigMap(exec, context, root, EVENTS_RUNTIME_CONFIG),
-      resources.find(resource => resource.kind === 'ConfigMap' && resource.metadata?.name === EVENTS_RUNTIME_CONFIG));
+    const liveEventsConfig = readExistingNamedRuntimeConfigMap(exec, context, root, EVENTS_RUNTIME_CONFIG);
+    const desiredEventsConfig = resources.find(resource =>
+      resource.kind === 'ConfigMap' && resource.metadata?.name === EVENTS_RUNTIME_CONFIG);
+    requireLiveProviderRateCardPreserved(
+      liveProjectsConfig,
+      liveEventsConfig,
+      runtimeConfig,
+      desiredEventsConfig);
+    requireFirstEnablementRateCardImages(
+      providerRateCard,
+      liveProjectsConfig,
+      liveEventsConfig,
+      requestedImages);
+    requireLiveAzureCostPreserved(liveEventsConfig, desiredEventsConfig);
     const missingRuntimeMaps = new Set([...existingRuntimeMaps]
       .filter(([, resource]) => resource === undefined).map(([name]) => name));
     const runtimeMapManifest = { apiVersion: 'v1', kind: 'List', items: desiredRuntimeMaps };
@@ -2437,6 +2495,14 @@ export async function deployKustomize(options, overrides = {}) {
     }
     const verifyCapability = overrides.verifyImageCapability ?? verifyImageCapability;
     await assertBrokerRollbackGuard(exec, context, root, digests, registries, verifyCapability);
+    if (providerRateCard) {
+      const projectsImage = imageName(registries.get('agentweaver.projects.config'), 'agentweaver.projects.config') +
+        `@${digests.get('agentweaver.projects.config')}`;
+      const eventsImage = imageName(registries.get('agentweaver.eventsandsessions'), 'agentweaver.eventsandsessions') +
+        `@${digests.get('agentweaver.eventsandsessions')}`;
+      await verifyCapability({ image: projectsImage, capability: 'projects-config-rate-card', root, exec });
+      await verifyCapability({ image: eventsImage, capability: 'events-and-sessions-rate-card', root, exec });
+    }
     let cutoverAnnotated = [];
     if (requestedImages.has('agentweaver.identity.broker')) {
       const projectsImage = imageName(registries.get('agentweaver.projects.config'), 'agentweaver.projects.config') +
