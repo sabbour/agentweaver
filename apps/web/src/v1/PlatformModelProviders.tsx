@@ -178,6 +178,10 @@ function switchMode(pageMode: string | null): 'untouched' | 'copilot' | 'byok' {
   return 'untouched';
 }
 
+function isPositiveSafeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
 function rawManualRateCard(
   editor: Editor,
   id: string,
@@ -258,8 +262,11 @@ export function PlatformModelProviders() {
   const [settingsRevision, setSettingsRevision] = useState<number | null>(null);
   const [mode, setMode] = useState<'untouched' | 'copilot' | 'byok'>('untouched');
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
+  const [activeProviderRevision, setActiveProviderRevision] = useState<number | null>(null);
+  const [detailReplacedProviderIds, setDetailReplacedProviderIds] = useState<ReadonlySet<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<unknown>(null);
+  const [switchConflictError, setSwitchConflictError] = useState<unknown>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [typeQuery, setTypeQuery] = useState('');
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -268,6 +275,10 @@ export function PlatformModelProviders() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<unknown>(null);
   const [switching, setSwitching] = useState<string | 'copilot' | null>(null);
+  const [pendingSwitchReload, setPendingSwitchReload] = useState<{
+    snapshot: AccessSnapshot;
+    conflictError: unknown;
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [credentialStatus, setCredentialStatus] = useState<{
     status: ModelProviderCredentialResponse['status'];
@@ -282,6 +293,14 @@ export function PlatformModelProviders() {
   const mountedRef = useRef(true);
   const clearPendingKeyRef = useRef<(() => void) | null>(null);
   const requestGeneration = useRef(0);
+  const switchGenerationRef = useRef(0);
+  const switchingRef = useRef(false);
+  const loadedSwitchSnapshotRef = useRef<{
+    mode: 'untouched' | 'copilot' | 'byok';
+    activeProviderId: string | null;
+    activeProviderRevision: number | null;
+    settingsRevision: number | null;
+  } | null>(null);
   const editorGeneration = useRef(0);
   const focusPricingProviderId = useRef<string | null>(null);
   const pricingGroupRef = useRef<HTMLDivElement>(null);
@@ -336,6 +355,9 @@ export function PlatformModelProviders() {
     clearPendingKeyRef.current?.();
     clearPendingKeyRef.current = null;
     requestGeneration.current += 1;
+    switchGenerationRef.current += 1;
+    switchingRef.current = false;
+    loadedSwitchSnapshotRef.current = null;
     editorGeneration.current += 1;
     focusPricingProviderId.current = null;
     setProviders([]);
@@ -343,6 +365,10 @@ export function PlatformModelProviders() {
     setSettingsRevision(null);
     setMode('untouched');
     setActiveProviderId(null);
+    setActiveProviderRevision(null);
+    setDetailReplacedProviderIds(new Set());
+    setSwitching(null);
+    setPendingSwitchReload(null);
     setEditor(null);
     setEditingProvider(null);
     setShowKey(false);
@@ -353,6 +379,7 @@ export function PlatformModelProviders() {
     setConfirmingResetProviderId(null);
     metadataOperation.current = null;
     setLoadError(null);
+    setSwitchConflictError(null);
     setLoading(false);
   }, []);
 
@@ -512,10 +539,21 @@ export function PlatformModelProviders() {
     snapshot = access,
     afterProviderId: string | null = null,
     append = false,
+    options?: { preserveConflict?: boolean },
   ): Promise<boolean> => {
     if (!snapshot || !isCurrent(snapshot)) return false;
     const generation = ++requestGeneration.current;
-    if (!append) setProviders([]);
+    if (!append) {
+      loadedSwitchSnapshotRef.current = null;
+      setProviders([]);
+      setNextAfterProviderId(null);
+      setSettingsRevision(null);
+      setMode('untouched');
+      setActiveProviderId(null);
+      setActiveProviderRevision(null);
+      setDetailReplacedProviderIds(new Set());
+      if (!options?.preserveConflict) setSwitchConflictError(null);
+    }
     setLoading(true);
     setLoadError(null);
     try {
@@ -525,11 +563,32 @@ export function PlatformModelProviders() {
         ));
       if (generation !== requestGeneration.current || !isCurrent(snapshot)) return false;
       const rows = page.providers.map(requirePlatformProvider);
+      const nextMode = switchMode(page.switchMode);
+      const nextActiveProviderRevision = page.activeProviderRevision ?? null;
+      if (append) {
+        const baseline = loadedSwitchSnapshotRef.current;
+        if (!baseline ||
+            baseline.mode !== nextMode ||
+            baseline.activeProviderId !== page.activeProviderId ||
+            baseline.activeProviderRevision !== nextActiveProviderRevision ||
+            baseline.settingsRevision !== page.settingsRevision) {
+          await loadPage(snapshot);
+          return false;
+        }
+      }
+      loadedSwitchSnapshotRef.current = {
+        mode: nextMode,
+        activeProviderId: page.activeProviderId,
+        activeProviderRevision: nextActiveProviderRevision,
+        settingsRevision: page.settingsRevision,
+      };
       setProviders((current) => append ? [...current, ...rows] : rows);
       setNextAfterProviderId(page.nextAfterProviderId);
       setSettingsRevision(page.settingsRevision);
-      setMode(switchMode(page.switchMode));
+      setMode(nextMode);
       setActiveProviderId(page.activeProviderId);
+      setActiveProviderRevision(nextActiveProviderRevision);
+      if (!append) setDetailReplacedProviderIds(new Set());
       setForbidden(false);
       return true;
     } catch (reason) {
@@ -1216,6 +1275,11 @@ export function PlatformModelProviders() {
       if (generation !== requestGeneration.current || !isCurrent(snapshot))
         return;
       const checked = requirePlatformProvider(latest);
+      setDetailReplacedProviderIds((current) => {
+        const next = new Set(current);
+        next.add(providerId);
+        return next;
+      });
       setProviders((current) => current.map((item) => item.id === providerId ? checked : item));
       if (opKey) deleteStoredOperation(opKey);
       setConfirmingResetProviderId(null);
@@ -1350,11 +1414,25 @@ export function PlatformModelProviders() {
   };
 
   const switchDefault = async (provider?: PlatformModelProviderDraft) => {
-    if (!access || settingsRevision === null || settingsRevision <= 0) return;
+    if (switchingRef.current || pendingSwitchReload !== null || !access || !isCurrent(access) || !isPositiveSafeInt(settingsRevision)) return;
+    if (provider && (detailReplacedProviderIds.has(provider.id) || !isPositiveSafeInt(provider.revision))) return;
     const snapshot = access;
     const selected = provider ? provider.id : 'copilot';
+    const switchGeneration = ++switchGenerationRef.current;
+    switchingRef.current = true;
     setSwitching(selected);
     setLoadError(null);
+    setSwitchConflictError(null);
+    const isTemporarilyUnconfirmedSameSession = (): boolean => {
+      const liveSession = sessionRef.current;
+      const liveIdentity = confirmedIdentityRef.current;
+      return (
+        mountedRef.current &&
+        Boolean(liveSession && !liveSession.binding && isActiveSession(liveSession)) &&
+        authSessionEpochRef.current === snapshot.sessionEpoch &&
+        liveIdentity.tenantId === null
+      );
+    };
     try {
       await boundCall(snapshot, (token) => provider
         ? gatewayClient.activatePlatformByokProvider(token, provider.id, {
@@ -1364,18 +1442,56 @@ export function PlatformModelProviders() {
         : gatewayClient.deactivatePlatformByokProvider(token, {
           expectedSettingsRevision: settingsRevision,
         }, snapshot.tenant));
-      if (!isCurrent(snapshot)) return;
-      await loadPage(snapshot);
-    } catch (reason) {
-      if (!isCurrent(snapshot)) return;
-      if (handleAccessFailure(reason)) return;
-      setLoadError(reason);
-      if (reason instanceof GatewayError && reason.status === 409)
+      if (switchGeneration !== switchGenerationRef.current) return;
+      if (isCurrent(snapshot)) {
         await loadPage(snapshot);
+      } else if (isTemporarilyUnconfirmedSameSession()) {
+        setPendingSwitchReload({ snapshot, conflictError: null });
+      }
+    } catch (reason) {
+      if (switchGeneration !== switchGenerationRef.current) return;
+      if (isCurrent(snapshot)) {
+        if (handleAccessFailure(reason)) return;
+        if (reason instanceof GatewayError && reason.status === 409) {
+          setSwitchConflictError(reason);
+          await loadPage(snapshot, null, false, { preserveConflict: true });
+        } else {
+          setLoadError(reason);
+        }
+      } else if (isTemporarilyUnconfirmedSameSession()) {
+        if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
+          handleAccessFailure(reason);
+          return;
+        }
+        if (reason instanceof GatewayError && reason.status === 409) {
+          setSwitchConflictError(reason);
+          setPendingSwitchReload({ snapshot, conflictError: reason });
+        } else {
+          setLoadError(reason);
+        }
+      }
     } finally {
-      if (mountedRef.current) setSwitching(null);
+      if (switchGeneration === switchGenerationRef.current) {
+        switchingRef.current = false;
+        if (mountedRef.current) setSwitching(null);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!pendingSwitchReload || !access || !isCurrent(pendingSwitchReload.snapshot)) return;
+    const { snapshot, conflictError } = pendingSwitchReload;
+    const timer = window.setTimeout(() => {
+      setPendingSwitchReload(null);
+      if (conflictError !== null) {
+        setSwitchConflictError(conflictError);
+        void loadPage(snapshot, null, false, { preserveConflict: true });
+      } else {
+        void loadPage(snapshot);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [access, authorizationContext, isCurrent, loadPage, pendingSwitchReload]);
 
   const editingOperation = useMemo(() => {
     void operationRevision;
@@ -1391,7 +1507,7 @@ export function PlatformModelProviders() {
       (authorizationContext.issuer == null || access.issuer === null || authorizationContext.issuer === access.issuer)
     )
   );
-  const controlsDisabled = forbidden || !access || !contextConfirmed || loading || saving;
+  const controlsDisabled = forbidden || !access || !contextConfirmed || loading || saving || switching !== null || pendingSwitchReload !== null;
   const activeSessionMessage = !session
     ? 'Sign in to manage platform providers.'
     : 'Switch to a platform sign-in before managing providers. Provider controls use an unbound Broker session.';
@@ -1432,6 +1548,7 @@ export function PlatformModelProviders() {
       {forbidden && <MessageBar intent="warning"><MessageBarBody>
         Your role cannot manage platform providers. The rest of Platform Settings remains available.
       </MessageBarBody></MessageBar>}
+      {switchConflictError != null && <ErrorNotice>{errorMessage(switchConflictError)}</ErrorNotice>}
       {loadError != null && <ErrorNotice>{errorMessage(loadError)}</ErrorNotice>}
       {notice && <MessageBar intent="success"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
       {credentialStatus && (
@@ -1583,9 +1700,24 @@ export function PlatformModelProviders() {
                         <Button onClick={() => void recheckSavedKey(provider)}
                           disabled={controlsDisabled}>Recheck saved key</Button>
                       )}
+                      {isDefault &&
+                        !detailReplacedProviderIds.has(provider.id) &&
+                        provider.state === 'Available' &&
+                        isPositiveSafeInt(settingsRevision) &&
+                        isPositiveSafeInt(activeProviderRevision) &&
+                        isPositiveSafeInt(provider.revision) &&
+                        provider.revision > activeProviderRevision && (
+                        <Button appearance="primary"
+                          aria-label={`Use latest revision for ${provider.name}`}
+                          onClick={() => void switchDefault(provider)}
+                          disabled={controlsDisabled || switching !== null}>
+                          {switching === provider.id ? 'Switching…' : 'Use latest revision'}
+                        </Button>
+                      )}
                       <Button appearance={isDefault ? 'secondary' : 'primary'}
                         onClick={() => void switchDefault(provider)}
                         disabled={controlsDisabled || switching !== null ||
+                          detailReplacedProviderIds.has(provider.id) ||
                           provider.state !== 'Available' || settingsRevision === null ||
                           settingsRevision === 0 || isDefault}>
                         {isDefault ? 'Default for new runs'

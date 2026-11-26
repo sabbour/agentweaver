@@ -1228,4 +1228,199 @@ describe('PlatformModelProviders', () => {
       issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1', scope: 'platform', projectId: null, providerId: 'provider-1',
     })).toBeNull());
   });
+
+  it('shows Use latest revision only when active Available row revision is strictly greater and sends exact request', async () => {
+    setPage({
+      switchMode: 'active',
+      activeProviderId: 'provider-1',
+      activeProviderRevision: 3,
+      settingsRevision: 9,
+      providers: [
+        provider({ id: 'provider-1', name: 'Primary', state: 'Available', revision: 5, is_active: true }),
+        provider({ id: 'provider-2', name: 'Secondary', state: 'Available', revision: 6, is_active: false }),
+      ],
+    });
+    api.activatePlatformByokProvider.mockResolvedValueOnce({
+      mode: 'active',
+      activeProviderId: 'provider-1',
+      settingsRevision: 10,
+    });
+    render(<PlatformModelProviders />);
+    const btn = await screen.findByRole('button', { name: 'Use latest revision for Primary' });
+    expect(screen.queryByRole('button', { name: 'Use latest revision for Secondary' })).toBeNull();
+
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.activatePlatformByokProvider).toHaveBeenCalledOnce());
+    expect(api.activatePlatformByokProvider.mock.calls[0].slice(1, 3)).toEqual([
+      'provider-1',
+      { expectedSettingsRevision: 9, expectedProviderRevision: 5 },
+    ]);
+  });
+
+  it('hides Use latest revision for equal, missing, lower, invalid, and Draft revisions', async () => {
+    const cases: Array<Record<string, unknown>> = [
+      { activeProviderRevision: null, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: undefined, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: 4, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: 5, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: 0, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: -1, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: 1.5, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: 2, settingsRevision: 0, providers: [provider({ revision: 4 })] },
+      { activeProviderRevision: 2, providers: [provider({ revision: 4, state: 'Draft' })] },
+      { switchMode: 'copilot', activeProviderId: null, activeProviderRevision: 2, providers: [provider({ revision: 4, is_active: false })] },
+    ];
+    for (const pageOverrides of cases) {
+      setPage(pageOverrides);
+      const view = render(<PlatformModelProviders />);
+      await screen.findByText('Primary');
+      expect(screen.queryByRole('button', { name: /Use latest revision/i })).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it('blocks duplicate clicks and disables Refresh and Load more while switching', async () => {
+    let resolveSwitch!: (value: unknown) => void;
+    api.activatePlatformByokProvider.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveSwitch = resolve; }),
+    );
+    setPage({
+      activeProviderRevision: 2,
+      settingsRevision: 9,
+      nextAfterProviderId: 'provider-1',
+      providers: [provider({ revision: 4 })],
+    });
+    render(<PlatformModelProviders />);
+    const btn = await screen.findByRole('button', { name: 'Use latest revision for Primary' });
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    expect(api.activatePlatformByokProvider).toHaveBeenCalledOnce();
+    expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Load more' }) as HTMLButtonElement).disabled).toBe(true);
+
+    resolveSwitch({ mode: 'active', activeProviderId: 'provider-1', settingsRevision: 10 });
+    await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2));
+  });
+
+  it('discards mixed-page pagination when switch header changes and reloads from page 1', async () => {
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 4 })],
+        { activeProviderRevision: 2, settingsRevision: 9, nextAfterProviderId: 'provider-1' },
+      ))
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-2', name: 'Secondary', revision: 1, is_active: false })],
+        { activeProviderRevision: 4, settingsRevision: 10, nextAfterProviderId: null },
+      ))
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 4 })],
+        { activeProviderRevision: 4, settingsRevision: 10, nextAfterProviderId: null },
+      ));
+
+    render(<PlatformModelProviders />);
+    await screen.findByRole('button', { name: 'Use latest revision for Primary' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+
+    await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(3));
+    expect(api.listPlatformByokProviderDrafts.mock.calls[2][2]).toBeNull();
+    expect(screen.queryByText('Secondary')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use latest revision for Primary' })).toBeNull();
+  });
+
+  it('invalidates Use latest revision on detail-only replacement', async () => {
+    const draft = provider({ id: 'provider-1', name: 'Primary', state: 'Draft', revision: 1, is_active: true });
+    const available = provider({ id: 'provider-1', name: 'Primary', state: 'Available', revision: 5, is_active: true });
+    setPage({ activeProviderRevision: 2, settingsRevision: 9, providers: [draft] });
+    auth.projectCredentialOperations!.set({
+      issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1', scope: 'platform', projectId: null, providerId: 'provider-1',
+    }, {
+      operationId: 'op-detail-replace',
+      expectedProviderRevision: 1,
+      expectedCredentialRevision: 0,
+      status: 'uncertain',
+    });
+    api.getPlatformByokProviderDraft.mockResolvedValueOnce(available);
+
+    render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset pending check' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm reset' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset pending check' })).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Use latest revision for Primary' })).toBeNull();
+  });
+
+  it('preserves conflict notice across page-1 reload without retrying after 409', async () => {
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 3, settingsRevision: 9 },
+      ))
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 5, settingsRevision: 10 },
+      ));
+    api.activatePlatformByokProvider.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'Revision conflict'),
+    );
+
+    render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use latest revision for Primary' }));
+    expect(await screen.findByText('HTTP 409: Revision conflict')).toBeTruthy();
+    expect(api.activatePlatformByokProvider).toHaveBeenCalledOnce();
+    expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'Use latest revision for Primary' })).toBeNull();
+  });
+
+  it('clears state and ignores late switch completion on 401/403 or scope change', async () => {
+    let resolveSwitch!: (value: unknown) => void;
+    api.activatePlatformByokProvider.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveSwitch = resolve; }),
+    );
+    setPage({
+      activeProviderRevision: 2,
+      settingsRevision: 9,
+      providers: [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+    });
+    const view = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use latest revision for Primary' }));
+
+    auth.tenant = 'tenant-2';
+    auth.authorizationContext = { tenantId: 'tenant-2' };
+    view.rerender(<PlatformModelProviders />);
+    await waitFor(() => expect(screen.queryByText('Primary')).toBeNull());
+
+    resolveSwitch({ mode: 'active', activeProviderId: 'provider-1', settingsRevision: 10 });
+    await Promise.resolve();
+    expect(screen.queryByRole('button', { name: 'Use latest revision for Primary' })).toBeNull();
+  });
+
+  it('reloads page 1 and preserves 409 conflict notice when switch finishes during temporary token refresh', async () => {
+    let rejectSwitch!: (reason: unknown) => void;
+    api.activatePlatformByokProvider.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectSwitch = reject; }),
+    );
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 3, settingsRevision: 9 },
+      ))
+      .mockResolvedValueOnce(providerPage(
+        [provider({ id: 'provider-1', name: 'Primary', revision: 5 })],
+        { activeProviderRevision: 5, settingsRevision: 10 },
+      ));
+    const view = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use latest revision for Primary' }));
+
+    // Simulate temporary null authorizationContext during token refresh (same authSessionEpoch).
+    auth.authorizationContext = null;
+    view.rerender(<PlatformModelProviders />);
+    rejectSwitch(new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'Refresh conflict'));
+    await Promise.resolve();
+
+    // Restore same identity; component reloads page 1 and preserves the 409 notice.
+    auth.authorizationContext = { tenantId: 'tenant-1' };
+    view.rerender(<PlatformModelProviders />);
+    expect(await screen.findByText('HTTP 409: Refresh conflict')).toBeTruthy();
+    await waitFor(() => expect(api.listPlatformByokProviderDrafts).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('button', { name: 'Use latest revision for Primary' })).toBeNull();
+  });
 });

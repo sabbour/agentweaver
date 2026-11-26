@@ -119,6 +119,7 @@ public sealed record ModelProviderDraftPage(
 {
     public string? SwitchMode { get; init; }
     public string? ActiveProviderId { get; init; }
+    public long? ActiveProviderRevision { get; init; }
     public long? SettingsRevision { get; init; }
 }
 

@@ -267,6 +267,7 @@ export interface PlatformModelProviderDraft extends Omit<ProjectModelProviderDra
 export interface PlatformModelProviderDraftPage {
   switchMode: 'untouched' | 'active' | 'explicitHosted' | 'byok' | 'copilot' | null;
   activeProviderId: string | null;
+  activeProviderRevision?: number | null;
   settingsRevision: number | null;
   providers: PlatformModelProviderDraft[];
   nextAfterProviderId: string | null;
