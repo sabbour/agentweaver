@@ -25,8 +25,8 @@ internal static class PolicyCommands
     internal static async Task<int> RunAsync(
         string[] args, CliRuntimeOptions runtime, HttpClient httpClient, TextWriter output, CancellationToken ct)
     {
-        if (args.Length == 0 || args[0] is not ("list" or "show" or "export" or "history" or "validate" or "apply"))
-            throw new CliUsageException("Choose `list`, `show`, `export`, `history`, `validate`, or `apply`.");
+        if (args.Length == 0 || args[0] is not ("list" or "show" or "export" or "history" or "decisions" or "validate" or "apply"))
+            throw new CliUsageException("Choose `list`, `show`, `export`, `history`, `decisions`, `validate`, or `apply`.");
         var command = args[0];
         var options = CliOptions.Parse(args[1..], new HashSet<string>(StringComparer.Ordinal));
         if (options.Many("run-id").Count > 0)
@@ -40,6 +40,7 @@ internal static class PolicyCommands
             "show" => new[] { "scope", "revision" },
             "export" => new[] { "scope", "revision", "output" },
             "history" => new[] { "scope", "page-size", "cursor" },
+            "decisions" => new[] { "scope", "policy-id", "page-size", "before-sequence" },
             "validate" => new[] { "scope", "input" },
             _ => new[] { "scope", "input", "expected-revision", "reason" },
         };
@@ -55,6 +56,7 @@ internal static class PolicyCommands
         var projectId = projectScope && command is ("show" or "history" or "export" or "validate")
             ? ProjectIdArgument(options.Single("project-id"))
             : null;
+        var policyId = command == "decisions" ? PolicyIdArgument(options.Single("policy-id")) : null;
         var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
         var inputPath = command is "validate" or "apply"
             ? InputFilePath(options.Single("input"), command)
@@ -84,6 +86,17 @@ internal static class PolicyCommands
         var cursor = options.Single("cursor");
         if (cursor is not null && !ValidCursor(cursor, projectList ? 4096 : 2048))
             throw new CliUsageException("--cursor must be a non-empty cursor within the API limit.");
+        var beforeSequenceText = options.Single("before-sequence");
+        long? beforeSequence = null;
+        if (beforeSequenceText is not null)
+        {
+            if (beforeSequenceText.Length == 0 || beforeSequenceText[0] == '0' ||
+                beforeSequenceText.Any(c => c is < '0' or > '9') ||
+                !long.TryParse(beforeSequenceText, NumberStyles.None, CultureInfo.InvariantCulture, out var sequenceValue) ||
+                sequenceValue <= 0)
+                throw new CliUsageException("--before-sequence must be a canonical positive decimal Int64.");
+            beforeSequence = sequenceValue;
+        }
         var inputArtifact = inputPath is null
             ? null
             : await ReadInputArtifactAsync(
@@ -110,6 +123,7 @@ internal static class PolicyCommands
             : command switch
         {
             "history" => "listPlatformNativeAcsPolicyRevisions",
+            "decisions" => "listPlatformGovernanceDecisions",
             "validate" => "validatePlatformNativeAcsPolicy",
             "apply" => "writePlatformNativeAcsPolicy",
             _ => revision is null ? "readPlatformNativeAcsPolicy" : "readPlatformNativeAcsPolicyRevision",
@@ -127,15 +141,23 @@ internal static class PolicyCommands
             : command switch
         {
             "history" => "/api/v1/policies/platform/revisions",
+            "decisions" => "/api/v1/policies/platform/decisions",
             "validate" => "/api/v1/policies/platform/validate",
             "apply" => "/api/v1/policies/platform",
             _ => revision is null ? "/api/v1/policies/platform" : "/api/v1/policies/platform/revisions/{revision}",
         };
         var query = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (command == "decisions")
+        {
+            query["resourceType"] = "platform_policy";
+            query["resourceId"] = policyId!;
+        }
         if (pageSizeText is not null)
             query["pageSize"] = pageSizeText;
         if (cursor is not null)
             query["cursor"] = cursor;
+        if (beforeSequenceText is not null)
+            query["beforeSequence"] = beforeSequenceText;
         var pathParameters = new Dictionary<string, string>(StringComparer.Ordinal);
         if (projectId is not null)
             pathParameters["projectId"] = projectId;
@@ -208,6 +230,12 @@ internal static class PolicyCommands
                 if (response.Status != 200)
                     throw new PolicyFailureException(ApplyErrorMessage(response.Status, response.Body));
                 result = ProjectApply(response.Body, expectedRevision, artifactHash!);
+            }
+            else if (command == "decisions")
+            {
+                if (response.Status != 200)
+                    throw new PolicyFailureException(DecisionErrorMessage(response.Status, response.Body));
+                result = ProjectDecisions(response.Body, policyId!, pageSize, beforeSequence);
             }
             else
             {
@@ -780,6 +808,97 @@ internal static class PolicyCommands
         };
     }
 
+    private static JsonObject ProjectDecisions(
+        JsonNode? body, string expectedPolicyId, int pageSize, long? beforeSequence)
+    {
+        if (body is not JsonObject obj ||
+            !obj.ContainsKey("nextBeforeSequence") ||
+            obj["items"] is not JsonArray items ||
+            items.Count > pageSize)
+            throw UnexpectedResponse();
+        CheckScope(obj, "platform", "default");
+        if (String(obj, "resourceType") != "platform_policy" ||
+            String(obj, "resourceId") != expectedPolicyId)
+            throw UnexpectedResponse();
+        var nextBeforeSequence = obj["nextBeforeSequence"] is null
+            ? (long?)null
+            : PositiveNumber(obj, "nextBeforeSequence");
+        if (items.Count == 0 && nextBeforeSequence is not null)
+            throw UnexpectedResponse();
+
+        var projected = new JsonArray();
+        long? previousSequence = null;
+        foreach (var item in items)
+        {
+            if (item is not JsonObject row)
+                throw UnexpectedResponse();
+            var sequence = PositiveNumber(row, "sequence");
+            if (beforeSequence is not null && sequence >= beforeSequence ||
+                previousSequence is not null && sequence >= previousSequence)
+                throw UnexpectedResponse();
+            previousSequence = sequence;
+            projected.Add(new JsonObject
+            {
+                ["decisionId"] = Uuid(row, "decisionId"),
+                ["sequence"] = sequence,
+                ["previousHash"] = Hash(row, "previousHash"),
+                ["recordHash"] = Hash(row, "recordHash"),
+                ["recordedAt"] = Timestamp(row, "recordedAt"),
+                ["decision"] = ProjectDecisionDetail(row["decision"]),
+            });
+        }
+
+        if (nextBeforeSequence is not null &&
+            (items.Count != pageSize ||
+             nextBeforeSequence != previousSequence ||
+             nextBeforeSequence <= 1 ||
+             beforeSequence is not null && nextBeforeSequence >= beforeSequence))
+            throw UnexpectedResponse();
+
+        return new JsonObject
+        {
+            ["scopeType"] = "platform",
+            ["scopeId"] = "default",
+            ["resourceType"] = "platform_policy",
+            ["resourceId"] = expectedPolicyId,
+            ["items"] = projected,
+            ["nextBeforeSequence"] = nextBeforeSequence,
+        };
+    }
+
+    private static JsonObject ProjectDecisionDetail(JsonNode? node)
+    {
+        if (node is not JsonObject detail)
+            throw UnexpectedResponse();
+        var outcome = String(detail, "outcome");
+        if (outcome is not ("allow" or "deny" or "approve" or "reject" or "pending"))
+            throw UnexpectedResponse();
+        var approvalState = String(detail, "approvalState");
+        if (approvalState is not ("notRequired" or "pending" or "approved" or "rejected"))
+            throw UnexpectedResponse();
+        return new JsonObject
+        {
+            ["decisionType"] = NonEmptyString(detail, "decisionType"),
+            ["outcome"] = outcome,
+            ["approvalState"] = approvalState,
+            ["policyRevision"] = NullablePositiveNumber(detail, "policyRevision"),
+            ["policyArtifactSha256"] = NullableHash(detail, "policyArtifactSha256"),
+            ["selectedRule"] = NullableString(detail, "selectedRule"),
+            ["interventionPoint"] = NullableString(detail, "interventionPoint"),
+            ["requestId"] = NullableString(detail, "requestId"),
+            ["actionId"] = NullableString(detail, "actionId"),
+            ["runId"] = NullableString(detail, "runId"),
+            ["agentId"] = NullableString(detail, "agentId"),
+            ["roleId"] = NullableString(detail, "roleId"),
+            ["ownerReceiptId"] = NullableString(detail, "ownerReceiptId"),
+            ["ownerReceiptPosition"] = NullablePositiveNumber(detail, "ownerReceiptPosition"),
+            ["compilerGeneration"] = NullableString(detail, "compilerGeneration"),
+            ["applicationGeneration"] = NullableString(detail, "applicationGeneration"),
+            ["correlationId"] = NonEmptyString(detail, "correlationId"),
+            ["decidedAt"] = Timestamp(detail, "decidedAt"),
+        };
+    }
+
     private static void CheckScope(JsonObject obj, string expectedScopeType = "platform", string expectedScopeId = "default")
     {
         if (String(obj, "scopeType") != expectedScopeType || String(obj, "scopeId") != expectedScopeId)
@@ -827,6 +946,54 @@ internal static class PolicyCommands
     private static string String(JsonObject obj, string name) =>
         obj[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : throw UnexpectedResponse();
 
+    private static string NonEmptyString(JsonObject obj, string name)
+    {
+        var text = String(obj, name);
+        if (string.IsNullOrEmpty(text))
+            throw UnexpectedResponse();
+        return text;
+    }
+
+    private static string? NullableString(JsonObject obj, string name)
+    {
+        if (!obj.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        return node is JsonValue value && value.TryGetValue<string>(out var text) ? text : throw UnexpectedResponse();
+    }
+
+    private static long? NullablePositiveNumber(JsonObject obj, string name)
+    {
+        if (!obj.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        return PositiveNumber(obj, name);
+    }
+
+    private static string? NullableHash(JsonObject obj, string name)
+    {
+        if (!obj.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        return Hash(obj, name);
+    }
+
+    private static string Uuid(JsonObject obj, string name)
+    {
+        var text = String(obj, name);
+        if (!Guid.TryParseExact(text, "D", out var guid) ||
+            !string.Equals(guid.ToString("D"), text, StringComparison.Ordinal))
+            throw UnexpectedResponse();
+        return text;
+    }
+
+    private static string PolicyIdArgument(string? value)
+    {
+        if (value is null)
+            return "canonical";
+        if (value.Length is 0 or > 128 ||
+            value.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_' or '.')))
+            throw new CliUsageException("--policy-id must be 1 to 128 ASCII letters, digits, '-', '_', or '.'.");
+        return value;
+    }
+
     private static bool ValidCursor(string value) =>
         ValidCursor(value, 2048);
 
@@ -866,6 +1033,21 @@ internal static class PolicyCommands
             (400, "native_acs_policy_revision_request_invalid");
         return known ? $"The policy request failed (HTTP {status}, {code})." :
             $"The policy request failed (HTTP {status}).";
+    }
+
+    private static string DecisionErrorMessage(int status, JsonNode? body)
+    {
+        if (status == 403)
+            return "The policy decision history request was denied (HTTP 403).";
+        var code = (body as JsonObject)?["code"] is JsonValue value &&
+            value.TryGetValue<string>(out var text) ? text : null;
+        var known = (status, code) is
+            (400, "governance_decision_history_request_invalid") or
+            (500, "governance_decision_corrupt") or
+            (503, "governance_decision_source_unavailable");
+        return known
+            ? $"The policy decision history request failed (HTTP {status}, {code})."
+            : $"The policy decision history request failed (HTTP {status}).";
     }
 
     private static string ValidationErrorMessage(int status, JsonNode? body)

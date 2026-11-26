@@ -875,8 +875,12 @@ public sealed partial class GatewayClient : IGatewayClient
         switch (type)
         {
             case "integer":
+                var isInt64 = string.Equals(
+                    GatewayContract.String(parameter.Schema, "format"),
+                    "int64",
+                    StringComparison.Ordinal);
                 if (!long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var integer) ||
-                    Math.Abs((double)integer) > 9_007_199_254_740_991d)
+                    !isInt64 && Math.Abs((double)integer) > 9_007_199_254_740_991d)
                     throw new InvalidOperationException($"Parameter {parameter.Name} must be a safe integer.");
                 normalized = integer.ToString(CultureInfo.InvariantCulture);
                 break;
@@ -908,14 +912,8 @@ public sealed partial class GatewayClient : IGatewayClient
             parameter.Schema["maxLength"] is JsonValue maxLength &&
             maxLength.TryGetValue<int>(out var maximumLength) &&
             normalized.Length > maximumLength ||
-            parameter.Schema["minimum"] is JsonValue minimum &&
-            minimum.TryGetValue<double>(out var minimumValue) &&
-            type is "integer" or "number" &&
-            double.Parse(normalized, CultureInfo.InvariantCulture) < minimumValue ||
-            parameter.Schema["maximum"] is JsonValue maximum &&
-            maximum.TryGetValue<double>(out var maximumValue) &&
-            type is "integer" or "number" &&
-            double.Parse(normalized, CultureInfo.InvariantCulture) > maximumValue)
+            BelowMinimum(parameter.Schema["minimum"], normalized, type) ||
+            AboveMaximum(parameter.Schema["maximum"], normalized, type))
         {
             throw new InvalidOperationException($"Parameter {parameter.Name} is outside its allowed shape.");
         }
@@ -933,6 +931,30 @@ public sealed partial class GatewayClient : IGatewayClient
             }
         }
         return normalized;
+    }
+
+    private static bool BelowMinimum(JsonNode? node, string normalized, string type)
+    {
+        if (node is not JsonValue minimum || type is not ("integer" or "number"))
+            return false;
+        if (type == "integer" &&
+            minimum.TryGetValue<long>(out var minInt) &&
+            long.TryParse(normalized, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var valueInt))
+            return valueInt < minInt;
+        return minimum.TryGetValue<double>(out var minDouble) &&
+               double.Parse(normalized, CultureInfo.InvariantCulture) < minDouble;
+    }
+
+    private static bool AboveMaximum(JsonNode? node, string normalized, string type)
+    {
+        if (node is not JsonValue maximum || type is not ("integer" or "number"))
+            return false;
+        if (type == "integer" &&
+            maximum.TryGetValue<long>(out var maxInt) &&
+            long.TryParse(normalized, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var valueInt))
+            return valueInt > maxInt;
+        return maximum.TryGetValue<double>(out var maxDouble) &&
+               double.Parse(normalized, CultureInfo.InvariantCulture) > maxDouble;
     }
 
     private static bool EnumValueEquals(JsonNode? node, string value, string type)
@@ -997,7 +1019,8 @@ public sealed partial class GatewayClient : IGatewayClient
         var hidePolicyEvidence = operationId is
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
-            "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
+            "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
+            "listPlatformGovernanceDecisions";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 
