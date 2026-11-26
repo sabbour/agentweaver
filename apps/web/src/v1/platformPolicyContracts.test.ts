@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPlatformPolicyValidationArtifact,
+  buildPlatformPolicyValidationRequestDocument,
   comparePlatformPolicyDraft,
   createPlatformPolicyTextBuffer,
   escapePlatformPolicyInvisibleCharacters,
@@ -190,6 +191,44 @@ describe('Platform Policy response contracts', () => {
         artifact: { ...artifact, contentSha256: 'b'.repeat(64) },
       }),
     ))).rejects.toThrow('hash does not match');
+  });
+
+  it('exports a compact importable Project Policy draft without changing its bytes or hash', async () => {
+    const manifest = createPlatformPolicyTextBuffer('\uFEFFname: x\r\n');
+    const files = [
+      { relativePath: 'rules/b.rego', content: createPlatformPolicyTextBuffer('b\r') },
+      { relativePath: 'rules/a.rego', content: createPlatformPolicyTextBuffer('a\n') },
+    ];
+    const artifact = await buildPlatformPolicyValidationArtifact(manifest, files);
+    const document = await buildPlatformPolicyValidationRequestDocument(manifest, files);
+    expect(new TextDecoder().decode(document)).toBe(JSON.stringify({ artifact }));
+
+    const imported = await parsePlatformPolicyValidationRequestFile(document);
+    expect(await buildPlatformPolicyValidationArtifact(
+      imported.manifest,
+      imported.files,
+    )).toEqual(artifact);
+  });
+
+  it('rejects an empty manifest when exporting a Policy draft', async () => {
+    await expect(buildPlatformPolicyValidationRequestDocument(
+      createPlatformPolicyTextBuffer(''),
+      [],
+    )).rejects.toThrow('non-empty manifest');
+  });
+
+  it('applies draft path and artifact limits before exporting a request', async () => {
+    const manifest = createPlatformPolicyTextBuffer('name: test');
+    const content = createPlatformPolicyTextBuffer('rule');
+    await expect(buildPlatformPolicyValidationRequestDocument(manifest, [
+      { relativePath: '../unsafe.rego', content },
+    ])).rejects.toThrow('valid relative path');
+    await expect(buildPlatformPolicyValidationRequestDocument(manifest, [
+      {
+        relativePath: 'rules/large.rego',
+        content: createPlatformPolicyTextBuffer('x'.repeat(262_145)),
+      },
+    ])).rejects.toThrow('262,144 bytes or smaller');
   });
 
   it('keeps unchanged mixed separators when a browser-normalized textarea value changes', () => {

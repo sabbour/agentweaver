@@ -60,7 +60,10 @@ Policy syntax or enforcement. Edit the draft or reload the page, and select
    and `contentSha256`. Each file must contain `relativePath` and `bytes`.
 4. Edit the imported manifest, file paths, and file content in the draft
    editor.
-5. Select **Validate draft**. Review the result and any diagnostics.
+5. Select **Download draft** to keep a portable copy named
+   `project-policy-draft.json`. The file uses the same compact JSON format as
+   **Validation request**, so you can select it again later.
+6. Select **Validate draft**. Review the result and any diagnostics.
 
 ## Raise the Project Skill minimum trust score
 
@@ -87,7 +90,15 @@ draft unchanged. The draft stays in browser memory. No Project Policy head or
 history request runs, and validation does not save or apply the draft.
 
 The request file limit is 5 MiB. The artifact limit is 1 MiB, with the same
-manifest and file limits described below.
+manifest and file limits described below. A download requires a non-empty
+manifest and stays within the request, artifact, path, file-count, and file
+size limits. It preserves the current UTF-8 bytes and content hash.
+
+Downloading creates a browser file only. It sends no request and does not save,
+apply, activate, or change a Project Policy. If the download fails, the draft
+stays in the editor. A pending download stops when you edit, import, change
+Project or access context, leave the route, change the sign-in session, or
+start a newer download.
 
 ## Edit and validate a Platform Policy draft
 

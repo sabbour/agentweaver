@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { GatewayError } from './api';
@@ -11,6 +20,7 @@ import type {
 import type { ProjectSummary } from './contracts';
 import {
   buildPlatformPolicyValidationArtifact,
+  buildPlatformPolicyValidationRequestDocument,
   createPlatformPolicyTextBuffer,
   parsePlatformPolicyValidationRequestFile,
   PLATFORM_POLICY_SCOPE_ID,
@@ -85,6 +95,7 @@ export interface PlatformPoliciesControllerValue {
   setDraftFileContent: (id: number, content: PlatformPolicyTextBuffer) => void;
   importDraft: (file: File) => Promise<void>;
   loadDraftFromSavedSource: () => void;
+  downloadDraft: () => void;
   validateDraft: () => void;
   loadMore: () => void;
 }
@@ -173,6 +184,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const requestGenerationRef = useRef(0);
   const validationGenerationRef = useRef(0);
   const importGenerationRef = useRef(0);
+  const downloadGenerationRef = useRef(0);
   const validationControllerRef = useRef<AbortController | null>(null);
   const draftFileIdRef = useRef(0);
   const identityEpochRef = useRef(0);
@@ -190,11 +202,13 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const tenantWasSelectedRef = useRef(false);
   const authorizedRef = useRef(false);
   const statusRef = useRef(status);
+  const draftGenerationRef = useRef(0);
   const lastAuthSignatureRef = useRef('');
   const expectedRefreshChangeRef = useRef<ExpectedRefreshChange | null>(null);
   const latestAuthRef = useRef(auth);
   const lastActiveContextTenantRef = useRef(auth.authorizationContext?.tenantId ?? null);
   const lastActiveContextSessionGenerationRef = useRef(auth.authSessionGeneration);
+  const routePathRef = useRef(location.pathname);
   const focusAfterHideRef = useRef(false);
   const runCheckRef = useRef<((
     requestedTenant: string,
@@ -203,9 +217,16 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     retryRead?: RetryRead,
   ) => Promise<void>) | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (latestAuthRef.current !== auth || routePathRef.current !== location.pathname)
+      downloadGenerationRef.current += 1;
     latestAuthRef.current = auth;
-  }, [auth]);
+    routePathRef.current = location.pathname;
+  }, [auth, location.pathname]);
+
+  useEffect(() => () => {
+    downloadGenerationRef.current += 1;
+  }, []);
 
   const capturePolicyLinkFocus = useCallback(() => {
     const activeElement = document.activeElement;
@@ -247,7 +268,9 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   }, []);
 
   const invalidateDraftComparison = useCallback(() => {
-    setDraftGeneration((generation) => generation + 1);
+    const generation = draftGenerationRef.current + 1;
+    draftGenerationRef.current = generation;
+    setDraftGeneration(generation);
   }, []);
 
   const clearDraftValidation = useCallback((
@@ -419,6 +442,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
         !policyIdentityRef.current ||
         !projectRef.current)
       return;
+    downloadGenerationRef.current += 1;
     const importIdentityEpoch = identityEpochRef.current;
     const importScope = scopeRef.current;
     const importTenant = tenantRef.current;
@@ -471,6 +495,71 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       content: createPlatformPolicyTextBuffer(file.content),
     })));
   }, [bindDraftToCurrentIdentity, clearDraftValidation, detail, invalidateDraftComparison]);
+
+  const downloadDraft = useCallback(() => {
+    const identity = policyIdentityRef.current;
+    const activeProject = projectRef.current;
+    const selectedTenant = tenantRef.current.trim();
+    const session = latestAuthRef.current.session;
+    const authSessionEpoch = latestAuthRef.current.authSessionEpoch;
+    const authSessionGeneration = latestAuthRef.current.authSessionGeneration;
+    const unboundSessionGeneration = latestAuthRef.current.unboundSessionGeneration;
+    const authorizationContext = latestAuthRef.current.authorizationContext;
+    const draftGeneration = draftGenerationRef.current;
+    const downloadGeneration = ++downloadGenerationRef.current;
+    const identityEpoch = identityEpochRef.current;
+    const isCurrentDownload = () =>
+      downloadGenerationRef.current === downloadGeneration &&
+      identityEpochRef.current === identityEpoch &&
+      draftGenerationRef.current === draftGeneration &&
+      routePathRef.current === '/policies' &&
+      scopeRef.current === 'project' &&
+      authorizedRef.current &&
+      statusRef.current === 'ready' &&
+      projectRef.current === activeProject &&
+      tenantRef.current.trim() === selectedTenant &&
+      identity !== null &&
+      policyIdentityRef.current !== null &&
+      sameIdentity(policyIdentityRef.current, identity) &&
+      latestAuthRef.current.session === session &&
+      latestAuthRef.current.authSessionEpoch === authSessionEpoch &&
+      latestAuthRef.current.authSessionGeneration === authSessionGeneration &&
+      latestAuthRef.current.unboundSessionGeneration === unboundSessionGeneration &&
+      latestAuthRef.current.authorizationContext?.issuer === authorizationContext?.issuer &&
+      latestAuthRef.current.authorizationContext?.actorId === authorizationContext?.actorId &&
+      latestAuthRef.current.authorizationContext?.tenantId === authorizationContext?.tenantId &&
+      latestAuthRef.current.authorizationContext?.membershipRevision ===
+        authorizationContext?.membershipRevision;
+
+    if (!isCurrentDownload()) return;
+    setDraftError(null);
+    void (async () => {
+      let url: string | null = null;
+      try {
+        const documentBytes = await buildPlatformPolicyValidationRequestDocument(
+          draftManifest,
+          draftFiles.map(({ relativePath, content }) => ({ relativePath, content })),
+        );
+        if (!isCurrentDownload()) return;
+        const blobBytes = new Uint8Array(documentBytes.byteLength);
+        blobBytes.set(documentBytes);
+        const blob = new Blob([blobBytes.buffer], { type: 'application/json' });
+        url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'project-policy-draft.json';
+        if (!isCurrentDownload()) return;
+        link.click();
+      } catch (reason) {
+        if (!isCurrentDownload()) return;
+        setDraftError(reason instanceof Error
+          ? reason.message
+          : 'The Project Policy draft could not be downloaded.');
+      } finally {
+        if (url !== null) URL.revokeObjectURL(url);
+      }
+    })();
+  }, [draftFiles, draftManifest]);
 
   const expectPolicyRefreshChange = useCallback((selectedTenant: string): ExpectedRefreshChange => {
     const current = latestAuthRef.current;
@@ -1293,6 +1382,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
 
   useEffect(() => {
     if (location.pathname === '/policies') return;
+    downloadGenerationRef.current += 1;
     revisionSelectionRef.current = null;
     identityEpochRef.current += 1;
     requestGenerationRef.current += 1;
@@ -1379,6 +1469,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     setDraftFileContent,
     importDraft,
     loadDraftFromSavedSource,
+    downloadDraft,
     validateDraft,
     loadMore,
   }), [
@@ -1406,6 +1497,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     tenantId,
     importDraft,
     loadDraftFromSavedSource,
+    downloadDraft,
     validateDraft,
     validation,
     validationLoading,
