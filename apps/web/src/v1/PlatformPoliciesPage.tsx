@@ -275,7 +275,7 @@ export function PlatformPoliciesPage() {
         title={`${scopeName} Policies`}
         description={policy.scope === 'platform'
           ? 'Read saved source and revisions, edit a raw draft, and validate it.'
-          : 'Import and edit a local Project Policy validation request.'}
+          : 'Import, edit, validate, and download a local Project Policy draft.'}
         breadcrumb={false}
       />
       <section aria-label={`${scopeName} Policy access`}>
@@ -440,6 +440,11 @@ export function PlatformPoliciesPage() {
             >
               {policy.validationLoading ? 'Validating…' : 'Validate draft'}
             </Button>
+            {policy.scope === 'project' && (
+              <Button appearance="secondary" onClick={policy.downloadDraft}>
+                Download draft
+              </Button>
+            )}
           </div>
           {policy.validation?.isValid && (
             <p role="status">The {scopeName} Policy draft is valid.</p>

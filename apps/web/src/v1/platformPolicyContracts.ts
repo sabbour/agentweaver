@@ -316,6 +316,19 @@ export async function buildPlatformPolicyValidationArtifact(
   };
 }
 
+export async function buildPlatformPolicyValidationRequestDocument(
+  manifest: PlatformPolicyTextBuffer,
+  files: { relativePath: string; content: PlatformPolicyTextBuffer }[],
+): Promise<Uint8Array> {
+  if (manifest.value.length === 0)
+    throw new Error('The Policy validation request needs a non-empty manifest.');
+  const artifact = await buildPlatformPolicyValidationArtifact(manifest, files);
+  const bytes = encodeUtf8(JSON.stringify({ artifact }));
+  if (bytes.byteLength > PLATFORM_POLICY_MAX_HTTP_BYTES)
+    throw new Error('The Policy validation request exceeds 5,242,880 bytes.');
+  return bytes;
+}
+
 function encodePlatformPolicyArtifact(
   manifest: PlatformPolicyTextBuffer,
   files: { relativePath: string; content: PlatformPolicyTextBuffer }[],

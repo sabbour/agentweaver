@@ -66,7 +66,11 @@ vi.mock('./config', async (importOriginal) => ({
 import App from './App';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
-import { buildPlatformPolicyValidationArtifact, createPlatformPolicyTextBuffer } from './platformPolicyContracts';
+import {
+  buildPlatformPolicyValidationArtifact,
+  createPlatformPolicyTextBuffer,
+  parsePlatformPolicyValidationRequestFile,
+} from './platformPolicyContracts';
 import {
   PlatformPoliciesControllerProvider,
   usePlatformPoliciesController,
@@ -242,6 +246,23 @@ function renderPolicyRecoveryHarness() {
       </MemoryRouter>
     </AuthProvider>,
   );
+}
+
+async function openProjectPolicyDraft(): Promise<void> {
+  projectAuthority = true;
+  render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  await completeSignIn();
+  await screen.findByText('Saved Platform Policy revisions');
+  fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+    target: { value: 'project' },
+  });
+  const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+  await screen.findByRole('option', { name: /Project One/ });
+  fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+  await waitFor(() => expect(
+    (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+  ).toBe(false));
 }
 
 async function startRunBoundPolicySession(): Promise<void> {
@@ -643,6 +664,400 @@ describe('Platform Policies served route', () => {
     expect(JSON.parse(String(validationCall?.init?.body))).toEqual({ artifact });
     expect(requests.some(({ url }) =>
       url.includes('/policies/projects/project-1') && !url.endsWith('/validate'))).toBe(false);
+  });
+
+  it('downloads the exact Project draft as an importable compact JSON file without a request', async () => {
+    await openProjectPolicyDraft();
+    const expected = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer('\uFEFFname: download\r\n'),
+      [{
+        relativePath: 'rules/download.rego',
+        content: createPlatformPolicyTextBuffer('allow: true\r\n'),
+      }],
+    );
+    fireEvent.change(screen.getByLabelText('Project Policy validation request'), {
+      target: {
+        files: [new File([JSON.stringify({ artifact: expected })], 'import.json', {
+          type: 'application/json',
+        })],
+      },
+    });
+    await waitFor(() => expect(
+      (screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value,
+    ).toBe('\uFEFFname: download\n'));
+    let downloaded: Blob | null = null;
+    const createObjectURL = vi.fn((blob: Blob) => {
+      downloaded = blob;
+      return 'blob:project-policy';
+    });
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      expect(this.download).toBe('project-policy-draft.json');
+    });
+    const requestCount = requests.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    const bytes = new Uint8Array(await downloaded!.arrayBuffer());
+    const text = new TextDecoder().decode(bytes);
+    expect(text).toBe(JSON.stringify({ artifact: expected }));
+    expect(bytes.byteLength).toBe(new TextEncoder().encode(text).byteLength);
+    expect(bytes.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:project-policy');
+    expect(requests).toHaveLength(requestCount);
+    const imported = await parsePlatformPolicyValidationRequestFile(bytes);
+    expect(await buildPlatformPolicyValidationArtifact(
+      imported.manifest,
+      imported.files,
+    )).toEqual(expected);
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Remove rules/download.rego',
+    }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'source removed' },
+    });
+    expect(screen.queryByRole('textbox', {
+      name: 'Content for rules/download.rego',
+    })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Project Policy validation request'), {
+      target: {
+        files: [new File([downloaded!], 'project-policy-draft.json', {
+          type: 'application/json',
+        })],
+      },
+    });
+    await waitFor(() => expect(
+      (screen.getByRole('textbox', { name: 'Project Policy manifest' }) as HTMLTextAreaElement).value,
+    ).toBe('\uFEFFname: download\n'));
+    click.mockClear();
+    downloaded = null;
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    const roundtripBytes = new Uint8Array(await downloaded!.arrayBuffer());
+    const roundtrip = await parsePlatformPolicyValidationRequestFile(roundtripBytes);
+    expect(roundtripBytes).toEqual(bytes);
+    expect(await buildPlatformPolicyValidationArtifact(
+      roundtrip.manifest,
+      roundtrip.files,
+    )).toEqual(expected);
+  });
+
+  it('downloads a permitted Project draft when the selected tenant differs from the active context', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), {
+      target: { value: 'tenant-2' },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'platform' },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    const projectPicker = await screen.findByRole('combobox', { name: 'Project' });
+    await screen.findByRole('option', { name: /Project One/ });
+    fireEvent.change(projectPicker, { target: { value: 'project-1' } });
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Validate draft' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: tenant-two' },
+    });
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(requests.some(({ url, init }) =>
+      url.endsWith('/authorization/context') &&
+      new Headers(init?.headers).get('X-Agentweaver-Tenant') === 'tenant-2')).toBe(true);
+  });
+
+  it('rejects an empty Project draft download and keeps the draft editor', async () => {
+    await openProjectPolicyDraft();
+    const createObjectURL = vi.fn(() => 'blob:project-policy');
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    expect(await screen.findByText(
+      'The Policy validation request needs a non-empty manifest.',
+    )).toBeTruthy();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'Project Policy manifest' })).toBeTruthy();
+  });
+
+  it('rejects an invalid Project draft path before download and keeps the file', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: retained' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: '../unsafe.rego' },
+    });
+    const createObjectURL = vi.fn(() => 'blob:project-policy');
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+
+    expect(await screen.findByText(
+      'Each Platform Policy file needs a valid relative path.',
+    )).toBeTruthy();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect((screen.getByRole('textbox', {
+      name: 'Relative path',
+    }) as HTMLInputElement).value).toBe('../unsafe.rego');
+  });
+
+  it('keeps the Project draft and revokes the URL when the browser download fails', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: retained' },
+    });
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL,
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+      throw new Error('The browser blocked the download.');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+
+    expect(await screen.findByText('The browser blocked the download.')).toBeTruthy();
+    expect((screen.getByRole('textbox', {
+      name: 'Project Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('name: retained');
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:project-policy');
+  });
+
+  it('lets only the newest Project draft download click finish hashing', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: current' },
+    });
+    const first = deferred<ArrayBuffer>();
+    const second = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest')
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    await act(async () => {
+      first.resolve(new ArrayBuffer(32));
+      await first.promise;
+    });
+    expect(click).not.toHaveBeenCalled();
+    await act(async () => {
+      second.resolve(new ArrayBuffer(32));
+      await second.promise;
+    });
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+  });
+
+  it('cancels hashing immediately when a selected import starts reading', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: before-import' },
+    });
+    const hashing = deferred<ArrayBuffer>();
+    const reading = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValue(hashing.promise);
+    const delayedFile = new File([], 'delayed.json', { type: 'application/json' });
+    vi.spyOn(delayedFile, 'arrayBuffer').mockReturnValue(reading.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    fireEvent.change(screen.getByLabelText('Project Policy validation request'), {
+      target: { files: [delayedFile] },
+    });
+    await act(async () => {
+      hashing.resolve(new ArrayBuffer(32));
+      await hashing.promise;
+    });
+
+    expect(click).not.toHaveBeenCalled();
+    await act(async () => {
+      reading.reject(new Error('stop delayed read'));
+      await reading.promise.catch(() => {});
+    });
+  });
+
+  it('cancels a Project draft download when the draft changes during hashing', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: before-download' },
+    });
+    const hashing = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValue(hashing.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: after-download' },
+    });
+    await act(async () => {
+      hashing.resolve(new ArrayBuffer(32));
+      await hashing.promise;
+    });
+
+    expect(click).not.toHaveBeenCalled();
+    expect((screen.getByRole('textbox', {
+      name: 'Project Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('name: after-download');
+  });
+
+  it('cancels a Project draft download when the Project changes during hashing', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: context-fenced' },
+    });
+    const hashing = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValue(hashing.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Project' }), {
+      target: { value: '' },
+    });
+    await act(async () => {
+      hashing.resolve(new ArrayBuffer(32));
+      await hashing.promise;
+    });
+
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('cancels a Project draft download when the route changes during hashing', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: route-fenced' },
+    });
+    const hashing = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValue(hashing.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    act(() => {
+      window.history.pushState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await act(async () => {
+      hashing.resolve(new ArrayBuffer(32));
+      await hashing.promise;
+    });
+
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('cancels a Project draft download when the session ends during hashing', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: session-fenced' },
+    });
+    const hashing = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValue(hashing.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Account' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await screen.findByRole('button', { name: 'Sign in' });
+    click.mockClear();
+    await act(async () => {
+      hashing.resolve(new ArrayBuffer(32));
+      await hashing.promise;
+    });
+
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('cancels a Project draft download when access changes during hashing', async () => {
+    await openProjectPolicyDraft();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: access-fenced' },
+    });
+    const hashing = deferred<ArrayBuffer>();
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockReturnValue(hashing.promise);
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:project-policy'),
+      revokeObjectURL: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+    projectAuthority = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(
+      'You do not have permission to access this Project Policy.',
+    )).toBeTruthy();
+    await act(async () => {
+      hashing.resolve(new ArrayBuffer(32));
+      await hashing.promise;
+    });
+
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('keeps an oversized Project draft in the editor and does not download it', async () => {
+    await openProjectPolicyDraft();
+    const oversized = 'x'.repeat(262_145);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project Policy manifest' }), {
+      target: { value: 'name: oversized' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative path' }), {
+      target: { value: 'rules/oversized.rego' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Content for rules/oversized.rego' }), {
+      target: { value: oversized },
+    });
+    const createObjectURL = vi.fn(() => 'blob:project-policy');
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download draft' }));
+
+    expect(await screen.findByText(
+      'Each Platform Policy file must be 262,144 bytes or smaller.',
+    )).toBeTruthy();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect((screen.getByRole('textbox', {
+      name: 'Content for rules/oversized.rego',
+    }) as HTMLTextAreaElement).value).toBe(oversized);
   });
 
   it('ignores a Project validation response after the draft is edited', async () => {
