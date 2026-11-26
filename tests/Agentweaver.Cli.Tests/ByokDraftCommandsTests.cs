@@ -800,6 +800,67 @@ public sealed class ByokDraftCommandsTests
     }
 
     [Fact]
+    public async Task ListAcceptsLegacyAndCurrentModelProviderDraftPageSchemasAndRejectsInvalidActiveProviderRevision()
+    {
+        // Older Gateway schema without activeProviderRevision still succeeds.
+        using (var legacyFixture = new Fixture
+        {
+            TransformOpenApi = document =>
+                document["components"]!["schemas"]!["ModelProviderDraftPage"]!
+                    ["properties"]!.AsObject().Remove("activeProviderRevision"),
+            Respond = _ => JsonResponse(Page([Provider(ProviderId, "First")], null)),
+        })
+        {
+            Assert.Equal(0, await legacyFixture.Run("list"));
+            Assert.Single(legacyFixture.Requests);
+        }
+
+        // Current Gateway schema with optional nullable integer activeProviderRevision succeeds.
+        using (var currentFixture = new Fixture
+        {
+            Respond = _ =>
+            {
+                var page = JsonNode.Parse(Page([Provider(ProviderId, "First")], null))!.AsObject();
+                page["activeProviderRevision"] = 3;
+                return JsonResponse(page);
+            },
+        })
+        {
+            Assert.Equal(0, await currentFixture.Run("list"));
+            Assert.Single(currentFixture.Requests);
+        }
+
+        // Invalid activeProviderRevision type fails before dispatch.
+        using (var badTypeFixture = new Fixture
+        {
+            TransformOpenApi = document =>
+            {
+                var field = document["components"]!["schemas"]!["ModelProviderDraftPage"]!
+                    ["properties"]!["activeProviderRevision"]!.AsObject();
+                field["anyOf"]![0]!["type"] = "string";
+            },
+        })
+        {
+            Assert.Equal(1, await badTypeFixture.Run("list"));
+            Assert.Empty(badTypeFixture.Requests);
+            Assert.Equal("BYOK_CONTRACT_MISMATCH" + Environment.NewLine, badTypeFixture.Error.ToString());
+        }
+
+        // Required activeProviderRevision fails before dispatch.
+        using (var requiredFixture = new Fixture
+        {
+            TransformOpenApi = document =>
+                document["components"]!["schemas"]!["ModelProviderDraftPage"]!
+                    ["required"]!.AsArray().Add("activeProviderRevision"),
+        })
+        {
+            Assert.Equal(1, await requiredFixture.Run("list"));
+            Assert.Empty(requiredFixture.Requests);
+            Assert.Equal("BYOK_CONTRACT_MISMATCH" + Environment.NewLine, requiredFixture.Error.ToString());
+        }
+    }
+
+    [Fact]
     public async Task SavePricesRejectsCredentialBearingSourceUrlBeforeDispatch()
     {
         var body = ManualRateCard("card-1");
