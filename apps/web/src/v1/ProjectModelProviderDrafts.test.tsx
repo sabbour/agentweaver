@@ -61,6 +61,8 @@ function provider(overrides: Record<string, unknown> = {}) {
     azure_api_version: null,
     reasoning_efforts: ['low'],
     prompt_capacity_tokens: null,
+    rate_card_id: null,
+    rate_card_version: null,
     scope: 'project',
     projectId: 'project-1',
     state: 'Draft',
@@ -1456,5 +1458,146 @@ describe('Project BYOK provider drafts', () => {
       />,
     );
     expect(screen.getByText('No platform BYOK providers are available.')).toBeTruthy();
+  });
+
+  it('attaches a rate-card pair on create, shows it on detail, and preserves it on unrelated edits', async () => {
+    const savedWithCard = provider({
+      id: 'created-provider-id',
+      rate_card_id: 'manual-card',
+      rate_card_version: '7',
+      revision: 1,
+    });
+    const updatedWithCard = provider({
+      id: 'created-provider-id',
+      name: 'Renamed model',
+      rate_card_id: 'manual-card',
+      rate_card_version: '7',
+      revision: 2,
+    });
+    mocks.create.mockResolvedValueOnce(savedWithCard);
+    mocks.read.mockResolvedValueOnce(savedWithCard);
+    mocks.update.mockResolvedValueOnce(updatedWithCard);
+    mocks.read.mockResolvedValueOnce(updatedWithCard);
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add provider draft' }));
+
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Customer model' } });
+    fireEvent.change(screen.getByLabelText(/^Provider type/), { target: { value: 'openai' } });
+    fireEvent.change(screen.getByLabelText(/^Base URL/), { target: { value: 'https://provider.example/v1' } });
+    fireEvent.change(screen.getByLabelText(/^Model or deployment/), { target: { value: 'model-a' } });
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: 'manual-card' } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '7' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create draft' }));
+
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+    expect(mocks.create.mock.calls[0][2]).toMatchObject({
+      rate_card_id: 'manual-card',
+      rate_card_version: '7',
+    });
+    expect(await screen.findByText('Rate card: manual-card / 7')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    expect((screen.getByLabelText('Rate-card ID') as HTMLInputElement).value).toBe('manual-card');
+    expect((screen.getByLabelText('Rate-card version') as HTMLInputElement).value).toBe('7');
+
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Renamed model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1));
+    expect(mocks.update.mock.calls[0][3]).toMatchObject({
+      name: 'Renamed model',
+      rate_card_id: 'manual-card',
+      rate_card_version: '7',
+    });
+    expect(await screen.findByText('Rate card: manual-card / 7')).toBeTruthy();
+  });
+
+  it('rejects partial pairs, invalid syntax or length, and prevents accidental clear on edit', async () => {
+    const existing = provider({
+      rate_card_id: 'manual-card',
+      rate_card_version: '7',
+      revision: 1,
+    });
+    mocks.list.mockResolvedValue({ providers: [existing], nextAfterProviderId: null });
+    mocks.read.mockResolvedValue(existing);
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    await screen.findByText('Rate card: manual-card / 7');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    expect(await screen.findByText('Enter both a rate-card ID and version, or leave both blank.')).toBeTruthy();
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: 'bad id' } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    expect(await screen.findByText(/Use a rate-card ID of at most 128 characters/)).toBeTruthy();
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: 'a'.repeat(129) } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    expect(await screen.findByText(/Use a rate-card ID of at most 128 characters/)).toBeTruthy();
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    expect(await screen.findByText(/This provider has a saved rate-card link/)).toBeTruthy();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('recovers from 409 conflict and clears pricing state on access loss', async () => {
+    const initial = provider({ rate_card_id: 'card-a', rate_card_version: '1', revision: 1 });
+    const latest = provider({ rate_card_id: 'card-b', rate_card_version: '2', revision: 2 });
+    mocks.list.mockResolvedValue({ providers: [initial], nextAfterProviderId: null });
+    mocks.read.mockResolvedValueOnce(initial).mockResolvedValueOnce(latest);
+    mocks.update.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'The provider draft changed.'),
+    );
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    await screen.findByText('Rate card: card-a / 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard edits and reload latest' }));
+    expect(await screen.findByText('Rate card: card-b / 2')).toBeTruthy();
+
+    mocks.update.mockRejectedValueOnce(
+      new GatewayError(403, { code: 'forbidden' }, 'Access denied.'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByLabelText('Rate-card ID')).toBeNull();
+  });
+
+  it('shows Pricing status unavailable when rate-card fields are absent and omits them on unrelated edit', async () => {
+    const absent = provider({ rate_card_id: undefined, rate_card_version: undefined, revision: 1 });
+    const updated = provider({ name: 'Renamed', rate_card_id: undefined, rate_card_version: undefined, revision: 2 });
+    mocks.list.mockResolvedValue({ providers: [absent], nextAfterProviderId: null });
+    mocks.read.mockResolvedValueOnce(absent).mockResolvedValueOnce(updated);
+    mocks.update.mockResolvedValueOnce(updated);
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    expect(await screen.findByText('Pricing status unavailable')).toBeTruthy();
+    expect(screen.getByText('Pricing').parentElement?.textContent).not.toContain('Not set');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1));
+    const sent = mocks.update.mock.calls[0][3] as Record<string, unknown>;
+    expect('rate_card_id' in sent).toBe(false);
+    expect('rate_card_version' in sent).toBe(false);
   });
 });

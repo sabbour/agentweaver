@@ -206,9 +206,9 @@ public sealed class ModelProviderDraftHttpContractTests
         Assert.Contains("\"has_api_key\":false", json);
         Assert.Contains("\"hasCredential\":true", json);
         Assert.DoesNotContain("credential-version-secret", json);
-        Assert.DoesNotContain("rate-card-secret", json);
+        Assert.Contains("\"rate_card_id\":\"rate-card-secret\"", json);
+        Assert.Contains("\"rate_card_version\":\"7\"", json);
         Assert.DoesNotContain("CreatedByActorId", json);
-        Assert.Contains("\"rate_card_id\":null", json);
         var platform = binding with { Scope = ModelProviderBindingScope.Platform, ProjectId = null };
         var platformJson = JsonSerializer.Serialize(
             ModelProviderDraftEndpoints.Project(new ModelProviderDraft(ModelProviderDraftState.Draft, platform)),

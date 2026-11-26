@@ -399,8 +399,7 @@ internal static class ModelProviderDraftEndpoints
                 return InvalidRequest();
             if (ValidateSaveBody(body, create) is { } invalid)
                 return invalid;
-            if (scope == ModelProviderBindingScope.Platform && !create &&
-                body.RateCardIdSpecified != body.RateCardVersionSpecified)
+            if (body.RateCardIdSpecified != body.RateCardVersionSpecified)
                 return InvalidRequest();
             if (!IsSafePublicUrl(body.BaseUrl, body.Type))
                 return InvalidRequest();
@@ -414,7 +413,7 @@ internal static class ModelProviderDraftEndpoints
             {
                 Reference = body.Reference,
                 TargetInstallationId = body.TargetInstallationId,
-                PreserveRateCardLink = scope == ModelProviderBindingScope.Platform && !create &&
+                PreserveRateCardLink = !create &&
                     !body.RateCardIdSpecified && !body.RateCardVersionSpecified,
             };
             var saved = await service.SaveAsync(
@@ -533,8 +532,8 @@ internal static class ModelProviderDraftEndpoints
             binding.WireApi, binding.AzureApiVersion, binding.ReasoningEfforts, binding.PromptCapacityTokens,
             binding.Scope == ModelProviderBindingScope.Platform ? "platform" : "project",
             binding.ProjectId, draft.State.ToString(), binding.ProviderRevision, binding.ConfigurationHash,
-            binding.Scope == ModelProviderBindingScope.Platform ? binding.RateCardId : null,
-            binding.Scope == ModelProviderBindingScope.Platform ? binding.RateCardVersion : null,
+            binding.RateCardId,
+            binding.RateCardVersion,
             false,
             binding.ProviderId == activeProviderId,
             binding.CredentialVersion is not null,
