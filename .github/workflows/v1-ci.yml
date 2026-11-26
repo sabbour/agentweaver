@@ -621,7 +621,11 @@ jobs:
             --output "$RUNNER_TEMP/agentweaver-native-acs/opa"
           echo '00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084  '"$RUNNER_TEMP/agentweaver-native-acs/opa" | sha256sum --check -
           chmod 0755 "$RUNNER_TEMP/agentweaver-native-acs/opa"
-          echo "ACS_OPA_PATH=$RUNNER_TEMP/agentweaver-native-acs/opa" >> "$GITHUB_ENV"
+          if [[ "${{ matrix.name }}" == "native-acs" || "${{ matrix.name }}" == "projects-config" ]]; then
+            echo "ACS_OPA_PATH=$RUNNER_TEMP/agentweaver-native-acs/opa" >> "$GITHUB_ENV"
+          else
+            echo "AGENTWEAVER_TEST_OPA_PATH=$RUNNER_TEMP/agentweaver-native-acs/opa" >> "$GITHUB_ENV"
+          fi
       - name: Restore and build test project
         env:
           TEST_PROJECT: ${{ matrix.project }}

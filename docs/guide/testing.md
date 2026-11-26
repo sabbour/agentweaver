@@ -521,6 +521,16 @@ Run the Projects & Config PostgreSQL tests in hosted CI:
 dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicy|FullyQualifiedName~NativeAcsPlatformPolicy|FullyQualifiedName~NativeAcsProjectPolicyRead|FullyQualifiedName~NativeAcsProjectPolicyList|FullyQualifiedName~NativeAcsProjectValidation"
 ```
 
+Run the Gateway preparation receipt regression on Linux. Set
+`AGENTWEAVER_TEST_OPA_PATH` to the same pinned OPA 0.70.0 executable. This
+test-only variable lets the Broker test use a validator without enabling native
+ACS evaluation in unrelated service fixtures.
+
+```bash
+export AGENTWEAVER_TEST_OPA_PATH='/path/to/opa'
+dotnet test tests/Agentweaver.Identity.Broker.Tests/Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~GatewayPlatformPolicyPreparationOpenApiMatchesNewAndRetryReceipts
+```
+
 These controlled tests use disposable PostgreSQL. They check Platform and
 Project source reads, current authorization, history pagination, exact bytes,
 opaque list cursors, bounded set-based list authorization, and unchanged
