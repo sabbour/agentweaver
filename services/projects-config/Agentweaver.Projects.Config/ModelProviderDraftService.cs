@@ -216,7 +216,8 @@ public sealed partial class ModelProviderDraftService
         await AuthorizeAsync(caller, scope, projectId, cancellationToken).ConfigureAwait(false);
         ValidateProviderId(providerId);
         ArgumentNullException.ThrowIfNull(request);
-        if (request.PreserveRateCardLink)
+        var preserveRateCardLink = request.PreserveRateCardLink;
+        if (preserveRateCardLink)
         {
             var existing = await db.ModelProviderDraftRevisions.AsNoTracking()
                 .Where(revision =>
@@ -252,6 +253,13 @@ public sealed partial class ModelProviderDraftService
             metadata.RateCardId,
             metadata.RateCardVersion);
         var requestFingerprint = Hash(new SaveFingerprint(fingerprintInput, request.ExpectedRevision));
+        var legacyClearedFingerprint = preserveRateCardLink &&
+            scope == ModelProviderBindingScope.Project &&
+            metadata.RateCardId is not null
+            ? Hash(new SaveFingerprint(
+                fingerprintInput with { RateCardId = null, RateCardVersion = null },
+                request.ExpectedRevision))
+            : null;
         var configurationHash = Hash(fingerprintInput);
 
         if (request.ExpectedRevision == 0)
@@ -280,6 +288,7 @@ public sealed partial class ModelProviderDraftService
                     scope,
                     projectId,
                     requestFingerprint,
+                    legacyClearedFingerprint,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (replay is not null)
@@ -387,6 +396,7 @@ public sealed partial class ModelProviderDraftService
                         scope,
                         projectId,
                         requestFingerprint,
+                        legacyClearedFingerprint,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (concurrentReplay is not null)
@@ -617,6 +627,7 @@ public sealed partial class ModelProviderDraftService
         ModelProviderBindingScope scope,
         string? projectId,
         string requestFingerprint,
+        string? legacyClearedFingerprint,
         CancellationToken cancellationToken)
     {
         var replay = await db.ModelProviderDraftRevisions.AsNoTracking()
@@ -624,10 +635,16 @@ public sealed partial class ModelProviderDraftService
             .ConfigureAwait(false);
         if (replay is null)
             return null;
+        var matchesFingerprint = replay.RequestFingerprint == requestFingerprint ||
+            (legacyClearedFingerprint is not null &&
+             replay.Scope == ModelProviderBindingScope.Project &&
+             replay.RateCardId is null &&
+             replay.RateCardVersion is null &&
+             replay.RequestFingerprint == legacyClearedFingerprint);
         if (replay.ProviderId != providerId ||
             replay.Scope != scope ||
             replay.ProjectId != projectId ||
-            replay.RequestFingerprint != requestFingerprint)
+            !matchesFingerprint)
             throw ModelProviderDraftException.Conflict();
         return ToDraft(ModelProviderDraftState.Draft, replay,
             await ReadReferenceAsync(providerId, cancellationToken).ConfigureAwait(false));

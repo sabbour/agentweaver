@@ -63,8 +63,14 @@ agentweaver project byok show $providerId --project-id $projectId
 Update the complete metadata. Copy optional values from `show` when you want
 to keep them. If you omit `--wire-api`, `--azure-api-version`,
 `--reasoning-effort`, or `--prompt-capacity-tokens`, the update clears those
-values. Add `--rate-card-id` and `--rate-card-version` together to keep or
-replace an attachment. Omitting the pair clears an existing attachment.
+values. The CLI `update` command also sends `null` for `--rate-card-id` and
+`--rate-card-version` when you omit those flags, which clears an existing
+rate-card attachment. Copy `--rate-card-id` and `--rate-card-version` from
+`show` to keep or replace an attachment. Direct API `PUT` callers that omit
+both `rate_card_id` and `rate_card_version` from JSON preserve the existing
+attachment; sending both as `null` clears it, and sending only one fails with
+`400`. Saving the rate-card link does not activate the provider; Projects
+verifies the linked card against Events during key publication.
 
 ```powershell
 $expectedRevision = Read-Host "Current revision from show"
@@ -72,6 +78,8 @@ $displayName = Read-Host "Provider display name"
 $providerType = Read-Host "Provider type: openai, azure, or anthropic"
 $providerBaseUrl = Read-Host "Provider HTTPS base URL"
 $deployment = Read-Host "Model deployment"
+$rateCardId = Read-Host "Current rate-card ID from show"
+$rateCardVersion = Read-Host "Current rate-card version from show"
 $operationId = [guid]::NewGuid().ToString()
 
 agentweaver project byok update $providerId `
@@ -81,6 +89,8 @@ agentweaver project byok update $providerId `
   --type $providerType `
   --base-url $providerBaseUrl `
   --model $deployment `
+  --rate-card-id $rateCardId `
+  --rate-card-version $rateCardVersion `
   --operation-id $operationId
 ```
 

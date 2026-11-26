@@ -91,6 +91,196 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task ProjectProviderRateCardLinkRoundTripsPreservesOmittedRejectsPartialAndDeniesUnauthorized()
+    {
+        await using var db = CreateDbContext();
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var tenantId = "project-rate-card-" + Guid.NewGuid().ToString("N");
+        var ownerSubject = "project-rate-owner-" + Guid.NewGuid().ToString("N");
+        var tenantAdmin = await SeedCallerAsync(
+            db, authority, ownerSubject, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Project pricing", CancellationToken.None);
+        var otherSubject = "project-rate-other-" + Guid.NewGuid().ToString("N");
+        await SeedCallerAsync(
+            db, authority, otherSubject, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Contributor);
+
+        using var host = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs());
+        using var ownerClient = CreateDraftEndpointClient(host, ownerSubject, tenantId, project.ProjectId);
+        using var unauthorizedClient = CreateDraftEndpointClient(host, otherSubject, tenantId, project.ProjectId);
+
+        var projectPath = $"/api/projects/{project.ProjectId}/byok-providers";
+        using (var partialCreate = SaveRequest(
+            projectPath,
+            SaveDraftBody(Guid.NewGuid(), 0, "Partial create")[..^1] + ""","rate_card_id":null}"""))
+        using (var response = await ownerClient.SendAsync(partialCreate))
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var operation = Guid.NewGuid();
+        var providerId = "byok-" + operation.ToString("N");
+        var createBody = SaveDraftBody(operation, 0, "Project priced provider")[..^1] +
+            ""","rate_card_id":"project-card","rate_card_version":"3"}""";
+
+        using (var create = SaveRequest(projectPath, createBody))
+        using (var response = await ownerClient.SendAsync(create))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("project", json.RootElement.GetProperty("scope").GetString());
+            Assert.Equal("project-card", json.RootElement.GetProperty("rate_card_id").GetString());
+            Assert.Equal("3", json.RootElement.GetProperty("rate_card_version").GetString());
+            Assert.False(json.RootElement.GetProperty("has_api_key").GetBoolean());
+        }
+
+        using (var list = await ownerClient.GetAsync(projectPath))
+        {
+            Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+            using var json = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+            var item = Assert.Single(json.RootElement.GetProperty("providers").EnumerateArray());
+            Assert.Equal("project-card", item.GetProperty("rate_card_id").GetString());
+            Assert.Equal("3", item.GetProperty("rate_card_version").GetString());
+        }
+
+        using (var read = await ownerClient.GetAsync(projectPath + "/" + providerId))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            using var json = JsonDocument.Parse(await read.Content.ReadAsStringAsync());
+            Assert.Equal("project-card", json.RootElement.GetProperty("rate_card_id").GetString());
+            Assert.Equal("3", json.RootElement.GetProperty("rate_card_version").GetString());
+        }
+
+        using (var updateOmitted = SaveRequest(
+            projectPath + "/" + providerId,
+            SaveDraftBody(Guid.NewGuid(), 1, "Project renamed"),
+            HttpMethod.Put))
+        using (var response = await ownerClient.SendAsync(updateOmitted))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("project-card", json.RootElement.GetProperty("rate_card_id").GetString());
+            Assert.Equal("3", json.RootElement.GetProperty("rate_card_version").GetString());
+        }
+
+        foreach (var partialRateCard in new[]
+                 {
+                     ""","rate_card_id":null}""",
+                     ""","rate_card_version":null}""",
+                     ""","rate_card_id":"other-card"}""",
+                 })
+        {
+            var partialBody = SaveDraftBody(Guid.NewGuid(), 2, "Project renamed")[..^1] +
+                partialRateCard;
+            using var request = SaveRequest(projectPath + "/" + providerId, partialBody, HttpMethod.Put);
+            using var response = await ownerClient.SendAsync(request);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        using (var unchanged = await ownerClient.GetAsync(projectPath + "/" + providerId))
+        {
+            Assert.Equal(HttpStatusCode.OK, unchanged.StatusCode);
+            using var json = JsonDocument.Parse(await unchanged.Content.ReadAsStringAsync());
+            Assert.Equal("project-card", json.RootElement.GetProperty("rate_card_id").GetString());
+            Assert.Equal("3", json.RootElement.GetProperty("rate_card_version").GetString());
+        }
+
+        var clearBody = SaveDraftBody(Guid.NewGuid(), 2, "Project renamed")[..^1] +
+            ""","rate_card_id":null,"rate_card_version":null}""";
+        using (var clear = SaveRequest(projectPath + "/" + providerId, clearBody, HttpMethod.Put))
+        using (var response = await ownerClient.SendAsync(clear))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("rate_card_id").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("rate_card_version").ValueKind);
+        }
+
+        using (var deniedList = await unauthorizedClient.GetAsync(projectPath))
+            Assert.Equal(HttpStatusCode.Forbidden, deniedList.StatusCode);
+        using (var deniedRead = await unauthorizedClient.GetAsync(projectPath + "/" + providerId))
+            Assert.Equal(HttpStatusCode.Forbidden, deniedRead.StatusCode);
+    }
+
+    [Fact]
+    public async Task ProjectProviderPreUpgradeClearedUpdateReplaysAfterUpgrade()
+    {
+        await using var db = CreateDbContext();
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var tenantId = "project-legacy-replay-" + Guid.NewGuid().ToString("N");
+        var ownerSubject = "project-legacy-owner-" + Guid.NewGuid().ToString("N");
+        var tenantAdmin = await SeedCallerAsync(
+            db, authority, ownerSubject, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Project legacy replay", CancellationToken.None);
+
+        using var host = await StartDraftEndpointHostAsync(fixture.DataSource, new CapturedLogs());
+        using var ownerClient = CreateDraftEndpointClient(host, ownerSubject, tenantId, project.ProjectId);
+        var projectPath = $"/api/projects/{project.ProjectId}/byok-providers";
+
+        var createOp = Guid.NewGuid();
+        var providerId = "byok-" + createOp.ToString("N");
+        var createBody = SaveDraftBody(createOp, 0, "Project priced provider")[..^1] +
+            ""","rate_card_id":"project-card","rate_card_version":"3"}""";
+        using (var create = SaveRequest(projectPath, createBody))
+        using (var response = await ownerClient.SendAsync(create))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // Simulate a pre-upgrade PUT that omitted rate_card_id/rate_card_version and committed null values.
+        var legacyOp = Guid.NewGuid();
+        var currentMembership = await db.TenantMemberships.AsNoTracking()
+            .SingleAsync(m => m.MembershipId == tenantAdmin.MembershipId);
+        var grants = (await db.RoleAssignments.AsNoTracking()
+                .Where(a => a.MembershipId == tenantAdmin.MembershipId && a.State == ProjectAuthorityRecordState.Active)
+                .ToArrayAsync())
+            .Select(a => new ProjectAuthorizationGrant(a.AssignmentId, a.ResourceType, a.ResourceId, a.Role, a.Revision))
+            .ToArray();
+        var projectCaller = new ProjectAuthorizationContext(
+            tenantAdmin.Issuer,
+            tenantAdmin.ActorId,
+            tenantAdmin.TenantId,
+            currentMembership.MembershipId,
+            currentMembership.Revision,
+            [.. grants],
+            tenantAdmin.Scopes,
+            project.ProjectId,
+            null,
+            null);
+        await new ModelProviderDraftService(db, TimeProvider.System).SaveAsync(
+            projectCaller,
+            ModelProviderBindingScope.Project,
+            project.ProjectId,
+            providerId,
+            new SaveModelProviderDraftRequest(
+                legacyOp, 1, "Legacy omitted rename", "openai", "https://api.openai.com/v1",
+                "test-model", null, null, [], null, null, null)
+            {
+                PreserveRateCardLink = false,
+            },
+            CancellationToken.None);
+
+        var retryBody = SaveDraftBody(legacyOp, 1, "Legacy omitted rename");
+        using (var retry = SaveRequest(projectPath + "/" + providerId, retryBody, HttpMethod.Put))
+        using (var response = await ownerClient.SendAsync(retry))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(2, json.RootElement.GetProperty("revision").GetInt64());
+            Assert.Equal("Legacy omitted rename", json.RootElement.GetProperty("name").GetString());
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("rate_card_id").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("rate_card_version").ValueKind);
+        }
+
+        var mismatchBody = SaveDraftBody(legacyOp, 1, "Changed name");
+        using (var mismatch = SaveRequest(projectPath + "/" + providerId, mismatchBody, HttpMethod.Put))
+        using (var response = await ownerClient.SendAsync(mismatch))
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
     public async Task PlatformProviderSwitchEndpointsReturnTheSavedRevisionAndListState()
     {
         await using var db = CreateDbContext();

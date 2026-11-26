@@ -70,7 +70,9 @@ operation ID and expected revision; create uses revision `0`, while update
 requires a positive revision. Save retries return the revision committed by
 the original operation. Create and update accept optional nullable
 `rate_card_id` and `rate_card_version` fields. API callers must provide both or
-neither. Omitting both on update clears the attachment. Activation requires the current positive
+neither. Omitting both on update preserves the existing attachment; sending both
+as `null` clears it. Saving the link does not activate the provider; Projects
+verifies the linked rate card against Events during key publication. Activation requires the current positive
 `expectedSettingsRevision` and `expectedProviderRevision`. It also requires an
 `Available` platform provider with stored credential and pricing evidence.
 Deactivation requires `expectedSettingsRevision`.
@@ -152,9 +154,9 @@ credential. Explicit project, role, agent, and task model choices stay in place.
 Accepted runs keep their saved selections; a settings revision applies only to
 fresh starts.
 
-Platform provider metadata accepts `rate_card_id` and `rate_card_version` as a
+Platform and project provider metadata accept `rate_card_id` and `rate_card_version` as a
 pair. Update preserves a pair when both fields are omitted. Send both fields as
-`null` to clear it. Platform list and read responses return the saved pair.
+`null` to clear it. Authorized platform and project list, read, create, and update responses return the saved pair.
 
 Manual pricing writes accept exact JSON decimal rates and immutable `{id,
 version}` keys. A `409` rate-card conflict means that the key and version

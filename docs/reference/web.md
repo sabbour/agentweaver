@@ -30,7 +30,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client, callback messages, and the actionable setup message for `github_repo_app_not_configured`. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
-| `src/v1/ProjectModelProviderDrafts.tsx` | Project Settings > Connections read-only **Available platform providers** list, project provider Draft list, detail with host-request status and **Refresh status**, and metadata editor. |
+| `src/v1/ProjectModelProviderDrafts.tsx` | Project Settings > Connections read-only **Available platform providers** list, project provider Draft list, detail with pricing and host-request status and **Refresh status**, and metadata editor with paired rate-card fields. |
 | `src/v1/SkillsMarketplacePanel.tsx` | Suggested marketplaces, marketplace sources, **Add skill**, folder, file, and ZIP upload through the package route, preview, import, inventory with **Remove skill** (revision revoke), and assignment. |
 | `src/v1/OperationsPages.tsx` | Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster pages built from project reads, each with a note for the missing parts. |
 | `src/v1/RunOutputCaptures.tsx` | **Produced files** on the run Changes tab: saved file sets and their patches. |

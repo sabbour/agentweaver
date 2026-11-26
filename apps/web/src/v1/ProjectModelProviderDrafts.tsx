@@ -32,6 +32,8 @@ type ProviderEditor = {
   azureApiVersion: string;
   reasoningEfforts: string;
   promptCapacityTokens: string;
+  rateCardId: string;
+  rateCardVersion: string;
 };
 
 type ProviderView = 'list' | 'detail' | 'create' | 'edit';
@@ -62,6 +64,21 @@ class StaleRequestError extends Error {
 
 const PAGE_SIZE = 50;
 
+function validRateCardIdentifier(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    !/\s/.test(value) &&
+    /^[A-Za-z0-9._:-]+$/.test(value);
+}
+
+function pricingStatus(provider: ProjectModelProviderDraft): 'missing' | 'attached' | 'unavailable' {
+  if (provider.rate_card_id === null && provider.rate_card_version === null) return 'missing';
+  if (validRateCardIdentifier(provider.rate_card_id, 128) &&
+      validRateCardIdentifier(provider.rate_card_version, 64)) return 'attached';
+  return 'unavailable';
+}
+
 function emptyEditor(): ProviderEditor {
   return {
     name: '',
@@ -72,10 +89,13 @@ function emptyEditor(): ProviderEditor {
     azureApiVersion: '',
     reasoningEfforts: '',
     promptCapacityTokens: '',
+    rateCardId: '',
+    rateCardVersion: '',
   };
 }
 
 function editorFromDraft(provider: ProjectModelProviderDraft): ProviderEditor {
+  const validPricing = pricingStatus(provider) === 'attached';
   return {
     name: provider.name,
     type: provider.type,
@@ -85,6 +105,8 @@ function editorFromDraft(provider: ProjectModelProviderDraft): ProviderEditor {
     azureApiVersion: provider.azure_api_version ?? '',
     reasoningEfforts: provider.reasoning_efforts.join(', '),
     promptCapacityTokens: provider.prompt_capacity_tokens?.toString() ?? '',
+    rateCardId: validPricing ? provider.rate_card_id as string : '',
+    rateCardVersion: validPricing ? provider.rate_card_version as string : '',
   };
 }
 
@@ -847,6 +869,27 @@ export function ProjectModelProviderDrafts({
       setSaveError(new Error('Prompt capacity must be a positive whole number.'));
       return;
     }
+    const rateCardId = editor.rateCardId.trim();
+    const rateCardVersion = editor.rateCardVersion.trim();
+    if ((rateCardId.length > 0) !== (rateCardVersion.length > 0)) {
+      setSaveError(new Error('Enter both a rate-card ID and version, or leave both blank.'));
+      return;
+    }
+    if (rateCardId.length > 0 &&
+        (!validRateCardIdentifier(rateCardId, 128) ||
+         !validRateCardIdentifier(rateCardVersion, 64))) {
+      setSaveError(new Error(
+        'Use a rate-card ID of at most 128 characters and a version of at most 64 characters, with letters, digits, ".", "_", "-", or ":".',
+      ));
+      return;
+    }
+    const isUpdate = view === 'edit' && selectedProvider !== null;
+    if (isUpdate && rateCardId.length === 0 && pricingStatus(selectedProvider) === 'attached') {
+      setSaveError(new Error(
+        'This provider has a saved rate-card link. Keep both the rate-card ID and version to preserve it.',
+      ));
+      return;
+    }
     const requestBody: Omit<ProjectModelProviderDraftSaveRequest, 'operationId'> = {
       expectedRevision: view === 'edit' ? selectedProvider?.revision ?? 0 : 0,
       name: editor.name.trim(),
@@ -857,8 +900,10 @@ export function ProjectModelProviderDrafts({
       azure_api_version: editor.azureApiVersion.trim() || null,
       reasoning_efforts: editor.reasoningEfforts.split(',').map((effort) => effort.trim()).filter(Boolean),
       prompt_capacity_tokens: promptCapacity,
+      ...(rateCardId.length > 0
+        ? { rate_card_id: rateCardId, rate_card_version: rateCardVersion }
+        : {}),
     };
-    const isUpdate = view === 'edit' && selectedProvider !== null;
     const expectedSaveView = view;
     const expectedProviderId = isUpdate ? selectedProvider.id : null;
     const capturedScope = currentScopeRef.current;
@@ -1564,6 +1609,20 @@ export function ProjectModelProviderDrafts({
                     <div><dt>Azure API version</dt><dd>{selectedProvider.azure_api_version ?? 'Not set'}</dd></div>
                     <div><dt>Reasoning efforts</dt><dd>{selectedProvider.reasoning_efforts.join(', ') || 'Not set'}</dd></div>
                     <div><dt>Prompt capacity</dt><dd>{selectedProvider.prompt_capacity_tokens ?? 'Not set'}</dd></div>
+                    <div>
+                      <dt>Pricing</dt>
+                      <dd>
+                        {pricingStatus(selectedProvider) === 'attached' && (
+                          <span>Rate card: {selectedProvider.rate_card_id} / {selectedProvider.rate_card_version}</span>
+                        )}
+                        {pricingStatus(selectedProvider) === 'unavailable' && (
+                          <Badge appearance="outline" color="warning">Pricing status unavailable</Badge>
+                        )}
+                        {pricingStatus(selectedProvider) === 'missing' && (
+                          <span>Not set</span>
+                        )}
+                      </dd>
+                    </div>
                     <div><dt>State</dt><dd>{selectedProvider.state}</dd></div>
                     <div><dt>Revision</dt><dd>{selectedProvider.revision}</dd></div>
                     <div>
@@ -1760,6 +1819,25 @@ export function ProjectModelProviderDrafts({
                   step={1}
                   value={editor.promptCapacityTokens}
                   onChange={(_, data) => updateEditor('promptCapacityTokens', data.value)}
+                  disabled={saving}
+                />
+              </Field>
+              <Field
+                label="Rate-card ID"
+                hint="Optional. Enter both ID and version to link a saved rate card. Key publication verifies this link; saving it does not activate the provider."
+              >
+                <Input
+                  aria-label="Rate-card ID"
+                  value={editor.rateCardId}
+                  onChange={(_, data) => updateEditor('rateCardId', data.value)}
+                  disabled={saving}
+                />
+              </Field>
+              <Field label="Rate-card version">
+                <Input
+                  aria-label="Rate-card version"
+                  value={editor.rateCardVersion}
+                  onChange={(_, data) => updateEditor('rateCardVersion', data.value)}
                   disabled={saving}
                 />
               </Field>

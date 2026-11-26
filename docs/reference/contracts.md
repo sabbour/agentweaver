@@ -54,8 +54,8 @@ Create and update requests contain `operationId`, `expectedRevision`, `name`,
 `azure_api_version`, `reasoning_efforts`, `prompt_capacity_tokens`,
 `rate_card_id`, and `rate_card_version`. The two rate-card fields are a pair.
 When an update omits both fields, Projects preserves the existing pair. An
-explicit pair of `null` values clears the pair. Platform reads return the saved
-pair. Project reads leave it `null`.
+explicit pair of `null` values clears the pair. Authorized platform and project reads return the saved
+pair.
 Unknown or duplicate fields fail with `400 model_provider_draft_invalid_request`.
 Credential values, headers, and vault references are not accepted. Create
 requires revision `0`; update requires a revision greater
