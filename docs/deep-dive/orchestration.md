@@ -74,6 +74,27 @@ simultaneous edits. Both sides can close and reopen work. This is a
 deterministic policy, not a conflict prompt. Archived tasks retain their
 mapping and are not exported or edited.
 
+Exports patch only fields that differ. A null patch value means "do not
+change"; an empty body and a false open state are explicit values. The worker
+confirms the returned issue identity and only the fields it sent. It does not
+fall back to a full update.
+
+Before the provider request, the worker verifies that the task still links to
+the same issue. It does not hold backlog row locks during the provider call.
+For a newly created issue, it first saves that task link and the remote
+baseline together under the pending receipt. A later user unlink is then
+treated as a mapping change and is not silently restored.
+After GitHub confirms the patch, the worker locks the graph, rereads the task,
+and rejects an archived task or a changed or missing link. It merges local
+edits made during the request, then saves the task and remote baseline in one
+transaction. Authority is checked after the lock and again before commit.
+
+An automation hold on an already linked task retains pending local imports and
+records only confirmed patch progress. A later pass applies the held local
+content after the hold is released. This recovery path does not create a new
+attachment. GitHub has no atomic condition for the three issue fields, so an
+edit to the same field after the read can still be overwritten.
+
 Before creating an issue the worker persists a pending receipt and includes
 a stable HTML comment in the remote body. A lost response is recovered by
 finding that marker in subsequent bounded pages, including closed issues.

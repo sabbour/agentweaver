@@ -101,6 +101,102 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
     }
 
     [Fact]
+    public async Task ClosedFirstExportCreatesThenPatchesAndAtomicallyAttachesTheTask()
+    {
+        await AddTask("local", "Already closed", "Closed body");
+        var before = (await Graph()).Tasks.Single();
+        await Edit(before.Reference.TaskId, before.Title, before.Description ?? "", BacklogTaskLifecycle.Closed);
+
+        await Cycle();
+
+        var task = Assert.Single((await Graph()).Tasks);
+        Assert.NotNull(task.RepositoryIssue);
+        Assert.Equal(BacklogTaskLifecycle.Closed, task.Lifecycle);
+        Assert.True(_github.Issues[1].Closed);
+        var patch = JsonDocument.Parse(Assert.Single(_github.Patches));
+        Assert.Equal(["state"], patch.RootElement.EnumerateObject().Select(field => field.Name).ToArray());
+        var receipt = (await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!;
+        Assert.False(receipt.CreatePending);
+        Assert.True(receipt.Baseline!.Closed);
+    }
+
+    [Fact]
+    public async Task EditDuringFirstCreateIsPreservedAndPatchedWithTheInitialAttachment()
+    {
+        await AddTask("local", "Original", "Original body");
+        var task = (await Graph()).Tasks.Single();
+        _github.BeforeCreate = async () =>
+            await Edit(task.Reference.TaskId, "New title", "New body", BacklogTaskLifecycle.Closed);
+
+        await Cycle();
+
+        var linked = Assert.Single((await Graph()).Tasks);
+        Assert.Equal("New title", linked.Title);
+        Assert.Equal("New body", linked.Description);
+        Assert.Equal(BacklogTaskLifecycle.Closed, linked.Lifecycle);
+        Assert.NotNull(linked.RepositoryIssue);
+        Assert.Equal("New title", _github.Issues[1].Title);
+        Assert.Equal("New body\n\n" + IssueSyncEngine.Marker(_project, task.Reference.TaskId),
+            _github.Issues[1].Body);
+        Assert.True(_github.Issues[1].Closed);
+        var receipt = (await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!;
+        Assert.False(receipt.CreatePending);
+        Assert.Equal(new(1, "New title", "New body", true), receipt.Baseline);
+    }
+
+    [Fact]
+    public async Task ExplicitUnlinkAfterInitialAttachmentBlocksConfirmedPatchCommit()
+    {
+        await AddTask("local", "Local", "Body");
+        var task = Assert.Single((await Graph()).Tasks);
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = async (_, _) => await SetLink(task.Reference.TaskId, null);
+
+        await Cycle();
+
+        Assert.True(_github.Issues[1].Closed);
+        Assert.Null(Assert.Single((await Graph()).Tasks).RepositoryIssue);
+        var receipt = (await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!;
+        Assert.False(receipt.CreatePending);
+        Assert.False(receipt.Baseline!.Closed);
+        Assert.Equal("issue_sync_mapping_changed", (await _store.ReadAsync(_project, default))!.ErrorCode);
+
+        await Cycle();
+        Assert.Null(Assert.Single((await Graph()).Tasks).RepositoryIssue);
+        Assert.Single(_github.Patches);
+        Assert.Equal("succeeded", (await _store.ReadAsync(_project, default))!.Status);
+    }
+
+    [Fact]
+    public async Task OpenIssueUnlinkDuringInitialTitlePatchDoesNotImportDuplicate()
+    {
+        await AddTask("local", "Original", "Body");
+        var task = Assert.Single((await Graph()).Tasks);
+        _github.BeforeCreate = async () =>
+            await Edit(task.Reference.TaskId, "New title", task.Description ?? "", BacklogTaskLifecycle.Open);
+        _github.BeforePatch = async (_, _) =>
+        {
+            await SetLink(task.Reference.TaskId, null);
+            _github.BeforePatch = null;
+        };
+
+        await Cycle();
+
+        Assert.Equal("New title", _github.Issues[1].Title);
+        Assert.False(_github.Issues[1].Closed);
+        Assert.Single(_github.Patches);
+        Assert.Null(Assert.Single((await Graph()).Tasks).RepositoryIssue);
+        Assert.Equal("issue_sync_mapping_changed", (await _store.ReadAsync(_project, default))!.ErrorCode);
+
+        await Cycle();
+
+        Assert.Single((await Graph()).Tasks);
+        Assert.Null(Assert.Single((await Graph()).Tasks).RepositoryIssue);
+        Assert.Single(_github.Patches);
+        Assert.Equal("succeeded", (await _store.ReadAsync(_project, default))!.Status);
+    }
+
+    [Fact]
     public async Task TransientReadAndDefinitiveCreateRejectionRetryOnNextCycle()
     {
         await AddTask("local", "Local");
@@ -174,6 +270,228 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
         Assert.Equal(3, (await Graph()).Tasks.Length);
     }
 
+    [Fact]
+    public async Task StateOnlyPatchPreservesRemoteTitleChangedAfterRead()
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = (_, _) =>
+        {
+            _github.Issues[1] = _github.Issues[1] with
+            {
+                Title = "Remote title race winner",
+                Body = "Remote body race winner"
+            };
+            return Task.CompletedTask;
+        };
+
+        await Cycle();
+
+        Assert.Equal("Remote title race winner", _github.Issues[1].Title);
+        Assert.Equal("Remote body race winner", _github.Issues[1].Body);
+        Assert.True(_github.Issues[1].Closed);
+        var merged = (await Graph()).Tasks.Single();
+        Assert.Equal("Remote title race winner", merged.Title);
+        Assert.Equal("Remote body race winner", merged.Description);
+        using var patch = JsonDocument.Parse(Assert.Single(_github.Patches));
+        Assert.Equal(["state"], patch.RootElement.EnumerateObject().Select(item => item.Name).ToArray());
+    }
+
+    [Fact]
+    public async Task ReopenDuringConfirmedPatchRemainsPendingLocalIntent()
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = async (_, _) => await Edit(task.Reference.TaskId, task.Title,
+            task.Description ?? "", BacklogTaskLifecycle.Open);
+
+        await Cycle();
+
+        var local = (await Graph()).Tasks.Single();
+        Assert.True(_github.Issues[1].Closed);
+        Assert.Equal(BacklogTaskLifecycle.Open, local.Lifecycle);
+        Assert.True((await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!.Baseline!.Closed);
+
+        await Cycle();
+        Assert.False(_github.Issues[1].Closed);
+    }
+
+    [Fact]
+    public async Task LocalIntentThatMatchedReadSurvivesAConcurrentRemoteEdit()
+    {
+        var task = await Import("Original");
+        const string intent = "Shared at read";
+        _github.Issues[1] = _github.Issues[1] with { Title = intent };
+        await Edit(task.Reference.TaskId, intent, "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = (_, _) =>
+        {
+            _github.Issues[1] = _github.Issues[1] with { Title = "Remote race" };
+            return Task.CompletedTask;
+        };
+
+        await Cycle();
+
+        Assert.Equal(intent, (await Graph()).Tasks.Single().Title);
+        Assert.Equal("Remote race", _github.Issues[1].Title);
+        Assert.True(_github.Issues[1].Closed);
+
+        _github.BeforePatch = null;
+        await Cycle();
+        Assert.Equal(intent, _github.Issues[1].Title);
+    }
+
+    [Fact]
+    public async Task RemappedTaskIsRejectedBeforePatch()
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforeRepositoryRead = async (_, read) =>
+        {
+            if (read == 5)
+                await SetLink(task.Reference.TaskId, 2);
+        };
+
+        await Cycle();
+
+        Assert.Empty(_github.Patches);
+        Assert.False(_github.Issues[1].Closed);
+        Assert.Equal("issue_sync_mapping_changed", (await _store.ReadAsync(_project, default))!.ErrorCode);
+    }
+
+    [Fact]
+    public async Task RevocationAfterPatchKeepsConfirmedRemoteProgressWithoutLocalOverwrite()
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = (_, _) =>
+        {
+            _authority.Failure = "issue_sync_grant_revoked";
+            return Task.CompletedTask;
+        };
+
+        await Cycle();
+
+        Assert.True(_github.Issues[1].Closed);
+        Assert.Equal(BacklogTaskLifecycle.Closed,
+            (await Graph()).Tasks.Single(item => item.Reference == task.Reference).Lifecycle);
+        Assert.False((await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!.Baseline!.Closed);
+        Assert.Equal("issue_sync_grant_revoked", (await _store.ReadAsync(_project, default))!.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("remap")]
+    [InlineData("unlink")]
+    [InlineData("archive")]
+    public async Task ChangedOrMissingMappingAndArchiveAfterPatchAreRejected(string change)
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = async (_, _) =>
+        {
+            if (change == "remap")
+                await SetLink(task.Reference.TaskId, 2);
+            else if (change == "unlink")
+                await SetLink(task.Reference.TaskId, null);
+            else
+            {
+                var graph = await Graph();
+                var current = graph.Tasks.Single();
+                Assert.True((await _backlog.ArchiveTaskAsync(current.Reference, graph.Revision,
+                    current.Revision, default)).IsSuccess);
+            }
+        };
+
+        await Cycle();
+
+        Assert.True(_github.Issues[1].Closed);
+        var error = (await _store.ReadAsync(_project, default))!.ErrorCode;
+        Assert.Contains(error, new[] { "issue_sync_mapping_changed", "issue_sync_task_archived" });
+        Assert.False((await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!.Baseline!.Closed);
+    }
+
+    [Fact]
+    public async Task AutomationHoldKeepsRemoteImportAndConfirmedStateForReleasePass()
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = async (_, _) =>
+        {
+            _github.Issues[1] = _github.Issues[1] with { Title = "Imported later" };
+            await SetAutomationHold(task.Reference.TaskId, true);
+        };
+
+        await Cycle();
+
+        Assert.True(_github.Issues[1].Closed);
+        var held = (await Graph()).Tasks.Single();
+        Assert.Equal("Original", held.Title);
+        Assert.Equal(BacklogTaskLifecycle.Closed, held.Lifecycle);
+        var receipt = (await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!;
+        Assert.Equal("Original", receipt.Baseline!.Title);
+        Assert.True(receipt.Baseline.Closed);
+
+        await SetAutomationHold(task.Reference.TaskId, false);
+        _github.BeforePatch = null;
+        await Cycle();
+
+        Assert.Equal("Imported later", (await Graph()).Tasks.Single().Title);
+        Assert.Equal("Imported later", _github.Issues[1].Title);
+        Assert.Equal("succeeded", (await _store.ReadAsync(_project, default))!.Status);
+    }
+
+    [Fact]
+    public async Task HoldAdvancesConfirmedCloseWhileRetainingReopenAndBlockingTitleImport()
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = async (_, _) =>
+        {
+            _github.Issues[1] = _github.Issues[1] with { Title = "Remote later title" };
+            await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Open);
+            await SetAutomationHold(task.Reference.TaskId, true);
+        };
+
+        await Cycle();
+
+        var held = Assert.Single((await Graph()).Tasks);
+        Assert.Equal("Original", held.Title);
+        Assert.Equal(BacklogTaskLifecycle.Open, held.Lifecycle);
+        var receipt = (await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!;
+        Assert.Equal("Original", receipt.Baseline!.Title);
+        Assert.True(receipt.Baseline.Closed);
+
+        await SetAutomationHold(task.Reference.TaskId, false);
+        _github.BeforePatch = null;
+        await Cycle();
+        Assert.False(_github.Issues[1].Closed);
+    }
+
+    [Fact]
+    public async Task FinalAuthorityCheckRollsBackChangedTaskAndReceipt()
+    {
+        var task = await Import("Original");
+        await Edit(task.Reference.TaskId, task.Title, task.Description ?? "", BacklogTaskLifecycle.Closed);
+        _github.BeforePatch = (_, _) =>
+        {
+            _github.Issues[1] = _github.Issues[1] with { Title = "Remote title" };
+            return Task.CompletedTask;
+        };
+        _authority.ResetValidations();
+        _authority.DenyAtValidation = 5;
+
+        await Cycle();
+
+        Assert.Equal(5, _authority.ValidationCount);
+        Assert.Equal("issue_sync_grant_revoked", (await _store.ReadAsync(_project, default))!.ErrorCode);
+        var unchanged = Assert.Single((await Graph()).Tasks);
+        Assert.Equal("Original", unchanged.Title);
+        Assert.Equal(BacklogTaskLifecycle.Closed, unchanged.Lifecycle);
+        var receipt = (await _store.ReadReceiptAsync(_project, task.Reference.TaskId, default))!;
+        Assert.Equal("Original", receipt.Baseline!.Title);
+        Assert.False(receipt.Baseline.Closed);
+        Assert.True(_github.Issues[1].Closed);
+    }
+
     private async Task Cycle()
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -189,12 +507,37 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
         Assert.True((await _backlog.AddTaskAsync(new(_project, task), new BacklogTaskContent(title, body),
             graph.Revision, default)).IsSuccess);
     }
+    private async Task<BacklogTaskSnapshot> Import(string title)
+    {
+        _github.Issues.Add(1, new(1, title, "", false));
+        await Cycle();
+        return (await Graph()).Tasks.Single();
+    }
     private async Task Edit(string taskId, string title, string body, BacklogTaskLifecycle lifecycle)
     {
         var graph = await Graph();
         var task = graph.Tasks.Single(task => task.Reference.TaskId == taskId);
         Assert.True((await _backlog.SetTaskContentAsync(task.Reference,
             new(title, body, lifecycle, task.RepositoryIssue), graph.Revision, task.Revision, default)).IsSuccess);
+    }
+    private async Task SetLink(string taskId, long? issueNumber)
+    {
+        var graph = await Graph();
+        var task = graph.Tasks.Single(item => item.Reference.TaskId == taskId);
+        var link = issueNumber is null ? null : task.RepositoryIssue! with { IssueNumber = issueNumber.Value };
+        Assert.True((await _backlog.SetTaskContentAsync(task.Reference,
+            new(task.Title, task.Description, task.Lifecycle, link), graph.Revision, task.Revision, default)).IsSuccess);
+    }
+    private async Task SetAutomationHold(string taskId, bool held)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"UPDATE \"{_schema}\".backlog_tasks SET automation_invocation_pending=@held " +
+            "WHERE project_id=@project AND task_id=@task", connection);
+        command.Parameters.AddWithValue("held", held);
+        command.Parameters.AddWithValue("project", _project);
+        command.Parameters.AddWithValue("task", taskId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
     private sealed class TestAuthority(IssueSyncGrantReceipt grant) : IIssueSyncAuthority
@@ -203,7 +546,9 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
         internal string? Failure { get; set; }
         internal int Mints { get; private set; }
         internal int DenyAfterValidations { get; set; } = int.MaxValue;
-        private int _validations;
+        internal int? DenyAtValidation { get; set; }
+        internal int ValidationCount { get; private set; }
+        internal void ResetValidations() => ValidationCount = 0;
         public Task<IssueSyncCredentialResponse> MintAsync(Guid id, CancellationToken ct)
         {
             if (Failure is not null) throw new RuntimeAuthorizationException(Failure);
@@ -213,7 +558,9 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
         }
         public Task<IssueSyncGrantReceipt> ValidateAsync(Guid id, CancellationToken ct)
         {
-            if (++_validations > DenyAfterValidations)
+            if (Failure is not null) throw new RuntimeAuthorizationException(Failure);
+            ValidationCount++;
+            if (ValidationCount > DenyAfterValidations || ValidationCount == DenyAtValidation)
                 throw new RuntimeAuthorizationException("issue_sync_grant_revoked");
             return Task.FromResult(Grant);
         }
@@ -227,6 +574,11 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
         internal bool LoseCreateResponse { get; set; }
         internal bool RejectCreateOnce { get; set; }
         internal bool FailReadOnce { get; set; }
+        internal List<string> Patches { get; } = [];
+        internal Func<long, HttpRequestMessage, Task>? BeforePatch { get; set; }
+        internal Func<Task>? BeforeCreate { get; set; }
+        internal Func<HttpRequestMessage, int, Task>? BeforeRepositoryRead { get; set; }
+        internal int RepositoryReads { get; private set; }
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             var uri = request.RequestUri!;
@@ -238,11 +590,16 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
                 return new(HttpStatusCode.ServiceUnavailable);
             }
             if (uri.AbsolutePath == "/repos/octo/widget")
+            {
+                RepositoryReads++;
+                if (BeforeRepositoryRead is not null)
+                    await BeforeRepositoryRead(request, RepositoryReads);
                 return Json("""
                     {"id":123,"full_name":"octo/widget","default_branch":"main","private":true,
                      "created_at":"2020-01-01T00:00:00Z","has_issues":true,
                      "permissions":{"pull":false,"push":false,"admin":false}}
                     """);
+            }
             if (request.Method == HttpMethod.Post)
             {
                 if (RejectCreateOnce)
@@ -251,6 +608,8 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
                     return new(HttpStatusCode.TooManyRequests);
                 }
                 using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+                if (BeforeCreate is not null)
+                    await BeforeCreate();
                 var number = Issues.Count == 0 ? 1 : Issues.Keys.Max() + 1;
                 var issue = new SourceControlIssueContent(number, body.RootElement.GetProperty("title").GetString()!,
                     body.RootElement.GetProperty("body").GetString()!, false);
@@ -276,8 +635,15 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
             if (request.Method == HttpMethod.Patch)
             {
                 using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
-                Issues[id] = new(id, body.RootElement.GetProperty("title").GetString()!,
-                    body.RootElement.GetProperty("body").GetString()!, body.RootElement.GetProperty("state").GetString() == "closed");
+                var patch = body.RootElement;
+                Patches.Add(patch.GetRawText());
+                if (BeforePatch is not null)
+                    await BeforePatch(id, request);
+                var current = Issues[id];
+                Issues[id] = new(id,
+                    patch.TryGetProperty("title", out var title) ? title.GetString()! : current.Title,
+                    patch.TryGetProperty("body", out var description) ? description.GetString()! : current.Body,
+                    patch.TryGetProperty("state", out var state) ? state.GetString() == "closed" : current.Closed);
             }
             return Json(JsonSerializer.Serialize(Wire(Issues[id])));
         }

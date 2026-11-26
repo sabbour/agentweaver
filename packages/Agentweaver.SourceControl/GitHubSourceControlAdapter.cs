@@ -45,7 +45,8 @@ public sealed class SourceControlOperationException(
 /// Context-based operations validate provider and capability bindings; the adapter distinguishes uncertain write outcomes.
 /// </summary>
 public sealed partial class GitHubSourceControlAdapter :
-    ISourceControlAdapter, ISourceControlIssueAdapter, ISourceControlTeamSyncAdapter, ISourceControlWorkspaceAdapter
+    ISourceControlAdapter, ISourceControlIssueAdapter, ISourceControlIssuePatchAdapter,
+    ISourceControlTeamSyncAdapter, ISourceControlWorkspaceAdapter
 {
     /// <summary>The provider-options schema version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;

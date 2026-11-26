@@ -165,6 +165,22 @@ internal sealed class IssueSyncStore
             reader.GetBoolean(3)) : null;
     }
 
+    internal async Task<bool> HasReceiptAsync(string project, string repository, long issueNumber,
+        CancellationToken ct)
+    {
+        await using var connection = await _data.OpenConnectionAsync(ct);
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_schema}.issue_sync_receipts
+                WHERE project_id=@project AND repository=@repository AND issue_number=@issue
+            )
+            """, connection);
+        command.Parameters.AddWithValue("project", project);
+        command.Parameters.AddWithValue("repository", repository);
+        command.Parameters.AddWithValue("issue", NpgsqlDbType.Bigint, issueNumber);
+        return (bool)(await command.ExecuteScalarAsync(ct).ConfigureAwait(false) ?? false);
+    }
+
     internal async Task WriteReceiptAsync(string project, IssueSyncReceipt receipt, CancellationToken ct)
     {
         // Once attached, a task cannot silently switch repository or issue during reconciliation.

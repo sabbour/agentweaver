@@ -79,6 +79,9 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                         await store.WriteReceiptAsync(projectId, pending with { IssueNumber = remote.Number }, ct);
                         continue;
                     }
+                    if (await store.HasReceiptAsync(projectId, repository.FullName.ToLowerInvariant(),
+                        remote.Number, ct))
+                        continue;
                     if (remote.Closed)
                         continue;
                     var id = "issue-" + Hash(projectId + "\n" + repository.FullName.ToLowerInvariant() + "\n" + remote.Number);
@@ -107,6 +110,12 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                     var receipt = await store.ReadReceiptAsync(projectId, task.Reference.TaskId, ct);
                     if (receipt is not null && receipt.Repository != repository.FullName.ToLowerInvariant())
                         throw new CoordinationException("issue_sync_repository_changed", 409);
+                    if (receipt is { CreatePending: false, IssueNumber: not null } &&
+                        task.RepositoryIssue is null)
+                    {
+                        cursor = task.Reference.TaskId;
+                        continue;
+                    }
                     var number = task.RepositoryIssue?.IssueNumber ?? receipt?.IssueNumber;
                     if (task.RepositoryIssue is not null && receipt?.IssueNumber is { } mapped &&
                         mapped != task.RepositoryIssue.IssueNumber)
@@ -182,8 +191,18 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
         if (task.IsArchived)
             throw new CoordinationException("issue_sync_task_archived", 409);
         var receipt = await store.ReadReceiptAsync(project.ProjectId, taskReference.TaskId, ct);
+        if (receipt is { CreatePending: false, IssueNumber: not null } &&
+            !Matches(task.RepositoryIssue, context.Repository, number))
+            throw new CoordinationException("issue_sync_mapping_changed", 409);
         var remote = await issues.ReadIssueAsync(context, number, ct);
         var remoteContent = remote with { Body = StripMarker(remote.Body, project.ProjectId, taskReference.TaskId) };
+        if (receipt?.CreatePending == true)
+        {
+            await backlog.AttachCreatedIssueAsync(taskReference, context.Repository, remoteContent, ct, revalidate);
+            graph = await ReadGraph(project.ProjectId, ct);
+            task = graph.Tasks.Single(item => item.Reference == taskReference);
+            receipt = await store.ReadReceiptAsync(project.ProjectId, taskReference.TaskId, ct);
+        }
         var local = new SourceControlIssueContent(number, task.Title, task.Description ?? "",
             task.Lifecycle == BacklogTaskLifecycle.Closed);
         // On first attachment an existing repository link reads provider content; a pending export starts from local content.
@@ -196,7 +215,25 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
         {
             await revalidate(ct);
             await issues.VerifyCurrentIssueBindingAsync(context, ct);
-            await issues.UpdateIssueAsync(context, external, ct);
+            var beforePatch = (await ReadGraph(project.ProjectId, ct)).Tasks
+                .SingleOrDefault(item => item.Reference == taskReference);
+            if (beforePatch is null || beforePatch.IsArchived ||
+                !Matches(beforePatch.RepositoryIssue, context.Repository, number))
+                throw new CoordinationException("issue_sync_mapping_changed", 409);
+            if (issues is not ISourceControlIssuePatchAdapter patch)
+                throw new CoordinationException("issue_sync_partial_patch_unsupported", 409);
+            var update = new SourceControlIssueUpdate(number,
+                remote.Title != external.Title ? external.Title : null,
+                remote.Body != external.Body ? external.Body : null,
+                remote.Closed != external.Closed ? external.Closed : null);
+            var confirmed = await patch.PatchIssueAsync(context, update, ct);
+            confirmed = confirmed with
+            {
+                Body = StripMarker(confirmed.Body, project.ProjectId, taskReference.TaskId)
+            };
+            await backlog.CompleteIssuePatchAsync(taskReference, context.Repository, number, local,
+                confirmed, ct, revalidate);
+            return;
         }
         var content = ToContent(desired, context.Repository);
         if (local != desired || !Matches(task.RepositoryIssue, context.Repository, number))
