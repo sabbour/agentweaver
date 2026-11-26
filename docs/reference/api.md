@@ -577,6 +577,13 @@ fresh installation, selection returns `409 platform_runtime_unconfigured`
 until an operator bootstraps a PlatformAdmin and writes the reviewed defaults.
 See [Deploy to Azure](../guide/deploy-to-azure.md#bootstrap-the-first-platformadmin-and-configure-runtime-defaults).
 
+Public Gateway `acceptRunSelection` and `getRunSelection` responses set
+`Cache-Control: no-store` and omit BYOK `credentialReference` and
+`providerBindingRevision.credentialVersion` from model selections and overrides,
+returning `502 Bad Gateway` (`run_selection_owner_contract_invalid`) on
+malformed owner payloads. Projects & Config retains the full snapshot for
+internal Orchestrator reads.
+
 ### Project role assignments
 
 These routes manage who holds the Owner, Contributor, Viewer, and
