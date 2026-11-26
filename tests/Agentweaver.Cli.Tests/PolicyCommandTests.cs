@@ -950,6 +950,271 @@ public sealed class PolicyCommandTests
         }
     }
 
+    [Theory]
+    [InlineData("4", 4L, true)]
+    [InlineData("none", null, false)]
+    public async Task ApplyAcceptsPendingPreparationReceiptWithoutClaimingRevision(
+        string expectedText, long? expectedRevision, bool includeGovernanceDecision)
+    {
+        var inputPath = NewInputPath();
+        var inputJson = ExportInput(exact: false);
+        var expectedHash = JsonNode.Parse(inputJson)!["contentSha256"]!.GetValue<string>();
+        await File.WriteAllTextAsync(inputPath, inputJson);
+        var fixture = new Fixture();
+        fixture.ApplyResponse = (_, body, _) =>
+            Task.FromResult(JsonResponse(HttpStatusCode.OK,
+                PendingApplyReceipt(body, replayed: false, includeGovernanceDecision)));
+        fixture.BeforePolicyApply = body =>
+        {
+            var request = JsonNode.Parse(body)!.AsObject();
+            var records = Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json");
+            Assert.Single(records);
+            var recordText = File.ReadAllText(records[0]);
+            var saved = JsonNode.Parse(recordText)!.AsObject();
+            Assert.Equal(request["idempotencyKey"]!.GetValue<string>(), saved["idempotencyKey"]!.GetValue<string>());
+            Assert.Equal(request["correlationId"]!.GetValue<string>(), saved["correlationId"]!.GetValue<string>());
+            Assert.DoesNotContain("Approve reviewed policy update", recordText, StringComparison.Ordinal);
+            Assert.DoesNotContain(ArtifactCanary, recordText, StringComparison.Ordinal);
+        };
+        try
+        {
+            Assert.Equal(0, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", expectedText, "--reason", "Approve reviewed policy update"));
+
+            var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.False(output.ContainsKey("revision"));
+            Assert.Equal(
+                [
+                    "checkpoint", "createdAt", "expectedHeadContentSha256", "expectedHeadPolicyId",
+                    "expectedHeadRevision", "governanceDecisionHash", "governanceDecisionId",
+                    "policyId", "preparationId", "proposedContentSha256", "replayed",
+                    "scopeId", "scopeType", "state",
+                ],
+                output.Select(pair => pair.Key).Order(StringComparer.Ordinal));
+            Assert.Equal("platform", output["scopeType"]!.GetValue<string>());
+            Assert.Equal("default", output["scopeId"]!.GetValue<string>());
+            Assert.Equal("canonical", output["policyId"]!.GetValue<string>());
+            Assert.Equal("pending", output["state"]!.GetValue<string>());
+            Assert.Equal(expectedHash, output["proposedContentSha256"]!.GetValue<string>());
+            Assert.Equal(Time, output["createdAt"]!.GetValue<string>());
+            Assert.False(output["replayed"]!.GetValue<bool>());
+            if (expectedRevision is null)
+            {
+                Assert.Null(output["expectedHeadPolicyId"]);
+                Assert.Null(output["expectedHeadRevision"]);
+                Assert.Null(output["expectedHeadContentSha256"]);
+            }
+            else
+            {
+                Assert.Equal("canonical", output["expectedHeadPolicyId"]!.GetValue<string>());
+                Assert.Equal(expectedRevision.Value, output["expectedHeadRevision"]!.GetValue<long>());
+                Assert.Equal(ArtifactHash(2), output["expectedHeadContentSha256"]!.GetValue<string>());
+            }
+            if (includeGovernanceDecision)
+            {
+                Assert.Equal("00000000-0000-0000-0000-000000000012", output["governanceDecisionId"]!.GetValue<string>());
+                Assert.Equal(ArtifactHash(9), output["governanceDecisionHash"]!.GetValue<string>());
+            }
+            else
+            {
+                Assert.Null(output["governanceDecisionId"]);
+                Assert.Null(output["governanceDecisionHash"]);
+            }
+            Assert.DoesNotContain(ArtifactCanary, fixture.Output.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["requestBody"]!.GetValue<string>());
+            Assert.Equal("[REDACTED]", fixture.Client.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.Empty(Directory.GetFiles(fixture.PolicyApplyStateDirectory));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyReusesSavedIdsAfterResponseLossAndRecoversPendingReceipt()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        fixture.ApplyResponse = (attempt, body, _) =>
+        {
+            if (attempt == 1)
+                throw new HttpRequestException(Canary);
+            return Task.FromResult(JsonResponse(HttpStatusCode.OK, PendingApplyReceipt(body, replayed: true)));
+        };
+        try
+        {
+            var args = new[]
+            {
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", "4", "--reason", "Recover pending receipt",
+            };
+            Assert.Equal(1, await fixture.Run(args));
+            Assert.Contains("saved recovery record remains", fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            var first = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            var firstKey = first["idempotencyKey"]!.GetValue<string>();
+            var firstCorrelation = first["correlationId"]!.GetValue<string>();
+            Assert.Single(Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json"));
+
+            Assert.Equal(0, await fixture.Run(args));
+            var second = JsonNode.Parse(fixture.PolicyBody!)!.AsObject();
+            Assert.Equal(firstKey, second["idempotencyKey"]!.GetValue<string>());
+            Assert.Equal(firstCorrelation, second["correlationId"]!.GetValue<string>());
+            var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal("pending", output["state"]!.GetValue<string>());
+            Assert.True(output["replayed"]!.GetValue<bool>());
+            Assert.False(output.ContainsKey("revision"));
+            Assert.Empty(Directory.GetFiles(fixture.PolicyApplyStateDirectory));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyRetainsJournalWhenOutputWriteFails()
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        fixture.ApplyResponse = (_, body, _) =>
+            Task.FromResult(JsonResponse(HttpStatusCode.OK, PendingApplyReceipt(body, replayed: false)));
+        try
+        {
+            var runtime = new CliRuntimeOptions(
+                GatewayClientFactory: fixture,
+                Authentication: fixture.Authentication,
+                Output: new FailingTextWriter(),
+                Error: fixture.Error)
+            {
+                PolicyApplyStateDirectory = fixture.PolicyApplyStateDirectory,
+            };
+            Assert.Equal(1, await CliApplication.RunAsync(
+                ["policy", "apply", "--scope", "platform", "--input", inputPath, "--expected-revision", "4", "--reason", "Approve", .. Target],
+                runtime));
+            Assert.Single(Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json"));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
+    [Theory]
+    [InlineData("none", "nonnull-expected-policy")]
+    [InlineData("none", "nonnull-expected-revision")]
+    [InlineData("none", "nonnull-expected-hash")]
+    [InlineData("4", "null-expected-policy")]
+    [InlineData("4", "mismatch-expected-policy")]
+    [InlineData("4", "null-expected-revision")]
+    [InlineData("4", "mismatch-expected-revision")]
+    [InlineData("4", "null-expected-hash")]
+    [InlineData("4", "uppercase-expected-hash")]
+    [InlineData("4", "empty-preparation-id")]
+    [InlineData("4", "partial-decision-id-only")]
+    [InlineData("4", "partial-decision-hash-only")]
+    [InlineData("4", "empty-decision-id")]
+    [InlineData("4", "uppercase-decision-hash")]
+    [InlineData("4", "wrong-state")]
+    [InlineData("4", "hybrid-committed-revision")]
+    [InlineData("4", "hybrid-committed-audit")]
+    [InlineData("4", "committed-with-preparation-id")]
+    public async Task ApplyRejectsMalformedOrHybridPendingReceiptsAndRetainsJournal(string expectedText, string mutation)
+    {
+        var inputPath = NewInputPath();
+        await File.WriteAllTextAsync(inputPath, ExportInput(exact: false));
+        var fixture = new Fixture();
+        fixture.ApplyResponse = (_, body, _) =>
+        {
+            var node = mutation == "committed-with-preparation-id"
+                ? JsonNode.Parse(ApplyReceipt(body, replayed: false))!.AsObject()
+                : JsonNode.Parse(PendingApplyReceipt(body, replayed: false))!.AsObject();
+            switch (mutation)
+            {
+                case "nonnull-expected-policy":
+                    node["expectedHeadPolicyId"] = "canonical";
+                    break;
+                case "nonnull-expected-revision":
+                    node["expectedHeadRevision"] = 1;
+                    break;
+                case "nonnull-expected-hash":
+                    node["expectedHeadContentSha256"] = ArtifactHash(2);
+                    break;
+                case "null-expected-policy":
+                    node["expectedHeadPolicyId"] = null;
+                    break;
+                case "mismatch-expected-policy":
+                    node["expectedHeadPolicyId"] = "other";
+                    break;
+                case "null-expected-revision":
+                    node["expectedHeadRevision"] = null;
+                    break;
+                case "mismatch-expected-revision":
+                    node["expectedHeadRevision"] = 3;
+                    break;
+                case "null-expected-hash":
+                    node["expectedHeadContentSha256"] = null;
+                    break;
+                case "uppercase-expected-hash":
+                    node["expectedHeadContentSha256"] = ArtifactHash(2).ToUpperInvariant();
+                    break;
+                case "empty-preparation-id":
+                    node["preparationId"] = Guid.Empty.ToString("D");
+                    break;
+                case "partial-decision-id-only":
+                    node["governanceDecisionHash"] = null;
+                    break;
+                case "partial-decision-hash-only":
+                    node["governanceDecisionId"] = null;
+                    break;
+                case "empty-decision-id":
+                    node["governanceDecisionId"] = Guid.Empty.ToString("D");
+                    break;
+                case "uppercase-decision-hash":
+                    node["governanceDecisionHash"] = ArtifactHash(9).ToUpperInvariant();
+                    break;
+                case "wrong-state":
+                    node["state"] = "committed";
+                    break;
+                case "hybrid-committed-revision":
+                    node["revision"] = 5;
+                    break;
+                case "hybrid-committed-audit":
+                    node["auditId"] = "00000000-0000-0000-0000-000000000001";
+                    break;
+                case "committed-with-preparation-id":
+                    node["preparationId"] = "00000000-0000-0000-0000-000000000011";
+                    break;
+            }
+            return Task.FromResult(JsonResponse(HttpStatusCode.OK, node.ToJsonString()));
+        };
+        try
+        {
+            Assert.Equal(1, await fixture.Run(
+                "apply", "--scope", "platform", "--input", inputPath,
+                "--expected-revision", expectedText, "--reason", "Validate malformed receipt"));
+            Assert.Empty(fixture.Output.ToString());
+            Assert.Contains("The Gateway returned an invalid policy response.", fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Single(Directory.GetFiles(fixture.PolicyApplyStateDirectory, "*.json"));
+        }
+        finally
+        {
+            if (File.Exists(inputPath))
+                File.Delete(inputPath);
+            fixture.CleanupPolicyState();
+        }
+    }
+
     [Fact]
     public async Task ApplyReusesSavedIdsAfterResponseLossAndRecoversTheReceipt()
     {
@@ -1881,6 +2146,40 @@ public sealed class PolicyCommandTests
 
     private static string NewInputPath() =>
         Path.Combine(AppContext.BaseDirectory, $"policy-input-{Guid.NewGuid():N}.json");
+
+    private static string PendingApplyReceipt(string requestBody, bool replayed, bool includeGovernanceDecision = true)
+    {
+        var request = JsonNode.Parse(requestBody)!.AsObject();
+        var expectedRevision = request["expectedRevision"]?.GetValue<long>();
+        var hash = request["artifact"]!["contentSha256"]!.GetValue<string>();
+        var receipt = new JsonObject
+        {
+            ["preparationId"] = "00000000-0000-0000-0000-000000000011",
+            ["scopeType"] = "platform",
+            ["scopeId"] = "default",
+            ["policyId"] = "canonical",
+            ["expectedHeadPolicyId"] = expectedRevision is null ? null : "canonical",
+            ["expectedHeadRevision"] = expectedRevision,
+            ["expectedHeadContentSha256"] = expectedRevision is null ? null : ArtifactHash(2),
+            ["proposedContentSha256"] = hash,
+            ["state"] = "pending",
+            ["checkpoint"] = "prepared",
+            ["createdAt"] = Time,
+            ["replayed"] = replayed,
+        };
+        if (includeGovernanceDecision)
+        {
+            receipt["governanceDecisionId"] = "00000000-0000-0000-0000-000000000012";
+            receipt["governanceDecisionHash"] = ArtifactHash(9);
+        }
+        return receipt.ToJsonString();
+    }
+
+    private sealed class FailingTextWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+        public override Task WriteLineAsync(string? value) => throw new IOException("simulated output failure");
+    }
 
     private static string ApplyReceipt(string requestBody, bool replayed)
     {

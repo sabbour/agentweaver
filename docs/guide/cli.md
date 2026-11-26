@@ -293,8 +293,13 @@ characters.
 The CLI checks that the input has Platform scope and a valid artifact hash
 before it sends the request. The request must fit the Gateway's 5 MiB limit.
 The server checks current PlatformAdmin write authority and the expected
-revision. A successful response prints the policy ID, new revision, hash, and
-whether the server replayed a saved receipt. It does not print the artifact.
+revision. A successful preparation prints JSON with `scopeType`, `scopeId`,
+`policyId`, `preparationId`, `state` (`pending`), expected head fields,
+`proposedContentSha256`, `checkpoint`, `createdAt`, `replayed`, and optional
+`governanceDecisionId` and `governanceDecisionHash` without claiming an active
+policy revision. A replay of a legacy committed write prints `scopeType`,
+`scopeId`, `policyId`, `revision`, `contentSha256`, and `replayed`. Neither
+response prints the artifact.
 
 The CLI saves an idempotency key and correlation ID in per-user state before it
 sends the write. It does not save the artifact or reason there. If the result
@@ -302,10 +307,11 @@ is uncertain, run the same command again with the same input, expected
 revision, and reason. The CLI reuses the saved IDs. A different artifact,
 revision, or reason uses a different key.
 
-The server write gate stays disabled by default. When the gate is disabled,
-apply reports `native_acs_policy_writes_unavailable` and keeps the recovery
-record. Run the same command again when writes are enabled. Apply changes the
-saved policy source; it does not activate or enforce policy.
+The server write gate (`NativeAcsPolicy:HeadWritesEnabled`) stays disabled by
+default. When the gate is disabled, apply reports
+`native_acs_policy_writes_unavailable` and keeps the recovery record. Run the
+same command again when writes are enabled. Apply prepares a pending change; it
+does not activate or enforce a policy revision.
 
 History returns the newest revision first. Each item contains `revision`,
 `contentSha256` and `createdAt`. The response also contains

@@ -508,30 +508,106 @@ internal static class PolicyCommands
     {
         if (body is not JsonObject obj)
             throw UnexpectedResponse();
+        var hasCommittedFields =
+            obj.ContainsKey("revision") || obj.ContainsKey("contentSha256") ||
+            obj.ContainsKey("auditId") || obj.ContainsKey("outboxId");
+        var hasPendingFields =
+            obj.ContainsKey("preparationId") || obj.ContainsKey("proposedContentSha256") ||
+            obj.ContainsKey("state") || obj.ContainsKey("expectedHeadPolicyId") ||
+            obj.ContainsKey("expectedHeadRevision") || obj.ContainsKey("expectedHeadContentSha256") ||
+            obj.ContainsKey("checkpoint") || obj.ContainsKey("createdAt") ||
+            obj.ContainsKey("governanceDecisionId") || obj.ContainsKey("governanceDecisionHash");
+        if (hasCommittedFields == hasPendingFields)
+            throw UnexpectedResponse();
+
         CheckScope(obj);
         var policyId = PolicyId(obj);
-        var revision = PositiveNumber(obj, "revision");
-        var hash = Hash(obj);
-        var nextRevision = expectedRevision is null
-            ? 1
-            : expectedRevision == long.MaxValue
-                ? throw UnexpectedResponse()
-                : expectedRevision.Value + 1;
-        if (revision != nextRevision || hash != expectedHash ||
-            !Guid.TryParse(String(obj, "auditId"), out _) ||
-            !Guid.TryParse(String(obj, "outboxId"), out _) ||
-            obj["replayed"] is not JsonValue replayedValue ||
+        if (obj["replayed"] is not JsonValue replayedValue ||
             !replayedValue.TryGetValue<bool>(out var replayed))
             throw UnexpectedResponse();
+
+        if (hasCommittedFields)
+        {
+            var revision = PositiveNumber(obj, "revision");
+            var hash = Hash(obj);
+            var nextRevision = expectedRevision is null
+                ? 1
+                : expectedRevision == long.MaxValue
+                    ? throw UnexpectedResponse()
+                    : expectedRevision.Value + 1;
+            if (revision != nextRevision || hash != expectedHash ||
+                !Guid.TryParse(String(obj, "auditId"), out _) ||
+                !Guid.TryParse(String(obj, "outboxId"), out _))
+                throw UnexpectedResponse();
+
+            return new JsonObject
+            {
+                ["scopeType"] = "platform",
+                ["scopeId"] = "default",
+                ["policyId"] = policyId,
+                ["revision"] = revision,
+                ["contentSha256"] = hash,
+                ["replayed"] = replayed,
+            };
+        }
+
+        if (!Guid.TryParse(String(obj, "preparationId"), out var preparationId) || preparationId == Guid.Empty)
+            throw UnexpectedResponse();
+        var proposedHash = Hash(obj, "proposedContentSha256");
+        if (proposedHash != expectedHash || String(obj, "state") != "pending")
+            throw UnexpectedResponse();
+        var createdAt = Timestamp(obj, "createdAt");
+
+        var expectedHeadPolicyId = OptionalStringValue(obj, "expectedHeadPolicyId");
+        var expectedHeadRevision = !obj.ContainsKey("expectedHeadRevision") || obj["expectedHeadRevision"] is null
+            ? (long?)null
+            : PositiveNumber(obj, "expectedHeadRevision");
+        var expectedHeadHash = !obj.ContainsKey("expectedHeadContentSha256") || obj["expectedHeadContentSha256"] is null
+            ? null
+            : Hash(obj, "expectedHeadContentSha256");
+        if (expectedRevision is null)
+        {
+            if (expectedHeadPolicyId is not null || expectedHeadRevision is not null || expectedHeadHash is not null)
+                throw UnexpectedResponse();
+        }
+        else if (expectedHeadPolicyId != policyId ||
+                 expectedHeadRevision != expectedRevision.Value ||
+                 expectedHeadHash is null)
+        {
+            throw UnexpectedResponse();
+        }
+
+        var checkpoint = OptionalStringValue(obj, "checkpoint");
+        var decisionIdText = OptionalStringValue(obj, "governanceDecisionId");
+        var decisionHash = !obj.ContainsKey("governanceDecisionHash") || obj["governanceDecisionHash"] is null
+            ? null
+            : Hash(obj, "governanceDecisionHash");
+        if ((decisionIdText is null) != (decisionHash is null))
+            throw UnexpectedResponse();
+        string? normalizedDecisionId = null;
+        if (decisionIdText is not null)
+        {
+            if (!Guid.TryParse(decisionIdText, out var decisionId) || decisionId == Guid.Empty)
+                throw UnexpectedResponse();
+            normalizedDecisionId = decisionId.ToString("D");
+        }
 
         return new JsonObject
         {
             ["scopeType"] = "platform",
             ["scopeId"] = "default",
             ["policyId"] = policyId,
-            ["revision"] = revision,
-            ["contentSha256"] = hash,
+            ["preparationId"] = preparationId.ToString("D"),
+            ["state"] = "pending",
+            ["expectedHeadPolicyId"] = expectedHeadPolicyId,
+            ["expectedHeadRevision"] = expectedHeadRevision,
+            ["expectedHeadContentSha256"] = expectedHeadHash,
+            ["proposedContentSha256"] = proposedHash,
+            ["checkpoint"] = checkpoint,
+            ["createdAt"] = createdAt,
             ["replayed"] = replayed,
+            ["governanceDecisionId"] = normalizedDecisionId,
+            ["governanceDecisionHash"] = decisionHash,
         };
     }
 
@@ -598,10 +674,13 @@ internal static class PolicyCommands
     }
 
     private static JsonNode? OptionalString(JsonObject obj, string name) =>
+        OptionalStringValue(obj, name) is { } text ? JsonValue.Create(text) : null;
+
+    private static string? OptionalStringValue(JsonObject obj, string name) =>
         !obj.ContainsKey(name) || obj[name] is null
             ? null
             : obj[name] is JsonValue value && value.TryGetValue<string>(out var text)
-                ? JsonValue.Create(text)
+                ? text
                 : throw UnexpectedResponse();
 
     private static JsonNode? OptionalInt32(JsonObject obj, string name) =>
@@ -718,9 +797,9 @@ internal static class PolicyCommands
         return id;
     }
 
-    private static string Hash(JsonObject obj)
+    private static string Hash(JsonObject obj, string name = "contentSha256")
     {
-        var hash = String(obj, "contentSha256");
+        var hash = String(obj, name);
         if (hash.Length != 64 || hash.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
             throw UnexpectedResponse();
         return hash;
