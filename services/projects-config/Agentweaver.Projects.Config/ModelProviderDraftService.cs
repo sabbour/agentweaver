@@ -89,74 +89,92 @@ public sealed partial class ModelProviderDraftService
             throw ModelProviderDraftException.InvalidRequest("Page size must be between 1 and 100.");
         if (afterProviderId is not null)
             ValidateProviderId(afterProviderId);
-        await using var switchTransaction = scope == ModelProviderBindingScope.Platform
-            ? await db.Database.BeginTransactionAsync(
-                System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false)
-            : null;
-        if (switchTransaction is not null)
+        const int maxAttempts = 3;
+        for (var attempt = 0; ; attempt++)
         {
-            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
-            var transaction = (NpgsqlTransaction)switchTransaction.GetDbTransaction();
-            await using var lockCommand = new NpgsqlCommand(
-                "SELECT id FROM projects_config.platform_runtime_heads WHERE id = 'default' FOR SHARE",
-                connection, transaction);
-            _ = await lockCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        }
+            await using var switchTransaction = scope == ModelProviderBindingScope.Platform
+                ? await db.Database.BeginTransactionAsync(
+                    System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false)
+                : null;
+            try
+            {
+                if (switchTransaction is not null)
+                {
+                    var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+                    var transaction = (NpgsqlTransaction)switchTransaction.GetDbTransaction();
+                    await using var lockCommand = new NpgsqlCommand(
+                        "SELECT id FROM projects_config.platform_runtime_heads WHERE id = 'default' FOR SHARE",
+                        connection, transaction);
+                    _ = await lockCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                }
 
-        var drafts = await (
-                from head in db.ModelProviderDrafts.AsNoTracking()
-                join revision in db.ModelProviderDraftRevisions.AsNoTracking()
-                    on new { head.ProviderId, Revision = head.CurrentRevision }
-                    equals new { revision.ProviderId, Revision = revision.ProviderRevision }
-                join reservation in db.ModelProviderReferenceReservations.AsNoTracking()
-                    on head.ProviderId equals reservation.ProviderId into reservations
-                from reservation in reservations.DefaultIfEmpty()
-                where head.Scope == scope && head.ProjectId == projectId &&
-                    (afterProviderId == null || head.ProviderId.CompareTo(afterProviderId) > 0)
-                orderby head.ProviderId
-                select new { head.ProviderId, head.State, Revision = revision, Reference = reservation == null ? null : reservation.Reference })
-            .Take(pageSize + 1)
-            .ToArrayAsync(cancellationToken)
-            .ConfigureAwait(false);
-        var hasNextPage = drafts.Length > pageSize;
-        var rawProviders = drafts.Take(pageSize)
-            .Select(item => ToDraft(item.State, item.Revision, item.Reference))
-            .ToArray();
-        var providers = await AttachEgressStatusesAsync(rawProviders, cancellationToken).ConfigureAwait(false);
-        var page = new ModelProviderDraftPage(
-            providers,
-            hasNextPage ? drafts[pageSize - 1].ProviderId : null);
-        if (switchTransaction is null)
-            return page;
-        var settingsHead = await db.PlatformRuntimeHeads.AsNoTracking().SingleAsync(
-            item => item.Id == PlatformRuntimeHeadRecord.SingletonId, cancellationToken).ConfigureAwait(false);
-        if (settingsHead.CurrentRevision == 0)
-        {
-            await switchTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return page with
+                var drafts = await (
+                        from head in db.ModelProviderDrafts.AsNoTracking()
+                        join revision in db.ModelProviderDraftRevisions.AsNoTracking()
+                            on new { head.ProviderId, Revision = head.CurrentRevision }
+                            equals new { revision.ProviderId, Revision = revision.ProviderRevision }
+                        join reservation in db.ModelProviderReferenceReservations.AsNoTracking()
+                            on head.ProviderId equals reservation.ProviderId into reservations
+                        from reservation in reservations.DefaultIfEmpty()
+                        where head.Scope == scope && head.ProjectId == projectId &&
+                            (afterProviderId == null || head.ProviderId.CompareTo(afterProviderId) > 0)
+                        orderby head.ProviderId
+                        select new { head.ProviderId, head.State, Revision = revision, Reference = reservation == null ? null : reservation.Reference })
+                    .Take(pageSize + 1)
+                    .ToArrayAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                var hasNextPage = drafts.Length > pageSize;
+                var rawProviders = drafts.Take(pageSize)
+                    .Select(item => ToDraft(item.State, item.Revision, item.Reference))
+                    .ToArray();
+                var providers = await AttachEgressStatusesAsync(rawProviders, cancellationToken).ConfigureAwait(false);
+                var page = new ModelProviderDraftPage(
+                    providers,
+                    hasNextPage ? drafts[pageSize - 1].ProviderId : null);
+                if (switchTransaction is null)
+                    return page;
+                var settingsHead = await db.PlatformRuntimeHeads.AsNoTracking().SingleAsync(
+                    item => item.Id == PlatformRuntimeHeadRecord.SingletonId, cancellationToken).ConfigureAwait(false);
+                if (settingsHead.CurrentRevision == 0)
+                {
+                    await switchTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    return page with
+                    {
+                        SwitchMode = "untouched",
+                        SettingsRevision = 0,
+                    };
+                }
+                var settingsRevision = await db.PlatformRuntimeRevisions.AsNoTracking().SingleAsync(
+                    item => item.Revision == settingsHead.CurrentRevision, cancellationToken).ConfigureAwait(false);
+                var settings = ProjectsConfigService.Deserialize<PlatformRuntimeDefaults>(
+                    settingsRevision.ConfigurationJson);
+                var result = page with
+                {
+                    SwitchMode = settings.ModelDefaultSwitch.Mode switch
+                    {
+                        PlatformModelDefaultSwitchMode.Untouched => "untouched",
+                        PlatformModelDefaultSwitchMode.Active => "active",
+                        PlatformModelDefaultSwitchMode.ExplicitHosted => "explicitHosted",
+                        _ => throw new InvalidOperationException("The platform model switch mode is invalid."),
+                    },
+                    ActiveProviderId = settings.ModelDefaultSwitch.ActiveProviderId,
+                    ActiveProviderRevision = settings.ModelDefaultSwitch.Mode == PlatformModelDefaultSwitchMode.Active
+                        ? settings.ModelDefaultSwitch.ProviderRevision
+                        : null,
+                    SettingsRevision = settingsRevision.Revision,
+                };
+                await switchTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return result;
+            }
+            catch (PostgresException exception) when (
+                switchTransaction is not null &&
+                exception.SqlState == PostgresErrorCodes.SerializationFailure &&
+                attempt + 1 < maxAttempts)
             {
-                SwitchMode = "untouched",
-                SettingsRevision = 0,
-            };
+                await switchTransaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                db.ChangeTracker.Clear();
+            }
         }
-        var settingsRevision = await db.PlatformRuntimeRevisions.AsNoTracking().SingleAsync(
-            item => item.Revision == settingsHead.CurrentRevision, cancellationToken).ConfigureAwait(false);
-        var settings = ProjectsConfigService.Deserialize<PlatformRuntimeDefaults>(
-            settingsRevision.ConfigurationJson);
-        var result = page with
-        {
-            SwitchMode = settings.ModelDefaultSwitch.Mode switch
-            {
-                PlatformModelDefaultSwitchMode.Untouched => "untouched",
-                PlatformModelDefaultSwitchMode.Active => "active",
-                PlatformModelDefaultSwitchMode.ExplicitHosted => "explicitHosted",
-                _ => throw new InvalidOperationException("The platform model switch mode is invalid."),
-            },
-            ActiveProviderId = settings.ModelDefaultSwitch.ActiveProviderId,
-            SettingsRevision = settingsRevision.Revision,
-        };
-        await switchTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return result;
     }
 
     public async Task<ModelProviderDraft> ReadAsync(

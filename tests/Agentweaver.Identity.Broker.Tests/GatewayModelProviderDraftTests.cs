@@ -396,6 +396,17 @@ public sealed class GatewayModelProviderDraftTests
         Assert.DoesNotContain("credentialVersion",
             draftSchema.GetProperty("properties").EnumerateObject()
                 .Select(property => property.Name));
+        Assert.True(schemas.TryGetProperty("ModelProviderDraftPage", out var pageSchema));
+        var pageProps = pageSchema.GetProperty("properties");
+        Assert.True(pageProps.TryGetProperty("activeProviderRevision", out var activeRevSchema));
+        var activeRevAnyOf = activeRevSchema.GetProperty("anyOf").EnumerateArray().ToArray();
+        Assert.Equal("integer", activeRevAnyOf[0].GetProperty("type").GetString());
+        Assert.Equal("int64", activeRevAnyOf[0].GetProperty("format").GetString());
+        Assert.Equal("null", activeRevAnyOf[1].GetProperty("type").GetString());
+        Assert.DoesNotContain("activeProviderRevision", pageSchema.GetProperty("required")
+            .EnumerateArray().Select(value => value.GetString()));
+        Assert.DoesNotContain("credentialVersion",
+            pageProps.EnumerateObject().Select(property => property.Name));
         Assert.Equal(
             ["Draft", "Available"],
             draftSchema.GetProperty("properties").GetProperty("state")

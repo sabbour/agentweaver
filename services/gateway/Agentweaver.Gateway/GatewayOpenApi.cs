@@ -2891,6 +2891,7 @@ else if (route.OperationId is
             ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"],
             ("switchMode", Nullable(Enum("untouched", "active", "explicitHosted"))),
             ("activeProviderId", NullableStr()), ("settingsRevision", NullableInt()),
+            ("activeProviderRevision", NullableInt()),
             ("providers", Arr(Ref("ModelProviderDraft"))), ("nextAfterProviderId", NullableStr())),
         ["ActivatePlatformModelProviderRequest"] = StrictObj(
             ["expectedSettingsRevision", "expectedProviderRevision"],

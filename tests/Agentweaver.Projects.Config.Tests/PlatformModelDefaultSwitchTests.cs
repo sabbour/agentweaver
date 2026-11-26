@@ -793,4 +793,154 @@ public sealed partial class ProjectsConfigPostgresTests
                     item => item.TaskKind == ModelTaskKind.CodeWriting).Selection.Reference);
         });
     }
+
+    [Fact]
+    public async Task PlatformListReturnsCoherentActiveProviderRevisionAcrossPagesAndNullForCopilotUninitializedAndProject()
+    {
+        await RunWithIsolatedProjectsAsync(async tests =>
+        {
+            await using var db = tests.CreateDbContext();
+            var authority = new ProjectsConfigPrivilegedAuthorityStore(
+                tests.CreateDbContextOptions(), TimeProvider.System);
+            var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+            var draftService = new ModelProviderDraftService(db, TimeProvider.System);
+            var suffix = Guid.NewGuid().ToString("N")[..12];
+            var tenantId = "list-rev-tenant-" + suffix;
+            var admin = await SeedCallerAsync(db, authority, "list-rev-admin-" + suffix, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+            var owner = await SeedCallerAsync(db, authority, "list-rev-owner-" + suffix, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+                tenantId, ProjectAuthorityRole.TenantAdmin);
+
+            // Uninitialized platform settings return switchMode=untouched, settingsRevision=0, activeProviderRevision=null.
+            var uninitialized = await draftService.ListPageAsync(
+                admin, ModelProviderBindingScope.Platform, null, 10, null, CancellationToken.None);
+            Assert.Equal("untouched", uninitialized.SwitchMode);
+            Assert.Equal(0, uninitialized.SettingsRevision);
+            Assert.Null(uninitialized.ActiveProviderId);
+            Assert.Null(uninitialized.ActiveProviderRevision);
+
+            // Project list omits switch fields and activeProviderRevision.
+            var project = await service.CreateProjectAsync(owner, "List Revision Project", CancellationToken.None);
+            var projectOwner = await ResolveCallerAsync(
+                db, "list-rev-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
+                boundProjectId: project.ProjectId);
+            var projectPage = await draftService.ListPageAsync(
+                projectOwner, ModelProviderBindingScope.Project, project.ProjectId, 10, null, CancellationToken.None);
+            Assert.Null(projectPage.SwitchMode);
+            Assert.Null(projectPage.ActiveProviderId);
+            Assert.Null(projectPage.ActiveProviderRevision);
+            Assert.Null(projectPage.SettingsRevision);
+
+            var providerA = await SeedAvailablePlatformByokProviderAsync(
+                tests, db, admin, "list-rev-a-" + suffix);
+            var providerB = await SeedAvailablePlatformByokProviderAsync(
+                tests, db, admin, "list-rev-b-" + suffix);
+
+            var initial = await service.UpdatePlatformRuntimeDefaultsAsync(
+                admin,
+                (await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None)).Revision,
+                PlatformDefaults(),
+                CancellationToken.None);
+
+            var activeSwitch = await service.ActivatePlatformModelProviderAsync(
+                admin, providerA.ProviderId, initial.Revision, providerA.ProviderRevision, CancellationToken.None);
+
+            // Advance providerA to revision 2 while settings remain pinned to revision 1.
+            await using (var ownerConnection = await tests.OpenOwnerConnectionAsync())
+            {
+                await using var bump = new NpgsqlCommand(
+                    """
+                    ALTER TABLE projects_config.model_providers DISABLE TRIGGER USER;
+                    ALTER TABLE projects_config.model_provider_revisions DISABLE TRIGGER USER;
+                    INSERT INTO projects_config.model_provider_revisions
+                      (provider_id, provider_revision, scope, project_id, operation_id, request_fingerprint,
+                       display_name, type, base_url, deployment, wire_api, reasoning_efforts,
+                       prompt_capacity_tokens, configuration_hash, credential_version, credential_slot_id,
+                       credential_secret_id, rate_card_id, rate_card_version, rate_card_pin_json,
+                       created_by_actor_id, created_at)
+                    SELECT provider_id, 2, scope, project_id, gen_random_uuid(), repeat('f', 64),
+                           display_name, type, base_url, 'deployment-2', wire_api, reasoning_efforts,
+                           prompt_capacity_tokens, repeat('1', 64), 'v2', credential_slot_id,
+                           credential_secret_id, rate_card_id, rate_card_version, rate_card_pin_json,
+                           created_by_actor_id, now()
+                    FROM projects_config.model_provider_revisions
+                    WHERE provider_id = @provider AND provider_revision = 1;
+                    UPDATE projects_config.model_providers
+                    SET current_revision = 2
+                    WHERE provider_id = @provider;
+                    ALTER TABLE projects_config.model_providers ENABLE TRIGGER USER;
+                    ALTER TABLE projects_config.model_provider_revisions ENABLE TRIGGER USER;
+                    """,
+                    ownerConnection);
+                bump.Parameters.AddWithValue("provider", providerA.ProviderId);
+                await bump.ExecuteNonQueryAsync();
+            }
+
+            // Page 1 contains providerA; page 2 contains only providerB (active row is on another page).
+            var page1 = await draftService.ListPageAsync(
+                admin, ModelProviderBindingScope.Platform, null, 1, null, CancellationToken.None);
+            Assert.Single(page1.Providers);
+            Assert.Equal(providerA.ProviderId, page1.Providers[0].Binding.ProviderId);
+            Assert.Equal(2, page1.Providers[0].Binding.ProviderRevision);
+            Assert.Equal("active", page1.SwitchMode);
+            Assert.Equal(providerA.ProviderId, page1.ActiveProviderId);
+            Assert.Equal(1, page1.ActiveProviderRevision);
+            Assert.Equal(activeSwitch.SettingsRevision, page1.SettingsRevision);
+            Assert.Equal(providerA.ProviderId, page1.NextAfterProviderId);
+
+            var page2 = await draftService.ListPageAsync(
+                admin, ModelProviderBindingScope.Platform, null, 1, page1.NextAfterProviderId, CancellationToken.None);
+            Assert.Single(page2.Providers);
+            Assert.Equal(providerB.ProviderId, page2.Providers[0].Binding.ProviderId);
+            Assert.Equal("active", page2.SwitchMode);
+            Assert.Equal(providerA.ProviderId, page2.ActiveProviderId);
+            Assert.Equal(1, page2.ActiveProviderRevision);
+            Assert.Equal(activeSwitch.SettingsRevision, page2.SettingsRevision);
+
+            // Deterministic 40001 serialization retry: hold an uncommitted update on platform_runtime_heads,
+            // wait until ListPageAsync blocks on FOR SHARE, then commit the switch so ListPageAsync must retry.
+            await using var activateDb = tests.CreateDbContext();
+            var activateService = new ProjectsConfigService(activateDb, CreateProviderCatalog(), TimeProvider.System);
+            var refreshed = await activateService.ActivatePlatformModelProviderAsync(
+                admin, providerA.ProviderId, activeSwitch.SettingsRevision, 2, CancellationToken.None);
+            await using (var lockConnection = await tests.OpenOwnerConnectionAsync())
+            await using (var lockTx = await lockConnection.BeginTransactionAsync())
+            {
+                await using (var updateHead = new NpgsqlCommand(
+                    "UPDATE projects_config.platform_runtime_heads SET current_revision = current_revision WHERE id = 'default'",
+                    lockConnection, lockTx))
+                    await updateHead.ExecuteNonQueryAsync();
+
+                await using var listDb = tests.CreateDbContext();
+                var concurrentDraftService = new ModelProviderDraftService(listDb, TimeProvider.System);
+                var listTask = concurrentDraftService.ListPageAsync(
+                    admin, ModelProviderBindingScope.Platform, null, 10, null, CancellationToken.None);
+
+                await tests.WaitForRunSelectionFenceActivityAsync(
+                    "wait_event_type = 'Lock' AND query ILIKE '%FOR SHARE%' AND query ILIKE '%platform_runtime_heads%'",
+                    listTask);
+
+                await lockTx.CommitAsync();
+                var concurrentPage = await listTask;
+                Assert.Equal("active", concurrentPage.SwitchMode);
+                Assert.Equal(providerA.ProviderId, concurrentPage.ActiveProviderId);
+                Assert.Equal(refreshed.SettingsRevision, concurrentPage.SettingsRevision);
+                Assert.Equal(2, concurrentPage.ActiveProviderRevision);
+            }
+
+            // Deactivating to Copilot clears activeProviderRevision to null.
+            await using var deactivateDb = tests.CreateDbContext();
+            var deactivateService = new ProjectsConfigService(deactivateDb, CreateProviderCatalog(), TimeProvider.System);
+            var deactivated = await deactivateService.DeactivatePlatformModelProviderAsync(
+                admin, refreshed.SettingsRevision, CancellationToken.None);
+            var afterDeactivate = await draftService.ListPageAsync(
+                admin, ModelProviderBindingScope.Platform, null, 10, null, CancellationToken.None);
+            Assert.Equal("explicitHosted", afterDeactivate.SwitchMode);
+            Assert.Equal(deactivated.SettingsRevision, afterDeactivate.SettingsRevision);
+            Assert.Null(afterDeactivate.ActiveProviderId);
+            Assert.Null(afterDeactivate.ActiveProviderRevision);
+        });
+    }
 }

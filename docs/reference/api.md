@@ -138,15 +138,19 @@ responding Projects process's startup `revision` and BYOK `bindings`. Each
 binding has a `reference`, `enabled`, and `reasoningEfforts`. A missing
 startup copy returns `503`. The response is not a deployment-wide inventory.
 
-The platform provider list returns `switchMode`, `activeProviderId`, and
-`settingsRevision` with the provider rows. The three switch modes are
-`untouched`, `active`, and `explicitHosted`. Activation replaces only the
-installation base and managed task fallbacks. Re-activating the same active
-provider refreshes the base selection and only the already managed task kinds,
-leaving unmanaged or restored task defaults unchanged. Deactivation restores the shipped
-hosted Copilot task choices and keeps the provider and credential. Explicit
-project, role, agent, and task model choices stay in place. Accepted runs keep
-their saved selections; a settings revision applies only to fresh starts.
+The platform provider list returns `switchMode`, `activeProviderId`,
+`activeProviderRevision`, and `settingsRevision` with the provider rows.
+`activeProviderRevision` is a nullable `int64` that holds the saved
+`ModelDefaultSwitch.ProviderRevision` when `switchMode` is `active`, and `null`
+for uninitialized settings, Copilot (`explicitHosted`), and project lists. The
+three switch modes are `untouched`, `active`, and `explicitHosted`. Activation
+replaces only the installation base and managed task fallbacks. Re-activating the
+same active provider refreshes the base selection and only the already managed
+task kinds, leaving unmanaged or restored task defaults unchanged. Deactivation
+restores the shipped hosted Copilot task choices and keeps the provider and
+credential. Explicit project, role, agent, and task model choices stay in place.
+Accepted runs keep their saved selections; a settings revision applies only to
+fresh starts.
 
 Platform provider metadata accepts `rate_card_id` and `rate_card_version` as a
 pair. Update preserves a pair when both fields are omitted. Send both fields as

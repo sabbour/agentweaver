@@ -221,6 +221,24 @@ public sealed class ModelProviderDraftHttpContractTests
             ModelProviderDraftEndpoints.Project(new ModelProviderDraft(
                 ModelProviderDraftState.Draft,
                 binding with { BaseUrl = "https://api.openai.com/v1?api_key=sentinel" })));
+
+        var platformPage = new ModelProviderDraftPageResponse(
+            "active",
+            "byok-provider",
+            9,
+            [ModelProviderDraftEndpoints.Project(new ModelProviderDraft(ModelProviderDraftState.Available, platform), "byok-provider")],
+            null,
+            3);
+        var platformPageJson = JsonSerializer.Serialize(platformPage, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Contains("\"activeProviderRevision\":3", platformPageJson);
+        Assert.DoesNotContain("credentialVersion", platformPageJson);
+        Assert.DoesNotContain("credential-version-secret", platformPageJson);
+
+        var projectPage = new ModelProviderDraftPageResponse(null, null, null, [response], null, null);
+        var projectPageJson = JsonSerializer.Serialize(projectPage, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Contains("\"activeProviderRevision\":null", projectPageJson);
+        Assert.Contains("\"settingsRevision\":null", projectPageJson);
+        Assert.DoesNotContain("credentialVersion", projectPageJson);
     }
 
     private static Task<ModelProviderDraftSaveBody?> ParseAsync(string json)

@@ -85,6 +85,11 @@ close clears this in-memory state.
 Use a provider only after its state is `Available` and its key status is
 **Key saved**. Select **Use for new runs**.
 
+When the active `Available` provider has a newer `Available` revision than the
+revision saved in platform model settings, the card shows **Use latest
+revision**. Select **Use latest revision** to switch new runs to that revision
+while keeping unmanaged task defaults and custom overrides unchanged.
+
 Select **Use Copilot for new runs** to restore hosted Copilot. These controls
 change the default for fresh runs. Existing accepted runs keep their saved
 provider selection.

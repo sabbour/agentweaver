@@ -90,7 +90,8 @@ internal sealed record ModelProviderDraftPageResponse(
     string? ActiveProviderId,
     long? SettingsRevision,
     IReadOnlyList<ModelProviderDraftResponse> Providers,
-    string? NextAfterProviderId);
+    string? NextAfterProviderId,
+    long? ActiveProviderRevision = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record ActivatePlatformModelProviderRequest(
@@ -272,7 +273,7 @@ internal static class ModelProviderDraftEndpoints
                 .ToArray();
             return Results.Ok(new ModelProviderDraftPageResponse(
                 page.SwitchMode, page.ActiveProviderId, page.SettingsRevision,
-                providers, page.NextAfterProviderId));
+                providers, page.NextAfterProviderId, page.ActiveProviderRevision));
         }
 
         catch (ModelProviderDraftUnsafeMetadataException exception)
