@@ -430,7 +430,7 @@ internal static class ByokDraftCommands
                 ["host", "port", "destinationState", "canApprove", "deliveryStatus"],
                 ["host", "port", "destinationState", "canApprove", "deliveryStatus"]),
             "ModelProviderDraftPage" => new(
-                ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"],
+                ["switchMode", "activeProviderId", "activeProviderRevision", "settingsRevision", "providers", "nextAfterProviderId"],
                 ["switchMode", "activeProviderId", "settingsRevision", "providers", "nextAfterProviderId"]),
             "ModelProviderCredentialOperationResponse" => new(
                 ["operationId", "status", "scope", "projectId", "providerId", "providerRevision",
@@ -607,6 +607,7 @@ internal static class ByokDraftCommands
             case "ModelProviderDraftPage":
                 RequireNullableType(properties, "switchMode", "string");
                 RequireNullableType(properties, "activeProviderId", "string");
+                RequireNullableType(properties, "activeProviderRevision", "integer");
                 RequireNullableType(properties, "settingsRevision", "integer");
                 RequireArrayReference(properties, "providers", "ModelProviderDraft");
                 RequireNullableType(properties, "nextAfterProviderId", "string");
