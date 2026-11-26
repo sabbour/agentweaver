@@ -149,6 +149,7 @@ import type {
   SourceControlOutputFileContent,
   SourceControlOutputCapturePage,
   SourceControlRepositoryPinView,
+  UpdateProjectConfigurationResponse,
   UsageRunTotals,
   VersionedProjectConfiguration,
 } from './contracts';
@@ -933,10 +934,16 @@ export class AgentweaverGatewayClient {
     expectedRevision: number,
     configuration: ProjectConfiguration,
     tenantSelector?: string | null,
-  ): Promise<VersionedProjectConfiguration> {
+    scanCharterAgentId?: string,
+  ): Promise<UpdateProjectConfigurationResponse> {
+    const request = {
+      expectedRevision,
+      configuration: withoutProviderOverrides(configuration),
+      ...(scanCharterAgentId ? { scanCharterAgentId } : {}),
+    };
     return this.request(token, `/projects/${encodeSegments(projectId)}/configuration`, {
       method: 'PUT',
-      body: JSON.stringify({ expectedRevision, configuration: withoutProviderOverrides(configuration) }),
+      body: JSON.stringify(request),
     }, this.baseUrl, tenantSelector);
   }
 

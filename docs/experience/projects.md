@@ -98,6 +98,24 @@ project only.
 Select **Refresh** to reload the project, its configuration, the run list,
 and the metrics.
 
+## Scan a charter when you save it
+
+1. Open **Agents** for the project.
+2. Select an agent, then select **Charter**.
+3. Change the role or charter content.
+4. Select **Scan on save**.
+5. Select **Save charter**.
+
+The app runs the optional static coverage scan after Projects & Config saves the
+new configuration revision. The result shows the covered count and any missing
+vector IDs. If the scan is unavailable, the app still confirms that the
+charter was saved.
+
+The scan is an observation of the saved charter text. It is not runtime
+enforcement, approval, or release acceptance. The app does not save the scan
+result as project configuration. Changing the checkbox alone does not save a
+revision; its hint says that the scan runs with the next save.
+
 ## Use the project Board
 
 **Prerequisites:** Permission to view the project. Capturing, editing,

@@ -1941,6 +1941,43 @@ export interface VersionedProjectConfiguration {
   createdAt: string;
 }
 
+export interface PromptContentScanReportV1 {
+  contractVersion: number;
+  inputKind: 'ProjectCharter';
+  source: {
+    ownerKind: 'ProjectConfiguration';
+    ownerId: string;
+    ownerRevision: number;
+    relativePath: string;
+    provenance: 'Authored';
+    sourceRevision: string | null;
+    resolvedCommitSha: string | null;
+  };
+  inputSha256: string;
+  inputByteCount: number;
+  scannerPackage: string;
+  scannerPackageVersion: string;
+  vectorSetRevision: string;
+  policyRevision: string;
+  evaluatedAt: string;
+  status: 'Completed';
+  score: number | null;
+  grade: string | null;
+  coveredVectorCount: number | null;
+  vectorCount: number | null;
+  meetsRecommendedThreshold: boolean | null;
+  findings: { vectorId: string; owaspCategory: string }[];
+  errorCode: string | null;
+}
+
+export type ProjectCharterScanResult =
+  | { agentId: string; status: 'completed'; report: PromptContentScanReportV1 }
+  | { agentId: string; status: 'unavailable'; code: 'charter_scan_unavailable' };
+
+export interface UpdateProjectConfigurationResponse extends VersionedProjectConfiguration {
+  charterScan?: ProjectCharterScanResult;
+}
+
 export interface AvailablePlatformProvider {
   id: string;
   name: string;

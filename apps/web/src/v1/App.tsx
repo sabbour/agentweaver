@@ -95,6 +95,7 @@ import type {
   SourceControlRepositoryPinView,
   UsageRunTotals,
   VersionedProjectConfiguration,
+  UpdateProjectConfigurationResponse,
   OwnerRunStatus,
 } from './contracts';
 import type { AuthorizationBinding, RunBinding } from './authProtocol';
@@ -122,7 +123,17 @@ import { clearPendingRun, readPendingRun } from './pendingRun';
 import { clearPendingChat } from './chiefOfStaff';
 import { StopRunButton } from './StopRunButton';
 import { RunEgressPanel } from './RunEgressPanel';
-import { AgentsView } from './AgentsView';
+import { AgentsView, type ConfigurationSaveResult } from './AgentsView';
+
+export function retainNewerConfigurationSave(
+  current: { scope: string; response: UpdateProjectConfigurationResponse } | null,
+  scope: string,
+  response: UpdateProjectConfigurationResponse,
+) {
+  return !current || current.scope !== scope || response.revision > current.response.revision
+    ? { scope, response }
+    : current;
+}
 import { CastTeamPage } from './CastTeamPage';
 import { PlatformSettingsPage } from './PlatformSettingsPage';
 import { useProjectConfiguration, useProjectSummary } from './projectData';
@@ -718,13 +729,14 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   const [editor, setEditor] = useState('');
   const [configurationDraft, setConfigurationDraft] = useState<ProjectConfiguration | null>(null);
   const [loading, setLoading] = useState(true);
-  const [savingScope, setSavingScope] = useState<string | null>(null);
+  const [savingScope, setSavingScope] = useState<{ scope: string; generation: number } | null>(null);
   const [skillAssignmentPending, setSkillAssignmentPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [errorScope, setErrorScope] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeScope, setNoticeScope] = useState<string | null>(null);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  const [loadedGeneration, setLoadedGeneration] = useState<number | null>(null);
   const requestScope = JSON.stringify([
     session?.accessToken ?? null,
     authorizationContext?.tenantId ?? null,
@@ -734,12 +746,31 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   ]);
   const activeScope = useRef(requestScope);
   const loadGeneration = useRef(0);
+  const loadedState = useRef<{
+    scope: string;
+    generation: number;
+    versioned: VersionedProjectConfiguration;
+    editor: string;
+  } | null>(null);
+  const retainedSave = useRef<{
+    scope: string;
+    response: UpdateProjectConfigurationResponse;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!versioned || !loadedScope || loadedGeneration === null) {
+      loadedState.current = null;
+      return;
+    }
+    loadedState.current = { scope: loadedScope, generation: loadedGeneration, versioned, editor };
+  }, [editor, loadedGeneration, loadedScope, versioned]);
 
   const load = useCallback(async () => {
     const scope = requestScope;
     const generation = ++loadGeneration.current;
     setLoading(true);
     setLoadedScope(null);
+    setLoadedGeneration(null);
     setError(null);
     setErrorScope(null);
     setNotice(null);
@@ -766,13 +797,21 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
       if (result.projectId !== projectId)
         throw new Error('The server returned configuration for a different project.');
-      setVersioned(result);
+      const retained = retainedSave.current;
+      const resultToApply = retained?.scope === scope &&
+        retained.response.projectId === projectId &&
+        retained.response.revision > result.revision
+        ? retained.response
+        : result;
+      if (retained?.scope === scope) retainedSave.current = null;
+      setVersioned(resultToApply);
       const scopedChoices = choiceResult.value?.projectId === projectId ? choiceResult.value : null;
       setConfigurationChoices(scopedChoices);
       setConfigurationChoicesError(view === 'settings' && (choiceResult.failed || !scopedChoices));
-      setEditor(JSON.stringify(result.configuration, null, 2));
+      setEditor(JSON.stringify(resultToApply.configuration, null, 2));
       // Start the form draft from the loaded document, so it matches the JSON text.
-      setConfigurationDraft(result.configuration);
+      setConfigurationDraft(resultToApply.configuration);
+      setLoadedGeneration(generation);
       setLoadedScope(scope);
     } catch (reason) {
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
@@ -799,21 +838,27 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   }, [load, requestScope]);
 
   /**
-   * Saves a full configuration document against the loaded revision. Resolves true on success.
-   * The settings form, the raw JSON editor, and the Agents view all save through here.
+   * Saves a full configuration document against the loaded revision.
+   * The settings form, raw JSON editor, and Agents view all save through here.
    */
-  const persist = async (configuration: ProjectConfiguration): Promise<boolean> => {
+  const persist = async (
+    configuration: ProjectConfiguration,
+    scanCharterAgentId?: string,
+  ): Promise<ConfigurationSaveResult> => {
     // Remember which user and project this save belongs to. If either changes
     // while the request runs, the late response is ignored below.
     const scope = requestScope;
+    const generation = loadGeneration.current;
     // Refuse to save when:
     // - the configuration is not loaded for this exact scope (we need its revision), or
     // - a skill assignment is updating the same document right now.
-    if (!versioned || loadedScope !== scope || versioned.projectId !== projectId || skillAssignmentPending) return false;
+    if (!versioned || loadedScope !== scope || versioned.projectId !== projectId || skillAssignmentPending)
+      return { status: 'stale' };
     // A new model choice may need a credential that is not set yet. The form
     // shows that problem itself; the save just stops here.
-    if (needsModelCredential(configuration, versioned.configuration.modelSelection)) return false;
-    setSavingScope(scope);
+    if (needsModelCredential(configuration, versioned.configuration.modelSelection))
+      return { status: 'error', error: new Error('Set the model credential before saving.') };
+    setSavingScope({ scope, generation });
     setError(null);
     setErrorScope(null);
     setNotice(null);
@@ -822,15 +867,45 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       // The server rejects the update if `versioned.revision` is no longer the
       // latest revision. That stops one user from silently overwriting another.
       const updated = await apiCall(
-        (token, tenantSelector) => gatewayClient.updateProjectConfiguration(
-          token, projectId, versioned.revision, configuration, tenantSelector,
-        ),
+        (token, tenantSelector) => scanCharterAgentId
+          ? gatewayClient.updateProjectConfiguration(
+            token, projectId, versioned.revision, configuration, tenantSelector, scanCharterAgentId,
+          )
+          : gatewayClient.updateProjectConfiguration(
+            token, projectId, versioned.revision, configuration, tenantSelector,
+          ),
         null,
       );
-      // The user switched project or account while saving. Do not show this result.
-      if (activeScope.current !== scope) return false;
+      if (activeScope.current !== scope) return { status: 'stale' };
       if (updated.projectId !== projectId)
         throw new Error('The server returned an update for a different project.');
+      if (loadGeneration.current !== generation) {
+        const current = loadedState.current;
+        const currentEditor = current?.editor ?? '';
+        const currentUntouched = current?.versioned &&
+          currentEditor === JSON.stringify(current.versioned.configuration, null, 2);
+        // A->B->A can finish loading the old A revision before this write
+        // commits. Adopt the newer write only while that A load is untouched.
+        if (current?.scope === scope &&
+            current.versioned.projectId === projectId &&
+            updated.revision > current.versioned.revision &&
+            currentUntouched) {
+          const nextEditor = JSON.stringify(updated.configuration, null, 2);
+          loadedState.current = {
+            scope,
+            generation: loadGeneration.current,
+            versioned: updated,
+            editor: nextEditor,
+          };
+          setVersioned(updated);
+          setEditor(nextEditor);
+          setConfigurationDraft(updated.configuration);
+        } else if (!current || current.scope !== scope) {
+          retainedSave.current = retainNewerConfigurationSave(retainedSave.current, scope, updated);
+        }
+        // An old drawer must not show this scan result after A was reopened.
+        return { status: 'stale' };
+      }
       // Replace the saved copy, the JSON text, and the form draft together so
       // all three show the new revision.
       setVersioned(updated);
@@ -838,14 +913,15 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       setConfigurationDraft(updated.configuration);
       setNotice(`Configuration revision ${updated.revision} saved. Runs that already started keep their settings.`);
       setNoticeScope(scope);
-      return true;
+      return { status: 'saved', response: updated };
     } catch (reason) {
-      if (activeScope.current !== scope) return false;
+      if (activeScope.current !== scope || loadGeneration.current !== generation)
+        return { status: 'stale' };
       setError(reason);
       setErrorScope(scope);
-      return false;
+      return { status: 'error', error: reason };
     } finally {
-      if (activeScope.current === scope)
+      if (activeScope.current === scope && loadGeneration.current === generation)
         setSavingScope(null);
     }
   };
@@ -953,9 +1029,11 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     ) => apiCall((token, tenantSelector) =>
       gatewayClient.updateSkillAssignment(token, scope, skillId, request, tenantSelector), null),
   }), [apiCall]);
+  const savingCurrentGeneration = savingScope?.scope === requestScope
+    && savingScope.generation === loadedGeneration;
   const assignmentDisabledReason = skillAssignmentPending
     ? 'Wait for the current assignment update to finish.'
-    : savingScope === requestScope
+    : savingCurrentGeneration
       ? 'Wait for the current configuration save to finish.'
       : currentConfiguration && editor !== JSON.stringify(currentConfiguration.configuration, null, 2)
         ? 'Save or reload the edited project configuration before assigning a skill.'
@@ -963,7 +1041,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
 
   // A save or a skill assignment is running. Both write the same document,
   // so the page blocks other edits until it finishes.
-  const busy = savingScope === requestScope || skillAssignmentPending;
+  const busy = savingCurrentGeneration || skillAssignmentPending;
   // True when the JSON text still matches the form draft. False means the
   // user edited raw JSON; then the form sections become read-only so the
   // two edits cannot overwrite each other.
@@ -1119,7 +1197,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
               )}
               <div className="v1-actions">
                 <Button appearance="primary" type="submit" disabled={saveDisabled}>
-                  {savingScope === requestScope ? 'Saving…' : 'Save changes'}
+                  {savingCurrentGeneration ? 'Saving…' : 'Save changes'}
                 </Button>
                 <Button appearance="secondary" type="button" disabled={busy} onClick={() => void load()}>Reload</Button>
                 <Text size={200}>Revision {currentConfiguration.revision}</Text>

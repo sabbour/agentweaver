@@ -5,6 +5,7 @@ import type {
   EffectiveProjectRole,
   EffectiveRunSelection,
   ProjectConfigurationChoices,
+  UpdateProjectConfigurationResponse,
 } from './contracts';
 
 const mocks = vi.hoisted(() => ({
@@ -26,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   getProjectConfiguration: vi.fn(),
   getProjectConfigurationChoices: vi.fn(),
   getHostedModelReasoningCatalog: vi.fn(),
+  getProjectAgentHistory: vi.fn(),
+  listCastingProposals: vi.fn(),
   updateProjectConfiguration: vi.fn(),
   listMarketplaceSources: vi.fn(),
   createMarketplaceSource: vi.fn(),
@@ -112,6 +115,8 @@ vi.mock('./api', () => ({
     getProjectConfiguration: mocks.getProjectConfiguration,
     getProjectConfigurationChoices: mocks.getProjectConfigurationChoices,
     getHostedModelReasoningCatalog: mocks.getHostedModelReasoningCatalog,
+    getProjectAgentHistory: mocks.getProjectAgentHistory,
+    listCastingProposals: mocks.listCastingProposals,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
     listMarketplaceSources: mocks.listMarketplaceSources,
     createMarketplaceSource: mocks.createMarketplaceSource,
@@ -277,7 +282,7 @@ vi.mock('./config', async (importOriginal) => {
   return { ...actual, brokerIssuer: 'https://identity.example.test/' };
 });
 
-import App from './App';
+import App, { retainNewerConfigurationSave } from './App';
 import { GatewayError } from './api';
 import { PENDING_CHAT_STORAGE_KEY } from './chiefOfStaff';
 import { PENDING_RUN_STORAGE_KEY } from './pendingRun';
@@ -305,6 +310,17 @@ function projectConfiguration(projectId: string, revision: number) {
       blueprintWorkflowReferences: [],
       skills: [],
       runLimits: {},
+    },
+  };
+}
+
+function agentProjectConfiguration(projectId: string, revision: number, charter = 'Lead the work.') {
+  const current = projectConfiguration(projectId, revision);
+  return {
+    ...current,
+    configuration: {
+      ...current.configuration,
+      agentCharters: [{ agentId: 'a1', name: 'Ada', role: 'Lead', charter }],
     },
   };
 }
@@ -607,6 +623,12 @@ describe('v1 web project scoping', () => {
         models: {},
       }),
     );
+    mocks.getProjectAgentHistory.mockReset().mockImplementation(
+      async (_token: string, projectId: string, agentId: string) => ({
+        projectId, agentId, items: [],
+      }),
+    );
+    mocks.listCastingProposals.mockReset().mockResolvedValue([]);
     mocks.updateProjectConfiguration.mockReset();
     mocks.listMarketplaceSources.mockReset().mockResolvedValue([]);
     mocks.createMarketplaceSource.mockReset();
@@ -2657,6 +2679,298 @@ describe('v1 web project scoping', () => {
       expect.objectContaining({ projectMarker: 'p2' }),
       'tenant-1',
     );
+  });
+
+  it('ignores a configuration save response after the project scope changes', async () => {
+    const oldSave = deferred<ReturnType<typeof projectConfiguration>>();
+    mocks.getProjectConfiguration.mockImplementation(async (_token: string, projectId: string) =>
+      projectConfiguration(projectId, projectId === 'p1' ? 1 : 2));
+    mocks.updateProjectConfiguration.mockReturnValueOnce(oldSave.promise);
+
+    window.history.replaceState({}, '', '/projects/p1/settings?section=advanced');
+    render(<App />);
+    const editor = await screen.findByLabelText('Configuration JSON') as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: JSON.stringify({ ...JSON.parse(editor.value), projectMarker: 'p1-edited' }) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
+
+    act(() => {
+      window.history.pushState({}, '', '/projects/p2/settings?section=advanced');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await screen.findByText('Revision 2');
+
+    await act(async () => {
+      oldSave.resolve(projectConfiguration('p1', 3));
+      await oldSave.promise;
+    });
+
+    expect((screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement).value)
+      .toContain('"projectMarker": "p2"');
+    expect(screen.queryByText(/Configuration revision 3 saved/)).toBeNull();
+  });
+
+  it.each([
+    ['archived', 'Archived projects cannot be reconfigured.'],
+    ['revision conflict', 'The project configuration revision has changed.'],
+  ])('shows an accurate %s save error and warns before discarding the Agents draft', async (_name, message) => {
+    mocks.getProjectConfiguration.mockResolvedValue(agentProjectConfiguration('p1', 4));
+    mocks.updateProjectConfiguration.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'revision_conflict' }, message),
+    );
+    window.history.replaceState({}, '', '/projects/p1/team');
+    render(<App />);
+    fireEvent.click(await screen.findByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    const content = within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement;
+    fireEvent.change(content, { target: { value: 'Unsaved charter.' } });
+
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' }));
+
+    expect(await within(drawer).findByText(message)).toBeTruthy();
+    expect(content.value).toBe('Unsaved charter.');
+    expect(within(drawer).getByText(/reloading replaces this unsaved charter/i)).toBeTruthy();
+    expect(within(drawer).getByRole('button', { name: 'Reload and discard unsaved charter' })).toBeTruthy();
+  });
+
+  it('reconciles an untouched reopened agent draft with the completed parent save', async () => {
+    const pendingSave = deferred<ReturnType<typeof agentProjectConfiguration>>();
+    mocks.getProjectConfiguration.mockResolvedValue(agentProjectConfiguration('p1', 4));
+    mocks.updateProjectConfiguration.mockReturnValueOnce(pendingSave.promise);
+    window.history.replaceState({}, '', '/projects/p1/team');
+    render(<App />);
+    fireEvent.click(await screen.findByText('Ada'));
+    let drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.click(within(drawer).getByRole('checkbox', { name: 'Scan on save' }));
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /Charter content/ }), {
+      target: { value: 'Saved charter.' },
+    });
+    const liveStatus = within(drawer).getByRole('status', { name: 'Charter save status' });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' }));
+    await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
+    expect(within(drawer).getByRole('status', { name: 'Charter save status' })).toBe(liveStatus);
+    expect(mocks.updateProjectConfiguration.mock.calls[0][5]).toBe('a1');
+
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close panel' }));
+    fireEvent.click(screen.getByText('Ada'));
+    drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    expect((within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value)
+      .toBe('Lead the work.');
+
+    await act(async () => {
+      pendingSave.resolve(agentProjectConfiguration('p1', 5, 'Saved charter.'));
+      await pendingSave.promise;
+    });
+
+    await waitFor(() => expect(
+      (within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value,
+    ).toBe('Saved charter.'));
+    expect((within(drawer).getByRole('button', { name: 'Save charter' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not apply an older A scan response after navigating A to B and back to newer A', async () => {
+    const pendingSave = deferred<ReturnType<typeof agentProjectConfiguration>>();
+    let projectOneLoads = 0;
+    mocks.getProjectConfiguration.mockImplementation(async (_token: string, projectId: string) => {
+      if (projectId === 'p2') return agentProjectConfiguration('p2', 2, 'B charter.');
+      projectOneLoads += 1;
+      return agentProjectConfiguration('p1', projectOneLoads === 1 ? 1 : 5,
+        projectOneLoads === 1 ? 'A first charter.' : 'A newer charter.');
+    });
+    mocks.updateProjectConfiguration.mockReturnValueOnce(pendingSave.promise);
+    window.history.replaceState({}, '', '/projects/p1/team');
+    render(<App />);
+    fireEvent.click(await screen.findByText('Ada'));
+    let drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.click(within(drawer).getByRole('checkbox', { name: 'Scan on save' }));
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /Charter content/ }), {
+      target: { value: 'A old save.' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' }));
+    await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
+
+    act(() => {
+      window.history.pushState({}, '', '/projects/p2/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledWith('broker-token', 'p2', 'tenant-1'));
+    act(() => {
+      window.history.pushState({}, '', '/projects/p1/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    fireEvent.click(await screen.findByText('Ada'));
+    drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    expect((within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value)
+      .toBe('A newer charter.');
+    expect(within(drawer).getByRole('button', { name: 'Save charter' })).toBeTruthy();
+
+    await act(async () => {
+      pendingSave.resolve(agentProjectConfiguration('p1', 2, 'A old save.'));
+      await pendingSave.promise;
+    });
+
+    expect((within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value)
+      .toBe('A newer charter.');
+    expect(screen.queryByText(/Configuration revision 2 saved/)).toBeNull();
+  });
+
+  it('reconciles a committed A save after A to B to A returns to an older untouched A revision', async () => {
+    const pendingSave = deferred<UpdateProjectConfigurationResponse>();
+    let projectOneLoads = 0;
+    mocks.getProjectConfiguration.mockImplementation(async (_token: string, projectId: string) => {
+      if (projectId === 'p2') return agentProjectConfiguration('p2', 2, 'B charter.');
+      projectOneLoads += 1;
+      return agentProjectConfiguration('p1', 1, 'A old load.');
+    });
+    mocks.updateProjectConfiguration.mockReturnValueOnce(pendingSave.promise);
+    window.history.replaceState({}, '', '/projects/p1/team');
+    render(<App />);
+    fireEvent.click(await screen.findByText('Ada'));
+    let drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.click(within(drawer).getByRole('checkbox', { name: 'Scan on save' }));
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /Charter content/ }), {
+      target: { value: 'A committed save.' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' }));
+    await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
+
+    act(() => {
+      window.history.pushState({}, '', '/projects/p2/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledWith('broker-token', 'p2', 'tenant-1'));
+    act(() => {
+      window.history.pushState({}, '', '/projects/p1/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(projectOneLoads).toBe(2));
+    fireEvent.click(await screen.findByText('Ada'));
+    drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    expect((within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value)
+      .toBe('A old load.');
+
+    await act(async () => {
+      pendingSave.resolve({
+        ...agentProjectConfiguration('p1', 2, 'A committed save.'),
+        charterScan: { agentId: 'a1', status: 'unavailable', code: 'charter_scan_unavailable' },
+      });
+      await pendingSave.promise;
+    });
+
+    await waitFor(() => expect(
+      (within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value,
+    ).toBe('A committed save.'));
+    expect(within(drawer).getByRole('status', { name: 'Charter save status' }).textContent).toBe('');
+    expect(within(drawer).queryByText('Charter saved; scan unavailable.')).toBeNull();
+  });
+
+  it('retains a save that returns while the newer A load is still pending', async () => {
+    const pendingSave = deferred<UpdateProjectConfigurationResponse>();
+    const returnLoad = deferred<ReturnType<typeof agentProjectConfiguration>>();
+    let projectOneLoads = 0;
+    mocks.getProjectConfiguration.mockImplementation(async (_token: string, projectId: string) => {
+      if (projectId === 'p2') return agentProjectConfiguration('p2', 2, 'B charter.');
+      projectOneLoads += 1;
+      if (projectOneLoads === 2) return returnLoad.promise;
+      return agentProjectConfiguration('p1', 1, 'A initial charter.');
+    });
+    mocks.updateProjectConfiguration.mockReturnValueOnce(pendingSave.promise);
+    window.history.replaceState({}, '', '/projects/p1/team');
+    render(<App />);
+    fireEvent.click(await screen.findByText('Ada'));
+    let drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /Charter content/ }), {
+      target: { value: 'A committed charter.' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' }));
+    await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
+
+    act(() => {
+      window.history.pushState({}, '', '/projects/p2/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledWith('broker-token', 'p2', 'tenant-1'));
+    act(() => {
+      window.history.pushState({}, '', '/projects/p1/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(projectOneLoads).toBe(2));
+
+    await act(async () => {
+      pendingSave.resolve(agentProjectConfiguration('p1', 2, 'A committed charter.'));
+      await pendingSave.promise;
+    });
+    await act(async () => {
+      returnLoad.resolve(agentProjectConfiguration('p1', 1, 'A stale load.'));
+      await returnLoad.promise;
+    });
+
+    fireEvent.click(await screen.findByText('Ada'));
+    drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    expect((within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value)
+      .toBe('A committed charter.');
+    expect(within(drawer).getByRole('status', { name: 'Charter save status' }).textContent).toBe('');
+  });
+
+  it('retains the highest revision when successful saves finish out of order during an A reload', async () => {
+    const revisionThree = agentProjectConfiguration('p1', 3, 'Revision three charter.');
+    const revisionTwo = agentProjectConfiguration('p1', 2, 'Revision two charter.');
+    const retained = retainNewerConfigurationSave(null, 'scope-a', revisionThree);
+    expect(retainNewerConfigurationSave(retained, 'scope-a', revisionTwo)).toEqual({
+      scope: 'scope-a',
+      response: revisionThree,
+    });
+  });
+
+  it('keeps a newly edited reopened charter when the prior A save commits', async () => {
+    const pendingSave = deferred<UpdateProjectConfigurationResponse>();
+    mocks.getProjectConfiguration.mockImplementation(async (_token: string, projectId: string) =>
+      projectId === 'p2'
+        ? agentProjectConfiguration('p2', 2, 'B charter.')
+        : agentProjectConfiguration('p1', 1, 'A old load.'));
+    mocks.updateProjectConfiguration.mockReturnValueOnce(pendingSave.promise);
+    window.history.replaceState({}, '', '/projects/p1/team');
+    render(<App />);
+    fireEvent.click(await screen.findByText('Ada'));
+    let drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /Charter content/ }), {
+      target: { value: 'A pending save.' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' }));
+    await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
+
+    act(() => {
+      window.history.pushState({}, '', '/projects/p2/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledWith('broker-token', 'p2', 'tenant-1'));
+    act(() => {
+      window.history.pushState({}, '', '/projects/p1/team');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    fireEvent.click(await screen.findByText('Ada'));
+    drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    const content = within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement;
+    fireEvent.change(content, { target: { value: 'A newer local draft.' } });
+
+    await act(async () => {
+      pendingSave.resolve(agentProjectConfiguration('p1', 2, 'A pending save.'));
+      await pendingSave.promise;
+    });
+
+    expect(content.value).toBe('A newer local draft.');
+    expect((within(drawer).getByRole('button', { name: 'Save charter' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('shows unavailable platform providers when getProjectConfiguration rejects on Connections', async () => {

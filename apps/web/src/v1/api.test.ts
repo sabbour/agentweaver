@@ -253,6 +253,21 @@ describe('Gateway API client', () => {
     expect(configuration.providerOverrides).toHaveLength(1);
   });
 
+  it('sends the optional charter scan selector only when provided', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const configuration = { providerOverrides: [], orderedProviderOverrides: [] } as unknown as ProjectConfiguration;
+
+    await client.updateProjectConfiguration('token', 'p1', 3, configuration, 'tenant-1');
+    await client.updateProjectConfiguration('token', 'p1', 3, configuration, 'tenant-1', 'planner');
+
+    const bodies = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies[0]).not.toHaveProperty('scanCharterAgentId');
+    expect(bodies[1].scanCharterAgentId).toBe('planner');
+  });
+
   it('patches one proposal member role with its expected draft revision and title', async () => {
     // Send the catalog role ID and custom title in one revision-checked update.
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', {

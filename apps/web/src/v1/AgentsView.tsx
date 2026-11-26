@@ -7,11 +7,11 @@
  * add, import) become casting proposals that apply only when confirmed.
  */
 import {
-  Badge, Button, DrawerBody, DrawerHeader, DrawerHeaderTitle, Field, Input, OverlayDrawer,
+  Badge, Button, Checkbox, DrawerBody, DrawerHeader, DrawerHeaderTitle, Field, Input, OverlayDrawer,
   Spinner, Tab, TabList, Text, Textarea, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Dismiss24Regular, People24Regular } from '@fluentui/react-icons';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { MetricRow } from '../components/ui/Metric';
@@ -22,7 +22,7 @@ import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
 import { AddMemberDialog, PendingProposals, TeamMemberActions, TeamSyncPanel } from './AgentsTeamControls';
 import { castPath } from './castingData';
-import type { ProjectConfiguration } from './contracts';
+import type { ProjectCharterScanResult, ProjectConfiguration, UpdateProjectConfigurationResponse } from './contracts';
 import { PageHeading } from './pageParts';
 
 type Filter = 'all' | 'team' | 'other';
@@ -39,7 +39,38 @@ const useStyles = makeStyles({
   historyEntry: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   historyHeading: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalNone },
   historyContent: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' },
+  scanResult: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
+
+export type ConfigurationSaveResult =
+  | { status: 'saved'; response: UpdateProjectConfigurationResponse }
+  | { status: 'error'; error: unknown }
+  | { status: 'stale' };
+
+function saveErrorText(error: unknown): string {
+  if (error instanceof GatewayError) return error.message || `Save failed (${error.status}).`;
+  if (error instanceof Error) return error.message;
+  return 'The charter could not be saved.';
+}
+
+function ScanCoverage({ scan }: { scan: ProjectCharterScanResult }) {
+  if (scan.status === 'unavailable') return <Text>Charter saved; scan unavailable.</Text>;
+  const { report } = scan;
+  const coverage = report.coveredVectorCount === null || report.vectorCount === null
+    ? 'Static coverage completed.'
+    : `${report.coveredVectorCount} of ${report.vectorCount} vectors covered.`;
+  const missing = report.findings.map((finding) => finding.vectorId);
+  return (
+    <>
+      <Text>Charter saved. {coverage}</Text>
+      {report.score !== null && <Text>Coverage score: {report.score}.</Text>}
+      {missing.length > 0
+        ? <Text>Missing vectors: {missing.join(', ')}.</Text>
+        : <Text>No missing vectors reported.</Text>}
+      <Text size={200}>This is a static coverage scan. It does not enforce runtime behavior.</Text>
+    </>
+  );
+}
 
 /** Drawer content for one agent. Saving replaces only this agent's charter entry. */
 function AgentDetail({ projectId, agent, configuration, configurationRevision, readOnly, onClose, onSave, onConflict }: {
@@ -49,7 +80,7 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
   configurationRevision: number;
   readOnly: boolean;
   onClose: () => void;
-  onSave: (next: ProjectConfiguration) => Promise<boolean>;
+  onSave: (next: ProjectConfiguration, scanCharterAgentId?: string) => Promise<ConfigurationSaveResult>;
   onConflict?: () => void;
 }) {
   const styles = useStyles();
@@ -60,7 +91,15 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
   const [role, setRole] = useState(agent.role);
   const [charter, setCharter] = useState(agent.charter);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [scanOnSave, setScanOnSave] = useState(false);
+  const [saveResult, setSaveResult] = useState<
+    | { status: 'saved'; scan?: ProjectCharterScanResult }
+    | { status: 'error'; error: unknown; conflict: boolean }
+    | null
+  >(null);
+  const editVersion = useRef(0);
+  const roleTouched = useRef(false);
+  const charterTouched = useRef(false);
   const [historyResult, setHistoryResult] = useState<{
     requestKey: string;
     status: 'empty' | 'loaded' | 'permission' | 'error';
@@ -79,19 +118,43 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
   const skills = configuration.skills.filter((skill) => skill.enabled && (!skill.agentIds?.length || skill.agentIds.includes(agent.agentId)));
   // Save is enabled only after a real change.
   const dirty = role !== agent.role || charter !== agent.charter;
+
+  useEffect(() => {
+    if (!roleTouched.current) setRole(agent.role);
+    if (!charterTouched.current) setCharter(agent.charter);
+  }, [agent.charter, agent.role]);
+
   /** Saves a full configuration where only this agent's role and charter differ. */
   const save = async () => {
+    const submittedEditVersion = editVersion.current;
     setSaving(true);
-    setSaved(false);
+    setSaveResult(null);
     // The configuration is saved as a whole revision, so copy it and replace just
     // this one charter entry. The role is trimmed; the charter text is kept as typed.
-    const ok = await onSave({
+    const result = await onSave({
       ...configuration,
       agentCharters: configuration.agentCharters.map((item) => item.agentId === agent.agentId ? { ...item, role: role.trim(), charter } : item),
-    });
+    }, scanOnSave ? agent.agentId : undefined);
     setSaving(false);
-    // Show "Charter saved." only when onSave reports success.
-    setSaved(ok);
+    if (submittedEditVersion !== editVersion.current || result.status === 'stale') return;
+    if (result.status === 'error') {
+      setSaveResult({
+        status: 'error',
+        error: result.error,
+        conflict: result.error instanceof GatewayError && result.error.status === 409,
+      });
+      return;
+    }
+    const savedAgent = result.response.configuration.agentCharters.find(
+      (item) => item.agentId === agent.agentId,
+    );
+    if (savedAgent) {
+      roleTouched.current = false;
+      charterTouched.current = false;
+      setRole(savedAgent.role);
+      setCharter(savedAgent.charter);
+    }
+    setSaveResult({ status: 'saved', scan: result.response.charterScan });
   };
 
   useEffect(() => {
@@ -209,19 +272,63 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
           {tab === 'charter' && (
             <>
               <Field label="Role" hint={casting ? 'Change team roles through a reviewed proposal.' : undefined}>
-                <Input value={role} readOnly={readOnly || Boolean(casting)} onChange={(_, data) => { setRole(data.value); setSaved(false); }} />
+                <Input value={role} readOnly={readOnly || Boolean(casting)} onChange={(_, data) => {
+                  roleTouched.current = true;
+                  setRole(data.value);
+                  editVersion.current += 1;
+                  setSaveResult(null);
+                }} />
               </Field>
               <Field label="Charter content" hint="Instructions this agent follows in every run. Saved changes apply to future runs.">
-                <Textarea value={charter} readOnly={readOnly} resize="vertical" rows={16} onChange={(_, data) => { setCharter(data.value); setSaved(false); }} />
+                <Textarea value={charter} readOnly={readOnly} resize="vertical" rows={16} onChange={(_, data) => {
+                  charterTouched.current = true;
+                  setCharter(data.value);
+                  editVersion.current += 1;
+                  setSaveResult(null);
+                }} />
               </Field>
               {!readOnly && (
-                <div className={styles.actions}>
-                  <Button appearance="primary" disabled={saving || !dirty || !role.trim()} onClick={() => void save()}>
-                    {saving ? 'Saving…' : 'Save charter'}
-                  </Button>
-                  {saved && <Text>Charter saved.</Text>}
-                </div>
+                <>
+                  <Checkbox
+                    label="Scan on save"
+                    checked={scanOnSave}
+                    onChange={(_, data) => {
+                      setScanOnSave(data.checked === true);
+                      editVersion.current += 1;
+                      setSaveResult(null);
+                    }}
+                  />
+                  <Text size={200}>The scan runs when you save the next charter or role change. It reports static coverage, not runtime enforcement.</Text>
+                  <div className={styles.actions}>
+                    <Button appearance="primary" disabled={saving || !dirty || !role.trim()} onClick={() => void save()}>
+                      {saving ? 'Saving…' : 'Save charter'}
+                    </Button>
+                  </div>
+                  {saveResult?.status === 'error' && (
+                    <div className={styles.scanResult}>
+                      <Text role="alert">{saveErrorText(saveResult.error)}</Text>
+                      {saveResult.conflict && onConflict && (
+                        <>
+                          <Text size={200}>Reloading replaces this unsaved charter with the latest project configuration.</Text>
+                          <Button appearance="secondary" onClick={onConflict}>Reload and discard unsaved charter</Button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
+              <div
+                className={styles.scanResult}
+                role="status"
+                aria-live="polite"
+                aria-label="Charter save status"
+              >
+                {saveResult?.status === 'saved' && (
+                  saveResult.scan
+                    ? <ScanCoverage scan={saveResult.scan} />
+                    : <Text>Charter saved.</Text>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -240,7 +347,7 @@ export function AgentsView({ projectId, configuration, configurationRevision, re
   configuration: ProjectConfiguration;
   configurationRevision: number;
   readOnly: boolean;
-  onSave: (next: ProjectConfiguration) => Promise<boolean>;
+  onSave: (next: ProjectConfiguration, scanCharterAgentId?: string) => Promise<ConfigurationSaveResult>;
   status?: ReactNode;
   onReload?: () => void;
 }) {

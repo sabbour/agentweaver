@@ -63,16 +63,61 @@ function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfigura
 }
 
 function renderView(props: Partial<Parameters<typeof AgentsView>[0]> = {}) {
-  const onSave = vi.fn().mockResolvedValue(true);
-  render(
+  const onSave = vi.fn().mockResolvedValue({
+    status: 'saved',
+    response: {
+      projectId: 'p1',
+      revision: 5,
+      configuration: config(),
+      updatedByActorId: 'actor-1',
+      createdAt: '2026-11-26T08:00:00Z',
+    },
+  });
+  const element = (next: Partial<Parameters<typeof AgentsView>[0]>) => (
     <MemoryRouter initialEntries={['/projects/p1/team']}>
       <Routes>
-        <Route path="/projects/:projectId/team" element={<AgentsView projectId="p1" configuration={config()} configurationRevision={4} readOnly={false} onSave={onSave} {...props} />} />
+        <Route path="/projects/:projectId/team" element={<AgentsView projectId="p1" configuration={config()} configurationRevision={4} readOnly={false} onSave={onSave} {...next} />} />
         <Route path="/projects/:projectId/team/cast" element={<p>Cast page</p>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
-  return { onSave };
+  const rendered = render(element(props));
+  return { onSave, rerenderView: (next: Partial<Parameters<typeof AgentsView>[0]>) => rendered.rerender(element({ ...props, ...next })) };
+}
+
+function completedScan(score: number, coveredVectorCount: number, missing: string[] = []) {
+  return {
+    agentId: 'a1',
+    status: 'completed' as const,
+    report: {
+      contractVersion: 1,
+      inputKind: 'ProjectCharter' as const,
+      source: {
+        ownerKind: 'ProjectConfiguration' as const,
+        ownerId: 'p1',
+        ownerRevision: 5,
+        relativePath: 'agent-charters/by-id-sha256/id/charter',
+        provenance: 'Authored' as const,
+        sourceRevision: null,
+        resolvedCommitSha: null,
+      },
+      inputSha256: 'a'.repeat(64),
+      inputByteCount: 14,
+      scannerPackage: 'Agentweaver',
+      scannerPackageVersion: '1.0.0',
+      vectorSetRevision: '1',
+      policyRevision: '1',
+      evaluatedAt: '2026-11-26T08:00:00Z',
+      status: 'Completed' as const,
+      score,
+      grade: null,
+      coveredVectorCount,
+      vectorCount: 4,
+      meetsRecommendedThreshold: score >= 80,
+      findings: missing.map((vectorId) => ({ vectorId, owaspCategory: 'objective' })),
+      errorCode: null,
+    },
+  };
 }
 
 describe('AgentsView', () => {
@@ -269,6 +314,219 @@ describe('AgentsView', () => {
       { agentId: 'a2', name: 'Bo', role: 'Tester', charter: 'Test the work.' },
     ]);
     expect(await screen.findByText('Charter saved.')).toBeTruthy();
+  });
+
+  it('omits the scan selector when Scan on save is unchecked', async () => {
+    const { onSave } = renderView();
+    fireEvent.click(screen.getByText('Ada'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Charter content/ }), { target: { value: 'New charter.' } });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save charter' })); });
+
+    expect(onSave).toHaveBeenCalledWith(expect.any(Object), undefined);
+    expect(screen.getByRole('checkbox', { name: 'Scan on save' }).getAttribute('aria-checked')).not.toBe('true');
+  });
+
+  it.each([
+    ['high', completedScan(100, 4), '4 of 4 vectors covered.', 'No missing vectors reported.'],
+    ['low', completedScan(25, 1, ['instruction-hijack', 'secret-disclosure']), '1 of 4 vectors covered.', 'Missing vectors: instruction-hijack, secret-disclosure.'],
+  ])('shows objective %s coverage after a completed scan', async (_name, scan, coverage, missing) => {
+    const { onSave } = renderView();
+    onSave.mockResolvedValueOnce({ status: 'saved', response: {
+      projectId: 'p1', revision: 5, configuration: config(), updatedByActorId: 'actor-1',
+      createdAt: '2026-11-26T08:00:00Z', charterScan: scan,
+    } });
+    fireEvent.click(screen.getByText('Ada'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Scan on save' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Charter content/ }), { target: { value: 'New charter.' } });
+    const status = screen.getByRole('status', { name: 'Charter save status' });
+    expect(status.textContent).toBe('');
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save charter' })); });
+
+    expect(onSave).toHaveBeenCalledWith(expect.any(Object), 'a1');
+    expect(await screen.findByText(`Charter saved. ${coverage}`)).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Charter save status' })).toBe(status);
+    expect(screen.getByText(missing)).toBeTruthy();
+    expect(screen.getByText(/static coverage scan/i)).toBeTruthy();
+  });
+
+  it('shows an unavailable scan without presenting it as an approval result', async () => {
+    const { onSave } = renderView();
+    onSave.mockResolvedValueOnce({ status: 'saved', response: {
+      projectId: 'p1', revision: 5, configuration: config(), updatedByActorId: 'actor-1',
+      createdAt: '2026-11-26T08:00:00Z',
+      charterScan: { agentId: 'a1', status: 'unavailable', code: 'charter_scan_unavailable' },
+    } });
+    fireEvent.click(screen.getByText('Ada'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Scan on save' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Charter content/ }), { target: { value: 'New charter.' } });
+    const status = screen.getByRole('status', { name: 'Charter save status' });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save charter' })); });
+
+    expect(await screen.findByText('Charter saved; scan unavailable.')).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Charter save status' })).toBe(status);
+    expect(screen.queryByText(/approved|passed|attack-free|safe/i)).toBeNull();
+  });
+
+  it('keeps save failures inside the charter drawer', async () => {
+    const { onSave } = renderView();
+    onSave.mockResolvedValueOnce({ status: 'error', error: new Error('Write failed.') });
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /Charter content/ }), { target: { value: 'New charter.' } });
+
+    await act(async () => { fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' })); });
+
+    expect((await within(drawer).findByRole('alert')).textContent).toContain('Write failed.');
+    expect(within(drawer).queryByText('Charter saved.')).toBeNull();
+  });
+
+  it('offers reload for a revision conflict without showing a saved status', async () => {
+    const { GatewayError } = await import('./api');
+    const onReload = vi.fn();
+    const { onSave } = renderView({ onReload });
+    onSave.mockResolvedValueOnce({
+      status: 'error',
+      error: new GatewayError(409, { code: 'revision_conflict' }, 'Conflict.'),
+    });
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.change(within(drawer).getByRole('textbox', { name: /Charter content/ }), { target: { value: 'New charter.' } });
+    await act(async () => { fireEvent.click(within(drawer).getByRole('button', { name: 'Save charter' })); });
+
+    expect(await within(drawer).findByText('Conflict.')).toBeTruthy();
+    expect(within(drawer).getByText(/reloading replaces this unsaved charter/i)).toBeTruthy();
+    expect((within(drawer).getByRole('textbox', { name: /Charter content/ }) as HTMLTextAreaElement).value)
+      .toBe('New charter.');
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Reload and discard unsaved charter' }));
+    expect(onReload).toHaveBeenCalledOnce();
+    expect(within(drawer).queryByText('Charter saved.')).toBeNull();
+  });
+
+  it('ignores a late save result after the charter is edited again', async () => {
+    let resolveSave!: (value: unknown) => void;
+    const { onSave } = renderView();
+    onSave.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+    fireEvent.click(screen.getByText('Ada'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
+    const content = screen.getByRole('textbox', { name: /Charter content/ });
+    fireEvent.change(content, { target: { value: 'First edit.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save charter' }));
+    fireEvent.change(content, { target: { value: 'Second edit.' } });
+
+    await act(async () => resolveSave({
+      status: 'saved',
+      response: {
+        projectId: 'p1', revision: 5, configuration: config(), updatedByActorId: 'actor-1',
+        createdAt: '2026-11-26T08:00:00Z', charterScan: completedScan(100, 4),
+      },
+    }));
+
+    expect(screen.queryByText(/Charter saved/)).toBeNull();
+    expect((content as HTMLTextAreaElement).value).toBe('Second edit.');
+  });
+
+  it('clears a completed result when the editor changes', async () => {
+    const { onSave } = renderView();
+    onSave.mockResolvedValueOnce({ status: 'saved', response: {
+      projectId: 'p1', revision: 5, configuration: config(), updatedByActorId: 'actor-1',
+      createdAt: '2026-11-26T08:00:00Z', charterScan: completedScan(100, 4),
+    } });
+    fireEvent.click(screen.getByText('Ada'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
+    const content = screen.getByRole('textbox', { name: /Charter content/ });
+    fireEvent.change(content, { target: { value: 'First edit.' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save charter' })); });
+    expect(await screen.findByText(/4 of 4 vectors covered/)).toBeTruthy();
+    fireEvent.change(content, { target: { value: 'Second edit.' } });
+    expect(screen.queryByText(/4 of 4 vectors covered/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save charter' })).toBeTruthy();
+  });
+
+  it('ignores a late save result after another agent is opened', async () => {
+    let resolveSave!: (value: unknown) => void;
+    const { onSave } = renderView();
+    onSave.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+    fireEvent.click(screen.getByText('Ada'));
+    const firstDrawer = await screen.findByRole('dialog');
+    fireEvent.click(within(firstDrawer).getByRole('tab', { name: 'Charter' }));
+    fireEvent.change(within(firstDrawer).getByRole('textbox', { name: /Charter content/ }), {
+      target: { value: 'First edit.' },
+    });
+    fireEvent.click(within(firstDrawer).getByRole('button', { name: 'Save charter' }));
+    fireEvent.click(within(firstDrawer).getByRole('button', { name: 'Close panel' }));
+    fireEvent.click(screen.getByText('Bo'));
+
+    await act(async () => resolveSave({
+      status: 'saved',
+      response: {
+        projectId: 'p1', revision: 5, configuration: config(), updatedByActorId: 'actor-1',
+        createdAt: '2026-11-26T08:00:00Z', charterScan: completedScan(100, 4),
+      },
+    }));
+
+    expect((await screen.findByRole('dialog')).textContent).toContain('Bo');
+    expect(screen.queryByText(/4 of 4 vectors covered/)).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'role',
+      initial: { role: 'Tester', charter: 'Original charter.' },
+      advanced: { role: 'Tester', charter: 'Saved charter.' },
+      edit: { label: 'Role', value: 'Reviewer' },
+      expected: { role: 'Reviewer', charter: 'Saved charter.' },
+    },
+    {
+      name: 'charter',
+      initial: { role: 'Tester', charter: 'Original charter.' },
+      advanced: { role: 'Architect', charter: 'Original charter.' },
+      edit: { label: 'Charter content', value: 'New charter.' },
+      expected: { role: 'Architect', charter: 'New charter.' },
+    },
+  ])('refreshes the untouched field after a role or charter revision advances ($name)', async ({
+    initial, advanced, edit, expected,
+  }) => {
+    const first = config({
+      agentCharters: [
+        { agentId: 'a1', name: 'Ada', role: 'Lead', charter: 'Lead the work.' },
+        { agentId: 'a2', name: 'Bo', ...initial },
+      ],
+    });
+    const second = {
+      ...first,
+      agentCharters: first.agentCharters.map((agent) =>
+        agent.agentId === 'a2' ? { ...agent, ...advanced } : agent),
+    };
+    const { onSave, rerenderView } = renderView({ configuration: first });
+    fireEvent.click(screen.getByText('Bo'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
+    fireEvent.change(screen.getByRole('textbox', { name: edit.label }), {
+      target: { value: edit.value },
+    });
+    rerenderView({ configuration: second, configurationRevision: 5 });
+    fireEvent.click(screen.getByRole('button', { name: 'Save charter' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    const saved = onSave.mock.calls[0][0] as ProjectConfiguration;
+    expect(saved.agentCharters.find((agent) => agent.agentId === 'a2')).toMatchObject(expected);
+  });
+
+  it('does not create a save from a checkbox-only change', async () => {
+    const { onSave } = renderView();
+    fireEvent.click(screen.getByText('Ada'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Scan on save' }));
+
+    expect((screen.getByRole('button', { name: 'Save charter' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it('hides Save charter when read-only', async () => {
