@@ -47,6 +47,7 @@ import {
 
 type ProviderType = 'openai' | 'azure' | 'anthropic';
 type PricingChoice = '' | 'manual' | 'saved' | 'clear';
+type PricingStatus = 'missing' | 'attached' | 'unavailable';
 
 interface Editor {
   name: string;
@@ -111,18 +112,43 @@ function emptyEditor(type: ProviderType = 'openai'): Editor {
 }
 
 function editorFromProvider(provider: PlatformModelProviderDraft): Editor {
+  const type = PROVIDER_TYPES.some((item) => item.type === provider.type)
+    ? provider.type as ProviderType
+    : 'openai';
+  const validPricing = pricingStatus(provider) === 'attached';
   return {
-    ...emptyEditor(provider.type as ProviderType),
-    name: provider.name,
-    baseUrl: provider.base_url,
-    model: provider.model,
-    wireApi: (provider.wire_api ?? 'responses') as 'responses' | 'completions',
-    azureApiVersion: provider.azure_api_version ?? '',
-    reasoningEfforts: provider.reasoning_efforts.join(', '),
-    promptCapacityTokens: provider.prompt_capacity_tokens?.toString() ?? '',
-    rateCardId: provider.rate_card_id ?? '',
-    rateCardVersion: provider.rate_card_version ?? '1',
+    ...emptyEditor(type),
+    name: typeof provider.name === 'string' ? provider.name : '',
+    baseUrl: typeof provider.base_url === 'string' ? provider.base_url : '',
+    model: typeof provider.model === 'string' ? provider.model : '',
+    wireApi: provider.wire_api === 'completions' ? 'completions' : 'responses',
+    azureApiVersion: typeof provider.azure_api_version === 'string' ? provider.azure_api_version : '',
+    reasoningEfforts: Array.isArray(provider.reasoning_efforts)
+      ? provider.reasoning_efforts.filter((value): value is string => typeof value === 'string').join(', ')
+      : '',
+    promptCapacityTokens: typeof provider.prompt_capacity_tokens === 'number' &&
+        Number.isSafeInteger(provider.prompt_capacity_tokens) &&
+        provider.prompt_capacity_tokens > 0
+      ? provider.prompt_capacity_tokens.toString()
+      : '',
+    rateCardId: validPricing ? provider.rate_card_id as string : '',
+    rateCardVersion: validPricing ? provider.rate_card_version as string : '',
   };
+}
+
+function validRateCardIdentifier(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    !/\s/.test(value) &&
+    /^[A-Za-z0-9._:-]+$/.test(value);
+}
+
+function pricingStatus(provider: PlatformModelProviderDraft): PricingStatus {
+  if (provider.rate_card_id === null && provider.rate_card_version === null) return 'missing';
+  if (validRateCardIdentifier(provider.rate_card_id, 128) &&
+      validRateCardIdentifier(provider.rate_card_version, 64)) return 'attached';
+  return 'unavailable';
 }
 
 function validPositiveDecimal(value: string): boolean {
@@ -256,6 +282,9 @@ export function PlatformModelProviders() {
   const mountedRef = useRef(true);
   const clearPendingKeyRef = useRef<(() => void) | null>(null);
   const requestGeneration = useRef(0);
+  const editorGeneration = useRef(0);
+  const focusPricingProviderId = useRef<string | null>(null);
+  const pricingGroupRef = useRef<HTMLDivElement>(null);
   const accessGeneration = useRef(0);
   const hasUnboundSession = Boolean(session && !session.binding);
   const sessionRef = useRef(session);
@@ -298,6 +327,7 @@ export function PlatformModelProviders() {
       clearPendingKeyRef.current?.();
       clearPendingKeyRef.current = null;
       requestGeneration.current += 1;
+      editorGeneration.current += 1;
       accessGeneration.current += 1;
     };
   }, []);
@@ -306,6 +336,8 @@ export function PlatformModelProviders() {
     clearPendingKeyRef.current?.();
     clearPendingKeyRef.current = null;
     requestGeneration.current += 1;
+    editorGeneration.current += 1;
+    focusPricingProviderId.current = null;
     setProviders([]);
     setNextAfterProviderId(null);
     setSettingsRevision(null);
@@ -534,31 +566,58 @@ export function PlatformModelProviders() {
   }, [typeQuery]);
 
   const closeEditor = () => {
+    editorGeneration.current += 1;
+    focusPricingProviderId.current = null;
     setEditor(null);
     setEditingProvider(null);
     setShowKey(false);
     setSaveError(null);
   };
 
-  const startEdit = async (provider: PlatformModelProviderDraft) => {
+  const startEdit = async (provider: PlatformModelProviderDraft, focusPricing = false) => {
     if (!access) return;
     const snapshot = access;
-    const generation = requestGeneration.current;
+    const generation = ++editorGeneration.current;
+    const listGeneration = requestGeneration.current;
+    focusPricingProviderId.current = null;
+    setPickerOpen(false);
+    setEditor(null);
+    setEditingProvider(null);
+    setShowKey(false);
     setSaveError(null);
     setCredentialActionError(null);
     try {
       const latest = await boundCall(snapshot, (token) =>
         gatewayClient.getPlatformByokProviderDraft(token, provider.id, snapshot.tenant));
-      if (generation !== requestGeneration.current || !isCurrent(snapshot)) return;
+      if (generation !== editorGeneration.current ||
+          listGeneration !== requestGeneration.current ||
+          !isCurrent(snapshot)) return;
       const checked = requirePlatformProvider(latest);
+      if (checked.id !== provider.id || checked.state !== 'Draft') {
+        await loadPage(snapshot);
+        return;
+      }
+      focusPricingProviderId.current = focusPricing ? checked.id : null;
       setEditingProvider(checked);
       setEditor(editorFromProvider(checked));
       setShowKey(false);
     } catch (reason) {
-      if (generation === requestGeneration.current && isCurrent(snapshot) && !handleAccessFailure(reason))
+      if (!isCurrent(snapshot)) return;
+      if (handleAccessFailure(reason)) return;
+      if (generation === editorGeneration.current &&
+          listGeneration === requestGeneration.current)
         setLoadError(reason);
     }
   };
+
+  useLayoutEffect(() => {
+    if (editor && editingProvider &&
+        focusPricingProviderId.current === editingProvider.id &&
+        pricingGroupRef.current) {
+      pricingGroupRef.current.focus();
+      focusPricingProviderId.current = null;
+    }
+  }, [editor, editingProvider]);
 
   const updateEditor = <K extends keyof Editor>(field: K, value: Editor[K]) => {
     setEditor((current) => current ? { ...current, [field]: value } : current);
@@ -577,6 +636,14 @@ export function PlatformModelProviders() {
       return 'Choose Save manual prices or Use a saved rate card.';
     if (value.pricingChoice === 'saved' && (!value.rateCardId.trim() || !value.rateCardVersion.trim()))
       return 'Enter the saved rate-card ID and version.';
+    if (value.pricingChoice === 'saved' &&
+        (!validRateCardIdentifier(value.rateCardId.trim(), 128) ||
+         !validRateCardIdentifier(value.rateCardVersion.trim(), 64)))
+      return 'Use a rate-card ID of at most 128 characters and a version of at most 64 characters, with letters, digits, ".", "_", "-", or ":".';
+    if (value.pricingChoice === 'manual' &&
+        ((value.rateCardId.trim() && !validRateCardIdentifier(value.rateCardId.trim(), 128)) ||
+         (value.rateCardVersion.trim() && !validRateCardIdentifier(value.rateCardVersion.trim(), 64))))
+      return 'Use a rate-card ID of at most 128 characters and a version of at most 64 characters, with letters, digits, ".", "_", "-", or ":".';
     if (value.pricingChoice === 'manual' &&
         (!validPositiveDecimal(value.inputRate) || !validPositiveDecimal(value.outputRate) ||
          !value.priceSourceUrl.trim()))
@@ -723,6 +790,8 @@ export function PlatformModelProviders() {
         : gatewayClient.createPlatformByokProviderDraft(token, body, snapshot.tenant));
       if (generation !== requestGeneration.current || !isCurrent(snapshot)) return;
       const checked = requirePlatformProvider(saved);
+      if (source && checked.id !== source.id)
+        throw new Error('The service returned a different provider after the save.');
 
       if (keyWasSubmitted && pendingKey !== null) {
         const credentialOperationId = crypto.randomUUID();
@@ -875,9 +944,19 @@ export function PlatformModelProviders() {
           }
         }
       } else {
-        setNotice(hasUnresolvedOp
-          ? 'Provider settings were saved. The pending key operation remains active.'
-          : 'Provider settings were saved. Add a key before this provider can become Available.');
+        if (hasUnresolvedOp) {
+          setNotice('Provider settings were saved. The pending key operation remains active.');
+        } else if (metadataEditor.pricingChoice === 'clear') {
+          setNotice('Pricing was cleared. Select Set pricing to add prices before the provider can become Available.');
+        } else if (checked.state === 'Available') {
+          setNotice('Provider settings and pricing were saved.');
+        } else if (checked.hasCredential) {
+          setNotice(credentialRevisions[checked.id] !== undefined
+            ? 'Pricing was saved. Select Recheck saved key to apply the current pricing.'
+            : 'Pricing was saved. Run the documented platform byok recheck-key procedure to apply the current pricing to the saved key.');
+        } else {
+          setNotice('Provider settings and pricing were saved. Add a key before this provider can become Available.');
+        }
         closeEditor();
         await loadPage(snapshot);
       }
@@ -1322,7 +1401,14 @@ export function PlatformModelProviders() {
       title="Model providers"
       description="Save provider metadata and exact prices, store a write-only key, and choose the default for new runs."
       actions={<Button appearance="primary" icon={<AddRegular />} disabled={controlsDisabled}
-        onClick={() => { setPickerOpen(true); setTypeQuery(''); }}>Add provider</Button>}
+        onClick={() => {
+          editorGeneration.current += 1;
+          focusPricingProviderId.current = null;
+          setEditor(null);
+          setEditingProvider(null);
+          setPickerOpen(true);
+          setTypeQuery('');
+        }}>Add provider</Button>}
     >
       {checkingAccess && <Loading label="Checking platform access" />}
       {!checkingAccess && !access && !accessError && (
@@ -1369,6 +1455,7 @@ export function PlatformModelProviders() {
             <ul className="v1-permission-list" aria-label="Platform model providers">
               {providers.map((provider) => {
                 const isDefault = mode === 'byok' && activeProviderId === provider.id;
+                const pricing = pricingStatus(provider);
                 void operationRevision;
                 const opKey = buildOperationKey(access, provider.id);
                 const op = opKey ? operationStore.get(opKey) : null;
@@ -1382,9 +1469,15 @@ export function PlatformModelProviders() {
                         <Badge appearance="outline" color={provider.hasCredential ? 'success' : 'warning'}>
                           {provider.hasCredential ? 'Key saved' : 'No key saved'}
                         </Badge>
+                        {pricing === 'missing' && provider.state === 'Draft' && (
+                          <Badge appearance="outline" color="warning">Pricing required</Badge>
+                        )}
+                        {pricing === 'unavailable' && (
+                          <Badge appearance="outline" color="warning">Pricing status unavailable</Badge>
+                        )}
                         {isDefault && <Badge appearance="tint" color="success">Default for new runs</Badge>}
                       </div>
-                      {provider.rate_card_id && (
+                      {pricing === 'attached' && (
                         <Text className="v1-muted">
                           Rate card: {provider.rate_card_id} / {provider.rate_card_version}
                         </Text>
@@ -1475,9 +1568,15 @@ export function PlatformModelProviders() {
                       )}
                     </div>
                     <div className="v1-actions">
-                      {provider.state === 'Draft' && (
-                        <Button icon={<EditRegular />} onClick={() => void startEdit(provider)}
+                      {provider.state === 'Draft' && pricing !== 'missing' && (
+                        <Button icon={<EditRegular />} aria-label={`Edit ${provider.name}`}
+                          onClick={() => void startEdit(provider)}
                           disabled={controlsDisabled}>Edit</Button>
+                      )}
+                      {provider.state === 'Draft' && pricing === 'missing' && (
+                        <Button onClick={() => void startEdit(provider, true)}
+                          aria-label={`Set pricing for ${provider.name}`}
+                          disabled={controlsDisabled}>Set pricing</Button>
                       )}
                       {provider.state === 'Draft' && provider.hasCredential &&
                         credentialRevisions[provider.id] !== undefined && !op && (
@@ -1524,6 +1623,7 @@ export function PlatformModelProviders() {
           <div className="v1-stack">
             {filteredTypes.map((item) => (
               <Button key={item.type} appearance="secondary" onClick={() => {
+                editorGeneration.current += 1;
                 setPickerOpen(false);
                 setEditor(emptyEditor(item.type));
                 setEditingProvider(null);
@@ -1583,56 +1683,58 @@ export function PlatformModelProviders() {
               onChange={(_, data) => updateEditor('promptCapacityTokens', data.value)} />
           </Field>
 
-          <h3>Pricing</h3>
-          <RadioGroup value={editor.pricingChoice}
-            onChange={(_, data) => updateEditor('pricingChoice', data.value as PricingChoice)}>
-            <Radio value="manual" label="Save manual prices" />
-            <Radio value="saved" label="Use a saved rate card" />
-            {editingProvider?.rate_card_id && <Radio value="clear" label="Clear the saved rate card" />}
-          </RadioGroup>
-          {editor.pricingChoice === 'manual' && (
-            <>
-              <Field label="Rate-card ID" hint="Reuse the ID and choose a new version when prices change.">
-                <Input aria-label="Rate-card ID" value={editor.rateCardId} disabled={saving}
-                  onChange={(_, data) => updateEditor('rateCardId', data.value)} />
-              </Field>
-              <Field label="Rate-card version">
-                <Input aria-label="Rate-card version" value={editor.rateCardVersion} disabled={saving}
-                  onChange={(_, data) => updateEditor('rateCardVersion', data.value)} />
-              </Field>
-              <Field label="Input price per 1M tokens (USD)">
-                <Input aria-label="Input price per 1M tokens (USD)" inputMode="decimal"
-                  value={editor.inputRate} disabled={saving}
-                  onChange={(_, data) => updateEditor('inputRate', data.value)} />
-              </Field>
-              <Field label="Output price per 1M tokens (USD)">
-                <Input aria-label="Output price per 1M tokens (USD)" inputMode="decimal"
-                  value={editor.outputRate} disabled={saving}
-                  onChange={(_, data) => updateEditor('outputRate', data.value)} />
-              </Field>
-              <Field label="Price source URL" required>
-                <Input aria-label="Price source URL" type="url" value={editor.priceSourceUrl} disabled={saving}
-                  onChange={(_, data) => updateEditor('priceSourceUrl', data.value)} />
-              </Field>
-            </>
-          )}
-          {editor.pricingChoice === 'saved' && (
-            <>
-              <Field label="Rate-card ID" required>
-                <Input aria-label="Rate-card ID" value={editor.rateCardId} disabled={saving}
-                  onChange={(_, data) => updateEditor('rateCardId', data.value)} />
-              </Field>
-              <Field label="Rate-card version" required>
-                <Input aria-label="Rate-card version" value={editor.rateCardVersion} disabled={saving}
-                  onChange={(_, data) => updateEditor('rateCardVersion', data.value)} />
-              </Field>
-            </>
-          )}
-          {editor.pricingChoice === 'clear' && (
-            <Checkbox checked={editor.clearConfirmed}
-              onChange={(_, data) => updateEditor('clearConfirmed', Boolean(data.checked))}
-              label="Clear the saved rate-card link when I save these changes." />
-          )}
+          <div ref={pricingGroupRef} role="group" aria-labelledby="provider-pricing-heading" tabIndex={-1}>
+            <h3 id="provider-pricing-heading">Pricing</h3>
+            <RadioGroup value={editor.pricingChoice}
+              onChange={(_, data) => updateEditor('pricingChoice', data.value as PricingChoice)}>
+              <Radio value="manual" label="Save manual prices" />
+              <Radio value="saved" label="Use a saved rate card" />
+              {editingProvider?.rate_card_id && <Radio value="clear" label="Clear the saved rate card" />}
+            </RadioGroup>
+            {editor.pricingChoice === 'manual' && (
+              <>
+                <Field label="Rate-card ID" hint="Reuse the ID and choose a new version when prices change.">
+                  <Input aria-label="Rate-card ID" value={editor.rateCardId} disabled={saving}
+                    onChange={(_, data) => updateEditor('rateCardId', data.value)} />
+                </Field>
+                <Field label="Rate-card version">
+                  <Input aria-label="Rate-card version" value={editor.rateCardVersion} disabled={saving}
+                    onChange={(_, data) => updateEditor('rateCardVersion', data.value)} />
+                </Field>
+                <Field label="Input price per 1M tokens (USD)">
+                  <Input aria-label="Input price per 1M tokens (USD)" inputMode="decimal"
+                    value={editor.inputRate} disabled={saving}
+                    onChange={(_, data) => updateEditor('inputRate', data.value)} />
+                </Field>
+                <Field label="Output price per 1M tokens (USD)">
+                  <Input aria-label="Output price per 1M tokens (USD)" inputMode="decimal"
+                    value={editor.outputRate} disabled={saving}
+                    onChange={(_, data) => updateEditor('outputRate', data.value)} />
+                </Field>
+                <Field label="Price source URL" required>
+                  <Input aria-label="Price source URL" type="url" value={editor.priceSourceUrl} disabled={saving}
+                    onChange={(_, data) => updateEditor('priceSourceUrl', data.value)} />
+                </Field>
+              </>
+            )}
+            {editor.pricingChoice === 'saved' && (
+              <>
+                <Field label="Rate-card ID" required>
+                  <Input aria-label="Rate-card ID" value={editor.rateCardId} disabled={saving}
+                    onChange={(_, data) => updateEditor('rateCardId', data.value)} />
+                </Field>
+                <Field label="Rate-card version" required>
+                  <Input aria-label="Rate-card version" value={editor.rateCardVersion} disabled={saving}
+                    onChange={(_, data) => updateEditor('rateCardVersion', data.value)} />
+                </Field>
+              </>
+            )}
+            {editor.pricingChoice === 'clear' && (
+              <Checkbox checked={editor.clearConfirmed}
+                onChange={(_, data) => updateEditor('clearConfirmed', Boolean(data.checked))}
+                label="Clear the saved rate-card link when I save these changes." />
+            )}
+          </div>
 
           {editingOperation ? (
             <MessageBar intent="warning"><MessageBarBody>

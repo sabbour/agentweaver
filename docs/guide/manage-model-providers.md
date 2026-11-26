@@ -32,6 +32,29 @@ These commands use an unbound identity. They ignore
 `AGENTWEAVER_PROJECT_ID` and `AGENTWEAVER_RUN_ID` and reject `--project-id` and
 `--run-id`.
 
+## Set pricing for a platform provider Draft
+
+Open **Platform settings** and find the provider under **Model providers**. A
+Draft with no rate-card link shows **Pricing required**. Select **Set pricing**
+to open its pricing editor. The open action reads the current Draft and does
+not save metadata or prices. If the provider changed, the page refreshes the
+list instead of opening the stale provider.
+
+Choose one of these actions:
+
+- **Save manual prices** records exact input and output rates with a source URL.
+- **Use a saved rate card** attaches an existing rate-card ID and version.
+
+The two values form one rate-card link. A card with only one value or with
+malformed values shows **Pricing status unavailable**. Use **Edit** to correct
+the provider metadata and choose explicit pricing values before saving.
+
+After a save, the page reads the provider list again and shows the saved
+rate-card ID and version. A linked rate card does not by itself make a Draft
+ready, and the page does not treat the card as provider verification. The
+provider can become `Available` only through the existing provider and
+credential checks.
+
 ## Add a provider draft
 
 1. Enter the provider's metadata. Use `openai`, `azure`, or `anthropic` for
