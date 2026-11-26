@@ -94,6 +94,73 @@ public sealed partial class GitHubSourceControlAdapterTests
         Assert.Equal(2, calls);
     }
 
+    [Fact]
+    public async Task IssueFullUpdateRejectsNullBeforeSendingAnyRequest()
+    {
+        var adapter = CreateAdapter(new StubHandler((_, _) =>
+            throw new InvalidOperationException("no request expected")));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => adapter.UpdateIssueAsync(
+            CreateContext("sync", SourceControlCapabilities.IssueWrite), null!, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task IssueFullUpdateRejectsNullTitleInsteadOfOmittingIt()
+    {
+        var adapter = CreateAdapter(new StubHandler((_, _) =>
+            throw new InvalidOperationException("no request expected")));
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            adapter.UpdateIssueAsync(CreateContext("sync", SourceControlCapabilities.IssueWrite),
+                new(17, null!, "Body", false), CancellationToken.None));
+        Assert.Equal(SourceControlFailureCode.InvalidRequest, error.Code);
+    }
+
+    [Theory]
+    [InlineData(null, "", false)]
+    [InlineData("New title", null, true)]
+    public async Task IssuePatchSendsOnlyRequestedFieldsIncludingEmptyAndFalse(string? title, string? body, bool closed)
+    {
+        var adapter = CreateAdapter(new StubHandler(async (request, _) =>
+        {
+            Assert.Equal(HttpMethod.Patch, request.Method);
+            using var sent = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var fields = sent.RootElement.EnumerateObject().Select(property => property.Name).Order().ToArray();
+            Assert.Equal(title is null ? body is null ? ["state"] : ["body", "state"] :
+                body is null ? ["state", "title"] : ["body", "state", "title"], fields);
+            if (title is not null) Assert.Equal(title, sent.RootElement.GetProperty("title").GetString());
+            if (body is not null) Assert.Equal(body, sent.RootElement.GetProperty("body").GetString());
+            Assert.Equal(closed ? "closed" : "open", sent.RootElement.GetProperty("state").GetString());
+            return JsonResponse($$"""
+                {"number":17,"title":"{{(title ?? "Remote title")}}","body":"{{(body ?? "Remote body")}}","state":"{{(closed ? "closed" : "open")}}"}
+                """);
+        }));
+        var result = await adapter.PatchIssueAsync(CreateContext("sync", SourceControlCapabilities.IssueWrite),
+            new(17, title, body, closed), CancellationToken.None);
+        Assert.Equal(17, result.Number);
+        Assert.Equal(title ?? "Remote title", result.Title);
+    }
+
+    [Fact]
+    public async Task IssuePatchRejectsMismatchedIdentityOrRequestedField()
+    {
+        var adapter = CreateAdapter(new StubHandler((_, _) => Task.FromResult(JsonResponse(
+            """{"number":18,"title":"Other","body":"Remote","state":"open"}"""))));
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            adapter.PatchIssueAsync(CreateContext("sync", SourceControlCapabilities.IssueWrite),
+                new(17, Body: "", Closed: false), CancellationToken.None));
+        Assert.Equal(SourceControlFailureCode.RemoteOutcomeUncertain, error.Code);
+    }
+
+    [Fact]
+    public async Task IssuePatchRejectsMismatchedRequestedFieldButIgnoresOtherFields()
+    {
+        var adapter = CreateAdapter(new StubHandler((_, _) => Task.FromResult(JsonResponse(
+            """{"number":17,"title":"Remote change","body":"Wrong body","state":"closed"}"""))));
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            adapter.PatchIssueAsync(CreateContext("sync", SourceControlCapabilities.IssueWrite),
+                new(17, Body: "Requested body", Closed: true), CancellationToken.None));
+        Assert.Equal(SourceControlFailureCode.RemoteOutcomeUncertain, error.Code);
+    }
+
     [Theory]
     [InlineData("""{"number":18,"title":"Title","body":"","state":"open"}""")]
     [InlineData("""{"number":17,"title":"Title","body":"","state":"unknown"}""")]

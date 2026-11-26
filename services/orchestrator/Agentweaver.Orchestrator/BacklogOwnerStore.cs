@@ -223,6 +223,199 @@ internal sealed class BacklogOwnerStore
         return responseGraph;
     }
 
+    /// <summary>Attaches a newly created issue and its remote baseline before any later patch.</summary>
+    public async Task AttachCreatedIssueAsync(
+        BacklogTaskReference task,
+        SourceControlRepositoryIdentity repository,
+        SourceControlIssueContent remote,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> revalidateCurrentAuthority)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var graph = await ReadGraphInTransactionAsync(
+            connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
+        if (!graph.IsSuccess || graph.Value!.Tasks.SingleOrDefault(item => item.Reference == task) is not { } current)
+            throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        if (current.IsArchived)
+            throw new CoordinationException("issue_sync_task_archived", StatusCodes.Status409Conflict);
+        var repositoryName = repository.FullName.ToLowerInvariant();
+        IssueSyncReceipt? receipt = null;
+        await using (var readReceipt = new NpgsqlCommand($"""
+            SELECT repository,issue_number,baseline::text,create_pending
+            FROM {_issueSyncReceipts}
+            WHERE project_id=@project AND task_id=@task
+            FOR UPDATE
+            """, connection, transaction))
+        {
+            readReceipt.Parameters.AddWithValue("project", task.ProjectId);
+            readReceipt.Parameters.AddWithValue("task", task.TaskId);
+            await using var reader = await readReceipt.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                receipt = new(task.TaskId, reader.GetString(0),
+                    reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                    reader.IsDBNull(2) ? null :
+                        JsonSerializer.Deserialize<SourceControlIssueContent>(reader.GetString(2),
+                            new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                    reader.GetBoolean(3));
+        }
+        if (receipt is null || !receipt.CreatePending || receipt.Repository != repositoryName ||
+            receipt.IssueNumber != remote.Number || receipt.Baseline is not null ||
+            current.RepositoryIssue is not null)
+            throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        var link = new BacklogRepositoryIssueLink(SourceControlProviderIds.GitHub, repository, remote.Number);
+        var content = new BacklogTaskContent(current.Title, current.Description, current.Lifecycle, link);
+        var edit = graph.Value.SetTaskContent(task, content, graph.Value.Revision, current.Revision);
+        if (!edit.IsSuccess)
+            throw new CoordinationException(
+                "issue_sync_backlog_" + edit.Issues[0].Code.ToString().ToLowerInvariant(),
+                StatusCodes.Status409Conflict);
+        await UpdateGraphRevisionAsync(connection, transaction, edit.Value!.Graph, cancellationToken)
+            .ConfigureAwait(false);
+        await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
+            .ConfigureAwait(false);
+        await using (var writeReceipt = new NpgsqlCommand($"""
+            UPDATE {_issueSyncReceipts}
+            SET baseline=@baseline,create_pending=false
+            WHERE project_id=@project AND task_id=@task AND repository=@repository
+                AND issue_number=@issue AND create_pending=true
+            """, connection, transaction))
+        {
+            writeReceipt.Parameters.AddWithValue("project", task.ProjectId);
+            writeReceipt.Parameters.AddWithValue("task", task.TaskId);
+            writeReceipt.Parameters.AddWithValue("repository", repositoryName);
+            writeReceipt.Parameters.AddWithValue("issue", NpgsqlDbType.Bigint, remote.Number);
+            writeReceipt.Parameters.AddWithValue("baseline", NpgsqlDbType.Jsonb,
+                JsonSerializer.Serialize(remote, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            if (await writeReceipt.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        }
+        await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Commits a confirmed issue patch with the latest task and sync baseline.</summary>
+    public async Task<BacklogDependencyGraph> CompleteIssuePatchAsync(
+        BacklogTaskReference task,
+        SourceControlRepositoryIdentity repository,
+        long issueNumber,
+        SourceControlIssueContent localBeforePatch,
+        SourceControlIssueContent confirmedRemote,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> revalidateCurrentAuthority)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var graph = await ReadGraphInTransactionAsync(
+            connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
+        if (!graph.IsSuccess || graph.Value!.Tasks.SingleOrDefault(item => item.Reference == task) is not { } current)
+            throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        if (current.IsArchived)
+            throw new CoordinationException("issue_sync_task_archived", StatusCodes.Status409Conflict);
+        var link = current.RepositoryIssue;
+        IssueSyncReceipt? receipt = null;
+        await using (var readReceipt = new NpgsqlCommand($"""
+            SELECT repository,issue_number,baseline::text,create_pending
+            FROM {_issueSyncReceipts}
+            WHERE project_id=@project AND task_id=@task
+            FOR UPDATE
+            """, connection, transaction))
+        {
+            readReceipt.Parameters.AddWithValue("project", task.ProjectId);
+            readReceipt.Parameters.AddWithValue("task", task.TaskId);
+            await using var reader = await readReceipt.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                receipt = new(task.TaskId, reader.GetString(0),
+                    reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                    reader.IsDBNull(2) ? null :
+                        JsonSerializer.Deserialize<SourceControlIssueContent>(reader.GetString(2),
+                            new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                    reader.GetBoolean(3));
+        }
+        var repositoryName = repository.FullName.ToLowerInvariant();
+        if (receipt is null || receipt.Repository != repositoryName || receipt.IssueNumber != issueNumber)
+            throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        if (receipt.CreatePending || link is null || link.ProviderId != SourceControlProviderIds.GitHub ||
+            link.IssueNumber != issueNumber ||
+            !string.Equals(link.Repository.FullName, repository.FullName, StringComparison.OrdinalIgnoreCase))
+            throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        if (receipt.Baseline is not { } oldBaseline)
+            throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        var latest = new SourceControlIssueContent(issueNumber, current.Title, current.Description ?? "",
+            current.Lifecycle == BacklogTaskLifecycle.Closed);
+        var merged = MergeIssueAfterPatch(latest, confirmedRemote, localBeforePatch, oldBaseline);
+        var baseline = confirmedRemote;
+        if (merged != latest)
+        {
+            if (current.IsAutomationInvocationPending)
+            {
+                baseline = MergeIssueReceiptForHold(latest, localBeforePatch, confirmedRemote, oldBaseline);
+            }
+            else
+            {
+                var content = new BacklogTaskContent(merged.Title, merged.Body,
+                    merged.Closed ? BacklogTaskLifecycle.Closed : BacklogTaskLifecycle.Open, link);
+                var edit = graph.Value.SetTaskContent(task, content, graph.Value.Revision, current.Revision);
+                if (!edit.IsSuccess)
+                    throw new CoordinationException(
+                        "issue_sync_backlog_" + edit.Issues[0].Code.ToString().ToLowerInvariant(),
+                        StatusCodes.Status409Conflict);
+                if (edit.Value!.Changed)
+                {
+                    await UpdateGraphRevisionAsync(connection, transaction, edit.Value.Graph, cancellationToken)
+                        .ConfigureAwait(false);
+                    await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
+                        .ConfigureAwait(false);
+                    graph = BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+                }
+            }
+        }
+
+        await using (var writeReceipt = new NpgsqlCommand($"""
+            UPDATE {_issueSyncReceipts}
+            SET baseline=@baseline,create_pending=false
+            WHERE project_id=@project AND task_id=@task AND repository=@repository AND issue_number=@issue
+            """, connection, transaction))
+        {
+            writeReceipt.Parameters.AddWithValue("project", task.ProjectId);
+            writeReceipt.Parameters.AddWithValue("task", task.TaskId);
+            writeReceipt.Parameters.AddWithValue("repository", repositoryName);
+            writeReceipt.Parameters.AddWithValue("issue", NpgsqlDbType.Bigint, issueNumber);
+            writeReceipt.Parameters.AddWithValue("baseline", NpgsqlDbType.Jsonb,
+                JsonSerializer.Serialize(baseline, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            if (await writeReceipt.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException("issue_sync_mapping_changed", StatusCodes.Status409Conflict);
+        }
+        await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return graph.Value!;
+    }
+
+    private static SourceControlIssueContent MergeIssueAfterPatch(
+        SourceControlIssueContent latest, SourceControlIssueContent remote, SourceControlIssueContent localBefore,
+        SourceControlIssueContent baseline) =>
+        new(remote.Number,
+            latest.Title != localBefore.Title || localBefore.Title != baseline.Title ? latest.Title : remote.Title,
+            latest.Body != localBefore.Body || localBefore.Body != baseline.Body ? latest.Body : remote.Body,
+            latest.Closed != localBefore.Closed || localBefore.Closed != baseline.Closed ? latest.Closed : remote.Closed);
+
+    private static SourceControlIssueContent MergeIssueReceiptForHold(
+        SourceControlIssueContent local, SourceControlIssueContent localBefore,
+        SourceControlIssueContent remote, SourceControlIssueContent baseline) =>
+        new(remote.Number,
+            local.Title == localBefore.Title && localBefore.Title == baseline.Title &&
+                remote.Title != baseline.Title ? baseline.Title : remote.Title,
+            local.Body == localBefore.Body && localBefore.Body == baseline.Body &&
+                remote.Body != baseline.Body ? baseline.Body : remote.Body,
+            local.Closed == localBefore.Closed && localBefore.Closed == baseline.Closed &&
+                remote.Closed != baseline.Closed ? baseline.Closed : remote.Closed);
+
     /// <summary>
     /// Adds a dependency after the core graph validates the edge and expected revision.
     /// </summary>

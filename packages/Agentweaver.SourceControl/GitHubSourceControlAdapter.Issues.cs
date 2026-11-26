@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
@@ -92,7 +93,8 @@ public sealed partial class GitHubSourceControlAdapter
         using var response = await SendAsync(HttpMethod.Patch,
             RepositoryUri(context.Repository, $"issues/{issue.Number.ToString(CultureInfo.InvariantCulture)}"),
             context.Credential,
-            JsonContent.Create(new { title = issue.Title, body = issue.Body, state = issue.Closed ? "closed" : "open" }),
+            JsonContent.Create(new { title = issue.Title, body = issue.Body,
+                state = issue.Closed ? "closed" : "open" }),
             cancellationToken, operationMayHaveChangedRemoteState: true).ConfigureAwait(false);
         EnsureSuccess(response, "GitHub issue update", writeMayHaveChangedRemoteState: true);
         using var document = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
@@ -100,6 +102,37 @@ public sealed partial class GitHubSourceControlAdapter
         if (result != issue)
             throw new SourceControlOperationException(SourceControlFailureCode.RemoteOutcomeUncertain,
                 "GitHub did not confirm the requested issue content.");
+        return result;
+    }
+
+    /// <summary>Patches only supplied issue fields and confirms the identity and requested values.</summary>
+    public async Task<SourceControlIssueContent> PatchIssueAsync(
+        SourceControlOperationContext context, SourceControlIssueUpdate update, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        ValidateIssueNumber(update.Number);
+        if (update.Title is null && update.Body is null && update.Closed is null)
+            throw new SourceControlOperationException(SourceControlFailureCode.InvalidRequest,
+                "At least one issue field is required.");
+        ValidateIssueRequest(new(update.Title ?? "valid", update.Body ?? ""));
+        ValidateContext(context, SourceControlCapabilities.IssueWrite);
+        var fields = new JsonObject();
+        if (update.Title is not null) fields["title"] = update.Title;
+        if (update.Body is not null) fields["body"] = update.Body;
+        if (update.Closed is not null) fields["state"] = update.Closed.Value ? "closed" : "open";
+        using var response = await SendAsync(HttpMethod.Patch,
+            RepositoryUri(context.Repository, $"issues/{update.Number.ToString(CultureInfo.InvariantCulture)}"),
+            context.Credential, JsonContent.Create(fields),
+            cancellationToken, operationMayHaveChangedRemoteState: true).ConfigureAwait(false);
+        EnsureSuccess(response, "GitHub issue update", writeMayHaveChangedRemoteState: true);
+        using var document = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+        var result = ReadIssueContent(document.RootElement);
+        if (result.Number != update.Number ||
+            update.Title is not null && result.Title != update.Title ||
+            update.Body is not null && result.Body != update.Body ||
+            update.Closed is not null && result.Closed != update.Closed)
+            throw new SourceControlOperationException(SourceControlFailureCode.RemoteOutcomeUncertain,
+                "GitHub did not confirm the requested issue fields.");
         return result;
     }
 

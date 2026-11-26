@@ -224,6 +224,10 @@ public sealed record SourceControlIssue(
 /// <summary>Repository issue content used by periodic synchronization, excluding pull requests.</summary>
 public sealed record SourceControlIssueContent(long Number, string Title, string Body, bool Closed);
 
+/// <summary>Issue fields to patch; null values omit fields while empty strings and false remain explicit.</summary>
+public sealed record SourceControlIssueUpdate(long Number, string? Title = null, string? Body = null,
+    bool? Closed = null);
+
 /// <summary>A bounded page; the continuation is a provider page number, not a remote URL.</summary>
 public sealed record SourceControlIssuePage(ImmutableArray<SourceControlIssueContent> Issues, int? NextPage);
 
@@ -240,6 +244,13 @@ public interface ISourceControlIssueAdapter
         CancellationToken cancellationToken);
     Task<SourceControlIssueContent> UpdateIssueAsync(SourceControlOperationContext context,
         SourceControlIssueContent issue, CancellationToken cancellationToken);
+}
+
+/// <summary>Optional issue patch capability; existing issue adapters remain compatible.</summary>
+public interface ISourceControlIssuePatchAdapter
+{
+    Task<SourceControlIssueContent> PatchIssueAsync(SourceControlOperationContext context,
+        SourceControlIssueUpdate update, CancellationToken cancellationToken);
 }
 
 /// <summary>
