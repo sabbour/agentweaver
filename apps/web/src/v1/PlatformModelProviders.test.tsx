@@ -567,12 +567,12 @@ describe('PlatformModelProviders', () => {
       hasCredential: true, has_api_key: true,
       rate_card_id: 'old-card', rate_card_version: '1', revision: 4,
     });
-    const cleared = {
+    const cleared = provider({
       ...draft,
       revision: 5,
       rate_card_id: null,
       rate_card_version: null,
-    };
+    });
     api.listPlatformByokProviderDrafts
       .mockResolvedValueOnce(providerPage([draft], { activeProviderId: null }))
       .mockResolvedValueOnce(providerPage([cleared], { activeProviderId: null }));
