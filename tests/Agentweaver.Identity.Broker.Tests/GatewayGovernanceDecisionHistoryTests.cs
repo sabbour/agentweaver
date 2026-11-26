@@ -30,8 +30,8 @@ public sealed partial class GatewayModelProviderDraftPostgresTests
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
         using var rsa = RSA.Create(2048);
         var key = new RsaSecurityKey(rsa);
-        var opaPath = Environment.GetEnvironmentVariable("ACS_OPA_PATH");
-        Assert.True(File.Exists(opaPath), "Set ACS_OPA_PATH to the pinned OPA 0.70.0 executable.");
+        var opaPath = Environment.GetEnvironmentVariable("AGENTWEAVER_TEST_OPA_PATH");
+        Assert.True(File.Exists(opaPath), "Set AGENTWEAVER_TEST_OPA_PATH to the pinned OPA 0.70.0 executable.");
         var storeOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql(connectionString, config =>
                 config.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema))

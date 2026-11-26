@@ -293,9 +293,15 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.equal(jobs.foundation.if, '${{ always() }}');
   assert.equal(jobs.dotnet.strategy['fail-fast'], false);
   const nativeOpa = jobs.dotnet.steps.find((step) => step.name === 'Download and verify pinned OPA for native ACS tests');
-  assert.equal(nativeOpa.if, "matrix.name == 'native-acs' || matrix.name == 'projects-config'");
+  assert.equal(
+    nativeOpa.if,
+    "matrix.name == 'native-acs' || matrix.name == 'projects-config' || matrix.project == 'Agentweaver.Identity.Broker.Tests'");
   assert.match(nativeOpa.run, /opa_linux_amd64_static/);
   assert.match(nativeOpa.run, /00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084/);
+  assert.match(nativeOpa.run,
+    /if \[\[ "\$\{\{ matrix\.name \}\}" == "native-acs" \|\| "\$\{\{ matrix\.name \}\}" == "projects-config" \]\]; then\s+echo "ACS_OPA_PATH=/);
+  assert.match(nativeOpa.run,
+    /else\s+echo "AGENTWEAVER_TEST_OPA_PATH=/);
   const testBuild = jobs.dotnet.steps.find((step) => step.name === 'Restore and build test project');
   assert.match(testBuild.run, /Agentweaver.Policy.Acs.Tests[\s\S]*--runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true/);
   assert.equal(jobs.images.steps.some((step) => step.uses === 'actions/upload-artifact@v4'), false);
