@@ -141,7 +141,9 @@ startup copy returns `503`. The response is not a deployment-wide inventory.
 The platform provider list returns `switchMode`, `activeProviderId`, and
 `settingsRevision` with the provider rows. The three switch modes are
 `untouched`, `active`, and `explicitHosted`. Activation replaces only the
-installation base and managed task fallbacks. Deactivation restores the shipped
+installation base and managed task fallbacks. Re-activating the same active
+provider refreshes the base selection and only the already managed task kinds,
+leaving unmanaged or restored task defaults unchanged. Deactivation restores the shipped
 hosted Copilot task choices and keeps the provider and credential. Explicit
 project, role, agent, and task model choices stay in place. Accepted runs keep
 their saved selections; a settings revision applies only to fresh starts.
