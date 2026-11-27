@@ -901,6 +901,27 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Disables a platform BYOK provider credential without caching or cookies. */
+  deletePlatformByokProviderCredential(
+    token: string,
+    providerId: string,
+    request: ModelProviderCredentialDeleteRequest,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialResponse> {
+    return this.request(
+      token,
+      `/platform/${encodeSegments('byok-providers', providerId, 'credential')}`,
+      {
+        method: 'DELETE',
+        body: JSON.stringify(request),
+        credentials: 'omit',
+        cache: 'no-store',
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   getPlatformByokProviderCredentialOperation(
     token: string,
     providerId: string,

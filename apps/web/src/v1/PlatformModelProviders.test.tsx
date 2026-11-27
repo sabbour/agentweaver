@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   savePlatformManualRuntimeRateCard: vi.fn(),
   getPlatformByokProviderCredential: vi.fn(),
   setPlatformByokProviderCredential: vi.fn(),
+  deletePlatformByokProviderCredential: vi.fn(),
   getPlatformByokProviderCredentialOperation: vi.fn(),
   activatePlatformByokProvider: vi.fn(),
   deactivatePlatformByokProvider: vi.fn(),
@@ -40,6 +41,7 @@ const auth = vi.hoisted(() => ({
     return operation(auth.session?.accessToken ?? 'token-1', tenant);
   }),
   projectCredentialOperations: null as ReturnType<typeof createProjectCredentialOperationStore> | null,
+  projectDisableCredentialOperations: null as ReturnType<typeof createProjectCredentialOperationStore> | null,
   isActiveSession: vi.fn(() => auth.active),
   ensureSession: vi.fn().mockResolvedValue(true),
   authorize: vi.fn().mockResolvedValue(undefined),
@@ -101,6 +103,7 @@ beforeEach(() => {
   api.updatePlatformByokProviderDraft.mockReset();
   api.getPlatformByokProviderCredential.mockReset();
   api.setPlatformByokProviderCredential.mockReset();
+  api.deletePlatformByokProviderCredential.mockReset();
   api.getPlatformByokProviderCredentialOperation.mockReset();
   api.getPlatformByokProviderCredential.mockImplementation((_token: string, providerId: string) =>
     Promise.resolve({
@@ -123,6 +126,7 @@ beforeEach(() => {
     issuer: 'issuer', actorId: 'actor', tenantId: auth.tenant, membershipRevision: 1,
   }));
   auth.projectCredentialOperations = createProjectCredentialOperationStore();
+  auth.projectDisableCredentialOperations = createProjectCredentialOperationStore();
   setPage();
   api.savePlatformManualRuntimeRateCard.mockResolvedValue({});
   api.createPlatformByokProviderDraft.mockResolvedValue(provider({ state: 'Draft', revision: 1, is_active: false }));
@@ -130,6 +134,11 @@ beforeEach(() => {
     operationId: 'op', status: 'published', scope: 'platform', projectId: null,
     providerId: 'provider-1', providerRevision: 1, credentialRevision: 1,
     credentialVersion: 'secret-version', configurationHash: 'hash', providerState: 'Available',
+  });
+  api.deletePlatformByokProviderCredential.mockResolvedValue({
+    operationId: 'op', status: 'disabled', scope: 'platform', projectId: null,
+    providerId: 'provider-1', providerRevision: 5, credentialRevision: 2,
+    credentialVersion: null, configurationHash: 'hash', providerState: 'Draft',
   });
   api.activatePlatformByokProvider.mockResolvedValue({
     mode: 'active', activeProviderId: 'provider-1', settingsRevision: 10,
@@ -1922,5 +1931,286 @@ describe('PlatformModelProviders', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Draft One' }));
     expect(await screen.findByText('Status unavailable')).toBeTruthy();
     expect(screen.queryByLabelText('API key')).toBeNull();
+  });
+
+  it('gates Disable API key confirmation on enabled status and exact provider revision, shows truthful pinned-run text, and sends one-shot DELETE', async () => {
+    const p1 = provider({ id: 'p1', name: 'Primary', state: 'Available', revision: 4, hasCredential: true });
+    const p2 = provider({ id: 'p2', name: 'Draft Keyless', state: 'Draft', revision: 1, hasCredential: false, is_active: false });
+    api.listPlatformByokProviderDrafts
+      .mockResolvedValueOnce(providerPage([p1, p2], { activeProviderId: 'p1', activeProviderRevision: 4 }))
+      .mockResolvedValueOnce(providerPage([
+        provider({ id: 'p1', name: 'Primary', state: 'Draft', revision: 5, hasCredential: false, is_active: false }),
+        p2,
+      ], { switchMode: 'explicitHosted', activeProviderId: null }));
+
+    // First open: stale providerRevision prevents confirmation.
+    api.getPlatformByokProviderCredential
+      .mockResolvedValueOnce({
+        scope: 'platform', projectId: null, providerId: 'p1',
+        providerRevision: 3, state: 'enabled', credentialRevision: 2,
+      })
+      // Second open (via Refresh): disabled state prevents confirmation.
+      .mockResolvedValueOnce({
+        scope: 'platform', projectId: null, providerId: 'p1',
+        providerRevision: 4, state: 'disabled', credentialRevision: 2,
+      })
+      // Third open (via Refresh): enabled with matching revision enables Confirm disable.
+      .mockResolvedValueOnce({
+        scope: 'platform', projectId: null, providerId: 'p1',
+        providerRevision: 4, state: 'enabled', credentialRevision: 2,
+      });
+
+    api.deletePlatformByokProviderCredential.mockImplementationOnce(async (_token, providerId, request) => ({
+      operationId: request.operationId,
+      status: 'disabled',
+      scope: 'platform',
+      projectId: null,
+      providerId,
+      providerRevision: 5,
+      credentialRevision: 3,
+      credentialVersion: null,
+      configurationHash: 'hash',
+      providerState: 'Draft',
+    }));
+
+    render(<PlatformModelProviders />);
+    expect(await screen.findByRole('button', { name: 'Disable API key for Primary' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Disable API key for Draft Keyless' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable API key for Primary' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/The provider changed \(revision 3 vs displayed 4\)/i)).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Confirm disable' })).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh' }));
+    expect(await within(dialog).findByText(/Credential is already disabled/i)).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Confirm disable' })).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh' }));
+    expect(await within(dialog).findByRole('heading', { name: 'Disable API key for Primary?' })).toBeTruthy();
+    expect(within(dialog).getByText(/New runs that use this provider cannot use this key\. Runs already assigned this key can continue to use it\. The provider settings stay saved\./i)).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm disable' }));
+    await waitFor(() => expect(api.deletePlatformByokProviderCredential).toHaveBeenCalledTimes(1));
+
+    const [, deletedProviderId, deleteBody, deletedTenant] = api.deletePlatformByokProviderCredential.mock.calls[0];
+    expect(deletedProviderId).toBe('p1');
+    expect(deletedTenant).toBe('tenant-1');
+    expect(deleteBody).toEqual({
+      operationId: expect.any(String),
+      expectedProviderRevision: 4,
+      expectedCredentialRevision: 2,
+    });
+    expect(auth.apiCallOnce).toHaveBeenCalled();
+    expect(await screen.findByText('API key disabled.')).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(auth.projectDisableCredentialOperations?.get({
+      issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1',
+      scope: 'platform', projectId: null, providerId: 'p1',
+    })).toBeNull();
+  });
+
+  it('cancels disable without sending DELETE, restores focus, and blocks conflicting controls and dismissal while in-flight', async () => {
+    const p1 = provider({ id: 'p1', name: 'Primary', state: 'Available', revision: 4, hasCredential: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue(providerPage([p1], {
+      activeProviderId: 'p1', activeProviderRevision: 4,
+    }));
+    api.getPlatformByokProviderCredential.mockResolvedValue({
+      scope: 'platform', projectId: null, providerId: 'p1',
+      providerRevision: 4, state: 'enabled', credentialRevision: 2,
+    });
+
+    let resolveDelete!: (value: unknown) => void;
+    api.deletePlatformByokProviderCredential.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveDelete = resolve; }),
+    );
+
+    render(<PlatformModelProviders />);
+    const trigger = await screen.findByRole('button', { name: 'Disable API key for Primary' });
+    fireEvent.click(trigger);
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(await within(dialog).findByRole('button', { name: 'Confirm disable' })).toBeTruthy();
+
+    // Cancel sends nothing and restores focus to the Disable API key button.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(api.deletePlatformByokProviderCredential).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    // Re-open and start in-flight DELETE.
+    fireEvent.click(trigger);
+    const activeDialog = await screen.findByRole('alertdialog');
+    const confirmButton = await within(activeDialog).findByRole('button', { name: 'Confirm disable' });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(api.deletePlatformByokProviderCredential).toHaveBeenCalledTimes(1));
+    expect((within(activeDialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(activeDialog).getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(activeDialog).getByRole('button', { name: 'Disabling key…' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(activeDialog).queryByRole('button', { name: 'Close' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Rotate API key for Primary' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true);
+
+    // Escape cannot dismiss while in-flight.
+    fireEvent.keyDown(activeDialog, { key: 'Escape' });
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+
+    await act(async () => {
+      const [, , req] = api.deletePlatformByokProviderCredential.mock.calls[0];
+      resolveDelete({
+        operationId: req.operationId,
+        status: 'disabled',
+        scope: 'platform',
+        projectId: null,
+        providerId: 'p1',
+        providerRevision: 5,
+        credentialRevision: 3,
+        credentialVersion: null,
+        configurationHash: 'hash',
+        providerState: 'Draft',
+      });
+    });
+    expect(await screen.findByText('API key disabled.')).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('stores disable_pending in separate disable store on failure, retains it on 404 status check, and replays exact operationId on explicit retry', async () => {
+    const p1 = provider({ id: 'p1', name: 'Primary', state: 'Available', revision: 4, hasCredential: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue(providerPage([p1], {
+      activeProviderId: 'p1', activeProviderRevision: 4,
+    }));
+    api.getPlatformByokProviderCredential.mockResolvedValue({
+      scope: 'platform', projectId: null, providerId: 'p1',
+      providerRevision: 4, state: 'enabled', credentialRevision: 2,
+    });
+    api.deletePlatformByokProviderCredential
+      .mockRejectedValueOnce(new GatewayError(504, { code: 'timeout' }, 'Gateway timeout'))
+      .mockImplementationOnce(async (_token, providerId, request) => ({
+        operationId: request.operationId,
+        status: 'disabled',
+        scope: 'platform',
+        projectId: null,
+        providerId,
+        providerRevision: 5,
+        credentialRevision: 3,
+        credentialVersion: null,
+        configurationHash: 'hash',
+        providerState: 'Draft',
+      }));
+    api.getPlatformByokProviderCredentialOperation
+      .mockRejectedValueOnce(new GatewayError(404, { code: 'credential_operation_not_found' }, 'Not found'));
+
+    render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable API key for Primary' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Confirm disable' }));
+
+    // Timeout stores disable_pending in separate disable store, never auto-retries.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry disable' })).toBeTruthy());
+    expect(api.deletePlatformByokProviderCredential).toHaveBeenCalledTimes(1);
+    const [, , firstReq] = api.deletePlatformByokProviderCredential.mock.calls[0];
+    const key = {
+      issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1',
+      scope: 'platform' as const, projectId: null, providerId: 'p1',
+    };
+    expect(auth.projectDisableCredentialOperations?.get(key)).toEqual({
+      operationId: firstReq.operationId,
+      expectedProviderRevision: 4,
+      expectedCredentialRevision: 2,
+      status: 'disable_pending',
+    });
+    expect(auth.projectCredentialOperations?.get(key)).toBeNull();
+
+    // Operation-status 404 retains disable_pending and exact original ID/revisions.
+    fireEvent.click(screen.getByRole('button', { name: 'Check disable status' }));
+    await waitFor(() => expect(api.getPlatformByokProviderCredentialOperation).toHaveBeenCalledTimes(1));
+    expect(api.getPlatformByokProviderCredentialOperation).toHaveBeenCalledWith(
+      'token-1', 'p1', firstReq.operationId, 'tenant-1',
+    );
+    expect(auth.projectDisableCredentialOperations?.get(key)).toEqual({
+      operationId: firstReq.operationId,
+      expectedProviderRevision: 4,
+      expectedCredentialRevision: 2,
+      status: 'disable_pending',
+    });
+
+    // Explicit Retry disable sends exact same operationId and revisions.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry disable' }));
+    await waitFor(() => expect(api.deletePlatformByokProviderCredential).toHaveBeenCalledTimes(2));
+    const [, , retryReq] = api.deletePlatformByokProviderCredential.mock.calls[1];
+    expect(retryReq).toEqual(firstReq);
+    expect(await screen.findByText('API key disabled.')).toBeTruthy();
+    expect(auth.projectDisableCredentialOperations?.get(key)).toBeNull();
+  });
+
+  it('clears disable store on 409 conflict, cancelled, and 401/403 revocation, and ignores late identity/op responses', async () => {
+    const p1 = provider({ id: 'p1', name: 'Primary', state: 'Available', revision: 4, hasCredential: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue(providerPage([p1], {
+      activeProviderId: 'p1', activeProviderRevision: 4,
+    }));
+    api.getPlatformByokProviderCredential.mockResolvedValue({
+      scope: 'platform', projectId: null, providerId: 'p1',
+      providerRevision: 4, state: 'enabled', credentialRevision: 2,
+    });
+
+    const key1 = {
+      issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1',
+      scope: 'platform' as const, projectId: null, providerId: 'p1',
+    };
+    auth.projectDisableCredentialOperations?.set(key1, {
+      operationId: '11111111-1111-4111-8111-111111111111',
+      expectedProviderRevision: 4,
+      expectedCredentialRevision: 2,
+      status: 'disable_pending',
+    });
+
+    // 409 conflict on Check disable status clears store and refreshes.
+    api.getPlatformByokProviderCredentialOperation.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'credential_slot_conflict' }, 'Conflict'),
+    );
+    const view = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Check disable status' }));
+    expect(await screen.findByText(/The provider or key state changed\. Refreshing provider status\./i)).toBeTruthy();
+    expect(auth.projectDisableCredentialOperations?.get(key1)).toBeNull();
+
+    // 403 revocation during DELETE clears store and denies controls.
+    api.deletePlatformByokProviderCredential.mockRejectedValueOnce(
+      new GatewayError(403, { code: 'forbidden' }, 'Access denied'),
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable API key for Primary' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Confirm disable' }));
+    expect(await screen.findByText(/Your role cannot manage platform providers/i)).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(auth.projectDisableCredentialOperations?.get(key1)).toBeNull();
+
+    // Late response after identity change is ignored.
+    view.unmount();
+    let rejectLate!: (reason: Error) => void;
+    api.deletePlatformByokProviderCredential.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectLate = reject; }),
+    );
+    const view2 = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable API key for Primary' }));
+    const dialog2 = await screen.findByRole('alertdialog');
+    fireEvent.click(await within(dialog2).findByRole('button', { name: 'Confirm disable' }));
+    await waitFor(() => expect(api.deletePlatformByokProviderCredential).toHaveBeenCalledTimes(2));
+
+    auth.authSessionEpoch = 2;
+    auth.authorizationContext = { tenantId: 'tenant-1', actorId: 'actor-2', issuer: 'issuer' };
+    auth.resolveAuthorizationContext.mockResolvedValue({
+      issuer: 'issuer', actorId: 'actor-2', tenantId: 'tenant-1', membershipRevision: 2,
+    });
+    view2.rerender(<PlatformModelProviders />);
+    await waitFor(() => expect(auth.resolveAuthorizationContext).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      rejectLate(new GatewayError(503, { code: 'unavailable' }, 'Late failure'));
+    });
+    expect(auth.projectDisableCredentialOperations?.get({
+      issuer: 'issuer', actorId: 'actor-2', tenantId: 'tenant-1',
+      scope: 'platform', projectId: null, providerId: 'p1',
+    })).toBeNull();
   });
 });

@@ -93,6 +93,26 @@ For an `Available` provider or a `Draft` provider with an enabled key, select
    entry stays blocked. Resolve any pending or quarantined operation on the
    provider card first.
 
+## Disable an API key
+
+Platform administrators can disable an enabled platform BYOK provider API key
+in **Platform settings**:
+
+1. Select **Disable API key** on an `Available` provider or a `Draft` provider
+   that has a saved key.
+2. The confirmation dialog reads the current credential status and enables
+   **Confirm disable** only when the status is `enabled` and its provider
+   revision matches the displayed provider, with no credential operation in
+   progress.
+3. Review the confirmation prompt (**Disable API key for {provider name}?**)
+   and select **Confirm disable**, or select **Cancel** to keep the key active.
+   New runs that use this provider cannot use the disabled key. Runs already
+   assigned this key can continue to use it, and the provider settings stay
+   saved.
+4. If the reply is lost, use **Check disable status** or **Retry disable**
+   with the shown operation ID. If the provider or key state changes before
+   the disable finishes, the page refreshes and requires a new confirmation.
+
 ## Choose the default for new runs
 
 Use a provider only after its state is `Available` and its key status is

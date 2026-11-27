@@ -24,6 +24,7 @@ import {
   type FormEvent,
 } from 'react';
 import { PageSection } from '../components/ui/PageSection';
+import { AppDialog } from '../components/ui/AppDialog';
 import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
 import type {
@@ -245,6 +246,7 @@ export function PlatformModelProviders() {
     apiCall,
     apiCallOnce,
     projectCredentialOperations,
+    projectDisableCredentialOperations,
     session,
     authSessionEpoch = 0,
     authorizationContext,
@@ -255,6 +257,8 @@ export function PlatformModelProviders() {
   } = useAuth();
   const [fallbackOperationStore] = useState(() => createProjectCredentialOperationStore());
   const operationStore = projectCredentialOperations ?? fallbackOperationStore;
+  const [fallbackDisableOperationStore] = useState(() => createProjectCredentialOperationStore());
+  const disableOperationStore = projectDisableCredentialOperations ?? fallbackDisableOperationStore;
   const [access, setAccess] = useState<AccessSnapshot | null>(null);
   const [accessError, setAccessError] = useState<unknown>(null);
   const [checkingAccess, setCheckingAccess] = useState(true);
@@ -303,6 +307,12 @@ export function PlatformModelProviders() {
   const [showRotationKey, setShowRotationKey] = useState(false);
   const [rotationSaving, setRotationSaving] = useState(false);
   const [rotationError, setRotationError] = useState<unknown>(null);
+  const [disablingProvider, setDisablingProvider] = useState<PlatformModelProviderDraft | null>(null);
+  const [disableStatus, setDisableStatus] = useState<ModelProviderCredentialStatusResponse | null>(null);
+  const [disableStatusLoading, setDisableStatusLoading] = useState(false);
+  const [disableStatusError, setDisableStatusError] = useState<unknown>(null);
+  const [disableSaving, setDisableSaving] = useState(false);
+  const [disableError, setDisableError] = useState<unknown>(null);
   const metadataOperation = useRef<{ fingerprint: string; operationId: string } | null>(null);
   const mountedRef = useRef(true);
   const clearPendingKeyRef = useRef<(() => void) | null>(null);
@@ -310,6 +320,9 @@ export function PlatformModelProviders() {
   const requestGeneration = useRef(0);
   const rotationGeneration = useRef(0);
   const rotationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const disableGeneration = useRef(0);
+  const disableActionGeneration = useRef(0);
+  const disableTriggerRef = useRef<HTMLButtonElement | null>(null);
   const sectionHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const switchGenerationRef = useRef(0);
   const switchingRef = useRef(false);
@@ -368,6 +381,8 @@ export function PlatformModelProviders() {
       requestGeneration.current += 1;
       editorGeneration.current += 1;
       rotationGeneration.current += 1;
+      disableGeneration.current += 1;
+      disableActionGeneration.current += 1;
       accessGeneration.current += 1;
     };
   }, []);
@@ -383,6 +398,8 @@ export function PlatformModelProviders() {
     loadedSwitchSnapshotRef.current = null;
     editorGeneration.current += 1;
     rotationGeneration.current += 1;
+    disableGeneration.current += 1;
+    disableActionGeneration.current += 1;
     focusPricingProviderId.current = null;
     setProviders([]);
     setNextAfterProviderId(null);
@@ -413,6 +430,13 @@ export function PlatformModelProviders() {
     setRotationSaving(false);
     setRotationError(null);
     rotationTriggerRef.current = null;
+    setDisablingProvider(null);
+    setDisableStatus(null);
+    setDisableStatusLoading(false);
+    setDisableStatusError(null);
+    setDisableSaving(false);
+    setDisableError(null);
+    disableTriggerRef.current = null;
     metadataOperation.current = null;
     setLoadError(null);
     setSwitchConflictError(null);
@@ -581,6 +605,19 @@ export function PlatformModelProviders() {
     operationStore.delete(key);
     if (mountedRef.current) setOperationRevision((revision) => revision + 1);
   }, [operationStore]);
+
+  const setStoredDisableOperation = useCallback((
+    key: ProjectCredentialOperationKey,
+    operation: ProjectCredentialOperation,
+  ) => {
+    disableOperationStore.set(key, operation);
+    if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+  }, [disableOperationStore]);
+
+  const deleteStoredDisableOperation = useCallback((key: ProjectCredentialOperationKey) => {
+    disableOperationStore.delete(key);
+    if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+  }, [disableOperationStore]);
 
   const loadPage = useCallback(async (
     snapshot = access,
@@ -755,12 +792,82 @@ export function PlatformModelProviders() {
     }
   }, [boundCall, handleAccessFailure, isCurrent]);
 
+  const closeDisableDialog = useCallback((restoreFocus = false) => {
+    disableGeneration.current += 1;
+    setDisablingProvider(null);
+    setDisableStatus(null);
+    setDisableStatusLoading(false);
+    setDisableStatusError(null);
+    setDisableSaving(false);
+    setDisableError(null);
+    if (restoreFocus) {
+      const target = disableTriggerRef.current;
+      disableTriggerRef.current = null;
+      window.setTimeout(() => {
+        if (!mountedRef.current) return;
+        if (target && target.isConnected) {
+          target.focus();
+        } else {
+          sectionHeadingRef.current?.focus();
+        }
+      }, 0);
+    } else {
+      disableTriggerRef.current = null;
+    }
+  }, []);
+
+  const loadDisableStatus = useCallback(async (
+    snapshot: AccessSnapshot,
+    providerId: string,
+    generation: number,
+  ) => {
+    setDisableStatusLoading(true);
+    setDisableStatusError(null);
+    try {
+      const raw = await boundCall(snapshot, (token) =>
+        gatewayClient.getPlatformByokProviderCredential(token, providerId, snapshot.tenant));
+      if (generation !== disableGeneration.current || !isCurrent(snapshot)) return;
+      const checked = requireModelProviderCredentialStatus(raw, 'platform', null, providerId);
+      setDisableStatus(checked);
+    } catch (reason) {
+      if (!isCurrent(snapshot)) return;
+      if (handleAccessFailure(reason)) return;
+      if (generation === disableGeneration.current) {
+        setDisableStatus(null);
+        setDisableStatusError(reason);
+      }
+    } finally {
+      if (mountedRef.current && generation === disableGeneration.current && isCurrent(snapshot))
+        setDisableStatusLoading(false);
+    }
+  }, [boundCall, handleAccessFailure, isCurrent]);
+
+  const startDisable = (
+    provider: PlatformModelProviderDraft,
+    triggerButton: HTMLButtonElement | null,
+  ) => {
+    if (!access || !isCurrent(access)) return;
+    closeEditor();
+    closeRotationForm(false);
+    setPickerOpen(false);
+    const generation = ++disableGeneration.current;
+    disableTriggerRef.current = triggerButton;
+    setDisablingProvider(provider);
+    setDisableStatus(null);
+    setDisableStatusLoading(false);
+    setDisableStatusError(null);
+    setDisableSaving(false);
+    setDisableError(null);
+    void loadDisableStatus(access, provider.id, generation);
+  };
+
   const startRotate = (
     provider: PlatformModelProviderDraft,
     triggerButton: HTMLButtonElement | null,
   ) => {
     if (!access || !isCurrent(access)) return;
     closeEditor();
+    closeDisableDialog(false);
     setPickerOpen(false);
     clearPendingRotationKeyRef.current?.();
     clearPendingRotationKeyRef.current = null;
@@ -791,6 +898,7 @@ export function PlatformModelProviders() {
   const startEdit = async (provider: PlatformModelProviderDraft, focusPricing = false) => {
     if (!access) return;
     closeRotationForm(false);
+    closeDisableDialog(false);
     const snapshot = access;
     const generation = ++editorGeneration.current;
     const listGeneration = requestGeneration.current;
@@ -1802,6 +1910,295 @@ export function PlatformModelProviders() {
     }
   };
 
+  const executeDisableRequest = async (
+    opKey: ProjectCredentialOperationKey,
+    providerId: string,
+    operationId: string,
+    expectedProviderRevision: number,
+    expectedCredentialRevision: number,
+    fromDialog: boolean,
+  ) => {
+    if (!access || !isCurrent(access)) return;
+    const snapshot = access;
+    const actionGeneration = ++disableActionGeneration.current;
+    let dispatched = false;
+
+    setDisableSaving(true);
+    setDisableError(null);
+    setCredentialActionError(null);
+    setNotice(null);
+    setConfirmingResetProviderId(null);
+    try {
+      const response = await apiCallOnce(
+        (token, liveTenant) => {
+          if (actionGeneration !== disableActionGeneration.current ||
+              !isCurrent(snapshot) ||
+              liveTenant !== snapshot.tenant) {
+            return Promise.reject(new StaleRequestError());
+          }
+          dispatched = true;
+          return gatewayClient.deletePlatformByokProviderCredential(
+            token,
+            providerId,
+            {
+              operationId,
+              expectedProviderRevision,
+              expectedCredentialRevision,
+            },
+            liveTenant,
+          );
+        },
+        null,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedIdentity(snapshot)) return;
+      const existingDisable = disableOperationStore.get(opKey);
+      if (existingDisable && existingDisable.operationId !== operationId) return;
+      const checked = requirePlatformCredentialResponse(response, providerId, operationId);
+      const canUpdateUi =
+        mountedRef.current &&
+        actionGeneration === disableActionGeneration.current &&
+        isCurrent(snapshot);
+      if (checked.status === 'disabled') {
+        deleteStoredDisableOperation(opKey);
+        if (!canUpdateUi) return;
+        if (fromDialog) closeDisableDialog(true);
+        setNotice('API key disabled.');
+        await loadPage(snapshot);
+        return;
+      }
+      if (checked.status === 'cancelled') {
+        deleteStoredDisableOperation(opKey);
+        if (!canUpdateUi) return;
+        if (fromDialog) closeDisableDialog(true);
+        setCredentialActionError(new Error('Key disable was cancelled. Refreshing provider status.'));
+        await loadPage(snapshot);
+        return;
+      }
+      setStoredDisableOperation(opKey, {
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        status: 'disable_pending',
+      });
+      if (canUpdateUi) {
+        if (fromDialog) closeDisableDialog(true);
+        await loadPage(snapshot);
+      }
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (!dispatched) {
+        if (mountedRef.current && actionGeneration === disableActionGeneration.current && isCurrent(snapshot)) {
+          if (handleAccessFailure(reason)) return;
+          if (fromDialog) {
+            setDisableError(reason);
+          } else {
+            setCredentialActionError(reason);
+          }
+        }
+        return;
+      }
+      if (!isSameConfirmedIdentity(snapshot)) return;
+      const existingDisable = disableOperationStore.get(opKey);
+      if (existingDisable && existingDisable.operationId !== operationId) return;
+      const canUpdateUi =
+        mountedRef.current &&
+        actionGeneration === disableActionGeneration.current &&
+        isCurrent(snapshot);
+      if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
+        deleteStoredDisableOperation(opKey);
+        if (canUpdateUi) {
+          if (fromDialog) closeDisableDialog(false);
+          handleAccessFailure(reason);
+        }
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 409) {
+        deleteStoredDisableOperation(opKey);
+        if (canUpdateUi) {
+          if (fromDialog) closeDisableDialog(true);
+          setCredentialActionError(new Error(
+            reason.code === 'credential_operation_cancelled'
+              ? 'Key disable was cancelled. Refreshing provider status.'
+              : 'The provider or key state changed. Refreshing provider status.',
+          ));
+          await loadPage(snapshot);
+        }
+        return;
+      }
+      setStoredDisableOperation(opKey, {
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        status: 'disable_pending',
+      });
+      if (canUpdateUi) {
+        if (fromDialog) closeDisableDialog(true);
+        setCredentialActionError(reason);
+        await loadPage(snapshot);
+      }
+    } finally {
+      if (mountedRef.current && actionGeneration === disableActionGeneration.current)
+        setDisableSaving(false);
+    }
+  };
+
+  const confirmDisableKey = async () => {
+    if (!access || !isCurrent(access) || !disablingProvider || !disableStatus) return;
+    if (disableStatusLoading || disableStatusError != null) return;
+    if (disableStatus.state !== 'enabled' ||
+        disableStatus.providerRevision !== disablingProvider.revision) {
+      return;
+    }
+    const opKey = buildOperationKey(access, disablingProvider.id);
+    if (!opKey) {
+      setDisableError(new GatewayError(
+        403,
+        { code: 'forbidden' },
+        'Confirm platform access before disabling an API key.',
+      ));
+      return;
+    }
+    if (operationStore.get(opKey) || disableOperationStore.get(opKey)) return;
+    const operationId = crypto.randomUUID();
+    await executeDisableRequest(
+      opKey,
+      disablingProvider.id,
+      operationId,
+      disableStatus.providerRevision,
+      disableStatus.credentialRevision,
+      true,
+    );
+  };
+
+  const retryDisableKey = async (
+    providerId: string,
+    op: ProjectCredentialOperation,
+  ) => {
+    if (!access || !isCurrent(access)) return;
+    if (op.status !== 'disable_pending' && op.status !== 'uncertain') return;
+    const opKey = buildOperationKey(access, providerId);
+    if (!opKey) return;
+    await executeDisableRequest(
+      opKey,
+      providerId,
+      op.operationId,
+      op.expectedProviderRevision,
+      op.expectedCredentialRevision ?? 0,
+      false,
+    );
+  };
+
+  const checkDisableStatus = async (
+    providerId: string,
+    op: ProjectCredentialOperation,
+  ) => {
+    if (!access || !isCurrent(access)) return;
+    const snapshot = access;
+    const actionGeneration = ++disableActionGeneration.current;
+    const opKey = buildOperationKey(snapshot, providerId);
+    if (!opKey) return;
+    const expectedCredentialRevision = op.expectedCredentialRevision ?? 0;
+
+    setDisableSaving(true);
+    setCredentialActionError(null);
+    setNotice(null);
+    setConfirmingResetProviderId(null);
+    try {
+      const status = await apiCallOnce(
+        (token, liveTenant) => {
+          if (actionGeneration !== disableActionGeneration.current ||
+              !isCurrent(snapshot) ||
+              liveTenant !== snapshot.tenant) {
+            return Promise.reject(new StaleRequestError());
+          }
+          return gatewayClient.getPlatformByokProviderCredentialOperation(
+            token,
+            providerId,
+            op.operationId,
+            liveTenant,
+          );
+        },
+        null,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedIdentity(snapshot)) return;
+      const liveOp = disableOperationStore.get(opKey);
+      if (!liveOp || liveOp.operationId !== op.operationId) return;
+      const checked = requirePlatformCredentialOperationStatus(status, providerId, op.operationId);
+      const canUpdateUi =
+        mountedRef.current &&
+        actionGeneration === disableActionGeneration.current &&
+        isCurrent(snapshot);
+      if (checked.status === 'disabled') {
+        deleteStoredDisableOperation(opKey);
+        if (!canUpdateUi) return;
+        setNotice('API key disabled.');
+        await loadPage(snapshot);
+        return;
+      }
+      if (checked.status === 'cancelled') {
+        deleteStoredDisableOperation(opKey);
+        if (!canUpdateUi) return;
+        setCredentialActionError(new Error('Key disable was cancelled. Refreshing provider status.'));
+        await loadPage(snapshot);
+        return;
+      }
+      setStoredDisableOperation(opKey, {
+        operationId: op.operationId,
+        expectedProviderRevision: op.expectedProviderRevision,
+        expectedCredentialRevision,
+        status: 'disable_pending',
+      });
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (!isSameConfirmedIdentity(snapshot)) return;
+      const liveOp = disableOperationStore.get(opKey);
+      if (!liveOp || liveOp.operationId !== op.operationId) return;
+      const canUpdateUi =
+        mountedRef.current &&
+        actionGeneration === disableActionGeneration.current &&
+        isCurrent(snapshot);
+      if (reason instanceof GatewayError &&
+          reason.status === 404 &&
+          (reason.code === undefined || reason.code === 'credential_operation_not_found')) {
+        // 404 credential_operation_not_found is nonterminal because claim creation can lag.
+        setStoredDisableOperation(opKey, {
+          operationId: op.operationId,
+          expectedProviderRevision: op.expectedProviderRevision,
+          expectedCredentialRevision,
+          status: 'disable_pending',
+        });
+        return;
+      }
+      if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
+        deleteStoredDisableOperation(opKey);
+        if (canUpdateUi) handleAccessFailure(reason);
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 409) {
+        deleteStoredDisableOperation(opKey);
+        if (canUpdateUi) {
+          setCredentialActionError(new Error('The provider or key state changed. Refreshing provider status.'));
+          await loadPage(snapshot);
+        }
+        return;
+      }
+      if (canUpdateUi) setCredentialActionError(reason);
+    } finally {
+      if (mountedRef.current && actionGeneration === disableActionGeneration.current)
+        setDisableSaving(false);
+    }
+  };
+
   const switchDefault = async (provider?: PlatformModelProviderDraft) => {
     if (switchingRef.current || pendingSwitchReload !== null || !access || !isCurrent(access) || !isPositiveSafeInt(settingsRevision)) return;
     if (provider && (detailReplacedProviderIds.has(provider.id) || !isPositiveSafeInt(provider.revision))) return;
@@ -1874,15 +2271,25 @@ export function PlatformModelProviders() {
     void operationRevision;
     if (!access || !editingProvider) return null;
     const key = buildOperationKey(access, editingProvider.id);
-    return key ? operationStore.get(key) : null;
-  }, [access, buildOperationKey, editingProvider, operationRevision, operationStore]);
+    if (!key) return null;
+    return operationStore.get(key) ?? disableOperationStore.get(key);
+  }, [access, buildOperationKey, disableOperationStore, editingProvider, operationRevision, operationStore]);
 
   const rotatingOperation = useMemo(() => {
     void operationRevision;
     if (!access || !rotatingProvider) return null;
     const key = buildOperationKey(access, rotatingProvider.id);
-    return key ? operationStore.get(key) : null;
-  }, [access, buildOperationKey, operationRevision, operationStore, rotatingProvider]);
+    if (!key) return null;
+    return operationStore.get(key) ?? disableOperationStore.get(key);
+  }, [access, buildOperationKey, disableOperationStore, operationRevision, operationStore, rotatingProvider]);
+
+  const disablingOperation = useMemo(() => {
+    void operationRevision;
+    if (!access || !disablingProvider) return null;
+    const key = buildOperationKey(access, disablingProvider.id);
+    if (!key) return null;
+    return disableOperationStore.get(key) ?? operationStore.get(key);
+  }, [access, buildOperationKey, disableOperationStore, disablingProvider, operationRevision, operationStore]);
 
   const contextConfirmed = authorizationContext !== null && (
     !access || (
@@ -1891,7 +2298,7 @@ export function PlatformModelProviders() {
       (authorizationContext.issuer == null || access.issuer === null || authorizationContext.issuer === access.issuer)
     )
   );
-  const controlsDisabled = forbidden || !access || !contextConfirmed || loading || saving || rotationSaving || switching !== null || pendingSwitchReload !== null;
+  const controlsDisabled = forbidden || !access || !contextConfirmed || loading || saving || rotationSaving || disableSaving || switching !== null || pendingSwitchReload !== null;
   const activeSessionMessage = !session
     ? 'Sign in to manage platform providers.'
     : 'Switch to a platform sign-in before managing providers. Provider controls use an unbound Broker session.';
@@ -1903,6 +2310,7 @@ export function PlatformModelProviders() {
       actions={<Button appearance="primary" icon={<AddRegular />} disabled={controlsDisabled}
         onClick={() => {
           closeRotationForm(false);
+          closeDisableDialog(false);
           editorGeneration.current += 1;
           focusPricingProviderId.current = null;
           setEditor(null);
@@ -1962,6 +2370,7 @@ export function PlatformModelProviders() {
                 void operationRevision;
                 const opKey = buildOperationKey(access, provider.id);
                 const op = opKey ? operationStore.get(opKey) : null;
+                const disableOp = opKey ? disableOperationStore.get(opKey) : null;
                 return (
                   <li key={provider.id}>
                     <div>
@@ -1993,6 +2402,31 @@ export function PlatformModelProviders() {
                       <Text className="v1-muted">
                         Receiving a request does not approve the host or make the provider ready.
                       </Text>
+                      {disableOp && (
+                        <div className="v1-stack">
+                          <Text role="status">
+                            Disabling the API key did not finish. Check disable status or retry disabling with the same operation ID. Operation ID:{' '}
+                            <code>{disableOp.operationId}</code>
+                          </Text>
+                          <div className="v1-actions">
+                            <Button
+                              appearance="primary"
+                              type="button"
+                              onClick={() => void retryDisableKey(provider.id, disableOp)}
+                              disabled={controlsDisabled}
+                            >
+                              {disableSaving ? 'Disabling key…' : 'Retry disable'}
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => void checkDisableStatus(provider.id, disableOp)}
+                              disabled={controlsDisabled}
+                            >
+                              Check disable status
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                       {op && (
                         <div className="v1-stack">
                           {op.status === 'uncertain' && (
@@ -2082,18 +2516,26 @@ export function PlatformModelProviders() {
                           disabled={controlsDisabled}>Set pricing</Button>
                       )}
                       {provider.state === 'Draft' && provider.hasCredential &&
-                        credentialRevisions[provider.id] !== undefined && !op && (
+                        credentialRevisions[provider.id] !== undefined && !op && !disableOp && (
                         <Button onClick={() => void recheckSavedKey(provider)}
                           disabled={controlsDisabled}>Recheck saved key</Button>
                       )}
                       {(provider.state === 'Available' ||
                         (provider.state === 'Draft' && provider.hasCredential)) && (
-                        <Button
-                          aria-label={`Rotate API key for ${provider.name}`}
-                          onClick={(event) => startRotate(provider, event.currentTarget)}
-                          disabled={controlsDisabled || rotationSaving || Boolean(op)}>
-                          Rotate API key
-                        </Button>
+                        <>
+                          <Button
+                            aria-label={`Rotate API key for ${provider.name}`}
+                            onClick={(event) => startRotate(provider, event.currentTarget)}
+                            disabled={controlsDisabled || rotationSaving || Boolean(op) || Boolean(disableOp)}>
+                            Rotate API key
+                          </Button>
+                          <Button
+                            aria-label={`Disable API key for ${provider.name}`}
+                            onClick={(event) => startDisable(provider, event.currentTarget)}
+                            disabled={controlsDisabled || rotationSaving || Boolean(op) || Boolean(disableOp)}>
+                            Disable API key
+                          </Button>
+                        </>
                       )}
                       {isDefault &&
                         !detailReplacedProviderIds.has(provider.id) &&
@@ -2414,6 +2856,104 @@ export function PlatformModelProviders() {
             {rotationSaving && <Spinner size="extra-tiny" aria-hidden="true" />}
           </div>
         </form>
+      )}
+      {access && contextConfirmed && !forbidden && disablingProvider && (
+        <AppDialog
+          open={Boolean(disablingProvider)}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen && !disableSaving) closeDisableDialog(true);
+          }}
+          modalType="alert"
+          showClose={!disableSaving}
+          title={`Disable API key for ${disablingProvider.name}?`}
+          footer={
+            <div className="v1-actions">
+              <Button
+                type="button"
+                disabled={disableSaving}
+                onClick={() => closeDisableDialog(true)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={disableSaving || disableStatusLoading}
+                onClick={() => {
+                  if (access && isCurrent(access))
+                    void loadDisableStatus(access, disablingProvider.id, disableGeneration.current);
+                }}
+              >
+                Refresh
+              </Button>
+              {!disableStatusLoading &&
+                disableStatusError == null &&
+                (!disablingOperation || disableSaving) &&
+                disableStatus?.state === 'enabled' &&
+                disableStatus.providerRevision === disablingProvider.revision && (
+                <Button
+                  type="button"
+                  appearance="primary"
+                  disabled={disableSaving}
+                  onClick={() => void confirmDisableKey()}
+                >
+                  {disableSaving ? 'Disabling key…' : 'Confirm disable'}
+                </Button>
+              )}
+              {disableSaving && <Spinner size="extra-tiny" aria-hidden="true" />}
+            </div>
+          }
+        >
+          {disableStatusLoading && <Loading label="Checking credential status…" />}
+          {!disableStatusLoading && disableStatusError != null && (
+            <ErrorNotice>{errorMessage(disableStatusError)}</ErrorNotice>
+          )}
+          {!disableStatusLoading && disableStatusError == null && disablingOperation && !disableSaving && (
+            <MessageBar intent="warning"><MessageBarBody>
+              A key operation is already {disablingOperation.status.replaceAll('_', ' ')} (operation ID:{' '}
+              <code>{disablingOperation.operationId}</code>). Resolve it on the provider card before disabling the key.
+            </MessageBarBody></MessageBar>
+          )}
+          {!disableStatusLoading && disableStatusError == null && !disablingOperation &&
+            disableStatus?.state === 'not_set' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              No key is saved.
+            </MessageBarBody></MessageBar>
+          )}
+          {!disableStatusLoading && disableStatusError == null && !disablingOperation &&
+            disableStatus?.state === 'disabled' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              Credential is already disabled.
+            </MessageBarBody></MessageBar>
+          )}
+          {!disableStatusLoading && disableStatusError == null && !disablingOperation &&
+            disableStatus?.state === 'pending' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              A credential update is already in progress. Select Refresh, or use Check key status on the provider card.
+            </MessageBarBody></MessageBar>
+          )}
+          {!disableStatusLoading && disableStatusError == null && !disablingOperation &&
+            disableStatus?.state === 'quarantined' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              The last credential write was quarantined. Operator recovery is required before disabling the key.
+            </MessageBarBody></MessageBar>
+          )}
+          {!disableStatusLoading && disableStatusError == null && !disablingOperation &&
+            disableStatus?.state === 'enabled' &&
+            disableStatus.providerRevision !== disablingProvider.revision && (
+            <MessageBar intent="warning"><MessageBarBody>
+              The provider changed (revision {disableStatus.providerRevision} vs displayed {disablingProvider.revision}). Refresh the provider list and open the confirmation again.
+            </MessageBarBody></MessageBar>
+          )}
+          {!disableStatusLoading && disableStatusError == null &&
+            (!disablingOperation || disableSaving) &&
+            disableStatus?.state === 'enabled' &&
+            disableStatus.providerRevision === disablingProvider.revision && (
+            <Text>
+              New runs that use this provider cannot use this key. Runs already assigned this key can continue to use it. The provider settings stay saved.
+            </Text>
+          )}
+          {disableError != null && <ErrorNotice>{errorMessage(disableError)}</ErrorNotice>}
+        </AppDialog>
       )}
     </PageSection>
   );
