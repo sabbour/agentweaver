@@ -713,6 +713,32 @@ A selection is good for one read only. Each new command opens a new approval.
 
 Exit codes are `0` for success, `1` for a failure, and `130` for cancellation.
 
+## List pending provider host requests
+
+Use `platform egress provider-requests list` to read one page of pending
+model-provider host requests that Environment received across tenants. Clear
+`AGENTWEAVER_PROJECT_ID` and `AGENTWEAVER_RUN_ID`, then sign in with
+`agentweaver auth login --scope projects.admin` using an account with current
+Platform Administrator read authority so the saved sign-in is unbound. The
+command uses an unbound identity: it ignores `AGENTWEAVER_PROJECT_ID` and
+`AGENTWEAVER_RUN_ID`, and it rejects `--project-id` and `--run-id`.
+
+```text
+agentweaver platform egress provider-requests list [--limit <1-100>] [--cursor <cursor>] [target options]
+```
+
+`--limit` defaults to `50` and accepts `1` through `100`. Pass `--cursor` with
+the `nextCursor` value from the previous page to read the next page in server
+order. An empty `requests` array can still return a non-null `nextCursor`; keep
+paging until `nextCursor` is `null`. If the server rejects the cursor, rerun
+without `--cursor` to start from the first page.
+
+The command prints one JSON object with `requests` and `nextCursor`. Each item
+in `requests` contains `host`, `port`, `scope`, `tenantId`, `projectId`,
+`providerId`, `providerRevision`, and `requestedAt`. It lists only pending
+provider host requests; it does not list non-provider requests, approvals, or
+enforcement status.
+
 ## Manage platform BYOK provider drafts
 
 Use `platform byok` to list and edit platform model-provider metadata through

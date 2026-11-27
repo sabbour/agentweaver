@@ -106,7 +106,7 @@ public sealed partial class GatewayClient : IGatewayClient
 
     public Task<JsonObject> DiscoverAsync(CancellationToken ct) => DiscoverAsync(ct, recordEvidence: true);
 
-    private async Task<JsonObject> DiscoverAsync(CancellationToken ct, bool recordEvidence)
+    public async Task<JsonObject> DiscoverAsync(CancellationToken ct, bool recordEvidence)
     {
         _operations = new Dictionary<string, GatewayOperation>(StringComparer.Ordinal);
         var call = await SendAsync(
@@ -289,7 +289,8 @@ public sealed partial class GatewayClient : IGatewayClient
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentNullException.ThrowIfNull(invocation);
 
-        var operations = await EnsureDiscoveredAsync(ct).ConfigureAwait(false);
+        var recordAuxiliaryEvidence = operationId != "listPlatformEgressDestinations";
+        var operations = await EnsureDiscoveredAsync(ct, recordEvidence: recordAuxiliaryEvidence).ConfigureAwait(false);
         if (!operations.TryGetValue(operationId, out var operation))
             throw new InvalidOperationException("The requested operation was not found in the live Gateway contract.");
 
@@ -298,7 +299,7 @@ public sealed partial class GatewayClient : IGatewayClient
         // A selected tenant or project/run is only a selector; confirm its current owner context before any operation.
         var callerContext = operationId == "getAuthorizationContext"
             ? null
-            : await ReadAuthorizationContextAsync(Identity, primaryBearer, ct).ConfigureAwait(false);
+            : await ReadAuthorizationContextAsync(Identity, primaryBearer, ct, recordEvidence: recordAuxiliaryEvidence).ConfigureAwait(false);
 
         string? projectBearer = null;
         if (operation.Parameters.Any(parameter =>
@@ -1002,12 +1003,15 @@ public sealed partial class GatewayClient : IGatewayClient
         var started = Stopwatch.GetTimestamp();
         var hidePolicyRequest = operationId is
             "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy";
+        var queryEvidence = RedactQuery(
+            ParseQuery(pathAndQuery),
+            redactCursor: operationId == "listPlatformEgressDestinations");
         var evidence = new JsonObject
         {
             ["requestId"] = requestId.ToString("D"),
             ["method"] = method,
             ["path"] = pathAndQuery.Split('?', 2)[0],
-            ["query"] = RedactQuery(ParseQuery(pathAndQuery)),
+            ["query"] = queryEvidence,
             ["requestBody"] = body is null || !recordEvidence ? null : hidePolicyRequest ? "[REDACTED]" : RedactJson(ParseJson(body)),
             ["status"] = null,
             ["traceId"] = null,
@@ -1026,7 +1030,8 @@ public sealed partial class GatewayClient : IGatewayClient
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
             "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
-            "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions";
+            "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions" or
+            "listPlatformEgressDestinations";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 
@@ -1165,7 +1170,10 @@ public sealed partial class GatewayClient : IGatewayClient
                     {
                         if ((isByokCredentialStatusRead || isByokCancel) &&
                             (int)response.StatusCode == 200 &&
-                            HasDuplicateTopLevelKeys(bytes))
+                            HasDuplicateTopLevelKeys(bytes) ||
+                            operationId == "listPlatformEgressDestinations" &&
+                            (int)response.StatusCode == 200 &&
+                            HasDuplicateJsonKeys(bytes))
                         {
                             throw new InvalidDataException("The Gateway response contained duplicate JSON fields.");
                         }
@@ -1207,14 +1215,14 @@ public sealed partial class GatewayClient : IGatewayClient
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
             evidence["error"] = isByokCredentialStatusRead || isByokCancel || operationId is "validateProjectNativeAcsPolicy" or
-                "listProjectGovernanceDecisions"
+                "listProjectGovernanceDecisions" or "listPlatformEgressDestinations"
                 ? "[REDACTED]"
                 : RedactText(exception.Message);
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 throw;
             var transportMessage = exception is OperationCanceledException && !ct.IsCancellationRequested
                 ? "The Gateway request timed out."
-                : isByokCredentialStatusRead || isByokCancel
+                : isByokCredentialStatusRead || isByokCancel || operationId == "listPlatformEgressDestinations"
                     ? "The Gateway request failed."
                     : RedactText(exception.Message);
             throw new GatewayTransportException(transportMessage, exception);
@@ -1355,11 +1363,13 @@ public sealed partial class GatewayClient : IGatewayClient
         return result;
     }
 
-    private static JsonObject RedactQuery(IReadOnlyDictionary<string, string> query)
+    private static JsonObject RedactQuery(IReadOnlyDictionary<string, string> query, bool redactCursor = false)
     {
         var result = new JsonObject();
         foreach (var (name, value) in query)
-            result[name] = IsSensitiveName(name) ? "[REDACTED]" : RedactText(value);
+            result[name] = (redactCursor && name == "cursor") || IsSensitiveName(name)
+                ? "[REDACTED]"
+                : RedactText(value);
         return result;
     }
 
@@ -1520,6 +1530,41 @@ public sealed partial class GatewayClient : IGatewayClient
         {
             return false;
         }
+    }
+
+    private static bool HasDuplicateJsonKeys(byte[] bytes)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = 32 });
+            var stack = new Stack<HashSet<string>>();
+            while (reader.Read())
+            {
+                switch (reader.TokenType)
+                {
+                    case JsonTokenType.StartObject:
+                        stack.Push(new HashSet<string>(StringComparer.Ordinal));
+                        break;
+                    case JsonTokenType.EndObject:
+                        if (stack.Count > 0)
+                            stack.Pop();
+                        break;
+                    case JsonTokenType.PropertyName:
+                        if (stack.Count > 0)
+                        {
+                            var name = reader.GetString();
+                            if (name is not null && !stack.Peek().Add(name))
+                                return true;
+                        }
+                        break;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        return false;
     }
 
     private static bool HasDuplicateTopLevelKeys(byte[] bytes)

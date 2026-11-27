@@ -150,6 +150,9 @@ The card also shows the host-request delivery from its provider response:
 The card shows the returned host and port. It shows **Unavailable** when
 either value is invalid. It does not derive the host from the base URL.
 Receipt by Environment does not approve the host or make the provider ready.
+To list pending model-provider host requests across tenants from the CLI, run
+`agentweaver platform egress provider-requests list`; see the
+[CLI guide](./cli.md#list-pending-provider-host-requests).
 Select **Refresh** to read the current provider response.
 
 After a successful switch or conflict, the page reloads the current settings
