@@ -57,7 +57,10 @@ changed. Changes to the manifest, modules, or file closure fail validation.
 artifacts.
 
 `NativeAcsPolicyEvaluator.EvaluateComposedAsync` evaluates the selected domain
-only. An unselected domain's default deny does not affect the result.
+only, and accepts `projectScope: true` (alongside
+`EvaluateComposedForApprovalAsync` and `ResolveComposedApprovalAsync`) to
+validate Project artifacts with `ValidateComposedProject` and reject
+`PlatformNetwork`. An unselected domain's default deny does not affect the result.
 `EvaluateAsync` keeps its existing behavior. The Environment compiler has
 separate composed and composed-System-only candidate methods. Both preserve
 the hash of the complete manifest and every file. The existing compiler

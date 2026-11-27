@@ -431,7 +431,10 @@ domain's rule at `pre_model_call`. Domain changes can update
 their own data file; they cannot change the manifest or policy modules.
 
 `NativeAcsPolicyEvaluator.EvaluateComposedAsync` requires a
-`NativeAcsDomainId`. The existing `Validate`, `EvaluateAsync`, and Environment
+`NativeAcsDomainId`, and accepts `projectScope: true` (alongside
+`EvaluateComposedForApprovalAsync` and `ResolveComposedApprovalAsync`) to
+validate Project-scoped artifacts without `policy/data.json` while rejecting
+`PlatformNetwork`. The existing `Validate`, `EvaluateAsync`, and Environment
 compiler entrypoints keep their single-profile behavior and reject composed
 artifacts. The Environment candidate compiler has separate composed and
 System-only entrypoints, and each candidate hash covers the complete artifact.

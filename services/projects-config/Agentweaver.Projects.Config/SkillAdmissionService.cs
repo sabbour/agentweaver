@@ -307,14 +307,15 @@ public sealed class SkillAdmissionService(
                 score.Value ?? -1,
                 evidenceComplete,
                 builtInExempt));
-        await RequireAllowAsync(policy.PlatformArtifact, snapshot, cancellationToken)
+        await RequireAllowAsync(policy.PlatformArtifact, projectScope: false, snapshot, cancellationToken)
             .ConfigureAwait(false);
         if (policy.ProjectArtifact is { } projectArtifact)
-            await RequireAllowAsync(projectArtifact, snapshot, cancellationToken)
+            await RequireAllowAsync(projectArtifact, projectScope: true, snapshot, cancellationToken)
                 .ConfigureAwait(false);
 
         async Task RequireAllowAsync(
             NativeAcsArtifact artifact,
+            bool projectScope,
             NativeAcsEvaluationSnapshot facts,
             CancellationToken token)
         {
@@ -323,6 +324,7 @@ public sealed class SkillAdmissionService(
                     NativeAcsDomainId.Skills,
                     AgentControlSpecification.InterventionPoint.PreModelCall,
                     facts,
+                    projectScope,
                     token)
                 .ConfigureAwait(false);
             if (result.Outcome == PolicyEvaluationOutcome.Deny)
