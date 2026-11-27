@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthorizationCallbackMessage, AuthorizationTransaction } from './authProtocol';
-import { AgentweaverGatewayClient, gatewayClient } from './api';
+import { AgentweaverGatewayClient, gatewayClient, GatewayError } from './api';
 import {
   firstRunTourStorageKey,
   markFirstRunTourComplete,
@@ -69,6 +69,7 @@ import { AuthProvider, useAuth } from './AuthContext';
 import {
   buildPlatformPolicyValidationArtifact,
   createPlatformPolicyTextBuffer,
+  PLATFORM_POLICY_MAX_HTTP_BYTES,
   parsePlatformPolicyValidationRequestFile,
 } from './platformPolicyContracts';
 import {
@@ -2722,5 +2723,527 @@ describe('Platform Policies served route', () => {
       screen.getByRole('button', { name: 'Retry' }),
       screen.getByRole('main', { name: 'Main content' }),
     ]).toContain(document.activeElement);
+  });
+
+  async function setupValidSavedRevisionMocks(options: {
+    manifest?: string;
+    fileContent?: string;
+    revision?: number;
+    createdAt?: string;
+  } = {}) {
+    const manifest = options.manifest ?? '\uFEFFname: saved-policy\r\n';
+    const fileContent = options.fileContent ?? 'allow: false\r\n';
+    const revision = options.revision ?? 2;
+    const createdAt = options.createdAt ?? '2026-01-03T03:04:05Z';
+    const artifact = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer(manifest),
+      [{ relativePath: 'rules/example.yaml', content: createPlatformPolicyTextBuffer(fileContent) }],
+    );
+    const historyPayload = {
+      scopeType: 'platform' as const,
+      scopeId: 'default' as const,
+      policyId: 'policy-1',
+      snapshotRevision: revision,
+      items: [
+        { revision, contentSha256: artifact.contentSha256, createdAt },
+        { revision: 1, contentSha256: 'b'.repeat(64), createdAt: '2026-01-02T03:04:05Z' },
+      ],
+      nextCursor: null,
+    };
+    const revisionPayload = {
+      scopeType: 'platform' as const,
+      scopeId: 'default' as const,
+      policyId: 'policy-1',
+      revision,
+      contentSha256: artifact.contentSha256,
+      createdAt,
+      artifact: {
+        manifest,
+        files: [{ relativePath: 'rules/example.yaml', content: fileContent }],
+        contentSha256: artifact.contentSha256,
+      },
+    };
+    vi.spyOn(gatewayClient, 'getPlatformPolicyRevisionHistory').mockResolvedValue(historyPayload);
+    const readSpy = vi.spyOn(gatewayClient, 'readPlatformPolicyRevision').mockResolvedValue(revisionPayload);
+    return { artifact, historyPayload, revisionPayload, readSpy };
+  }
+
+  function mockBlobDownload() {
+    let downloaded: Blob | null = null;
+    let downloadName = '';
+    const createObjectURL = vi.fn((blob: Blob) => {
+      downloaded = blob;
+      return 'blob:saved-revision-test';
+    });
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloadName = this.download;
+    });
+    return {
+      getDownloaded: () => downloaded,
+      getDownloadName: () => downloadName,
+      createObjectURL,
+      revokeObjectURL,
+      click,
+    };
+  }
+
+  it('shows Download saved revision only in ready Platform mode with a loaded revision, exports exact CLI bytes, and preserves the draft', async () => {
+    const { artifact, readSpy } = await setupValidSavedRevisionMocks();
+    const dl = mockBlobDownload();
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+
+    expect(screen.queryByRole('button', { name: 'Download saved revision' })).toBeNull();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+    const downloadBtn = screen.getByRole('button', { name: 'Download saved revision' });
+    expect(downloadBtn).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'unsaved draft manifest' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+
+    const readsBefore = readSpy.mock.calls.length;
+    fireEvent.click(downloadBtn);
+
+    await waitFor(() => expect(dl.click).toHaveBeenCalledOnce());
+    expect(readSpy.mock.calls.length).toBe(readsBefore + 1);
+    expect(dl.getDownloadName()).toBe('platform-policy-revision-2.json');
+    expect(dl.revokeObjectURL).toHaveBeenCalledWith('blob:saved-revision-test');
+
+    const text = await dl.getDownloaded()!.text();
+    expect(text.endsWith('\n')).toBe(true);
+    expect(text.endsWith('\n\n')).toBe(false);
+    expect(text).not.toContain('\n  ');
+    const parsed = JSON.parse(text.slice(0, -1)) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual([
+      'artifact',
+      'contentSha256',
+      'createdAt',
+      'policyId',
+      'revision',
+      'scopeId',
+      'scopeType',
+    ]);
+    expect(parsed).toEqual({
+      scopeType: 'platform',
+      scopeId: 'default',
+      policyId: 'policy-1',
+      revision: 2,
+      contentSha256: artifact.contentSha256,
+      createdAt: '2026-01-03T03:04:05Z',
+      artifact,
+    });
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('unsaved draft manifest');
+    expect(screen.getByRole('textbox', { name: 'Relative path' })).toBeTruthy();
+
+    // Hidden in Project scope.
+    projectAuthority = true;
+    fireEvent.change(screen.getByRole('combobox', { name: 'Policy scope' }), {
+      target: { value: 'project' },
+    });
+    await screen.findByRole('combobox', { name: 'Project' });
+    expect(screen.queryByRole('button', { name: 'Download saved revision' })).toBeNull();
+  });
+
+  it('rejects altered bytes despite matching declared hashes and rejects oversize exports without touching the draft', async () => {
+    const { revisionPayload, readSpy } = await setupValidSavedRevisionMocks();
+    const dl = mockBlobDownload();
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Platform Policy manifest' }), {
+      target: { value: 'keep my draft' },
+    });
+
+    // Altered bytes on reread with matching declared hashes.
+    readSpy.mockResolvedValueOnce({
+      ...revisionPayload,
+      artifact: {
+        ...revisionPayload.artifact,
+        manifest: 'name: tampered\n',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    await screen.findByText('The saved Platform Policy revision could not be downloaded. Try again.');
+    expect(dl.click).not.toHaveBeenCalled();
+    expect(dl.createObjectURL).not.toHaveBeenCalled();
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('keep my draft');
+
+    // Oversize (> 5 MiB) export on reread.
+    readSpy.mockResolvedValueOnce({
+      ...revisionPayload,
+      policyId: 'p'.repeat(PLATFORM_POLICY_MAX_HTTP_BYTES),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    await screen.findByText('The saved Platform Policy revision could not be downloaded. Try again.');
+    expect(dl.click).not.toHaveBeenCalled();
+    expect((screen.getByRole('textbox', {
+      name: 'Platform Policy manifest',
+    }) as HTMLTextAreaElement).value).toBe('keep my draft');
+  });
+
+  it('handles current 403 by denying and hiding source, and ignores stale 403 after context change', async () => {
+    const { readSpy } = await setupValidSavedRevisionMocks();
+    const dl = mockBlobDownload();
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+
+    // Stale 403: start export, switch tenant while in flight, then reject old read with 403.
+    const staleRead = deferred<never>();
+    readSpy.mockReturnValueOnce(staleRead.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tenant ID' }), {
+      target: { value: 'tenant-2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Saved Platform Policy revisions');
+
+    await act(async () => {
+      staleRead.reject(new GatewayError(403, { code: 'forbidden' }, 'Denied'));
+      await staleRead.promise.catch(() => undefined);
+    });
+    expect(screen.queryByText('You do not have permission to access Platform Policies.')).toBeNull();
+
+    // Current 403: view revision again, then reject export read with 403.
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+    readSpy.mockRejectedValueOnce(new GatewayError(403, { code: 'forbidden' }, 'Denied'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    await screen.findByText('You do not have permission to access Platform Policies.');
+    expect(screen.queryByRole('heading', { name: 'Revision 2' })).toBeNull();
+    expect(dl.click).not.toHaveBeenCalled();
+  });
+
+  it('recovers from Gateway 401 and local policy_access_expired during active same-context runCheck', async () => {
+    const intervalHandlers: (() => void)[] = [];
+    const setInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+      if (delay === 60_000 && typeof handler === 'function')
+        intervalHandlers.push(handler as () => void);
+      return setInterval(handler, delay);
+    }) as typeof window.setInterval);
+    const { revisionPayload, readSpy } = await setupValidSavedRevisionMocks();
+    const dl = mockBlobDownload();
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+
+    // Gateway 401 platform_policy_request_failed -> refresh + runCheck + retry once -> download
+    // even when React commits the refreshed unbound session object before recovery resumes.
+    readSpy.mockRejectedValueOnce(
+      new GatewayError(401, { code: 'platform_policy_request_failed' }, 'Expired'),
+    );
+    const delayedRefresh = deferred<{
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+      expires_in: number;
+    }>();
+    authMocks.refreshBrokerToken.mockReturnValueOnce(delayedRefresh.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    await waitFor(() => expect(authMocks.refreshBrokerToken).toHaveBeenCalledOnce());
+    await act(async () => {
+      delayedRefresh.resolve({
+        access_token: 'access-refreshed-2',
+        refresh_token: 'refresh-refreshed-2',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      });
+      await delayedRefresh.promise;
+    });
+    await screen.findByRole('heading', { name: 'Revision 2' });
+    expect(screen.queryByText('The saved Platform Policy revision could not be downloaded. Try again.')).toBeNull();
+    await waitFor(() => expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(4));
+    await waitFor(() => expect(dl.click).toHaveBeenCalledOnce());
+    expect(dl.getDownloadName()).toBe('platform-policy-revision-2.json');
+
+    // Real session replacement / sign-out during 401 recovery stays fenced.
+    dl.click.mockClear();
+    const fencedRefresh = deferred<{
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+      expires_in: number;
+    }>();
+    authMocks.refreshBrokerToken.mockReturnValueOnce(fencedRefresh.promise);
+    readSpy.mockRejectedValueOnce(
+      new GatewayError(401, { code: 'platform_policy_request_failed' }, 'Expired'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    await waitFor(() => expect(authMocks.refreshBrokerToken).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Account' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await screen.findByRole('button', { name: 'Sign in' });
+    await act(async () => {
+      fencedRefresh.resolve({
+        access_token: 'access-refreshed-3',
+        refresh_token: 'refresh-refreshed-3',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      });
+      await fencedRefresh.promise;
+    });
+    expect(dl.click).not.toHaveBeenCalled();
+
+    // Sign back in for the remaining local policy_access_expired check.
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+
+    // Local policy_access_expired while an active same-context runCheck is in flight.
+    dl.click.mockClear();
+    const historySpy = vi.spyOn(gatewayClient, 'getPlatformPolicyRevisionHistory');
+    const deferredHistory = deferred<typeof revisionPayload extends never ? never : Awaited<ReturnType<typeof gatewayClient.getPlatformPolicyRevisionHistory>>>();
+    historySpy.mockReturnValueOnce(deferredHistory.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('Checking…')).toBeTruthy());
+
+    // Simulate local policy_access_expired when export runs during active same-context runCheck?
+    // When status is 'checking', button is hidden; trigger via polling starting right before export click
+    // or test via controller: first settle Retry, then start polling via interval.
+    await act(async () => {
+      deferredHistory.resolve({
+        scopeType: 'platform',
+        scopeId: 'default',
+        policyId: 'policy-1',
+        snapshotRevision: 2,
+        items: [
+          { revision: 2, contentSha256: revisionPayload.contentSha256, createdAt: '2026-01-03T03:04:05Z' },
+        ],
+        nextCursor: null,
+      });
+    });
+    await screen.findByRole('heading', { name: 'Revision 2' });
+
+    // Now test polling + export concurrency: start export, trigger polling while export read is in flight,
+    // finish export read first while polling is 'checking', then resolve polling -> download completes!
+    const exportRead = deferred<typeof revisionPayload>();
+    const pollHistory = deferred<Awaited<ReturnType<typeof gatewayClient.getPlatformPolicyRevisionHistory>>>();
+    readSpy.mockReturnValueOnce(exportRead.promise);
+    historySpy.mockReturnValueOnce(pollHistory.promise);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    act(() => intervalHandlers.at(-1)?.());
+    await waitFor(() => expect(screen.getByText('Checking…')).toBeTruthy());
+
+    await act(async () => {
+      exportRead.resolve(revisionPayload);
+      await exportRead.promise;
+    });
+    // Held while polling is checking.
+    expect(dl.click).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pollHistory.resolve({
+        scopeType: 'platform',
+        scopeId: 'default',
+        policyId: 'policy-1',
+        snapshotRevision: 2,
+        items: [
+          { revision: 2, contentSha256: revisionPayload.contentSha256, createdAt: '2026-01-03T03:04:05Z' },
+        ],
+        nextCursor: null,
+      });
+    });
+    await waitFor(() => expect(dl.click).toHaveBeenCalledOnce());
+
+    // Local policy_access_expired during an active same-context runCheck retries once after ready.
+    dl.click.mockClear();
+    const exportExpiredRead = deferred<typeof revisionPayload>();
+    const pollHistoryExpired = deferred<Awaited<ReturnType<typeof gatewayClient.getPlatformPolicyRevisionHistory>>>();
+    readSpy.mockReturnValueOnce(exportExpiredRead.promise);
+    historySpy.mockReturnValueOnce(pollHistoryExpired.promise);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    act(() => intervalHandlers.at(-1)?.());
+    await waitFor(() => expect(screen.getByText('Checking…')).toBeTruthy());
+
+    await act(async () => {
+      exportExpiredRead.reject(new GatewayError(401, { code: 'policy_access_expired' }, 'Expired'));
+      await exportExpiredRead.promise.catch(() => undefined);
+    });
+    expect(dl.click).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pollHistoryExpired.resolve({
+        scopeType: 'platform',
+        scopeId: 'default',
+        policyId: 'policy-1',
+        snapshotRevision: 2,
+        items: [
+          { revision: 2, contentSha256: revisionPayload.contentSha256, createdAt: '2026-01-03T03:04:05Z' },
+        ],
+        nextCursor: null,
+      });
+    });
+    await waitFor(() => expect(dl.click).toHaveBeenCalledOnce());
+
+    // Active poll itself hits 401 and refreshes the unbound session while export is held.
+    dl.click.mockClear();
+    const exportHeldOn401Poll = deferred<typeof revisionPayload>();
+    readSpy.mockReturnValueOnce(exportHeldOn401Poll.promise);
+    historySpy.mockRejectedValueOnce(
+      new GatewayError(401, { code: 'platform_policy_request_failed' }, 'Poll expired'),
+    );
+    const pollRefresh = deferred<{
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+      expires_in: number;
+    }>();
+    authMocks.refreshBrokerToken.mockReturnValueOnce(pollRefresh.promise);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    act(() => intervalHandlers.at(-1)?.());
+    await waitFor(() => expect(screen.getByText('Checking…')).toBeTruthy());
+
+    await act(async () => {
+      exportHeldOn401Poll.resolve(revisionPayload);
+      await exportHeldOn401Poll.promise;
+    });
+    expect(dl.click).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pollRefresh.resolve({
+        access_token: 'access-refreshed-poll',
+        refresh_token: 'refresh-refreshed-poll',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      });
+      await pollRefresh.promise;
+    });
+    await waitFor(() => expect(dl.click).toHaveBeenCalledOnce());
+  });
+
+  it('discards held export on polling detail reload failure and on context changes, and does not cancel pagination', async () => {
+    const { historyPayload, revisionPayload, readSpy } = await setupValidSavedRevisionMocks();
+    const dl = mockBlobDownload();
+    const intervalHandlers: (() => void)[] = [];
+    const setInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+      if (delay === 60_000 && typeof handler === 'function')
+        intervalHandlers.push(handler as () => void);
+      return setInterval(handler, delay);
+    }) as typeof window.setInterval);
+
+    const historySpy = vi.spyOn(gatewayClient, 'getPlatformPolicyRevisionHistory').mockResolvedValue({
+      ...historyPayload,
+      items: [historyPayload.items[0]],
+      nextCursor: 'cursor-1',
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+
+    // Pagination + export do not cancel each other.
+    const page2Deferred = deferred<typeof historyPayload>();
+    const exportRead1 = deferred<typeof revisionPayload>();
+    historySpy.mockReturnValueOnce(page2Deferred.promise);
+    readSpy.mockReturnValueOnce(exportRead1.promise);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+
+    await act(async () => {
+      page2Deferred.resolve({
+        ...historyPayload,
+        items: [historyPayload.items[1]],
+        nextCursor: null,
+      });
+      exportRead1.resolve(revisionPayload);
+    });
+    await waitFor(() => expect(dl.click).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+
+    // Polling detail reload failure discards held export.
+    dl.click.mockClear();
+    const exportRead2 = deferred<typeof revisionPayload>();
+    const pollHistory2 = deferred<typeof historyPayload>();
+    readSpy.mockReturnValueOnce(exportRead2.promise);
+    historySpy.mockReturnValueOnce(pollHistory2.promise);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    act(() => intervalHandlers.at(-1)?.());
+    await waitFor(() => expect(screen.getByText('Checking…')).toBeTruthy());
+
+    await act(async () => {
+      exportRead2.resolve(revisionPayload);
+    });
+    readSpy.mockRejectedValueOnce(new Error('detail reload failed'));
+    await act(async () => {
+      pollHistory2.resolve(historyPayload);
+    });
+    await screen.findByText('The selected Platform Policy revision is unavailable. Try again.');
+    expect(dl.click).not.toHaveBeenCalled();
+
+    // Changing selected revision during export read discards the old export.
+    readSpy.mockResolvedValueOnce(revisionPayload);
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    await screen.findByRole('heading', { name: 'Revision 2' });
+    const exportRead3 = deferred<typeof revisionPayload>();
+    readSpy.mockReturnValueOnce(exportRead3.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[1]);
+    await act(async () => {
+      exportRead3.resolve(revisionPayload);
+    });
+    expect(dl.click).not.toHaveBeenCalled();
+
+    // Signing out during export read discards the export.
+    readSpy.mockResolvedValueOnce({
+      ...revisionPayload,
+      revision: 1,
+      contentSha256: 'b'.repeat(64),
+      createdAt: '2026-01-02T03:04:05Z',
+      artifact: {
+        ...revisionPayload.artifact,
+        contentSha256: 'b'.repeat(64),
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[1]);
+    await screen.findByRole('heading', { name: 'Revision 1' });
+    const exportRead4 = deferred<typeof revisionPayload>();
+    readSpy.mockReturnValueOnce(exportRead4.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Download saved revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Account' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await screen.findByRole('button', { name: 'Sign in' });
+    await act(async () => {
+      exportRead4.resolve(revisionPayload);
+    });
+    expect(dl.click).not.toHaveBeenCalled();
   });
 });
