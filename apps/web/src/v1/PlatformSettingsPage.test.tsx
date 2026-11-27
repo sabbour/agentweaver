@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
 import type { PlatformComponentArea, PlatformComponentAreaReport, PlatformEgressDestinationPage } from './contracts';
@@ -78,11 +79,67 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function CurrentPath() {
+  const location = useLocation();
+  return <output aria-label="Current path">{location.pathname}</output>;
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter initialEntries={['/platform-settings']}>
+      <Routes>
+        <Route path="/platform-settings" element={<PlatformSettingsPage />} />
+        <Route path="*" element={null} />
+      </Routes>
+      <CurrentPath />
+    </MemoryRouter>,
+  );
+}
+
 describe('Platform-wide provider host requests', () => {
+  it('opens Policies with Enter after a successful empty list', async () => {
+    signIn();
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(emptyQueue);
+    const link = screen.getByRole('link', { name: 'Open Policies' });
+    link.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/policies');
+  });
+
+  it('does not show Open Policies when access is denied', async () => {
+    signIn();
+    api.listPlatformEgressDestinations.mockRejectedValue(
+      new GatewayError(403, {}, 'Forbidden'));
+    renderPage();
+    await screen.findByText('Only platform administrators can view provider host requests.');
+    expect(screen.queryByRole('link', { name: 'Open Policies' })).toBeNull();
+  });
+
+  it('restores queue heading focus when session renewal removes a focused Open Policies link', async () => {
+    signIn();
+    const view = renderPage();
+    const link = await screen.findByRole('link', { name: 'Open Policies' });
+    link.focus();
+    signIn();
+    view.rerender(
+      <MemoryRouter initialEntries={['/platform-settings']}>
+        <Routes>
+          <Route path="/platform-settings" element={<PlatformSettingsPage />} />
+          <Route path="*" element={null} />
+        </Routes>
+        <CurrentPath />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('link', { name: 'Open Policies' })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByText(queueTitle));
+  });
+
   it('shows both tenants and their project IDs in server order', async () => {
     signIn();
     api.listPlatformEgressDestinations.mockResolvedValue(page(['2', '1']));
-    render(<PlatformSettingsPage />);
+    renderPage();
     const table = await screen.findByRole('table', { name: queueTitle });
     const [, first, second] = within(table).getAllByRole('row');
     expect(within(first).getByRole('cell', { name: 'tenant-2' })).toBeTruthy();
@@ -100,7 +157,7 @@ describe('Platform-wide provider host requests', () => {
     api.listPlatformEgressDestinations.mockRejectedValueOnce(
       new GatewayError(503, { code: 'egress_proof_unavailable' }, 'Unavailable'))
       .mockReturnValueOnce(retry.promise);
-    render(<PlatformSettingsPage />);
+    renderPage();
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('Couldn’t verify provider host requests');
     expect(screen.queryByText(emptyQueue)).toBeNull();
@@ -123,7 +180,7 @@ describe('Platform-wide provider host requests', () => {
       .mockResolvedValueOnce(page([], 'second'))
       .mockRejectedValueOnce(new GatewayError(503, {}, 'Unavailable'))
       .mockResolvedValueOnce(page(['2']));
-    render(<PlatformSettingsPage />);
+    renderPage();
     const more = () => screen.getByRole('button', { name: 'Load more' });
     await screen.findByRole('rowheader', { name: 'host-1.example.test' });
     fireEvent.click(more());
@@ -146,7 +203,7 @@ describe('Platform-wide provider host requests', () => {
       .mockResolvedValueOnce(page([], 'first'))
       .mockReturnValueOnce(append.promise)
       .mockReturnValueOnce(retry.promise);
-    render(<PlatformSettingsPage />);
+    renderPage();
     await screen.findByText('No requests were returned on this page.');
     expect(screen.queryByText(emptyQueue)).toBeNull();
     expect(screen.queryByRole('table', { name: queueTitle })).toBeNull();
@@ -177,7 +234,7 @@ describe('Platform-wide provider host requests', () => {
     const { promise, resolve, reject } = deferred<PlatformEgressDestinationPage>();
     api.listPlatformEgressDestinations.mockResolvedValueOnce(page(['1'], 'next'))
       .mockReturnValueOnce(promise).mockResolvedValueOnce(page(['2']));
-    const view = render(<PlatformSettingsPage />);
+    const view = renderPage();
     await screen.findByRole('rowheader', { name: 'host-1.example.test' });
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
     if (scenario === 'refresh') {
@@ -187,7 +244,15 @@ describe('Platform-wide provider host requests', () => {
         auth.authorizationContext = { issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-2' };
       else
         signIn();
-      view.rerender(<PlatformSettingsPage />);
+      view.rerender(
+        <MemoryRouter initialEntries={['/platform-settings']}>
+          <Routes>
+            <Route path="/platform-settings" element={<PlatformSettingsPage />} />
+            <Route path="*" element={null} />
+          </Routes>
+          <CurrentPath />
+        </MemoryRouter>,
+      );
     }
     expect(screen.queryByText('host-1.example.test')).toBeNull();
     await screen.findByRole('rowheader', { name: 'host-2.example.test' });
@@ -205,7 +270,7 @@ describe('Platform-wide provider host requests', () => {
     signIn();
     api.listPlatformEgressDestinations.mockResolvedValueOnce(page(['1'], 'next'))
       .mockRejectedValueOnce(new GatewayError(403, {}, 'Forbidden'));
-    render(<PlatformSettingsPage />);
+    renderPage();
     await screen.findByRole('rowheader', { name: 'host-1.example.test' });
     const action = screen.getByRole('button', { name: 'Load more' });
     action.focus();
@@ -233,7 +298,7 @@ describe('PlatformSettingsPage', () => {
         })
         : name === 'canvas' ? area(name, { owner: 'none', readiness: 'notAvailable', reason: 'noBackendOwner' }) : area(name)),
     });
-    render(<PlatformSettingsPage />);
+    renderPage();
     const table = await screen.findByRole('table', { name: 'Platform component areas' });
     // One header row plus one row per area.
     expect(within(table).getAllByRole('row')).toHaveLength(17);
@@ -251,14 +316,14 @@ describe('PlatformSettingsPage', () => {
 
   it('shows admin-only copy for a 403', async () => {
     api.getPlatformComponents.mockRejectedValue(new GatewayError(403, {}, 'Forbidden'));
-    render(<PlatformSettingsPage />);
+    renderPage();
     expect(await screen.findByText('Only tenant or platform administrators can view platform components.')).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
   });
 
   it('reads the report again on Refresh', async () => {
     api.getPlatformComponents.mockResolvedValue({ observedAt: '2026-01-01T00:00:00Z', areas: [area('sessions')] });
-    render(<PlatformSettingsPage />);
+    renderPage();
     await screen.findByRole('table');
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(api.getPlatformComponents).toHaveBeenCalledTimes(2));

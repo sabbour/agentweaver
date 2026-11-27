@@ -1,5 +1,6 @@
 import { Button } from '@fluentui/react-components';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
@@ -50,6 +51,7 @@ function HostRequestList({ session, tenantId, onFocusedRemoval }: {
   const [failure, setFailure] = useState<{ message: string; retryCursor: string | null; denied: boolean } | null>(null);
   const request = useRef<AbortController | null>(null);
   const pageAction = useRef<HTMLButtonElement>(null);
+  const policiesAction = useRef<HTMLAnchorElement>(null);
   const refreshAction = useRef<HTMLButtonElement>(null);
   const resultsStatus = useRef<HTMLDivElement>(null);
 
@@ -109,7 +111,7 @@ function HostRequestList({ session, tenantId, onFocusedRemoval }: {
 
   useLayoutEffect(() => () => {
     const focused = document.activeElement;
-    if (focused && (focused === pageAction.current || focused === refreshAction.current))
+    if (focused && (focused === pageAction.current || focused === policiesAction.current || focused === refreshAction.current))
       onFocusedRemoval();
     request.current?.abort();
   }, [onFocusedRemoval]);
@@ -162,6 +164,7 @@ function HostRequestList({ session, tenantId, onFocusedRemoval }: {
           {failure ? 'Retry' : 'Load more'}
         </Button>
       )}
+      {!loading && !failure && <Link ref={policiesAction} to="/policies">Open Policies</Link>}
     </>
   );
 }

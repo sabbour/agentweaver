@@ -2190,6 +2190,33 @@ describe('Platform Policies served route', () => {
     ]).toContain(document.activeElement);
   });
 
+  it('does not steal focus from a contextual Policies link during a background recheck', async () => {
+    const intervalHandlers: (() => void)[] = [];
+    const setInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number) => {
+      if (delay === 60_000 && typeof handler === 'function')
+        intervalHandlers.push(handler as () => void);
+      return setInterval(handler, delay);
+    }) as typeof window.setInterval);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completeSignIn();
+    await screen.findByText('Saved Platform Policy revisions');
+    const contextualLink = document.createElement('a');
+    contextualLink.href = '/policies';
+    contextualLink.textContent = 'Open Policies';
+    document.body.append(contextualLink);
+    contextualLink.focus();
+
+    policyStatus = 403;
+    act(() => intervalHandlers.at(-1)?.());
+
+    await screen.findByText('You do not have permission to access Platform Policies.');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
+    expect(document.activeElement).toBe(contextualLink);
+    contextualLink.remove();
+  });
+
   it.each(['timer', 'visibility'] as const)(
     'hides comparison during %s recheck and restores the pinned revision after a head advance',
     async (trigger) => {

@@ -52,7 +52,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/runState.ts` | State words for runs: Needs input, Open, Working, Done, and Unavailable. |
 | `src/v1/App.tsx` (`ProjectRunHistoryPage`) | Project-authorized Session tree, Activity, and stored Egress history for one run, using the shared tabs and panel layout. |
 | `src/v1/RunEgressPanel.tsx` | Exact project-session authorization, confirmed-tenant request fencing, server-ordered egress paging, retries, and access-loss clearing. |
-| `src/v1/PlatformProviderHostRequests.tsx` | Read-only platform-wide provider host requests. Uses an unbound platform session and confirmed tenant for access, not to filter rows. |
+| `src/v1/PlatformProviderHostRequests.tsx` | Read-only platform-wide provider host requests and **Open Policies** navigation after a successful queue load. Uses an unbound platform session and confirmed tenant for access, not to filter rows. |
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
 | `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, explicit repository sync preview and commit, and digest-checked AgentSuite export and import. |
@@ -90,7 +90,7 @@ data hooks are not mounted.
 | `/settings` | Account settings: clear the session and manage the Repo App account. |
 | `/sessions` | `SessionsPage`. |
 | `/assistant` | `NewSessionPage`; `project` or `projectId` preselects the project. |
-| `/platform-settings` | `PlatformSettingsPage`; includes the platform-wide host request list for platform administrators. |
+| `/platform-settings` | `PlatformSettingsPage`; includes the platform-wide host request list and **Open Policies** navigation after a successful queue load for platform administrators. |
 | `/policies` | `PlatformPoliciesPage`; Platform mode reads saved history and compares an in-memory draft with the exact viewed revision, while Project mode validates an in-memory local artifact for one authorized Project and offers the **Project Skill trust score** form after validation passes. |
 | `/projects/:projectId/team/cast` | `CastTeamPage`. |
 | `/projects/:projectId/runs/:runId/history` | Project-authorized Session tree, Activity, or Egress history for the selected run. `view` selects `sessions`, `activity`, or `egress`. Egress uses an exact project credential and a confirmed tenant while Session tree and Activity keep their unbound credential. |
