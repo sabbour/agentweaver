@@ -2193,7 +2193,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(HttpStatusCode.OK, putInitial2.StatusCode);
         }
 
-        // Cancel with mismatched revision on Projects returns 409 without releasing DisablePending until v2/cancel commits.
+        // Stale expectedProviderRevision on DELETE is rejected (409) at initial preflight WITHOUT creating DisablePending.
         var staleDisableOp = Guid.NewGuid();
         using (var staleDelete = await SendCredentialJsonAsync(
             gateway.Client, HttpMethod.Delete,
@@ -2202,19 +2202,45 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             Assert.Equal(HttpStatusCode.Conflict, staleDelete.StatusCode);
         }
-
-        // Concurrent PUT is blocked (409) while DisablePending is still active (even after Projects returned 409).
-        using (var fencedPut = await SendCredentialJsonAsync(
-            gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId2}/credential", adminToken,
-            new
-            {
-                operationId = Guid.NewGuid(),
-                expectedProviderRevision = 2,
-                expectedCredentialRevision = 1,
-                apiKey = "sk-fenced-secret-11111",
-            }))
+        using (var scope = broker.Services.CreateScope())
         {
-            Assert.Equal(HttpStatusCode.Conflict, fencedPut.StatusCode);
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            Assert.Null(await store.ReadWriteClaimByOperationAsync(staleDisableOp));
+        }
+
+        // Valid preflight + DisablePending claim (simulating a pending/lost-reply disable before Projects commits).
+        var pendingDisableOp = Guid.NewGuid();
+        var adminIssuer = new JwtSecurityTokenHandler().ReadJwtToken(adminToken).Issuer;
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = scope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var preflight = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    pendingDisableOp, ModelProviderBindingScope.Platform, null, providerId2,
+                    adminIssuer, adminSub, TenantId, null, null, "draft-snapshot"),
+                CancellationToken.None);
+            _ = await store.ClaimDisableAsync(
+                new ClaimModelProviderCredentialDisable(
+                    pendingDisableOp, 2, 1, ModelProviderCredentialScope.Platform, null, providerId2,
+                    adminSub, adminIssuer, preflight.PreflightId),
+                CancellationToken.None);
+        }
+
+        // Store-level concurrent different-operation PUT is fenced (credential_slot_conflict) while DisablePending is active.
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var fenceEx = await Assert.ThrowsAsync<ModelProviderCredentialException>(() =>
+                store.ClaimPublicationWriteAsync(
+                    new ClaimModelProviderCredentialPublication(
+                        new ClaimModelProviderCredentialWrite(
+                            Guid.NewGuid(), 1, Guid.NewGuid(),
+                            ModelProviderCredentialScope.Platform, null, providerId2,
+                            ModelProviderCredentialVaultSource.Byok, $"byok-platform-{providerId2}", adminSub),
+                        2, BrokerModelProviderCredentialPublicationClient.Purpose, adminIssuer, TenantId),
+                    CancellationToken.None));
+            Assert.Equal("credential_slot_conflict", fenceEx.Code);
         }
 
         // PUT with the DisablePending operationId is rejected (409).
@@ -2222,7 +2248,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             gateway.Client, HttpMethod.Put, $"/api/v1/platform/byok-providers/{providerId2}/credential", adminToken,
             new
             {
-                operationId = staleDisableOp,
+                operationId = pendingDisableOp,
                 expectedProviderRevision = 2,
                 expectedCredentialRevision = 1,
                 apiKey = "sk-same-op-secret-22222",
@@ -2234,7 +2260,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         // Cancel with ?cancel=true commits Projects v2/cancel tombstone and releases DisablePending.
         using (var cancelDelete = await SendCredentialJsonAsync(
             gateway.Client, HttpMethod.Delete,
-            $"/api/v1/platform/byok-providers/{providerId2}/credential?operationId={staleDisableOp:D}&cancel=true",
+            $"/api/v1/platform/byok-providers/{providerId2}/credential?operationId={pendingDisableOp:D}&cancel=true",
             adminToken, null))
         {
             Assert.Equal(HttpStatusCode.OK, cancelDelete.StatusCode);
