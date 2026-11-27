@@ -1,3 +1,5 @@
+import type { ModelProviderCredentialStatusResponse } from './contracts';
+
 /**
  * In-memory operation tracking for platform and project BYOK provider key writes.
  * Keyed by confirmed (issuer, actorId, tenantId, scope, projectId, providerId) and
@@ -100,4 +102,25 @@ export function createProjectCredentialOperationStore(): ProjectCredentialOperat
       }
     },
   };
+}
+
+export function requireModelProviderCredentialStatus(
+  response: ModelProviderCredentialStatusResponse,
+  expectedScope: CredentialOperationScope,
+  expectedProjectId: string | null,
+  expectedProviderId: string,
+): ModelProviderCredentialStatusResponse {
+  if (response.scope !== expectedScope ||
+      response.projectId !== expectedProjectId ||
+      response.providerId !== expectedProviderId ||
+      !Number.isSafeInteger(response.providerRevision) ||
+      response.providerRevision <= 0 ||
+      !Number.isSafeInteger(response.credentialRevision) ||
+      response.credentialRevision < 0 ||
+      !['not_set', 'enabled', 'disabled', 'pending', 'quarantined'].includes(response.state) ||
+      (response.state === 'not_set' && response.credentialRevision !== 0) ||
+      (response.state === 'enabled' && response.credentialRevision <= 0)) {
+    throw new Error('The service returned an invalid credential status.');
+  }
+  return response;
 }

@@ -815,6 +815,24 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Reads platform BYOK provider credential status and revision without caching or secrets. */
+  getPlatformByokProviderCredential(
+    token: string,
+    providerId: string,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialStatusResponse> {
+    return this.request(
+      token,
+      `/platform/${encodeSegments('byok-providers', providerId, 'credential')}`,
+      {
+        credentials: 'omit',
+        cache: 'no-store',
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   createPlatformByokProviderDraft(
     token: string,
     request: ProjectModelProviderDraftSaveRequest,

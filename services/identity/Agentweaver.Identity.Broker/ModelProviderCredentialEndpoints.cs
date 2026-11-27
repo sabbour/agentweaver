@@ -582,9 +582,10 @@ internal static class ModelProviderCredentialEndpoints
                 if (!StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
                     return Error("forbidden", 403);
 
-                var pubClaim = ToPublicationClaim(
-                    existingClaim,
-                    hasRecheck && existingClaim.ExpectedRevision > 0);
+                if (!store.TryResolvePublicationReplayIsRecheck(existingClaim, hasRecheck, out var replayIsRecheck))
+                    return Error("credential_slot_conflict", 409);
+
+                var pubClaim = ToPublicationClaim(existingClaim, replayIsRecheck);
 
                 if (existingClaim.State == ModelProviderCredentialWriteClaimState.Cancelled)
                     return Error("credential_operation_cancelled", 409);

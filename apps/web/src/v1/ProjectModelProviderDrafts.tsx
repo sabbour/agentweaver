@@ -15,6 +15,7 @@ import { errorMessage } from './errors';
 import { Loading, ErrorNotice } from './pageParts';
 import {
   createProjectCredentialOperationStore,
+  requireModelProviderCredentialStatus,
   type ProjectCredentialOperation,
   type ProjectCredentialOperationKey,
 } from './projectCredentialOperations';
@@ -169,17 +170,7 @@ function requireProjectCredentialStatus(
   projectId: string,
   providerId: string,
 ): ModelProviderCredentialStatusResponse {
-  if (response.scope !== 'project' ||
-      response.projectId !== projectId ||
-      response.providerId !== providerId ||
-      !Number.isSafeInteger(response.providerRevision) ||
-      response.providerRevision <= 0 ||
-      !Number.isSafeInteger(response.credentialRevision) ||
-      response.credentialRevision < 0 ||
-      !['not_set', 'enabled', 'disabled', 'pending', 'quarantined'].includes(response.state)) {
-    throw new Error('The service returned an invalid credential status.');
-  }
-  return response;
+  return requireModelProviderCredentialStatus(response, 'project', projectId, providerId);
 }
 
 function isPreClaimCredentialRejection(reason: unknown): boolean {

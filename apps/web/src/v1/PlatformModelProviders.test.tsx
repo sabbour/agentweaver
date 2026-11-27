@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   createPlatformByokProviderDraft: vi.fn(),
   updatePlatformByokProviderDraft: vi.fn(),
   savePlatformManualRuntimeRateCard: vi.fn(),
+  getPlatformByokProviderCredential: vi.fn(),
   setPlatformByokProviderCredential: vi.fn(),
   getPlatformByokProviderCredentialOperation: vi.fn(),
   activatePlatformByokProvider: vi.fn(),
@@ -95,6 +96,21 @@ function setPage(pageOverrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   api.listPlatformByokProviderDrafts.mockReset();
+  api.getPlatformByokProviderDraft.mockReset();
+  api.createPlatformByokProviderDraft.mockReset();
+  api.updatePlatformByokProviderDraft.mockReset();
+  api.getPlatformByokProviderCredential.mockReset();
+  api.setPlatformByokProviderCredential.mockReset();
+  api.getPlatformByokProviderCredentialOperation.mockReset();
+  api.getPlatformByokProviderCredential.mockImplementation((_token: string, providerId: string) =>
+    Promise.resolve({
+      scope: 'platform',
+      projectId: null,
+      providerId,
+      providerRevision: 1,
+      state: 'not_set',
+      credentialRevision: 0,
+    }));
   auth.active = true;
   auth.session = { accessToken: 'token-1', binding: null };
   auth.authSessionGeneration = 1;
@@ -102,6 +118,10 @@ beforeEach(() => {
   auth.unboundSessionGeneration = 1;
   auth.tenant = 'tenant-1';
   auth.authorizationContext = { tenantId: 'tenant-1' };
+  auth.resolveAuthorizationContext.mockReset();
+  auth.resolveAuthorizationContext.mockImplementation(async () => ({
+    issuer: 'issuer', actorId: 'actor', tenantId: auth.tenant, membershipRevision: 1,
+  }));
   auth.projectCredentialOperations = createProjectCredentialOperationStore();
   setPage();
   api.savePlatformManualRuntimeRateCard.mockResolvedValue({});
@@ -984,8 +1004,8 @@ describe('PlatformModelProviders', () => {
     setPage({ activeProviderId: null, providers: [draft] });
     api.createPlatformByokProviderDraft.mockResolvedValue(draft);
     api.setPlatformByokProviderCredential
-      .mockRejectedValueOnce(new GatewayError(409, { code: 'credential_slot_conflict' }, 'Conflict'))
-      .mockRejectedValueOnce(new GatewayError(503, { code: 'credential_vault_unavailable' }, 'Vault down'));
+      .mockRejectedValueOnce(new GatewayError(503, { code: 'credential_vault_unavailable' }, 'Vault down'))
+      .mockRejectedValueOnce(new GatewayError(409, { code: 'credential_slot_conflict' }, 'Conflict'));
 
     render(<PlatformModelProviders />);
     await screen.findByText('Primary');
@@ -1000,18 +1020,19 @@ describe('PlatformModelProviders', () => {
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'secret-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
 
-    expect(await screen.findByText(/already has an existing or disabled credential slot/)).toBeTruthy();
+    expect(await screen.findByText(/Vault down/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
     expect(auth.projectCredentialOperations!.get({
       issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1', scope: 'platform', projectId: null, providerId: 'provider-1',
     })).toBeNull();
 
-    // Second pre-claim failure (503 credential_vault_unavailable) on update also does not store an operation.
+    // Second pre-claim failure (409 credential_slot_conflict) on update also does not store an operation.
     api.updatePlatformByokProviderDraft.mockResolvedValue({ ...draft, revision: 2 });
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'secret-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    expect(await screen.findByText(/Vault down/)).toBeTruthy();
+    expect(await screen.findByText(/already has an existing or disabled credential slot/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Check key status' })).toBeNull();
+    expect(screen.queryByLabelText('API key')).toBeNull();
   });
 
   it('blocks API key entry in Edit during unresolved operations while allowing metadata-only edits, and closes/reloads on uncertain PUT', async () => {
@@ -1514,5 +1535,392 @@ describe('PlatformModelProviders', () => {
     rejectStaleReload(new GatewayError(403, { code: 'forbidden' }, 'Stale denied'));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText(/Your role cannot manage platform providers/)).toBeNull();
+  });
+
+  it('rotates an Available platform provider key without editing metadata or switching default', async () => {
+    const avail = provider({ state: 'Available', revision: 4, hasCredential: true, is_active: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue({
+      mode: 'active',
+      activeProviderId: 'provider-1',
+      activeProviderRevision: 4,
+      settingsRevision: 10,
+      providers: [avail],
+      nextAfterProviderId: null,
+    });
+    api.getPlatformByokProviderCredential.mockResolvedValueOnce({
+      scope: 'platform',
+      projectId: null,
+      providerId: 'provider-1',
+      providerRevision: 4,
+      state: 'enabled',
+      credentialRevision: 2,
+    });
+    let resolvePut!: (value: unknown) => void;
+    api.setPlatformByokProviderCredential.mockImplementationOnce(
+      () => new Promise((resolve) => { resolvePut = resolve; }),
+    );
+
+    const { container } = render(<PlatformModelProviders />);
+    const rotateBtn = await screen.findByRole('button', { name: 'Rotate API key for Primary' });
+    fireEvent.click(rotateBtn);
+
+    const input = await screen.findByLabelText(/New API key/i) as HTMLInputElement;
+    expect(input.type).toBe('password');
+    expect(input.autocomplete).toBe('new-password');
+    fireEvent.click(screen.getByRole('button', { name: 'Show API key' }));
+    expect(input.type).toBe('text');
+    fireEvent.change(input, { target: { value: 'sk-plat-rotated-3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new API key' }));
+
+    await waitFor(() => expect((screen.getByLabelText(/New API key/i) as HTMLInputElement).value).toBe(''));
+    expect((screen.getByLabelText(/New API key/i) as HTMLInputElement).type).toBe('password');
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+    expect(api.activatePlatformByokProvider).not.toHaveBeenCalled();
+    const putReq = api.setPlatformByokProviderCredential.mock.calls[0][2] as Record<string, unknown>;
+    expect(putReq).toMatchObject({
+      expectedProviderRevision: 4,
+      expectedCredentialRevision: 2,
+      apiKey: 'sk-plat-rotated-3',
+    });
+
+    await act(async () => {
+      resolvePut({
+        operationId: putReq.operationId,
+        status: 'published',
+        scope: 'platform',
+        projectId: null,
+        providerId: 'provider-1',
+        providerRevision: 5,
+        credentialRevision: 3,
+        credentialVersion: 'v3',
+        configurationHash: 'h',
+        providerState: 'Available',
+      });
+    });
+
+    expect(await screen.findByText('API key rotated. Provider state: Available.')).toBeTruthy();
+    expect(container.textContent).not.toContain('sk-plat-rotated-3');
+    expect(api.updatePlatformByokProviderDraft).not.toHaveBeenCalled();
+    expect(api.activatePlatformByokProvider).not.toHaveBeenCalled();
+  });
+
+  it('retries publication_pending platform rotation with original operationId and revisions without apiKey', async () => {
+    const draft = provider({ id: 'p-draft', name: 'Draft Prov', state: 'Draft', revision: 2, hasCredential: true, is_active: false });
+    api.listPlatformByokProviderDrafts.mockResolvedValue({
+      mode: 'copilot',
+      activeProviderId: null,
+      activeProviderRevision: null,
+      settingsRevision: 10,
+      providers: [draft],
+      nextAfterProviderId: null,
+    });
+    api.getPlatformByokProviderCredential.mockResolvedValueOnce({
+      scope: 'platform',
+      projectId: null,
+      providerId: 'p-draft',
+      providerRevision: 2,
+      state: 'enabled',
+      credentialRevision: 1,
+    });
+    api.setPlatformByokProviderCredential
+      .mockRejectedValueOnce(new GatewayError(503, { code: 'credential_publication_pending' }, 'Pending'))
+      .mockImplementationOnce(async (_token, _providerId, req) => ({
+        operationId: req.operationId,
+        status: 'published',
+        scope: 'platform',
+        projectId: null,
+        providerId: 'p-draft',
+        providerRevision: 3,
+        credentialRevision: 2,
+        credentialVersion: 'v2',
+        configurationHash: 'h',
+        providerState: 'Available',
+      }));
+
+    render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate API key for Draft Prov' }));
+    const input = await screen.findByLabelText(/New API key/i);
+    fireEvent.change(input, { target: { value: 'sk-draft-rotate' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new API key' }));
+
+    const retryBtn = await screen.findByRole('button', { name: 'Retry publication' });
+    const firstReq = api.setPlatformByokProviderCredential.mock.calls[0][2] as Record<string, unknown>;
+    fireEvent.click(retryBtn);
+
+    await waitFor(() => expect(api.setPlatformByokProviderCredential).toHaveBeenCalledTimes(2));
+    const retryReq = api.setPlatformByokProviderCredential.mock.calls[1][2] as Record<string, unknown>;
+    expect(retryReq).toMatchObject({
+      operationId: firstReq.operationId,
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 1,
+      recheckExistingVersion: true,
+    });
+    expect('apiKey' in retryReq).toBe(false);
+  });
+
+  it('blocks platform rotation on invalid status, non-enabled states, missing operation key, and 403', async () => {
+    const avail = provider({ state: 'Available', revision: 4, hasCredential: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue({
+      mode: 'active',
+      activeProviderId: 'provider-1',
+      activeProviderRevision: 4,
+      settingsRevision: 10,
+      providers: [avail],
+      nextAfterProviderId: null,
+    });
+    api.getPlatformByokProviderCredential
+      .mockResolvedValueOnce({
+        scope: 'platform',
+        projectId: null,
+        providerId: 'provider-1',
+        providerRevision: 4,
+        state: 'enabled',
+        credentialRevision: 0,
+      })
+      .mockResolvedValueOnce({
+        scope: 'platform',
+        projectId: null,
+        providerId: 'provider-1',
+        providerRevision: 4,
+        state: 'disabled',
+        credentialRevision: 2,
+      })
+      .mockResolvedValueOnce({
+        scope: 'platform',
+        projectId: null,
+        providerId: 'provider-1',
+        providerRevision: 4,
+        state: 'quarantined',
+        credentialRevision: 1,
+      })
+      .mockResolvedValueOnce({
+        scope: 'platform',
+        projectId: null,
+        providerId: 'provider-1',
+        providerRevision: 4,
+        state: 'enabled',
+        credentialRevision: 1,
+      })
+      .mockRejectedValueOnce(new GatewayError(403, { code: 'forbidden' }, 'Denied'));
+
+    const view = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate API key for Primary' }));
+    expect(await screen.findByText(/invalid credential status/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/New API key/i)).toBeNull();
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText(/Disabled credential slots cannot be rotated/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/New API key/i)).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText(/Operator recovery is required before rotating/i)).toBeTruthy();
+
+    // Missing operation-store key (actorId missing) blocks submit before sending any secret.
+    auth.authSessionEpoch = 2;
+    auth.authorizationContext = { tenantId: 'tenant-1', actorId: null, issuer: null };
+    auth.resolveAuthorizationContext.mockResolvedValue({
+      issuer: null as unknown as string,
+      actorId: null as unknown as string,
+      tenantId: 'tenant-1',
+      membershipRevision: 1,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    view.rerender(<PlatformModelProviders />);
+    await waitFor(() => expect(auth.resolveAuthorizationContext).toHaveBeenCalledTimes(2));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate API key for Primary' }));
+    const keyInput = await screen.findByLabelText(/New API key/i);
+    fireEvent.change(keyInput, { target: { value: 'sk-blocked-no-opkey' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new API key' }));
+    expect(await screen.findByText(/Confirm platform access before rotating/i)).toBeTruthy();
+    expect(api.setPlatformByokProviderCredential).not.toHaveBeenCalled();
+
+    // 403 clears rotation form and shows access-denied state.
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText(/Your role cannot manage platform providers/i)).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('ignores deferred status reads after Escape dismissal and returns focus to trigger button', async () => {
+    const p1 = provider({ id: 'p1', name: 'First Prov', state: 'Available', revision: 4, hasCredential: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue({
+      mode: 'active',
+      activeProviderId: 'p1',
+      activeProviderRevision: 4,
+      settingsRevision: 10,
+      providers: [p1],
+      nextAfterProviderId: null,
+    });
+    let resolveStatus!: (value: unknown) => void;
+    api.getPlatformByokProviderCredential.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveStatus = resolve; }),
+    );
+
+    render(<PlatformModelProviders />);
+    const trigger = await screen.findByRole('button', { name: 'Rotate API key for First Prov' });
+    fireEvent.click(trigger);
+
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(api.getPlatformByokProviderCredential).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    await act(async () => {
+      resolveStatus({
+        scope: 'platform',
+        projectId: null,
+        providerId: 'p1',
+        providerRevision: 4,
+        state: 'enabled',
+        credentialRevision: 1,
+      });
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('handles 409 credential_slot_conflict, 409 model_provider_draft_conflict, and 401 on platform rotation', async () => {
+    const avail = provider({ state: 'Available', revision: 4, hasCredential: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue({
+      mode: 'active',
+      activeProviderId: 'provider-1',
+      activeProviderRevision: 4,
+      settingsRevision: 10,
+      providers: [avail],
+      nextAfterProviderId: null,
+    });
+    api.getPlatformByokProviderCredential
+      .mockResolvedValueOnce({
+        scope: 'platform', projectId: null, providerId: 'provider-1',
+        providerRevision: 4, state: 'enabled', credentialRevision: 2,
+      })
+      .mockResolvedValueOnce({
+        scope: 'platform', projectId: null, providerId: 'provider-1',
+        providerRevision: 5, state: 'enabled', credentialRevision: 3,
+      })
+      .mockResolvedValueOnce({
+        scope: 'platform', projectId: null, providerId: 'provider-1',
+        providerRevision: 5, state: 'enabled', credentialRevision: 3,
+      })
+      .mockResolvedValueOnce({
+        scope: 'platform', projectId: null, providerId: 'provider-1',
+        providerRevision: 5, state: 'enabled', credentialRevision: 3,
+      });
+    api.setPlatformByokProviderCredential
+      .mockRejectedValueOnce(new GatewayError(409, { code: 'credential_slot_conflict' }, 'Slot changed'))
+      .mockRejectedValueOnce(new GatewayError(409, { code: 'model_provider_draft_conflict' }, 'Draft changed'))
+      .mockRejectedValueOnce(new GatewayError(401, { code: 'unauthorized' }, 'Expired'));
+
+    render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate API key for Primary' }));
+
+    // 409 credential_slot_conflict clears pending op and refreshes status for new key entry.
+    fireEvent.change(await screen.findByLabelText(/New API key/i), { target: { value: 'sk-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new API key' }));
+    expect(await screen.findByText(/credential state changed/i)).toBeTruthy();
+    expect(auth.projectCredentialOperations?.get({
+      issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1',
+      scope: 'platform', projectId: null, providerId: 'provider-1',
+    })).toBeNull();
+
+    // 409 model_provider_draft_conflict preserves operationId as uncertain and refreshes status.
+    fireEvent.change(await screen.findByLabelText(/New API key/i), { target: { value: 'sk-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new API key' }));
+    expect(await screen.findByText(/Draft changed/)).toBeTruthy();
+    const preserved = auth.projectCredentialOperations?.get({
+      issuer: 'issuer', actorId: 'actor', tenantId: 'tenant-1',
+      scope: 'platform', projectId: null, providerId: 'provider-1',
+    });
+    expect(preserved?.status).toBe('uncertain');
+    expect(preserved?.expectedCredentialRevision).toBe(3);
+
+    // Clear op to test 401 clearing rotation form.
+    auth.projectCredentialOperations?.clear();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate API key for Primary' }));
+    fireEvent.change(await screen.findByLabelText(/New API key/i), { target: { value: 'sk-3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new API key' }));
+    expect(await screen.findByText('Expired')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('ignores deferred PUT rotation result after closing form and clearing or switching operation', async () => {
+    const p1 = provider({ id: 'p1', name: 'Primary', state: 'Available', revision: 4, hasCredential: true });
+    api.listPlatformByokProviderDrafts.mockResolvedValue({
+      mode: 'active',
+      activeProviderId: 'p1',
+      activeProviderRevision: 4,
+      settingsRevision: 10,
+      providers: [p1],
+      nextAfterProviderId: null,
+    });
+    api.getPlatformByokProviderCredential.mockResolvedValueOnce({
+      scope: 'platform', projectId: null, providerId: 'p1',
+      providerRevision: 4, state: 'enabled', credentialRevision: 2,
+    });
+    let rejectDeferred!: (reason: Error) => void;
+    api.setPlatformByokProviderCredential.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectDeferred = reject; }),
+    );
+
+    const view = render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate API key for Primary' }));
+    fireEvent.change(await screen.findByLabelText(/New API key/i), { target: { value: 'sk-late' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new API key' }));
+    await waitFor(() => expect(api.setPlatformByokProviderCredential).toHaveBeenCalledTimes(1));
+
+    // Simulate identity switch clearing the operation store before late PUT settles.
+    auth.authSessionEpoch = 2;
+    auth.authorizationContext = { tenantId: 'tenant-1', actorId: 'actor-2', issuer: 'issuer' };
+    auth.resolveAuthorizationContext.mockResolvedValue({
+      issuer: 'issuer', actorId: 'actor-2', tenantId: 'tenant-1', membershipRevision: 2,
+    });
+    view.rerender(<PlatformModelProviders />);
+    await waitFor(() => expect(auth.resolveAuthorizationContext).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      rejectDeferred(new GatewayError(503, { code: 'credential_write_uncertain' }, 'Late uncertain'));
+    });
+    expect(auth.projectCredentialOperations?.get({
+      issuer: 'issuer', actorId: 'actor-2', tenantId: 'tenant-1',
+      scope: 'platform', projectId: null, providerId: 'p1',
+    })).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('gates first-key entry in Draft Edit form on confirmed not_set status while retaining metadata-only edits', async () => {
+    const draft = provider({ id: 'draft-1', name: 'Draft One', state: 'Draft', revision: 2, hasCredential: false, is_active: false });
+    api.listPlatformByokProviderDrafts.mockResolvedValue({
+      mode: 'copilot',
+      activeProviderId: null,
+      activeProviderRevision: null,
+      settingsRevision: 10,
+      providers: [draft],
+      nextAfterProviderId: null,
+    });
+    api.getPlatformByokProviderDraft.mockResolvedValue(draft);
+    api.updatePlatformByokProviderDraft.mockResolvedValue({ ...draft, name: 'Draft Renamed', revision: 3 });
+
+    // Disabled slot hides API key field but still allows metadata-only Save changes.
+    api.getPlatformByokProviderCredential.mockResolvedValueOnce({
+      scope: 'platform', projectId: null, providerId: 'draft-1',
+      providerRevision: 2, state: 'disabled', credentialRevision: 2,
+    });
+    render(<PlatformModelProviders />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Draft One' }));
+    expect(await screen.findByText(/Disabled credential slots cannot accept a new key/i)).toBeTruthy();
+    expect(screen.queryByLabelText('API key')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Draft Renamed' } });
+    fireEvent.click(screen.getByLabelText('Use a saved rate card'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(api.updatePlatformByokProviderDraft).toHaveBeenCalledTimes(1));
+    expect(api.setPlatformByokProviderCredential).not.toHaveBeenCalled();
+
+    // Status error also hides API key field while allowing metadata-only edits.
+    api.getPlatformByokProviderCredential.mockRejectedValueOnce(new Error('Status unavailable'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Draft One' }));
+    expect(await screen.findByText('Status unavailable')).toBeTruthy();
+    expect(screen.queryByLabelText('API key')).toBeNull();
   });
 });

@@ -80,6 +80,19 @@ close clears this in-memory state.
 - **`published`, `cancelled`, or `disabled`:** The page clears the operation
   and reloads the provider list.
 
+## Rotate a saved API key
+
+For an `Available` provider or a `Draft` provider with an enabled key, select
+**Rotate API key**:
+
+1. The form reads the current credential status and revisions without editing
+   provider metadata or switching the default.
+2. When the status is `enabled`, enter the replacement key in **New API key**
+   and select **Save new API key**. The form clears the typed key immediately.
+3. If the status is `not_set`, `disabled`, `pending`, or `quarantined`, key
+   entry stays blocked. Resolve any pending or quarantined operation on the
+   provider card first.
+
 ## Choose the default for new runs
 
 Use a provider only after its state is `Available` and its key status is
