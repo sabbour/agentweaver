@@ -1354,6 +1354,244 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsProjectPolicyBaselineRecord", b =>
+                {
+                    b.Property<Guid>("BaselineId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("baseline_id");
+
+                    b.Property<string>("ApprovalCorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("approval_correlation_id");
+
+                    b.Property<string>("ApprovalIdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("approval_idempotency_key");
+
+                    b.Property<string>("ApprovalReason")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("approval_reason");
+
+                    b.Property<string>("ApprovalRequestDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("approval_request_digest");
+
+                    b.Property<string>("ApprovalScopeDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("approval_scope_digest");
+
+                    b.Property<DateTimeOffset>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approved_at");
+
+                    b.Property<string>("ApproverActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("approver_actor_id");
+
+                    b.Property<Guid>("ApproverAssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("approver_assignment_id");
+
+                    b.Property<long>("ApproverAssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("approver_assignment_revision");
+
+                    b.Property<string>("ApproverIssuer")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("approver_issuer");
+
+                    b.Property<Guid>("ApproverMembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("approver_membership_id");
+
+                    b.Property<long>("ApproverMembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("approver_membership_revision");
+
+                    b.Property<string>("ArtifactJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("artifact");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("consumed_at");
+
+                    b.Property<long?>("ConsumedRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("consumed_revision");
+
+                    b.Property<string>("ContentSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_sha256");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("installation_id");
+
+                    b.Property<string>("OperatorActorId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("operator_actor_id");
+
+                    b.Property<string>("OperatorIssuer")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("operator_issuer");
+
+                    b.Property<Guid?>("OperatorMembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operator_membership_id");
+
+                    b.Property<long?>("OperatorMembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("operator_membership_revision");
+
+                    b.Property<string>("PinCorrelationId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("pin_correlation_id");
+
+                    b.Property<string>("PinIdempotencyKey")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("pin_idempotency_key");
+
+                    b.Property<string>("PinReason")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("pin_reason");
+
+                    b.Property<string>("PinRequestDigest")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("pin_request_digest");
+
+                    b.Property<string>("PinScopeDigest")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("pin_scope_digest");
+
+                    b.Property<DateTimeOffset?>("PinnedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("pinned_at");
+
+                    b.Property<string>("PlatformContentSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("platform_content_sha256");
+
+                    b.Property<string>("PlatformPolicyId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("platform_policy_id");
+
+                    b.Property<long?>("PlatformPolicyRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("platform_policy_revision");
+
+                    b.Property<string>("PolicyId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("policy_id");
+
+                    b.Property<string>("ProfileId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("profile_id");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("RevokedByActorId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("revoked_by_actor_id");
+
+                    b.Property<string>("RevokedByIssuer")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("revoked_by_issuer");
+
+                    b.Property<string>("RevokedCorrelationId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("revoked_correlation_id");
+
+                    b.Property<string>("RevokedReason")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("revoked_reason");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("BaselineId")
+                        .HasName("pk_native_acs_project_policy_baselines");
+
+                    b.HasIndex("ApprovalScopeDigest")
+                        .IsUnique()
+                        .HasDatabaseName("ux_native_acs_project_policy_baselines_approval_scope");
+
+                    b.HasIndex("PinScopeDigest")
+                        .IsUnique()
+                        .HasDatabaseName("ux_native_acs_project_policy_baselines_pin_scope")
+                        .HasFilter("pin_scope_digest IS NOT NULL");
+
+                    b.HasIndex("ProjectId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_native_acs_project_policy_baselines_active_project")
+                        .HasFilter("state IN ('Approved', 'Pinned')");
+
+                    b.ToTable("native_acs_project_policy_baselines", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_native_acs_project_policy_baselines_hashes", "content_sha256 ~ '^[0-9a-f]{64}$' AND approval_request_digest ~ '^[0-9a-f]{64}$' AND approval_scope_digest ~ '^[0-9a-f]{64}$' AND (pin_request_digest IS NULL OR pin_request_digest ~ '^[0-9a-f]{64}$') AND (pin_scope_digest IS NULL OR pin_scope_digest ~ '^[0-9a-f]{64}$') AND (platform_content_sha256 IS NULL OR platform_content_sha256 ~ '^[0-9a-f]{64}$')");
+
+                            t.HasCheckConstraint("ck_native_acs_project_policy_baselines_installation", "installation_id <> '00000000-0000-0000-0000-000000000000'::uuid");
+
+                            t.HasCheckConstraint("ck_native_acs_project_policy_baselines_policy_id", "policy_id = 'canonical'");
+
+                            t.HasCheckConstraint("ck_native_acs_project_policy_baselines_revisions", "approver_membership_revision > 0 AND approver_assignment_revision > 0 AND (operator_membership_revision IS NULL OR operator_membership_revision > 0) AND (platform_policy_revision IS NULL OR platform_policy_revision > 0) AND (consumed_revision IS NULL OR consumed_revision > 0)");
+
+                            t.HasCheckConstraint("ck_native_acs_project_policy_baselines_state", "state IN ('Approved', 'Pinned', 'Consumed', 'Revoked')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.PlatformRuntimeHeadRecord", b =>
                 {
                     b.Property<string>("Id")
@@ -3294,6 +3532,15 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasForeignKey("GovernanceDecisionId")
                         .HasPrincipalKey("DecisionId")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsProjectPolicyBaselineRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.PlatformRuntimeRevisionRecord", b =>

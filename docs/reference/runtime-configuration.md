@@ -745,6 +745,25 @@ workaround for an unavailable operator-only path. See
 [Diagnose interrupted project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
 for reconciliation guidance.
 
+The standalone `--project-policy-baseline` operator command also runs outside the
+HTTP service over `ConnectionStrings:ProjectsConfigAuthority` using
+`ProjectsConfig:AuthorityDatabase:WorkloadIdentity`. Configure
+`ProjectsConfig:ProjectPolicyProvisioning:ApprovedIssuer`,
+`ProjectsConfig:ProjectPolicyProvisioning:ApprovedSubject`, and
+`ProjectsConfig:ProjectPolicyProvisioning:ApprovedTenantId` (with
+`ApprovedIssuer` matching `ProjectsConfig:Authentication:Authority`). Pass a
+single bounded JSON object (`1.5 MiB` maximum, no duplicate or unknown keys) on
+standard input containing `accessToken` (unbound `aw_actor_class = "human"` JWT),
+`operation` (`"pin"` or `"revoke"`), `tenantId`, `projectId`, `baselineId`,
+`expectedContentSha256`, `idempotencyKey` (for `"pin"`), `reason`, and
+`correlationId`. To recover from an interrupted pin or a superseded approval,
+rerun `"pin"` with the same `idempotencyKey` and all identical request fields
+(`tenantId`, `projectId`, `baselineId`, `expectedContentSha256`, `reason`, and
+`correlationId`; the `accessToken` bearer token may be refreshed) for an
+idempotent replay, or run `"revoke"` (or call
+`POST /api/v1/policies/projects/{projectId}/baseline-approvals/{baselineId}/revoke`)
+before submitting a fresh human approval.
+
 The path invocation ID is a Projects setup correlation key; this endpoint does
 not validate it against Orchestrator invocation/checkpoint authority. The setup
 receipt proves only the local Projects transaction. It is not

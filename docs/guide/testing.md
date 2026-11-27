@@ -532,7 +532,7 @@ dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.
 Run the Projects & Config PostgreSQL tests in hosted CI:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicy|FullyQualifiedName~NativeAcsPlatformPolicy|FullyQualifiedName~NativeAcsProjectPolicyRead|FullyQualifiedName~NativeAcsProjectPolicyList|FullyQualifiedName~NativeAcsProjectValidation"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~NativeAcsPolicy|FullyQualifiedName~NativeAcsPlatformPolicy|FullyQualifiedName~NativeAcsProjectPolicyRead|FullyQualifiedName~NativeAcsProjectPolicyList|FullyQualifiedName~NativeAcsProjectValidation|FullyQualifiedName~ProjectPolicyBaseline"
 ```
 
 Run the Gateway preparation receipt regression on Linux. Set

@@ -661,6 +661,38 @@
           ]
         },
         {
+          "table": "native_acs_project_policy_baselines",
+          "privileges": [
+            "SELECT",
+            "INSERT"
+          ],
+          "updateColumns": [
+            "state",
+            "revoked_by_issuer",
+            "revoked_by_actor_id",
+            "revoked_reason",
+            "revoked_correlation_id",
+            "revoked_at"
+          ],
+          "mutationDenialRequired": true,
+          "mutationDenialGuards": [
+            {
+              "trigger": "native_acs_project_policy_baselines_no_delete",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 11,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            },
+            {
+              "trigger": "native_acs_project_policy_baselines_no_truncate",
+              "function": "reject_immutable_record_mutation()",
+              "triggerType": 34,
+              "message": "records in %.% are immutable",
+              "sqlState": "55000"
+            }
+          ]
+        },
+        {
           "table": "project_governance_decision_stream_heads",
           "privileges": [
             "SELECT",
@@ -834,6 +866,14 @@
         },
         {
           "signature": "require_native_acs_policy_head_advance()",
+          "execute": false
+        },
+        {
+          "signature": "guard_native_acs_project_policy_baseline_insert()",
+          "execute": false
+        },
+        {
+          "signature": "guard_native_acs_project_policy_baseline_transition()",
           "execute": false
         },
         {
