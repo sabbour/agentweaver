@@ -428,6 +428,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/policies/platform` | Read the current canonical ACS Policy artifact as a complete, hash-verified source. Requires `api.read` and a current unbound PlatformAdmin; it does not require `projects.admin`. |
 | `GET /api/policies/platform/decisions?resourceType={type}&resourceId={id}&pageSize={n}&beforeSequence={seq}` | List newest-first redacted governance decision history for one Platform resource stream. Requires `api.read`, an unbound token, and current PlatformAdmin authority. |
 | `GET /internal/policy-source/platform` | Environment source read on the shared Projects HTTPS listener. Requires native TLS 1.2/1.3, the exact Environment DNS SAN, a current pinned clientAuth leaf, the pinned backend CA, and valid online revocation status. Accepts no authorization header, query or body and returns the complete artifact with Pending admission state and `Cache-Control: no-store`. |
+| `GET /internal/policy-source/platform/preparations/{preparationId}` | Policy worker exact-preparation read on the shared Projects HTTPS listener, enabled only when `PreparationWorkerPins` is configured. Requires native TLS 1.2/1.3, the exact `environment-platform-egress-writer.agentweaver.svc.cluster.local` DNS SAN, a current pinned worker leaf, the pinned backend CA, and valid online revocation status. Accepts no authorization header, query or body and returns `artifact`, `proposedContentSha256`, and `expectedHead` with `Cache-Control: no-store`. |
 | `GET /api/policies/platform/revisions?pageSize={n}&cursor={token}` | Read newest-first revision metadata for the stable Platform lineage. `pageSize` defaults to 20 and ranges from 1 to 100. Every page rechecks current PlatformAdmin authority. |
 | `GET /api/policies/platform/revisions/{revision}` | Read the complete, hash-verified artifact and its original creation time from the exact retained revision. The revision is a canonical positive decimal Int64. |
 | `GET /api/policies/projects?pageSize={n}&cursor={token}` | List metadata for stored Project heads visible to the caller. Requires an unbound token and current TenantAdmin or project Owner, Contributor, or Viewer authority. Each bounded page query checks current membership and roles with the heads; pages do not form a snapshot. |
@@ -458,27 +459,26 @@ The Identity broker validates upstream identity but does not forward upstream te
 
 ```mermaid
 sequenceDiagram
-    actor E as Environment workload
+    actor E as Environment or Policy worker
     participant K as Shared Projects HTTPS
-    participant T as Environment peer validator
+    participant T as Route-scoped peer validator
     participant S as NativeAcsPolicyStore
     participant D as PostgreSQL
     E->>K: TLS 1.2/1.3 and client certificate
     K->>K: Classify leaf pin before issuer retrieval
-    K->>T: Validate Environment CA, leaf, SAN, EKU, validity, and revocation
+    K->>T: Validate CA, leaf pin, route SAN, EKU, validity, and revocation
     T-->>K: Accept handshake or fail without an HTTP response
-    E->>K: GET /internal/policy-source/platform
-    K->>T: Recheck peer certificate for this request
+    E->>K: GET /internal/policy-source/platform or .../preparations/{preparationId}
+    K->>T: Recheck route-matched peer certificate for this request
     T-->>K: Accept or return 403 policy_source_peer_denied
-    K->>S: Read current Platform source
+    K->>S: Read current head or exact Platform/default preparation
     S->>D: Begin read-only RepeatableRead transaction
-    S->>D: Read head, revision metadata, and bounded file metadata
-    S->>D: Load artifact bytes after the metadata bounds pass
-    S->>S: Reconstruct artifact and verify canonical hash
-    S-->>K: One complete artifact snapshot
-    K->>T: Recheck current Environment after serialization
+    S->>D: Read bounded head/revision or exact preparation row
+    S->>S: Validate bounds and verify canonical artifact hash
+    S-->>K: One complete snapshot or preparation record
+    K->>T: Recheck route-matched peer after serialization
     T-->>K: Accept or replace response with 403
-    K-->>E: 200 artifact, admission pending, no-store
+    K-->>E: 200 JSON payload, no-store
 ```
 
 The source response is one PostgreSQL snapshot. A newer head can commit after

@@ -778,6 +778,478 @@ public sealed partial class ProjectsConfigPostgresTests
             })
             .StartAsync();
 
+    [Fact]
+    public async Task PrivatePlatformPolicyPreparationReadReturnsExactImmutableRowAcrossHeadChangesAndNullExpectedHead()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "prep-read-tenant-" + suffix;
+        var caller = await SeedCallerAsync(
+            db, authorityStore, "prep-read-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var store = CreateNativeAcsStore();
+        var existingHead = await store.ReadAsync(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            CancellationToken.None);
+
+        var prep0Artifact = CreatePolicySourceArtifact(
+            "{\"version\":\"prep0\"}"u8.ToArray(),
+            [("policies/egress.yaml", "allow: [api.github.com]"u8.ToArray())]);
+        var prep0Receipt = await store.PrepareAsync(caller, new NativeAcsPolicyWriteRequest(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            existingHead?.PolicyId ?? "platform-egress",
+            existingHead?.Revision,
+            prep0Artifact,
+            "idem-prep0-" + suffix,
+            "initial prep",
+            "corr-prep0-" + suffix), CancellationToken.None);
+
+        var head1Artifact = CreatePolicySourceArtifact(
+            "{\"version\":\"head1\"}"u8.ToArray(),
+            [("policies/egress.yaml", "allow: [head1.example.com]"u8.ToArray())]);
+        var head1Receipt = await WritePlatformPolicyAsync(
+            caller, head1Artifact, "head1-" + suffix, "corr-head1-" + suffix);
+
+        var prep1Artifact = CreatePolicySourceArtifact(
+            "{\"version\":\"prep1\"}"u8.ToArray(),
+            [("policies/egress.yaml", "allow: [prep1.example.com]"u8.ToArray())]);
+        var prep1Receipt = await store.PrepareAsync(caller, new NativeAcsPolicyWriteRequest(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            head1Receipt.PolicyId,
+            head1Receipt.Revision,
+            prep1Artifact,
+            "idem-prep1-" + suffix,
+            "second prep",
+            "corr-prep1-" + suffix), CancellationToken.None);
+
+        var head2Artifact = CreatePolicySourceArtifact(
+            "{\"version\":\"head2\"}"u8.ToArray(),
+            [("policies/egress.yaml", "allow: [head2.example.com]"u8.ToArray())]);
+        var head2Receipt = await WritePlatformPolicyAsync(
+            caller, head2Artifact, "head2-" + suffix, "corr-head2-" + suffix);
+
+        var nullHeadPrepId = Guid.NewGuid();
+        var nullHeadArtifactJson = JsonSerializer.Serialize(
+            prep0Artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO projects_config.native_acs_policy_preparations
+            (preparation_id, scope_digest, scope_type, scope_id, policy_id, actor_issuer, actor_id,
+             membership_id, membership_revision, role_assignment_id, role_assignment_revision,
+             idempotency_key, request_digest, proposed_content_sha256, artifact, reason, correlation_id, created_at)
+            VALUES ({nullHeadPrepId}, {Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("null-head-" + suffix))).ToLowerInvariant()},
+                    'Platform', 'default', 'platform-egress', 'https://issuer.example', 'actor',
+                    {Guid.NewGuid()}, 1, {Guid.NewGuid()}, 1,
+                    {"idem-null-" + suffix}, {new string('9', 64)}, {prep0Artifact.ContentSha256},
+                    CAST({nullHeadArtifactJson} AS jsonb), 'null expected head', 'corr-null', NOW())
+            """);
+        try
+        {
+            using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
+            var identity = certificates.CreateIdentity(workerPins: [certificates.PreparationWorkerClient]);
+            using var workerHost = await StartPlatformPolicySourceEndpointHostAsync(
+                fixture.DataSource, identity, certificates.PreparationWorkerClient);
+            using var workerClient = workerHost.GetTestClient();
+
+            using var nullHeadResponse = await workerClient.GetAsync(
+                $"{PlatformPolicySourceTls.PreparationRoutePrefix}{nullHeadPrepId:D}");
+            Assert.Equal(HttpStatusCode.OK, nullHeadResponse.StatusCode);
+            Assert.True(nullHeadResponse.Headers.CacheControl?.NoStore);
+            using var nullHeadJson = JsonDocument.Parse(await nullHeadResponse.Content.ReadAsStringAsync());
+            Assert.Equal(
+                ["artifact", "expectedHead", "proposedContentSha256"],
+                nullHeadJson.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+            Assert.Equal(JsonValueKind.Null, nullHeadJson.RootElement.GetProperty("expectedHead").ValueKind);
+            Assert.Equal(prep0Artifact.ContentSha256, nullHeadJson.RootElement.GetProperty("proposedContentSha256").GetString());
+
+            using var prep0Response = await workerClient.GetAsync(
+                $"{PlatformPolicySourceTls.PreparationRoutePrefix}{prep0Receipt.PreparationId:D}");
+            Assert.Equal(HttpStatusCode.OK, prep0Response.StatusCode);
+            using var prep0Json = JsonDocument.Parse(await prep0Response.Content.ReadAsStringAsync());
+            AssertArtifactEquals(prep0Artifact, prep0Json.RootElement.GetProperty("artifact"));
+
+            using var prep1Response = await workerClient.GetAsync(
+                $"{PlatformPolicySourceTls.PreparationRoutePrefix}{prep1Receipt.PreparationId:D}");
+            Assert.Equal(HttpStatusCode.OK, prep1Response.StatusCode);
+            Assert.True(prep1Response.Headers.CacheControl?.NoStore);
+            using var prep1Json = JsonDocument.Parse(await prep1Response.Content.ReadAsStringAsync());
+            Assert.Equal(
+                ["artifact", "expectedHead", "proposedContentSha256"],
+                prep1Json.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+            AssertArtifactEquals(prep1Artifact, prep1Json.RootElement.GetProperty("artifact"));
+            var expectedHead = prep1Json.RootElement.GetProperty("expectedHead");
+            Assert.Equal(
+                ["contentSha256", "policyId", "revision"],
+                expectedHead.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+            Assert.Equal(head1Receipt.PolicyId, expectedHead.GetProperty("policyId").GetString());
+            Assert.Equal(head1Receipt.Revision, expectedHead.GetProperty("revision").GetInt64());
+            Assert.Equal(head1Receipt.ContentSha256, expectedHead.GetProperty("contentSha256").GetString());
+            Assert.Equal(prep1Artifact.ContentSha256, prep1Json.RootElement.GetProperty("proposedContentSha256").GetString());
+
+            using var envHost = await StartPlatformPolicySourceEndpointHostAsync(
+                fixture.DataSource, identity, certificates.EnvironmentClient);
+            using var envClient = envHost.GetTestClient();
+            using var headResponse = await envClient.GetAsync(PlatformPolicySourceTls.RoutePath);
+            Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);
+            using var headJson = JsonDocument.Parse(await headResponse.Content.ReadAsStringAsync());
+            Assert.Equal(head2Receipt.Revision, headJson.RootElement.GetProperty("revision").GetInt64());
+            Assert.Equal(head2Receipt.ContentSha256, headJson.RootElement.GetProperty("contentSha256").GetString());
+        }
+        finally
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE projects_config.native_acs_policy_preparations DISABLE TRIGGER native_acs_policy_preparations_immutable");
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM projects_config.native_acs_policy_preparations WHERE preparation_id = {nullHeadPrepId}");
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE projects_config.native_acs_policy_preparations ENABLE TRIGGER native_acs_policy_preparations_immutable");
+        }
+    }
+
+    [Fact]
+    public async Task PrivatePlatformPolicyPreparationReadRejectsMalformedIdsMissingRowsWrongScopeAndQueryOrBody()
+    {
+        using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
+        var identity = certificates.CreateIdentity(workerPins: [certificates.PreparationWorkerClient]);
+        var dbQueries = 0;
+        var countingInterceptor = new PolicyReadInterceptor(_ =>
+        {
+            Interlocked.Increment(ref dbQueries);
+            return Task.CompletedTask;
+        }, "native_acs_policy_preparations");
+        using var host = await StartPlatformPolicySourceEndpointHostAsync(
+            fixture.DataSource, identity, certificates.PreparationWorkerClient, countingInterceptor);
+        using var client = host.GetTestClient();
+
+        var validUuid = Guid.NewGuid().ToString("D");
+        foreach (var badId in new[] { "not-a-uuid", Guid.Empty.ToString("D"), Guid.NewGuid().ToString("N"), $"{validUuid}%20", $"%20{validUuid}" })
+        {
+            using var badResponse = await client.GetAsync($"{PlatformPolicySourceTls.PreparationRoutePrefix}{badId}");
+            Assert.Equal(HttpStatusCode.BadRequest, badResponse.StatusCode);
+            Assert.Equal("{\"code\":\"policy_source_request_invalid\"}", await badResponse.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(0, dbQueries);
+
+        using var missingResponse = await client.GetAsync($"{PlatformPolicySourceTls.PreparationRoutePrefix}{Guid.NewGuid():D}");
+        Assert.Equal(HttpStatusCode.NotFound, missingResponse.StatusCode);
+        Assert.Equal("{\"code\":\"native_acs_policy_not_found\"}", await missingResponse.Content.ReadAsStringAsync());
+
+        var validPath = $"{PlatformPolicySourceTls.PreparationRoutePrefix}{Guid.NewGuid():D}";
+        using var queryResponse = await client.GetAsync($"{validPath}?x=1");
+        Assert.Equal(HttpStatusCode.BadRequest, queryResponse.StatusCode);
+        Assert.Equal("{\"code\":\"policy_source_request_invalid\"}", await queryResponse.Content.ReadAsStringAsync());
+
+        using var bodyRequest = new HttpRequestMessage(HttpMethod.Get, validPath)
+        {
+            Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json"),
+        };
+        using var bodyResponse = await client.SendAsync(bodyRequest);
+        Assert.Equal(HttpStatusCode.BadRequest, bodyResponse.StatusCode);
+        Assert.Equal("{\"code\":\"policy_source_request_invalid\"}", await bodyResponse.Content.ReadAsStringAsync());
+
+        // Insert a non-Platform scope row by temporarily relaxing the scope check constraint.
+        var foreignId = Guid.NewGuid();
+        var artifact = CreatePolicySourceArtifact("{\"v\":1}"u8.ToArray(), []);
+        var artifactJson = JsonSerializer.Serialize(artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await using var adminDb = CreateDbContext();
+        await adminDb.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE projects_config.native_acs_policy_preparations DROP CONSTRAINT ck_native_acs_policy_preparations_scope");
+        try
+        {
+            await adminDb.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO projects_config.native_acs_policy_preparations
+                (preparation_id, scope_digest, scope_type, scope_id, policy_id, actor_issuer, actor_id,
+                 membership_id, membership_revision, role_assignment_id, role_assignment_revision,
+                 idempotency_key, request_digest, proposed_content_sha256, artifact, reason, correlation_id, created_at)
+                VALUES ({foreignId}, {new string('a', 64)}, 'Project', {Guid.NewGuid().ToString("N")}, 'p',
+                        'https://issuer.example', 'actor', {Guid.NewGuid()}, 1, {Guid.NewGuid()}, 1,
+                        'idem', {new string('b', 64)}, {artifact.ContentSha256}, CAST({artifactJson} AS jsonb),
+                        'wrong scope', 'corr', NOW())
+                """);
+            using var wrongScopeResponse = await client.GetAsync($"{PlatformPolicySourceTls.PreparationRoutePrefix}{foreignId:D}");
+            Assert.Equal(HttpStatusCode.NotFound, wrongScopeResponse.StatusCode);
+            Assert.Equal("{\"code\":\"native_acs_policy_not_found\"}", await wrongScopeResponse.Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            await adminDb.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE projects_config.native_acs_policy_preparations DISABLE TRIGGER native_acs_policy_preparations_immutable");
+            await adminDb.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM projects_config.native_acs_policy_preparations WHERE preparation_id = {foreignId}");
+            await adminDb.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE projects_config.native_acs_policy_preparations ENABLE TRIGGER native_acs_policy_preparations_immutable");
+            await adminDb.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE projects_config.native_acs_policy_preparations ADD CONSTRAINT ck_native_acs_policy_preparations_scope CHECK (scope_type = 'Platform' AND scope_id = 'default')");
+        }
+    }
+
+    [Fact]
+    public async Task PrivatePlatformPolicyPreparationReadSucceedsAtMaxDecodedArtifactBoundary()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "prep-max-tenant-" + suffix;
+        var caller = await SeedCallerAsync(
+            db, authorityStore, "prep-max-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var store = CreateNativeAcsStore();
+        var existingHead = await store.ReadAsync(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            CancellationToken.None);
+
+        // Fill 1,048,576 bytes with 3-digit byte values (255) across 65,536 manifest + 64 files (15,360 bytes each)
+        // so PostgreSQL jsonb::text exceeds 5,242,880 bytes while staying under the storage cap and HTTP response cap.
+        var maxManifest = Enumerable.Repeat((byte)255, 65_536).ToArray();
+        var perFileBytes = Enumerable.Repeat((byte)255, 15_360).ToArray();
+        var maxFiles = Enumerable.Range(0, 64)
+            .Select(i => ($"policies/file-{i:D2}.yaml", perFileBytes))
+            .ToArray();
+        var maxArtifact = CreatePolicySourceArtifact(maxManifest, maxFiles);
+
+        var receipt = await store.PrepareAsync(caller, new NativeAcsPolicyWriteRequest(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            existingHead?.PolicyId ?? "platform-egress",
+            existingHead?.Revision,
+            maxArtifact,
+            "idem-max-" + suffix,
+            "max boundary prep",
+            "corr-max-" + suffix), CancellationToken.None);
+
+        using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
+        var identity = certificates.CreateIdentity(workerPins: [certificates.PreparationWorkerClient]);
+        using var host = await StartPlatformPolicySourceEndpointHostAsync(
+            fixture.DataSource, identity, certificates.PreparationWorkerClient);
+        using var client = host.GetTestClient();
+
+        using var response = await client.GetAsync(
+            $"{PlatformPolicySourceTls.PreparationRoutePrefix}{receipt.PreparationId:D}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(maxArtifact.ContentSha256, json.RootElement.GetProperty("proposedContentSha256").GetString());
+        AssertArtifactEquals(maxArtifact, json.RootElement.GetProperty("artifact"));
+    }
+
+    [Fact]
+    public async Task PrivatePlatformPolicyPreparationReadRejectsCorruptDigestAndOversizedArtifact()
+    {
+        using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
+        var identity = certificates.CreateIdentity(workerPins: [certificates.PreparationWorkerClient]);
+        var interceptor = new PreparationQueryCaptureInterceptor();
+        using var host = await StartPlatformPolicySourceEndpointHostAsync(
+            fixture.DataSource, identity, certificates.PreparationWorkerClient, interceptor);
+        using var client = host.GetTestClient();
+
+        var corruptDigestId = Guid.NewGuid();
+        var oversizedId = Guid.NewGuid();
+        var oversizedJsonId = Guid.NewGuid();
+        var validArtifact = CreatePolicySourceArtifact("{\"v\":1}"u8.ToArray(), []);
+        var validArtifactJson = JsonSerializer.Serialize(validArtifact, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var oversizedArtifact = CreatePolicySourceArtifact(new byte[65_537], []);
+        var oversizedJson = JsonSerializer.Serialize(oversizedArtifact, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var oversizedJsonPayload = $$"""{"manifestBytes":"{{Convert.ToBase64String("{\"v\":1}"u8.ToArray())}}","files":[],"contentSha256":"{{validArtifact.ContentSha256}}","padding":"{{new string('x', 5_550_000)}}"}""";
+
+        await using var adminDb = CreateDbContext();
+        try
+        {
+            await adminDb.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO projects_config.native_acs_policy_preparations
+                (preparation_id, scope_digest, scope_type, scope_id, policy_id, actor_issuer, actor_id,
+                 membership_id, membership_revision, role_assignment_id, role_assignment_revision,
+                 idempotency_key, request_digest, proposed_content_sha256, artifact, reason, correlation_id, created_at)
+                VALUES ({corruptDigestId}, {new string('c', 64)}, 'Platform', 'default', 'p',
+                        'https://issuer.example', 'actor', {Guid.NewGuid()}, 1, {Guid.NewGuid()}, 1,
+                        'idem-corrupt', {new string('d', 64)}, {new string('e', 64)}, CAST({validArtifactJson} AS jsonb),
+                        'corrupt digest', 'corr', NOW())
+                """);
+            await adminDb.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO projects_config.native_acs_policy_preparations
+                (preparation_id, scope_digest, scope_type, scope_id, policy_id, actor_issuer, actor_id,
+                 membership_id, membership_revision, role_assignment_id, role_assignment_revision,
+                 idempotency_key, request_digest, proposed_content_sha256, artifact, reason, correlation_id, created_at)
+                VALUES ({oversizedId}, {new string('f', 64)}, 'Platform', 'default', 'p',
+                        'https://issuer.example', 'actor', {Guid.NewGuid()}, 1, {Guid.NewGuid()}, 1,
+                        'idem-oversized', {new string('1', 64)}, {oversizedArtifact.ContentSha256}, CAST({oversizedJson} AS jsonb),
+                        'oversized', 'corr', NOW())
+                """);
+            await adminDb.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO projects_config.native_acs_policy_preparations
+                (preparation_id, scope_digest, scope_type, scope_id, policy_id, actor_issuer, actor_id,
+                 membership_id, membership_revision, role_assignment_id, role_assignment_revision,
+                 idempotency_key, request_digest, proposed_content_sha256, artifact, reason, correlation_id, created_at)
+                VALUES ({oversizedJsonId}, {new string('2', 64)}, 'Platform', 'default', 'p',
+                        'https://issuer.example', 'actor', {Guid.NewGuid()}, 1, {Guid.NewGuid()}, 1,
+                        'idem-oversized-json', {new string('3', 64)}, {validArtifact.ContentSha256}, CAST({oversizedJsonPayload} AS jsonb),
+                        'oversized json', 'corr', NOW())
+                """);
+
+            var metaBeforeCorrupt = interceptor.MetadataQueries;
+            var fetchBeforeCorrupt = interceptor.ArtifactFetchQueries;
+            using var corruptResponse = await client.GetAsync($"{PlatformPolicySourceTls.PreparationRoutePrefix}{corruptDigestId:D}");
+            Assert.Equal(HttpStatusCode.InternalServerError, corruptResponse.StatusCode);
+            var corruptBody = await corruptResponse.Content.ReadAsStringAsync();
+            Assert.Equal("{\"code\":\"native_acs_policy_corrupt\"}", corruptBody);
+            Assert.Equal(metaBeforeCorrupt + 1, interceptor.MetadataQueries);
+            Assert.Equal(fetchBeforeCorrupt + 1, interceptor.ArtifactFetchQueries);
+
+            using var oversizedResponse = await client.GetAsync($"{PlatformPolicySourceTls.PreparationRoutePrefix}{oversizedId:D}");
+            Assert.Equal(HttpStatusCode.InternalServerError, oversizedResponse.StatusCode);
+            var oversizedBody = await oversizedResponse.Content.ReadAsStringAsync();
+            Assert.Equal("{\"code\":\"native_acs_policy_corrupt\"}", oversizedBody);
+
+            var metaBeforeJsonCap = interceptor.MetadataQueries;
+            var fetchBeforeJsonCap = interceptor.ArtifactFetchQueries;
+            using var oversizedJsonResponse = await client.GetAsync($"{PlatformPolicySourceTls.PreparationRoutePrefix}{oversizedJsonId:D}");
+            Assert.Equal(HttpStatusCode.InternalServerError, oversizedJsonResponse.StatusCode);
+            Assert.Equal("{\"code\":\"native_acs_policy_corrupt\"}", await oversizedJsonResponse.Content.ReadAsStringAsync());
+            // Only the metadata length query ran; the artifact-only fetch query never executed.
+            Assert.Equal(metaBeforeJsonCap + 1, interceptor.MetadataQueries);
+            Assert.Equal(fetchBeforeJsonCap, interceptor.ArtifactFetchQueries);
+        }
+        finally
+        {
+            await adminDb.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE projects_config.native_acs_policy_preparations DISABLE TRIGGER native_acs_policy_preparations_immutable");
+            await adminDb.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM projects_config.native_acs_policy_preparations WHERE preparation_id IN ({corruptDigestId}, {oversizedId}, {oversizedJsonId})");
+            await adminDb.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE projects_config.native_acs_policy_preparations ENABLE TRIGGER native_acs_policy_preparations_immutable");
+        }
+    }
+
+    [Fact]
+    public async Task PrivatePlatformPolicyPreparationReadRejectsWrongPeerInBothDirectionsAndPostBufferRevocation()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "prep-peer-tenant-" + suffix;
+        var caller = await SeedCallerAsync(
+            db, authorityStore, "prep-peer-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var store = CreateNativeAcsStore();
+        var existingHead = await store.ReadAsync(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            CancellationToken.None);
+        var prepArtifact = CreatePolicySourceArtifact(
+            "{\"version\":\"peer-check\"}"u8.ToArray(),
+            [("policies/egress.yaml", "allow: [peer-check.example.com]"u8.ToArray())]);
+        var prepReceipt = await store.PrepareAsync(caller, new NativeAcsPolicyWriteRequest(
+            NativeAcsPolicyScopeType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            existingHead?.PolicyId ?? "platform-egress",
+            existingHead?.Revision,
+            prepArtifact,
+            "idem-peer-" + suffix,
+            "peer check prep",
+            "corr-peer-" + suffix), CancellationToken.None);
+
+        using var certificates = new PlatformPolicySourceTlsTests.PolicySourceCertificates();
+        var identity = certificates.CreateIdentity(
+            workerPins: [certificates.PreparationWorkerClient]);
+        var prepPath = $"{PlatformPolicySourceTls.PreparationRoutePrefix}{prepReceipt.PreparationId:D}";
+
+        // Environment cert cannot read preparation route.
+        using (var envHost = await StartPlatformPolicySourceEndpointHostAsync(
+            fixture.DataSource, identity, certificates.EnvironmentClient))
+        using (var envClient = envHost.GetTestClient())
+        using (var envOnPrep = await envClient.GetAsync(prepPath))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, envOnPrep.StatusCode);
+            Assert.Equal("policy_source_peer_denied", await ReadErrorCodeAsync(envOnPrep));
+            Assert.DoesNotContain(prepArtifact.ContentSha256, await envOnPrep.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        // Worker cert cannot read head route.
+        using (var workerHost = await StartPlatformPolicySourceEndpointHostAsync(
+            fixture.DataSource, identity, certificates.PreparationWorkerClient))
+        using (var workerClient = workerHost.GetTestClient())
+        using (var workerOnHead = await workerClient.GetAsync(PlatformPolicySourceTls.RoutePath))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, workerOnHead.StatusCode);
+            Assert.Equal("policy_source_peer_denied", await ReadErrorCodeAsync(workerOnHead));
+        }
+
+        // Post-buffer CRL revocation of the same leaf mid-request denies before sending bytes.
+        var revokedMidRequest = 0;
+        var revocationPublished = 0;
+        var interceptor = new PolicyReadInterceptor(async cancellationToken =>
+        {
+            if (Interlocked.Exchange(ref revokedMidRequest, 1) == 0)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(3100), cancellationToken);
+                certificates.Revoke(certificates.PreparationWorkerClient);
+                Volatile.Write(ref revocationPublished, 1);
+            }
+        }, "native_acs_policy_preparations");
+        using (var recheckHost = await StartPlatformPolicySourceEndpointHostAsync(
+            fixture.DataSource,
+            identity,
+            certificates.PreparationWorkerClient,
+            interceptor))
+        using (var recheckClient = recheckHost.GetTestClient())
+        {
+            certificates.SetUnrevokedCrl(TimeSpan.FromSeconds(3));
+            using var revokedResponse = await recheckClient.GetAsync(prepPath);
+            Assert.Equal(1, Volatile.Read(ref revokedMidRequest));
+            Assert.Equal(1, Volatile.Read(ref revocationPublished));
+            Assert.Equal(HttpStatusCode.Forbidden, revokedResponse.StatusCode);
+            Assert.Equal("policy_source_peer_denied", await ReadErrorCodeAsync(revokedResponse));
+            var body = await revokedResponse.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(prepArtifact.ContentSha256, body, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"artifact\"", body, StringComparison.Ordinal);
+        }
+    }
+
+    private sealed class PreparationQueryCaptureInterceptor : DbCommandInterceptor
+    {
+        private int _metadataQueries;
+        private int _artifactFetchQueries;
+
+        internal int MetadataQueries => Volatile.Read(ref _metadataQueries);
+        internal int ArtifactFetchQueries => Volatile.Read(ref _artifactFetchQueries);
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("native_acs_policy_preparations", StringComparison.Ordinal))
+            {
+                if (command.CommandText.Contains("octet_length", StringComparison.Ordinal))
+                    Interlocked.Increment(ref _metadataQueries);
+                else
+                    Interlocked.Increment(ref _artifactFetchQueries);
+            }
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    private static void AssertArtifactEquals(NativeAcsArtifact expected, JsonElement actual)
+    {
+        var actualArtifact = actual.Deserialize<NativeAcsArtifact>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(actualArtifact);
+        Assert.Equal(expected.ManifestBytes.ToArray(), actualArtifact.ManifestBytes.ToArray());
+        Assert.Equal(expected.ContentSha256, actualArtifact.ContentSha256);
+        Assert.Equal(expected.Files.Length, actualArtifact.Files.Length);
+        for (var i = 0; i < expected.Files.Length; i++)
+        {
+            Assert.Equal(expected.Files[i].RelativePath, actualArtifact.Files[i].RelativePath);
+            Assert.Equal(expected.Files[i].Bytes.ToArray(), actualArtifact.Files[i].Bytes.ToArray());
+        }
+    }
+
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         private readonly object _gate = new();

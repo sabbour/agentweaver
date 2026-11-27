@@ -535,39 +535,57 @@ prove deployed capacity.
 
 ### Private Environment Policy source read
 
-`GET /internal/policy-source/platform` shares the existing Projects & Config
-HTTPS listener, normally port `8443`. It is mapped when
-`ProjectsConfig:PolicySource:Enabled` is `true`. The route is not exposed
-through the public Gateway, OpenAPI, or MCP surfaces.
+`GET /internal/policy-source/platform` and
+`GET /internal/policy-source/platform/preparations/{preparationId}` share the
+existing Projects & Config HTTPS listener, normally port `8443`.
+`GET /internal/policy-source/platform` is mapped when
+`ProjectsConfig:PolicySource:Enabled` is `true`.
+`GET /internal/policy-source/platform/preparations/{preparationId}` is mapped
+only when `ProjectsConfig:PolicySource:Enabled` is `true` and
+`ProjectsConfig:PolicySource:PreparationWorkerPins` is configured. Neither route
+is exposed through the public Gateway, OpenAPI, or MCP surfaces.
 
-The shared handshake uses optional client certificates. The source requires
-native TLS 1.2 or TLS 1.3 and the Environment certificate. Projects
-checks the pinned Environment leaf, exact
-`environment.agentweaver.svc.cluster.local` DNS SAN, client-authentication
-EKU, certificate validity, the single pinned backend CA, and online revocation
-status. Projects checks the peer at the start of each request and after
-serialization before sending headers, including protected errors. Failed TLS validation
-ends the handshake; a failed per-request check returns `403
-policy_source_peer_denied`. Bearer tokens do not authenticate this route.
+The shared handshake uses optional client certificates and requires native TLS
+1.2 or TLS 1.3. Projects binds each route to its own peer identity and checks
+that peer before lookup and after serialization before sending headers,
+including protected errors. Failed TLS validation ends the handshake; a failed
+per-request check returns `403 policy_source_peer_denied`. Bearer tokens do not
+authenticate either route.
+
+- `GET /internal/policy-source/platform` requires the Environment certificate: a
+  current pinned leaf in `EnvironmentPins`, exact
+  `environment.agentweaver.svc.cluster.local` DNS SAN, client-authentication
+  EKU, valid dates, the single pinned backend CA, and valid online revocation
+  status. It returns the current Platform head, complete artifact, stored hash,
+  revision, update time, and `admission: { state: "pending", checkpoint: null }`.
+- `GET /internal/policy-source/platform/preparations/{preparationId}` requires
+  the Policy worker certificate: a current pinned leaf in
+  `PreparationWorkerPins`, exact
+  `environment-platform-egress-writer.agentweaver.svc.cluster.local` DNS SAN,
+  client-authentication EKU, valid dates, the single pinned backend CA, and
+  valid online revocation status. It requires a nonzero, hyphenated UUID in the
+  path and returns `artifact`, `proposedContentSha256`, and `expectedHead`
+  (`policyId`, `revision`, and `contentSha256`, or `null`) for that exact
+  immutable `Platform/default` preparation row, with no actor, governance, or
+  status fields. It never falls back to the current head.
 
 Peer validation precedes the authorization-header check, then the method check,
-then query and body checks. The route accepts no `Authorization` header, query
-string (including a bare `?`) or request body. It returns the current
-Platform head, complete artifact, stored hash, revision, update time, and
-`admission: { state: "pending", checkpoint: null }`. It reads source without
-calling OPA or changing policy state. The head, revision metadata, and file
-metadata come from one read-only PostgreSQL `RepeatableRead` transaction.
-Projects checks limits before it loads file bytes, then checks the artifact
-hash. The source limits are a 65,536-byte manifest, at most 64 files, at most
-262,144 bytes per file, and 1,048,576 artifact bytes in total. The serialized
-response limit is 5,242,880 bytes. The request deadline is 15 seconds.
+then query and body checks. Both routes accept no `Authorization` header, query
+string (including a bare `?`) or request body, and read source without calling
+OPA or changing policy state. Each read uses one read-only PostgreSQL
+`RepeatableRead` transaction, checks storage limits before returning bytes, and
+recomputes the canonical artifact digest against both the artifact's declared
+digest and the stored row digest. The source limits are a 65,536-byte manifest,
+at most 64 files, at most 262,144 bytes per file, and 1,048,576 artifact bytes
+in total. The serialized response limit is 5,242,880 bytes. The request
+deadline is 15 seconds.
 
 | Result | Contract |
 | --- | --- |
-| `400 policy_source_request_invalid` | The authenticated peer sends an authorization header, query or body. |
-| `403 policy_source_peer_denied` | The native TLS peer is not the current Environment identity, including a missing certificate or failed final recheck. |
-| `404 native_acs_policy_not_found` | The Platform scope has no policy head. |
-| `404 not_found` | The request uses a source path variant or the wrong physical listener. |
+| `400 policy_source_request_invalid` | The authenticated peer sends an authorization header, query, body, or malformed `preparationId`. |
+| `403 policy_source_peer_denied` | The native TLS peer does not match the route's required identity, including a missing certificate, cross-route certificate, or failed final recheck. |
+| `404 native_acs_policy_not_found` | The Platform scope has no policy head, or no `Platform/default` preparation exists at `preparationId`. |
+| `404 not_found` | The request uses an absent `preparationId` segment, an unconfigured preparation route, a source path variant, or the wrong physical listener. |
 | `405`, `Allow: GET` | After peer and authorization-header checks, the request uses a method other than `GET`. |
 | `500 native_acs_policy_corrupt` | The stored source exceeds a limit or fails its integrity check. |
 | `500 policy_source_internal_error` | The request deadline expires or an unexpected internal error occurs. |
