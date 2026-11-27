@@ -603,6 +603,7 @@ public static class CliApplication
               --expected-credential-revision <revision> --operation-id <guid>
           agentweaver platform byok disable-key <providerId> --expected-revision <revision>
               --expected-credential-revision <revision> --operation-id <guid>
+          agentweaver platform byok disable-key <providerId> --operation-id <guid> --cancel
           agentweaver platform byok activate <providerId> --expected-revision <providerRevision>
               --expected-settings-revision <settingsRevision>
           agentweaver platform byok deactivate --expected-settings-revision <settingsRevision>
@@ -621,6 +622,7 @@ public static class CliApplication
               --expected-credential-revision <revision> --operation-id <guid>
           agentweaver project byok disable-key <providerId> --project-id <id> --expected-revision <revision>
               --expected-credential-revision <revision> --operation-id <guid>
+          agentweaver project byok disable-key <providerId> --project-id <id> --operation-id <guid> --cancel
           agentweaver workspace refs --project <project-id> --interactive [--cursor <2-10000>] [target options]
           agentweaver workspace tree --project <project-id> --ref <commit-sha> --interactive [target options]
           agentweaver workspace file --project <project-id> --ref <commit-sha> --path <repository-path>

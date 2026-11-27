@@ -55,7 +55,9 @@ internal static class ByokDraftCommands
         }
 
         var optionArgs = args[optionStart..];
-        if (optionArgs.Any(arg => arg.StartsWith("--credential-status=", StringComparison.Ordinal)))
+        if (optionArgs.Any(arg =>
+                arg.StartsWith("--credential-status=", StringComparison.Ordinal) ||
+                arg.StartsWith("--cancel=", StringComparison.Ordinal)))
             throw new CliUsageException(Usage(scopeName, command));
 
         CliOptions options;
@@ -63,9 +65,11 @@ internal static class ByokDraftCommands
         {
             options = CliOptions.Parse(
                 optionArgs,
-                new HashSet<string>(StringComparer.Ordinal) { "from-stdin", "credential-status" });
+                new HashSet<string>(StringComparer.Ordinal) { "from-stdin", "credential-status", "cancel" });
         }
-        catch (CliUsageException) when (optionArgs.Contains("--credential-status", StringComparer.Ordinal))
+        catch (CliUsageException) when (
+            optionArgs.Contains("--credential-status", StringComparer.Ordinal) ||
+            optionArgs.Contains("--cancel", StringComparer.Ordinal))
         {
             throw new CliUsageException(Usage(scopeName, command));
         }
@@ -80,7 +84,7 @@ internal static class ByokDraftCommands
             "update" => SaveOptions.Concat(["expected-revision"]).ToArray(),
             "set-key" => ["from-stdin", "expected-revision", "operation-id"],
             "recheck-key" => ["expected-revision", "expected-credential-revision", "operation-id"],
-            "disable-key" => ["expected-revision", "expected-credential-revision", "operation-id"],
+            "disable-key" => ["expected-revision", "expected-credential-revision", "operation-id", "cancel"],
             "activate" => ["expected-revision", "expected-settings-revision"],
             "deactivate" => ["expected-settings-revision"],
             _ => throw new CliUsageException($"Unknown {scopeName} BYOK command: {command}."),
@@ -90,12 +94,19 @@ internal static class ByokDraftCommands
         options.RequireOnly(commandOptions.Concat(targetOptions).ToArray());
 
         var credentialStatus = command == "show" && options.HasFlag("credential-status");
-        var rawOperationId = command == "show" ? options.Single("operation-id") : null;
+        var cancel = command == "disable-key" && options.HasFlag("cancel");
+        if (cancel &&
+            (options.Single("expected-revision") is not null ||
+             options.Single("expected-credential-revision") is not null))
+            throw new CliUsageException(Usage(scopeName, command));
+        var rawOperationId = command == "show" || cancel ? options.Single("operation-id") : null;
         if (credentialStatus && rawOperationId is not null)
             throw new CliUsageException(Usage(scopeName, command));
-        Guid? lookupOperationId = rawOperationId is not null
+        Guid? lookupOperationId = command == "show" && rawOperationId is not null
             ? RequiredOperationId(rawOperationId)
             : null;
+        if (cancel)
+            _ = RequiredOperationId(rawOperationId);
         var identity = CliConfiguration.ReadIdentity(
             ["projects.admin"],
             options: options,
@@ -129,48 +140,68 @@ internal static class ByokDraftCommands
                 .ConfigureAwait(false);
         }
 
-        var invocation = BuildInvocation(command, projectScope, projectId, args, options, out var operationId, lookupOperationId);
+        var invocation = BuildInvocation(command, projectScope, projectId, args, options, out var operationId, lookupOperationId, cancel);
         var receiptOperation = contractForCommand(contracts, command);
+        var cancelOutcomeUnknown = cancel
+            ? UnknownCancelMessage(scopeName, args[2], projectId, operationId!.Value)
+            : null;
         GatewayResponse response;
         try
         {
             response = await InvokeAsync(
-                gateway, receiptOperation.OperationId, invocation, scopeName, command, operationId, ct)
+                gateway, receiptOperation.OperationId, invocation, scopeName, command, operationId, ct, cancelOutcomeUnknown)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             await error.WriteLineAsync(
-                operationId is { } id
+                cancelOutcomeUnknown ??
+                (operationId is { } id
                     ? UnknownWriteMessage(id)
-                    : "Operation cancelled.").ConfigureAwait(false);
+                    : "Operation cancelled.")).ConfigureAwait(false);
             return 130;
         }
 
         EnsureSuccess(response, scopeName, command, operationId,
-            command == "show" ? args[2] : null, credentialStatus, lookupOperationId is not null);
-        if ((credentialStatus || lookupOperationId is not null) && response.Status != 200)
-            throw UnexpectedResponse();
-        var projected = command switch
+            command == "show" ? args[2] : null, credentialStatus, lookupOperationId is not null,
+            cancel, args.Length > 2 ? args[2] : null, projectId);
+        if ((credentialStatus || lookupOperationId is not null || cancel) && response.Status != 200)
+            throw cancelOutcomeUnknown is not null
+                ? new InvalidOperationException(cancelOutcomeUnknown)
+                : UnexpectedResponse();
+        JsonObject projected;
+        try
         {
-            "show" when credentialStatus => ProjectCredentialStatus(
-                response.Body, projectScope ? "project" : "platform", projectId, args[2]),
-            "show" when lookupOperationId is { } opId => ProjectOperationStatus(
-                response.Body, projectScope ? "project" : "platform", projectId, args[2], opId),
-            "show" or "add" or "update" => ProjectProvider(
-                response.Body,
-                projectScope ? "project" : "platform",
-                projectId,
-                command == "show" || command == "update" ? args[2] : null),
-            "prices" => ProjectPriceLookup(response.Body),
-            "save-prices" => ProjectRateCard(response.Body, args[2], args[3]),
-            "recheck-key" or "disable-key" => ProjectCredentialReceipt(
-                response.Body, projectScope ? "project" : "platform", projectId, args[2], operationId!.Value,
-                command == "recheck-key" ? "published" : "disabled"),
-            "activate" or "deactivate" => ProjectSwitchReceipt(
-                response.Body, command == "activate" ? args[2] : null),
-            _ => throw new InvalidOperationException($"Unknown {scopeName} BYOK command: {command}."),
-        };
+            projected = command switch
+            {
+                "show" when credentialStatus => ProjectCredentialStatus(
+                    response.Body, projectScope ? "project" : "platform", projectId, args[2]),
+                "show" when lookupOperationId is { } opId => ProjectOperationStatus(
+                    response.Body, projectScope ? "project" : "platform", projectId, args[2], opId),
+                "show" or "add" or "update" => ProjectProvider(
+                    response.Body,
+                    projectScope ? "project" : "platform",
+                    projectId,
+                    command == "show" || command == "update" ? args[2] : null),
+                "prices" => ProjectPriceLookup(response.Body),
+                "save-prices" => ProjectRateCard(response.Body, args[2], args[3]),
+                "recheck-key" => ProjectCredentialReceipt(
+                    response.Body, projectScope ? "project" : "platform", projectId, args[2], operationId!.Value,
+                    "published"),
+                "disable-key" when cancel => ProjectCancelReceipt(
+                    response.Body, projectScope ? "project" : "platform", projectId, args[2], operationId!.Value),
+                "disable-key" => ProjectCredentialReceipt(
+                    response.Body, projectScope ? "project" : "platform", projectId, args[2], operationId!.Value,
+                    "disabled"),
+                "activate" or "deactivate" => ProjectSwitchReceipt(
+                    response.Body, command == "activate" ? args[2] : null),
+                _ => throw new InvalidOperationException($"Unknown {scopeName} BYOK command: {command}."),
+            };
+        }
+        catch (InvalidDataException) when (cancelOutcomeUnknown is not null)
+        {
+            throw new InvalidOperationException(cancelOutcomeUnknown);
+        }
         await WriteJsonAsync(output, projected).ConfigureAwait(false);
         return 0;
     }
@@ -191,7 +222,9 @@ internal static class ByokDraftCommands
             "activate" => $"Usage: agentweaver {scope} byok activate <providerId> --expected-revision <providerRevision> --expected-settings-revision <settingsRevision>",
             "deactivate" => $"Usage: agentweaver {scope} byok deactivate --expected-settings-revision <settingsRevision>",
             "recheck-key" => $"Usage: agentweaver {scope} byok recheck-key <providerId> --expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid>",
-            "disable-key" => $"Usage: agentweaver {scope} byok disable-key <providerId> --expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid>",
+            "disable-key" => scope == "project"
+                ? "Usage: agentweaver project byok disable-key <providerId> --project-id <projectId> (--expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid> | --operation-id <uuid> --cancel)"
+                : "Usage: agentweaver platform byok disable-key <providerId> (--expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid> | --operation-id <uuid> --cancel)",
             "show" => scope == "project"
                 ? "Usage: agentweaver project byok show <providerId> --project-id <projectId> [--credential-status | --operation-id <uuid>] [target options]"
                 : "Usage: agentweaver platform byok show <providerId> [--credential-status | --operation-id <uuid>] [target options]",
@@ -947,7 +980,8 @@ internal static class ByokDraftCommands
         string[] args,
         CliOptions options,
         out Guid? operationId,
-        Guid? lookupOperationId = null)
+        Guid? lookupOperationId = null,
+        bool cancel = false)
     {
         operationId = null;
         var path = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1004,6 +1038,12 @@ internal static class ByokDraftCommands
             case "disable-key":
                 path["providerId"] = args[2];
                 operationId = RequiredOperationId(options.Single("operation-id"));
+                if (cancel)
+                    return new GatewayInvocation(path, Body: new JsonObject
+                    {
+                        ["operationId"] = operationId.Value.ToString("D"),
+                        ["cancel"] = true,
+                    });
                 return new GatewayInvocation(path, Body: new JsonObject
                 {
                     ["operationId"] = operationId.Value.ToString("D"),
@@ -1266,7 +1306,8 @@ internal static class ByokDraftCommands
         string scopeName,
         string command,
         Guid? operationIdForReplay,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? unknownOutcomeOverride = null)
     {
         try
         {
@@ -1278,14 +1319,32 @@ internal static class ByokDraftCommands
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            throw new InvalidOperationException(operationIdForReplay is { } replayId
-                ? UnknownWriteMessage(replayId)
-                : $"The {scopeName} BYOK {command} request failed.");
+            throw new InvalidOperationException(
+                unknownOutcomeOverride ??
+                (operationIdForReplay is { } replayId
+                    ? UnknownWriteMessage(replayId)
+                    : $"The {scopeName} BYOK {command} request failed."));
         }
     }
 
     private static string UnknownWriteMessage(Guid operationId) =>
         $"The write result is unknown. Repeat the same command with --operation-id {operationId:D} and the same fields to replay it.";
+
+    private static string CancelStatusLookupGuidance(
+        string scopeName,
+        string providerId,
+        string? projectId,
+        Guid operationId) =>
+        projectId is null
+            ? $"Check the operation status with: agentweaver {scopeName} byok show {providerId} --operation-id {operationId:D}"
+            : $"Check the operation status with: agentweaver {scopeName} byok show {providerId} --project-id {projectId} --operation-id {operationId:D}";
+
+    private static string UnknownCancelMessage(
+        string scopeName,
+        string providerId,
+        string? projectId,
+        Guid operationId) =>
+        $"The cancel result is unknown. {CancelStatusLookupGuidance(scopeName, providerId, projectId, operationId)}";
 
     private static void EnsureSuccess(
         GatewayResponse response,
@@ -1294,7 +1353,10 @@ internal static class ByokDraftCommands
         Guid? operationId,
         string? expectedProviderId = null,
         bool credentialStatus = false,
-        bool operationStatus = false)
+        bool operationStatus = false,
+        bool cancel = false,
+        string? providerId = null,
+        string? projectId = null)
     {
         if (response.Status is >= 200 and < 300)
             return;
@@ -1302,6 +1364,33 @@ internal static class ByokDraftCommands
         var code = response.Body is JsonObject problem
             ? GatewayContract.String(problem, "code")
             : null;
+        if (cancel && operationId is { } cancelOpId && providerId is not null)
+        {
+            var guidance = CancelStatusLookupGuidance(scopeName, providerId, projectId, cancelOpId);
+            if (response.Status == 409)
+            {
+                if (code == "credential_write_quarantined")
+                    throw new InvalidOperationException($"BYOK_QUARANTINED. {guidance}");
+                throw new InvalidOperationException($"BYOK_CONFLICT. {guidance}");
+            }
+            if (response.Status == 503)
+            {
+                var unknown = UnknownCancelMessage(scopeName, providerId, projectId, cancelOpId);
+                if (code == "credential_publication_pending")
+                    throw new InvalidOperationException($"BYOK_PENDING_PUBLICATION. {unknown}");
+                if (code == "credential_vault_unavailable")
+                    throw new InvalidOperationException($"BYOK_VAULT_UNAVAILABLE. {unknown}");
+                throw new InvalidOperationException(unknown);
+            }
+            if (response.Status == 403)
+                throw new InvalidOperationException("BYOK_FORBIDDEN");
+            if (response.Status == 404)
+                throw new InvalidOperationException("BYOK_NOT_FOUND");
+            if (response.Status == 499 || response.Status >= 500)
+                throw new InvalidOperationException(
+                    UnknownCancelMessage(scopeName, providerId, projectId, cancelOpId));
+            throw new InvalidOperationException($"BYOK_REQUEST_FAILED_{response.Status}");
+        }
         if (response.Status == 409)
         {
             if (code == "credential_write_quarantined")
@@ -1603,6 +1692,87 @@ internal static class ByokDraftCommands
             ["rateCard"] = projectedCard,
             ["provenance"] = projectedProvenance,
         };
+    }
+
+    private static readonly HashSet<string> AllowedCredentialReceiptProperties = new(StringComparer.Ordinal)
+    {
+        "operationId", "status", "scope", "projectId", "providerId",
+        "providerRevision", "credentialRevision", "credentialVersion", "configurationHash", "providerState",
+    };
+
+    private static JsonObject ProjectCancelReceipt(
+        JsonNode? body,
+        string expectedScope,
+        string? expectedProjectId,
+        string expectedProviderId,
+        Guid expectedOperationId)
+    {
+        if (body is not JsonObject receipt ||
+            receipt.Any(property => !AllowedCredentialReceiptProperties.Contains(property.Key)) ||
+            !Guid.TryParse(RequiredString(receipt, "operationId"), out var operationId) ||
+            operationId == Guid.Empty ||
+            operationId != expectedOperationId ||
+            RequiredString(receipt, "scope") != expectedScope ||
+            RequiredString(receipt, "providerId") != expectedProviderId)
+            throw UnexpectedResponse();
+
+        if (expectedProjectId is null)
+        {
+            if (receipt.TryGetPropertyValue("projectId", out var projectIdNode) && projectIdNode is not null)
+                throw UnexpectedResponse();
+        }
+        else if (RequiredString(receipt, "projectId") != expectedProjectId)
+        {
+            throw UnexpectedResponse();
+        }
+
+        var status = RequiredString(receipt, "status");
+        if (status == "cancelled")
+        {
+            if (receipt.TryGetPropertyValue("providerRevision", out var prNode) && prNode is not null ||
+                receipt.TryGetPropertyValue("credentialRevision", out var crNode) && crNode is not null ||
+                receipt.TryGetPropertyValue("credentialVersion", out var cvNode) && cvNode is not null ||
+                receipt.TryGetPropertyValue("configurationHash", out var chNode) && chNode is not null ||
+                receipt.TryGetPropertyValue("providerState", out var psNode) && psNode is not null)
+                throw UnexpectedResponse();
+
+            return new JsonObject
+            {
+                ["operationId"] = operationId.ToString("D"),
+                ["status"] = "cancelled",
+                ["scope"] = expectedScope,
+                ["projectId"] = expectedProjectId,
+                ["providerId"] = expectedProviderId,
+                ["providerRevision"] = null,
+                ["credentialRevision"] = null,
+                ["providerState"] = null,
+            };
+        }
+
+        if (status == "published")
+        {
+            var providerRevision = PositiveInt64(receipt, "providerRevision");
+            var credentialRevision = OptionalPositiveInt64(receipt, "credentialRevision");
+            _ = OptionalString(receipt, "credentialVersion");
+            _ = OptionalString(receipt, "configurationHash");
+            var providerState = OptionalString(receipt, "providerState");
+            if (providerState is not (null or "Draft" or "Available"))
+                throw UnexpectedResponse();
+
+            return new JsonObject
+            {
+                ["operationId"] = operationId.ToString("D"),
+                ["status"] = "published",
+                ["scope"] = expectedScope,
+                ["projectId"] = expectedProjectId,
+                ["providerId"] = expectedProviderId,
+                ["providerRevision"] = providerRevision,
+                ["credentialRevision"] = credentialRevision,
+                ["providerState"] = providerState,
+            };
+        }
+
+        throw UnexpectedResponse();
     }
 
     private static JsonObject ProjectCredentialReceipt(
