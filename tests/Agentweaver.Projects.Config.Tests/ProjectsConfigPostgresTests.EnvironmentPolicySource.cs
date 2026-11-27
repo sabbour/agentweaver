@@ -86,11 +86,11 @@ public sealed partial class ProjectsConfigPostgresTests
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT, UPDATE ON environment.p1_creation_links TO \"{runtimeRole}\"");
             await ExecuteOwnerSqlAsync(
-                $"GRANT SELECT, INSERT ON environment.platform_policy_apply_reservations TO \"{runtimeRole}\"");
+                $"GRANT SELECT ON environment.platform_policy_apply_reservations TO \"{runtimeRole}\"");
             await ExecuteOwnerSqlAsync(
-                $"GRANT SELECT, INSERT ON environment.platform_policy_proof_holds TO \"{runtimeRole}\"");
+                $"GRANT SELECT ON environment.platform_policy_proof_holds TO \"{runtimeRole}\"");
             await ExecuteOwnerSqlAsync(
-                $"GRANT SELECT, INSERT ON environment.platform_policy_proof_receipts TO \"{runtimeRole}\"");
+                $"GRANT SELECT ON environment.platform_policy_proof_receipts TO \"{runtimeRole}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON environment.provider_host_request_receipts TO \"{runtimeRole}\"");
             await ExecuteOwnerSqlAsync(
