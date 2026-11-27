@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect, useRef, useState } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { AgentweaverGatewayClient, gatewayClient, GatewayError } from './api';
 import type { AuthorizationCallbackMessage, AuthorizationTransaction } from './authProtocol';
 import type { PlatformEgressDestinationPage } from './contracts';
@@ -998,7 +999,7 @@ describe('Broker refresh coordination', () => {
     mocks.refreshBrokerToken.mockResolvedValueOnce(token('access-2', 'refresh-2'));
     const queue = vi.spyOn(gatewayClient, 'listPlatformEgressDestinations')
       .mockRejectedValue(new GatewayError(401, { code: 'unauthorized' }, 'Unauthorized'));
-    render(<AuthProvider><Harness /><PlatformProviderHostRequests /></AuthProvider>);
+    render(<MemoryRouter><AuthProvider><Harness /><PlatformProviderHostRequests /></AuthProvider></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await completePopupSignIn();
 
@@ -1036,7 +1037,7 @@ describe('Broker refresh coordination', () => {
       .mockReturnValueOnce(append.promise)
       .mockResolvedValueOnce({ destinations: [], nextCursor: null });
     mocks.refreshBrokerToken.mockResolvedValueOnce(token('access-2', 'refresh-2'));
-    render(<AuthProvider><Harness /><PlatformProviderHostRequests /></AuthProvider>);
+    render(<MemoryRouter><AuthProvider><Harness /><PlatformProviderHostRequests /></AuthProvider></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await completePopupSignIn();
     const heading = screen.getByText('Platform-wide provider host requests');

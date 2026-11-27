@@ -388,6 +388,10 @@ Select **Load more** when it is available, including after an empty page.
 Select **Refresh** to start from the first page. If the page cannot verify
 requests, select **Retry** to read the same page again. An empty result means
 the service returned no requests. It does not report whether the channel is on.
+After a successful queue load, select **Open Policies** to open the existing
+Policies area. The link is available for both populated and empty lists. A
+host request or navigation to Policies does not change Policy or approve
+network access.
 
 ### Read and validate Policies
 

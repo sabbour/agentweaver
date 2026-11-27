@@ -231,7 +231,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const capturePolicyLinkFocus = useCallback(() => {
     const activeElement = document.activeElement;
     if ((activeElement instanceof HTMLAnchorElement &&
-         activeElement.getAttribute('href') === '/policies') ||
+         activeElement.getAttribute('href') === '/policies' &&
+         activeElement.closest('nav[aria-label="Primary navigation"]')) ||
         (activeElement instanceof HTMLElement &&
          (activeElement.closest('[data-platform-policy-comparison]') ||
           activeElement.closest('[data-platform-policy-compare]') ||
