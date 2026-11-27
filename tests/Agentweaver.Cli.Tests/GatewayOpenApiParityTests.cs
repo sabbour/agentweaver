@@ -1,14 +1,21 @@
 using System.Diagnostics;
 using System.Net;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Agentweaver.Cli;
 using Agentweaver.Cli.Api;
+using Agentweaver.Cli.Auth;
+using Agentweaver.Cli.Vault;
 using Agentweaver.Gateway;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -210,6 +217,16 @@ public sealed class GatewayOpenApiParityTests
             projectDecisions["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
                 .GetValue<string>());
         Assert.Contains("404", Assert.IsType<JsonObject>(projectDecisions["responses"]).Select(item => item.Key));
+        var projectParams = Assert.IsType<JsonArray>(projectDecisions["parameters"]).OfType<JsonObject>().ToArray();
+        Assert.True(projectParams.Single(p => p["name"]?.GetValue<string>() == "projectId")["required"]?.GetValue<bool>());
+        Assert.True(projectParams.Single(p => p["name"]?.GetValue<string>() == "resourceType")["required"]?.GetValue<bool>());
+        Assert.True(projectParams.Single(p => p["name"]?.GetValue<string>() == "resourceId")["required"]?.GetValue<bool>());
+        Assert.Equal(100, projectParams.Single(p => p["name"]?.GetValue<string>() == "pageSize")["schema"]?["maximum"]?.GetValue<int>());
+        Assert.Equal(1, projectParams.Single(p => p["name"]?.GetValue<string>() == "beforeSequence")["schema"]?["minimum"]?.GetValue<int>());
+        Assert.Equal("int64", projectParams.Single(p => p["name"]?.GetValue<string>() == "beforeSequence")["schema"]?["format"]?.GetValue<string>());
+        Assert.DoesNotContain(projectParams,
+            p => p["in"]?.GetValue<string>() == "header" &&
+                 p["name"]?.GetValue<string>() == "X-Agentweaver-Project-Authorization");
         Assert.Null(schemas["VersionedProjectConfiguration"]?["properties"]?["charterScan"]);
 
         JsonObject updateProjectConfig = FindOperation(discovered, "updateProjectConfiguration");
@@ -363,6 +380,353 @@ public sealed class GatewayOpenApiParityTests
         Assert.Contains("sendProjectRunMessage", operationIds);
         Assert.Contains("sendMessage", operationIds);
         Assert.Contains("readRunEgress", operationIds);
+        Assert.Contains("listProjectGovernanceDecisions", operationIds);
+    }
+
+    [Fact]
+    public async Task PublishedLinuxApphostReadsProjectSkillDecisionsOverHttpsWithBrokerAndSecretService()
+    {
+        if (!OperatingSystem.IsLinux() ||
+            Environment.GetEnvironmentVariable("AGENTWEAVER_TEST_SECRET_SERVICE") != "1")
+            return;
+
+        string executable = Environment.GetEnvironmentVariable("AGENTWEAVER_TEST_PUBLISHED_APPHOST")
+            ?? ResolveCliApphost();
+        Assert.True(File.Exists(executable), $"The published apphost does not exist: {executable}");
+
+        using var caKey = RSA.Create(2048);
+        using var leafKey = RSA.Create(2048);
+        var now = DateTimeOffset.UtcNow;
+        var caRequest = new CertificateRequest(
+            "CN=Agentweaver Test Root CA", caKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        caRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        caRequest.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        caRequest.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(caRequest.PublicKey, false));
+        using var caCert = caRequest.CreateSelfSigned(now.AddMinutes(-5), now.AddHours(1));
+
+        var leafRequest = new CertificateRequest(
+            "CN=127.0.0.1", leafKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        leafRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        leafRequest.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+        leafRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+            [new Oid("1.3.6.1.5.5.7.3.1")], true));
+        var san = new SubjectAlternativeNameBuilder();
+        san.AddIpAddress(IPAddress.Loopback);
+        leafRequest.CertificateExtensions.Add(san.Build(true));
+        using var unsignedLeaf = leafRequest.Create(
+            caCert, now.AddMinutes(-2), now.AddMinutes(30), Guid.NewGuid().ToByteArray());
+        using var leafWithKey = unsignedLeaf.CopyWithPrivateKey(leafKey);
+
+        string tempDir = Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), $"aw-apphost-tls-{Guid.NewGuid():N}")).FullName;
+        string caFile = Path.Combine(tempDir, "test-root.pem");
+        await File.WriteAllTextAsync(caFile, caCert.ExportCertificatePem(), Encoding.ASCII);
+
+        const string allowedProject = "0123456789abcdef0123456789abcdef";
+        const string deniedProject = "fedcba9876543210fedcba9876543210";
+        const string skillId = "Skill.Alpha/v1";
+        string tenantId = $"fixture-tenant-{Guid.NewGuid():N}";
+        string initialRefresh = $"fixture-refresh-1-{Guid.NewGuid():N}";
+        string rotatedRefresh = $"fixture-refresh-2-{Guid.NewGuid():N}";
+        string accessToken = $"fixture-access-{Guid.NewGuid():N}";
+        var observedProjectAuthHeaders = new List<string>();
+        var observedScopes = new List<string>();
+        var requestTrace = new List<string>();
+
+        var brokerBuilder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        brokerBuilder.WebHost.UseKestrel(options =>
+            options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(leafWithKey)));
+        await using var brokerApp = brokerBuilder.Build();
+        brokerApp.MapGet("/.well-known/openid-configuration", (HttpContext ctx) =>
+        {
+            requestTrace.Add("broker:discovery");
+            string baseUri = $"https://127.0.0.1:{ctx.Connection.LocalPort}/";
+            return Results.Json(new
+            {
+                issuer = baseUri,
+                authorization_endpoint = baseUri + "connect/authorize",
+                token_endpoint = baseUri + "connect/token",
+                jwks_uri = baseUri + ".well-known/jwks.json",
+            });
+        });
+        int refreshCounter = 0;
+        var currentRefresh = initialRefresh;
+        brokerApp.MapPost("/connect/token", async (HttpContext ctx) =>
+        {
+            requestTrace.Add("broker:token");
+            var form = await ctx.Request.ReadFormAsync(ctx.RequestAborted);
+            observedScopes.Add(form["scope"].ToString());
+            string token = form["refresh_token"].ToString();
+            if (form["grant_type"] != "refresh_token" || token != currentRefresh)
+                return Results.BadRequest(new { error = "invalid_grant" });
+            currentRefresh = $"fixture-refresh-{Interlocked.Increment(ref refreshCounter)}-{Guid.NewGuid():N}";
+            return Results.Json(new
+            {
+                access_token = accessToken,
+                refresh_token = currentRefresh,
+                token_type = "Bearer",
+                expires_in = 3600,
+            });
+        });
+        await brokerApp.StartAsync();
+        string brokerAddress = brokerApp.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+
+        var gatewayBuilder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            ApplicationName = typeof(GatewayEndpoints).Assembly.FullName,
+            EnvironmentName = Environments.Development,
+        });
+        gatewayBuilder.WebHost.UseKestrel(options =>
+            options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(leafWithKey)));
+        gatewayBuilder.Services.AddSingleton<GatewayOwnerClient>(_ => null!);
+        await using var gatewayApp = gatewayBuilder.Build();
+        gatewayApp.MapGet("/openapi/v1.json", () =>
+        {
+            requestTrace.Add("gateway:openapi");
+            var method = typeof(GatewayEndpoints).Assembly.GetType("Agentweaver.Gateway.GatewayOpenApi")!
+                .GetMethod("CreateDocument", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+            var doc = method.Invoke(null, null);
+            return Results.Json(doc, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        });
+        gatewayApp.MapGet("/api/v1/authorization/context", (HttpContext ctx) =>
+        {
+            requestTrace.Add("gateway:auth-context");
+            if (ctx.Request.Headers.Authorization.ToString() != $"Bearer {accessToken}" ||
+                ctx.Request.Headers["X-Agentweaver-Tenant"].ToString() != tenantId)
+                return Results.Unauthorized();
+            return Results.Json(new
+            {
+                contractVersion = 1,
+                issuer = brokerAddress + "/",
+                actorId = "actor-1",
+                tenantId,
+                membershipRevision = 1,
+                boundProjectId = (string?)null,
+                boundRunId = (string?)null,
+                effectiveAuthority = Array.Empty<object>(),
+            });
+        });
+        gatewayApp.MapGet("/api/v1/policies/projects/{projectId}/decisions", (HttpContext ctx, string projectId) =>
+        {
+            requestTrace.Add($"gateway:decisions:{projectId}");
+            if (ctx.Request.Headers.TryGetValue("X-Agentweaver-Project-Authorization", out var projAuth))
+                observedProjectAuthHeaders.Add(projAuth.ToString());
+            if (ctx.Request.Headers.Authorization.ToString() != $"Bearer {accessToken}" ||
+                ctx.Request.Headers["X-Agentweaver-Tenant"].ToString() != tenantId)
+                return Results.Unauthorized();
+            if (projectId == deniedProject)
+                return Results.Json(
+                    new { code = "native_acs_forbidden", detail = "fixture-canary-secret" },
+                    statusCode: 403,
+                    contentType: "application/problem+json");
+            if (ctx.Request.Query["resourceType"] != "skill" ||
+                ctx.Request.Query["resourceId"] != skillId)
+                return Results.BadRequest(new { code = "governance_decision_history_request_invalid" });
+
+            var before = ctx.Request.Query["beforeSequence"].ToString();
+            string hash1 = new('a', 64);
+            string hash2 = new('b', 64);
+            if (string.IsNullOrEmpty(before))
+            {
+                return Results.Json(new
+                {
+                    scopeType = "project",
+                    scopeId = allowedProject,
+                    resourceType = "skill",
+                    resourceId = skillId,
+                    items = new object[]
+                    {
+                        new
+                        {
+                            decisionId = "00000000-0000-0000-0000-000000000002",
+                            sequence = 9_007_199_254_740_994L,
+                            previousHash = hash1,
+                            recordHash = hash2,
+                            recordedAt = "2026-11-27T00:00:00Z",
+                            decision = new
+                            {
+                                decisionType = "skill.trust.evidence.v1",
+                                outcome = "pending",
+                                approvalState = "pending",
+                                policyRevision = (long?)null,
+                                policyArtifactSha256 = (string?)null,
+                                selectedRule = (string?)null,
+                                interventionPoint = (string?)null,
+                                requestId = (string?)null,
+                                actionId = (string?)null,
+                                runId = (string?)null,
+                                agentId = (string?)null,
+                                roleId = (string?)null,
+                                ownerReceiptId = "receipt-2",
+                                ownerReceiptPosition = (long?)null,
+                                compilerGeneration = (string?)null,
+                                applicationGeneration = (string?)null,
+                                correlationId = "corr-2",
+                                decidedAt = "2026-11-27T00:00:00Z",
+                            },
+                        },
+                        new
+                        {
+                            decisionId = "00000000-0000-0000-0000-000000000001",
+                            sequence = 9_007_199_254_740_993L,
+                            previousHash = hash1,
+                            recordHash = hash2,
+                            recordedAt = "2026-11-27T00:00:00Z",
+                            decision = new
+                            {
+                                decisionType = "skill.trust.evidence.v1",
+                                outcome = "allow",
+                                approvalState = "approved",
+                                policyRevision = (long?)3,
+                                policyArtifactSha256 = hash1,
+                                selectedRule = "skill.allow",
+                                interventionPoint = (string?)null,
+                                requestId = (string?)null,
+                                actionId = (string?)null,
+                                runId = (string?)null,
+                                agentId = (string?)null,
+                                roleId = (string?)null,
+                                ownerReceiptId = "receipt-1",
+                                ownerReceiptPosition = (long?)1,
+                                compilerGeneration = (string?)null,
+                                applicationGeneration = (string?)null,
+                                correlationId = "corr-1",
+                                decidedAt = "2026-11-27T00:00:00Z",
+                            },
+                        },
+                    },
+                    nextBeforeSequence = 9_007_199_254_740_993L,
+                });
+            }
+            Assert.Equal("9007199254740993", before);
+            return Results.Json(new
+            {
+                scopeType = "project",
+                scopeId = allowedProject,
+                resourceType = "skill",
+                resourceId = skillId,
+                items = new object[]
+                {
+                    new
+                    {
+                        decisionId = "00000000-0000-0000-0000-000000000000",
+                        sequence = 1L,
+                        previousHash = new string('0', 64),
+                        recordHash = hash1,
+                        recordedAt = "2026-11-27T00:00:00Z",
+                        decision = new
+                        {
+                            decisionType = "skill.trust.evidence.v1",
+                            outcome = "pending",
+                            approvalState = "pending",
+                            policyRevision = (long?)null,
+                            policyArtifactSha256 = (string?)null,
+                            selectedRule = (string?)null,
+                            interventionPoint = (string?)null,
+                            requestId = (string?)null,
+                            actionId = (string?)null,
+                            runId = (string?)null,
+                            agentId = (string?)null,
+                            roleId = (string?)null,
+                            ownerReceiptId = "receipt-0",
+                            ownerReceiptPosition = (long?)null,
+                            compilerGeneration = (string?)null,
+                            applicationGeneration = (string?)null,
+                            correlationId = "corr-0",
+                            decidedAt = "2026-11-27T00:00:00Z",
+                        },
+                    },
+                },
+                nextBeforeSequence = (long?)null,
+            });
+        });
+        await gatewayApp.StartAsync();
+        string gatewayAddress = gatewayApp.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+
+        var authIdentity = CliAuthIdentity.Create(new CliIdentity(
+            new CliTarget(
+                new Uri(gatewayAddress + "/"),
+                new Uri(brokerAddress + "/"),
+                "agentweaver-cli",
+                "agentweaver",
+                tenantId),
+            ["openid", "api.read", "offline_access"]));
+
+        var vault = new LinuxSecretServiceVault();
+        vault.Delete(authIdentity.Account);
+        vault.Set(authIdentity.Account, initialRefresh);
+        try
+        {
+            async Task<(int ExitCode, string Stdout, string Stderr)> RunApphostAsync(params string[] extraArgs)
+            {
+                using Process process = new()
+                {
+                    StartInfo = new ProcessStartInfo(executable)
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                    },
+                };
+                process.StartInfo.Environment["SSL_CERT_FILE"] = caFile;
+                foreach (string arg in new[]
+                {
+                    "policy", "decisions",
+                    "--scope", "project",
+                    "--resource-type", "skill",
+                    "--resource-id", skillId,
+                    "--gateway-url", gatewayAddress,
+                    "--broker-issuer", brokerAddress + "/",
+                    "--client-id", "agentweaver-cli",
+                    "--api-audience", "agentweaver",
+                    "--tenant-id", tenantId,
+                }.Concat(extraArgs))
+                    process.StartInfo.ArgumentList.Add(arg);
+
+                Assert.True(process.Start());
+                Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+                Task<string> stderr = process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                return (process.ExitCode, await stdout, await stderr);
+            }
+
+            var page1 = await RunApphostAsync("--project-id", allowedProject, "--page-size", "2");
+            Assert.True(page1.ExitCode == 0, $"Exit={page1.ExitCode} Trace=[{string.Join(",", requestTrace)}] Stderr={page1.Stderr} Stdout={page1.Stdout}");
+            Assert.Empty(page1.Stderr);
+            var json1 = JsonNode.Parse(page1.Stdout)!.AsObject();
+            Assert.Equal(9_007_199_254_740_993L, json1["nextBeforeSequence"]!.GetValue<long>());
+            Assert.Equal("pending", json1["items"]![0]!["decision"]!["outcome"]!.GetValue<string>());
+            Assert.Null(json1["items"]![0]!["decision"]!["policyRevision"]);
+
+            var page2 = await RunApphostAsync(
+                "--project-id", allowedProject, "--page-size", "2", "--before-sequence", "9007199254740993");
+            Assert.Equal(0, page2.ExitCode);
+            Assert.Empty(page2.Stderr);
+            var json2 = JsonNode.Parse(page2.Stdout)!.AsObject();
+            Assert.Single(json2["items"]!.AsArray());
+            Assert.Null(json2["nextBeforeSequence"]);
+
+            var denied = await RunApphostAsync("--project-id", deniedProject, "--page-size", "2");
+            Assert.Equal(1, denied.ExitCode);
+            Assert.Empty(denied.Stdout);
+            Assert.Contains("HTTP 403", denied.Stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("fixture-canary-secret", denied.Stderr, StringComparison.Ordinal);
+
+            Assert.Empty(observedProjectAuthHeaders);
+            Assert.All(observedScopes, s => Assert.DoesNotContain("projects.admin", s, StringComparison.Ordinal));
+        }
+        finally
+        {
+            vault.Delete(authIdentity.Account);
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     private static string ResolveCliApphost()

@@ -1020,7 +1020,7 @@ public sealed partial class GatewayClient : IGatewayClient
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
             "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
-            "listPlatformGovernanceDecisions";
+            "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 
@@ -1177,7 +1177,7 @@ public sealed partial class GatewayClient : IGatewayClient
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            evidence["error"] = operationId == "validateProjectNativeAcsPolicy"
+            evidence["error"] = operationId is "validateProjectNativeAcsPolicy" or "listProjectGovernanceDecisions"
                 ? "[REDACTED]"
                 : RedactText(exception.Message);
             if (exception is OperationCanceledException && ct.IsCancellationRequested)

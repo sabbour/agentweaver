@@ -450,6 +450,20 @@ boundaries, denied writes without revision records, and exact replay. The ACS
 test checks the closed Skills domain schema. The Orchestrator tests preserve
 stable denial and retryable-unavailable runtime outcomes.
 
+Run the Project Skill decision history CLI and Gateway checks against their
+controlled fixtures:
+
+```powershell
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~PolicyCommandTests.ProjectSkillDecisions|FullyQualifiedName~PolicyCommandTests.ProjectAndPlatformDecisions|FullyQualifiedName~GatewayOpenApiParityTests"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayGovernanceDecisionHistory"
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --configuration Release --filter "FullyQualifiedName~PersistsExactSkillScanEvidenceAndPendingDecision"
+```
+
+The CLI tests use a local Gateway fixture and check unbound identity, exact
+query encoding, 64-bit sequence paging, `pending` and `null` fields, scope
+option rejection, and evidence redaction. The Gateway and Projects tests use a
+local owner handler and disposable PostgreSQL.
+
 ## Test the native ACS profile
 
 The shared ACS library validates a complete manifest and its relative Rego and
