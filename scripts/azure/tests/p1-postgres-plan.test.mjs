@@ -248,7 +248,7 @@ test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
   ])
     assert.deepEqual(environment.tables.find(item => item.table === table).privileges, ['SELECT', 'INSERT']);
   const reservations = environment.tables.find(table => table.table === 'platform_policy_apply_reservations');
-  assert.deepEqual(reservations.privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(reservations.privileges, ['SELECT']);
   assert.equal(reservations.mutationDenialRequired, true);
   assert.deepEqual(reservations.mutationDenialGuards.map(guard =>
     [guard.trigger, guard.function, guard.triggerType]), [
@@ -262,7 +262,7 @@ test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
       item.signature === guard.function && !item.execute));
   for (const name of ['platform_policy_proof_holds', 'platform_policy_proof_receipts']) {
     const proofTable = environment.tables.find(table => table.table === name);
-    assert.deepEqual(proofTable.privileges, ['SELECT', 'INSERT']);
+    assert.deepEqual(proofTable.privileges, ['SELECT']);
     assert.equal(proofTable.mutationDenialRequired, true);
     assert.deepEqual(proofTable.mutationDenialGuards.map(guard =>
       [guard.trigger, guard.function, guard.triggerType]), [

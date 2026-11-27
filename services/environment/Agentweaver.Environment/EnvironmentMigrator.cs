@@ -1,3 +1,4 @@
+using Agentweaver.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -208,17 +209,17 @@ public static class EnvironmentMigrator
                AND NOT has_table_privilege(current_user, 'environment.p1_creation_links', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.p1_creation_links', 'TRUNCATE')
                AND has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'SELECT')
-               AND has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'INSERT')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_apply_reservations', 'TRUNCATE')
                AND has_table_privilege(current_user, 'environment.platform_policy_proof_holds', 'SELECT')
-               AND has_table_privilege(current_user, 'environment.platform_policy_proof_holds', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_holds', 'INSERT')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_holds', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_holds', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_holds', 'TRUNCATE')
                AND has_table_privilege(current_user, 'environment.platform_policy_proof_receipts', 'SELECT')
-               AND has_table_privilege(current_user, 'environment.platform_policy_proof_receipts', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_receipts', 'INSERT')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_receipts', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_receipts', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.platform_policy_proof_receipts', 'TRUNCATE')
@@ -246,7 +247,15 @@ public static class EnvironmentMigrator
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Environment runtime principal must have required owner-scoped lifecycle and connection DML, append-only history/catalog/idempotency/reservation/receipt/egress access, no schema CREATE, and no physical DELETE/TRUNCATE authority.");
+                "The Environment runtime principal must have required owner-scoped lifecycle and connection DML, append-only history/catalog/idempotency/egress access, read-only Policy ledger access, no schema CREATE, and no physical DELETE/TRUNCATE authority.");
+
+        await using var userCommand = new NpgsqlCommand("SELECT current_user", connection);
+        var currentUser = (string)(await userCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        await PlannedRuntimeGrants.VerifyReadOnlyPolicyLedgerAsync(
+            connection,
+            transaction: null,
+            currentUser,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Applies pending migrations while holding a database advisory lock shared by migration instances.</summary>

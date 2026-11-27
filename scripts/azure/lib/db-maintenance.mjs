@@ -39,7 +39,7 @@ export function dbMaintenanceTarget(name = 'agentweaver') {
     postgresHost: `${name}-pg.postgres.database.azure.com` });
 }
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = '4ea7f43eb9bbb629b00b0f3a9c092b380cad46360eb3a75e531257171e615152';
+export const REVIEWED_PLAN_SHA256 = '6b9b99aa820948014ea1d1dbc2738a6f7eafec0faf20f03c214c7790972668dd';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -52,6 +52,29 @@ const P1_DIRECTORY = join('deploy', 'k8s', 'migrations', 'p1-postgres');
 const BROKER_DIRECTORY = join('deploy', 'k8s', 'migrations', 'identity-broker');
 const IDENTITY_TEMPLATE = join('infra', 'bicep', 'p1-postgres-migration-identity.bicep');
 const PLAN_FILE = join('scripts', 'azure', 'lib', 'p1-postgres-plan.json');
+const ENVIRONMENT_READ_ONLY_POLICY_LEDGER_TABLES = [
+  'platform_policy_apply_reservations',
+  'platform_policy_proof_holds',
+  'platform_policy_proof_receipts',
+];
+
+function isReadOnlyPolicyLedgerPlan(plan) {
+  const env = plan?.services?.find(service => service.service === 'environment');
+  if (!env || !Array.isArray(env.tables)) return false;
+  return ENVIRONMENT_READ_ONLY_POLICY_LEDGER_TABLES.every(name => {
+    const entry = env.tables.find(table => table.table === name);
+    return entry && Array.isArray(entry.privileges) &&
+      entry.privileges.includes('SELECT') && !entry.privileges.includes('INSERT');
+  });
+}
+
+async function verifyApprovedP1Image({ image, expectedDigest, readImage, head }) {
+  const verified = await readImage(image);
+  if (!verified || verified.digest !== expectedDigest)
+    throw new Error(`Image ${image} platform digest ${verified?.digest ?? '(missing)'} does not match approved digest ${expectedDigest}.`);
+  if (verified.sourceSha !== head)
+    throw new Error(`Image ${image} revision ${verified.sourceSha ?? '(missing)'} does not match reviewed checkout ${head}.`);
+}
 // Each owner's readiness check and the migration table it reads. The runner reads this file at
 // the commit an image was built from to learn which schema versions that image accepts. Git
 // paths always use forward slashes.
@@ -93,6 +116,7 @@ const PERMISSIONS = [
 const APP_PERMISSIONS = [
   ['create', 'leases.coordination.k8s.io'], ['get', 'leases.coordination.k8s.io'],
   ['delete', 'leases.coordination.k8s.io'],
+  ['get', 'pods'], ['list', 'pods'],
   ...['environment', 'orchestrator', 'events-and-sessions'].flatMap(name => [
     ['get', 'deployments.apps', undefined, name], ['list', 'deployments.apps', undefined, name],
     ['watch', 'deployments.apps', undefined, name], ['patch', 'deployments.apps', undefined, name],
@@ -272,10 +296,38 @@ export function describeEgressDrift(live, desired) {
 }
 
 /** Reads the image of each P1 service Deployment and compares it with the digest being migrated to. */
+function readNonTerminalEnvironmentPods(kubectl) {
+  const result = kubectl(['get', 'pods', '-l', 'agentweaver.io/workload=environment', '-o', 'json']);
+  if (result.status !== 0)
+    throw new Error(`Could not list environment pods: ${redact((result.stderr || result.stdout || '').trim())}`);
+  let pods;
+  try {
+    pods = JSON.parse(result.stdout);
+  } catch {
+    throw new Error('Could not parse environment pod list.');
+  }
+  if (!Array.isArray(pods?.items))
+    throw new Error('Could not parse environment pod list.');
+  return pods.items.filter(pod => !['Succeeded', 'Failed'].includes(pod.status?.phase));
+}
+
+function readEnvironmentDesiredReplicas(kubectl) {
+  const res = kubectl(['get', 'deployment', 'environment', '-o', 'jsonpath={.spec.replicas}']);
+  if (res.status !== 0) {
+    if (/NotFound/i.test(res.stderr ?? '')) return undefined;
+    throw new Error(`Could not read deployment/environment replicas: ${redact((res.stderr || res.stdout || '').trim())}`);
+  }
+  const raw = res.stdout.trim();
+  if (!/^\d+$/.test(raw))
+    throw new Error(`Could not parse deployment/environment replicas: '${raw}'.`);
+  return Number(raw);
+}
+
 function checkAppImages(kubectl, options) {
   return P1_JOBS.map(job => {
     const expected = imageReference(job.component, options[job.digestOption]);
-    const result = kubectl(['get', 'deployment', job.key, '-o', 'jsonpath={.spec.template.spec.containers[0].image}']);
+    const result = kubectl(['get', 'deployment', job.key, '-o',
+      `jsonpath={.spec.template.spec.containers[?(@.name=="${job.key}")].image}`]);
     if (result.status !== 0 && !/NotFound/i.test(result.stderr))
       throw new Error(`Could not read Deployment ${job.key}: ${result.stderr}`);
     const running = result.status === 0 ? result.stdout.trim() || undefined : undefined;
@@ -716,20 +768,59 @@ export async function runDbMaintenance(options, overrides = {}) {
     // deployed. Older images reject the new schema, so rolling back is never an option.
     const pendingImages = Object.fromEntries(P1_JOBS.filter(job => stateData[`rollForward.${job.key}`])
       .map(job => [job.key, stateData[`rollForward.${job.key}`]]));
-    if (options.migrationsOnly && Object.keys(pendingImages).length) {
+    const pendingPlanSha256 = stateData['rollForward.planSha256'];
+    const pendingEnvPriorReplicas = stateData['rollForward.environmentPriorReplicas'];
+    const hasPendingRecovery = Object.keys(pendingImages).length > 0 ||
+      Boolean(pendingPlanSha256) ||
+      pendingEnvPriorReplicas !== undefined;
+    if (options.migrationsOnly && hasPendingRecovery) {
       throw new Error(`Run ${stateData['rollForward.runId']} has an unfinished application roll-forward. ` +
         'Finish that existing maintenance run before starting a migrations-only deployment.');
     }
-    if (!options.prepareOnly && Object.keys(pendingImages).length) {
-      const differing = receipt.appImages.filter(app => pendingImages[app.deployment] && pendingImages[app.deployment] !== app.expected);
+    if (!options.prepareOnly && hasPendingRecovery) {
+      if (pendingPlanSha256 && pendingPlanSha256 !== REVIEWED_PLAN_SHA256)
+        throw new Error(`Run ${stateData['rollForward.runId']} recorded plan hash ${pendingPlanSha256}, not ${REVIEWED_PLAN_SHA256}. ` +
+          'Rerun with the same reviewed plan.');
+      if (pendingEnvPriorReplicas !== undefined && !/^\d+$/.test(pendingEnvPriorReplicas))
+        throw new Error(`Run ${stateData['rollForward.runId']} recorded invalid environmentPriorReplicas '${pendingEnvPriorReplicas}'.`);
+      const differing = P1_JOBS.filter(job => {
+        const expected = imageReference(job.component, options[job.digestOption]);
+        return pendingImages[job.key] && pendingImages[job.key] !== expected;
+      });
       if (differing.length)
         throw new Error(`Run ${stateData['rollForward.runId']} migrated the schema and must roll forward. ` +
-          `Rerun with the same digests: ${differing.map(app => `${app.deployment}=${pendingImages[app.deployment]}`).join(', ')}. ` +
+          `Rerun with the same digests: ${differing.map(job => `${job.key}=${pendingImages[job.key]}`).join(', ')}. ` +
           'Rolling back to older images is not supported.');
-      receipt.rollForward = { pendingFromRun: stateData['rollForward.runId'], images: pendingImages };
+      receipt.rollForward = {
+        pendingFromRun: stateData['rollForward.runId'],
+        ...(pendingPlanSha256 ? { planSha256: pendingPlanSha256 } : {}),
+        ...(pendingEnvPriorReplicas !== undefined ? { environmentPriorReplicas: Number(pendingEnvPriorReplicas) } : {}),
+        images: pendingImages,
+      };
     }
 
     const plan = JSON.parse(readFileSync(join(repoRoot, PLAN_FILE), 'utf8'));
+    const readOnlyLedgerCutover = isReadOnlyPolicyLedgerPlan(plan);
+    const readImage = deps.readImage ?? (reference => readServiceImageRevision(reference));
+    if (!options.prepareOnly && readOnlyLedgerCutover) {
+      if (options.migrationsOnly) {
+        const envApp = checkAppImages(kubectl, options).find(app => app.deployment === 'environment');
+        if (envApp && envApp.status !== 'absent')
+          throw new Error('The Environment Policy ledger cutover changes grants at schema 18 and requires --deploy-apps on an existing Environment deployment.');
+        if (readNonTerminalEnvironmentPods(kubectl).length > 0)
+          throw new Error('The Environment Policy ledger cutover requires zero non-terminal environment pods for --migrations-only.');
+      }
+      for (const job of P1_JOBS) {
+        await verifyApprovedP1Image({
+          image: imageReference(job.component, options[job.digestOption]),
+          expectedDigest: options[job.digestOption],
+          readImage,
+          head,
+        });
+      }
+      step('p1-images-verified', { count: P1_JOBS.length });
+    }
+
     let ordering = { order: options.migrationsOnly ? 'migrations-only' : 'migrate-first', services: [] };
     if (options.migrationsOnly) receipt.serviceOrder = ordering;
     if (options.appsOnly) {
@@ -738,6 +829,13 @@ export async function runDbMaintenance(options, overrides = {}) {
       if (absent.length)
         throw new Error(`Deployment ${absent.map(app => app.deployment).join(', ')} does not exist. ` +
           'Install the services with the release deploy path first.');
+      if (readOnlyLedgerCutover) {
+        if (hasPendingRecovery)
+          throw new Error('--apps-only cannot clear a pending Policy ledger recovery record because it does not run or verify the grant job; rerun normal maintenance with --deploy-apps.');
+        const envApp = receipt.appImages.find(entry => entry.deployment === 'environment');
+        if (!envApp || envApp.status !== 'match')
+          throw new Error('--apps-only cannot change the Environment image for the Policy ledger cutover; rerun normal maintenance with --deploy-apps to finish an interrupted cutover.');
+      }
     } else if (!options.prepareOnly && !options.migrationsOnly) {
       // Read the accepted schema range of every target image from the image's own source label.
       // Matching digests still need this gate: an unchanged image can reject a newer schema.
@@ -770,6 +868,26 @@ export async function runDbMaintenance(options, overrides = {}) {
         return [job.key, Number.isInteger(value) && value > 0 ? value : undefined];
       }));
       ordering = planServiceOrder({ appImages: receipt.appImages, ranges, targetSchema, currentSchema });
+      if (readOnlyLedgerCutover) {
+        const envApp = receipt.appImages.find(app => app.deployment === 'environment');
+        if (envApp && envApp.status === 'absent') {
+          if (readNonTerminalEnvironmentPods(kubectl).length > 0)
+            throw new Error('The Environment Policy ledger cutover requires zero non-terminal environment pods when deployment/environment is absent.');
+        } else if (envApp && envApp.status !== 'absent') {
+          if (!options.deployApps)
+            throw new Error('The Environment Policy ledger cutover requires --deploy-apps on an existing Environment deployment.');
+          if (envApp.status === 'mismatch') {
+            ordering.order = 'planned-readiness-gap';
+            ordering.services = ordering.services.map(service => service.deployment === 'environment'
+              ? {
+                  deployment: 'environment',
+                  action: 'gap',
+                  reason: 'Schema 18 Policy ledger outage cutover drains Environment before revoking INSERT and rolling to the approved image.',
+                }
+              : service);
+          }
+        }
+      }
       receipt.serviceOrder = ordering;
       // Deploy-first and a planned gap both depend on deploying the target images in this run.
       // Without --deploy-apps the run would leave a service unready, so it stops here.
@@ -791,6 +909,8 @@ export async function runDbMaintenance(options, overrides = {}) {
     const deployAfter = options.deployApps
       ? ordering.services.filter(service => ['migrate-first', 'gap'].includes(service.action)).map(service => service.deployment) : [];
 
+    const envNeedsOutage = readOnlyLedgerCutover && !options.migrationsOnly && !options.appsOnly &&
+      receipt.appImages.some(app => app.deployment === 'environment' && app.status !== 'absent');
     if (!options.execute) {
       // Dry run ends here, with the plan of record for an execute run.
       const mismatched = receipt.appImages.filter(entry => entry.status === 'mismatch');
@@ -812,9 +932,11 @@ export async function runDbMaintenance(options, overrides = {}) {
           ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
           `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes',
           ...(deployFirst.length ? ['deploy-apps-before-migrations'] : []),
+          ...(envNeedsOutage ? ['environment-drain'] : []),
             ...(plan.coreVersions.includes(47) ? ['terminal-cleanup-owners-check'] : []),
             ...(options.brokerDigest ? ['broker-job'] : []), 'environment-job', 'orchestrator-job', 'events-and-sessions-job',
-          ...(deployAfter.length ? ['deploy-apps-after-migrations'] : []), 'readiness', 'cleanup', 'receipt',
+          ...(deployAfter.length ? ['deploy-apps-after-migrations'] : []),
+          ...(envNeedsOutage ? ['environment-restore'] : []), 'readiness', 'cleanup', 'receipt',
         ];
       log(`Dry run passed. With --execute the runner would: ${receipt.plannedSteps.join(', ')}.`);
       receipt.result = 'dry-run-passed';
@@ -837,6 +959,40 @@ export async function runDbMaintenance(options, overrides = {}) {
     lockHeld = true;
     step('lock-acquired', { lease: LOCK_NAME });
 
+    // Re-read state and named Environment container under the maintenance lock before any mutation.
+    const liveStateRes = kubectl(['get', 'configmap', STATE_NAME, '-o', 'json']);
+    let liveStateData = {};
+    if (liveStateRes.status === 0) {
+      liveStateData = JSON.parse(liveStateRes.stdout).data ?? {};
+    } else if (!/NotFound/i.test(liveStateRes.stderr ?? '')) {
+      throw new Error(`Could not reread ${STATE_NAME} under lock: ${redact((liveStateRes.stderr ?? '').trim())}`);
+    }
+    const recoveryKeys = [
+      ...P1_JOBS.map(job => `rollForward.${job.key}`),
+      'rollForward.runId',
+      'rollForward.planSha256',
+      'rollForward.environmentPriorReplicas',
+      'orchestrator.schema',
+    ];
+    for (const key of recoveryKeys) {
+      if ((liveStateData[key] ?? undefined) !== (stateData[key] ?? undefined))
+        throw new Error(`Cluster state (${key}) changed before acquiring the maintenance lock; rerun maintenance.`);
+    }
+    if (!options.prepareOnly && !options.migrationsOnly) {
+      const preflightEnv = receipt.appImages.find(app => app.deployment === 'environment');
+      const liveEnv = checkAppImages(kubectl, options).find(app => app.deployment === 'environment');
+      if ((liveEnv?.running ?? undefined) !== (preflightEnv?.running ?? undefined))
+        throw new Error('Deployment environment image changed before acquiring the maintenance lock; rerun maintenance.');
+      if (readOnlyLedgerCutover && preflightEnv?.status === 'absent' && readNonTerminalEnvironmentPods(kubectl).length > 0)
+        throw new Error('Non-terminal environment pods appeared before acquiring the maintenance lock; rerun maintenance.');
+    } else if (options.migrationsOnly && readOnlyLedgerCutover) {
+      const liveEnv = checkAppImages(kubectl, options).find(app => app.deployment === 'environment');
+      if (liveEnv && liveEnv.status !== 'absent')
+        throw new Error('The Environment Policy ledger cutover changes grants at schema 18 and requires --deploy-apps on an existing Environment deployment.');
+      if (readNonTerminalEnvironmentPods(kubectl).length > 0)
+        throw new Error('The Environment Policy ledger cutover requires zero non-terminal environment pods for --migrations-only.');
+    }
+
     // Merges keys into the state ConfigMap, creating it when missing. A null value removes a key.
     // A merge patch keeps every key this call does not name, so the handover record, the schema
     // versions, and the roll-forward record never overwrite one another.
@@ -852,8 +1008,13 @@ export async function runDbMaintenance(options, overrides = {}) {
         data: Object.fromEntries(Object.entries(data).filter(([, value]) => value !== null)) }) }), action);
     };
     const clearRollForward = () => {
-      updateState(Object.fromEntries([...P1_JOBS.map(job => `rollForward.${job.key}`), 'rollForward.runId', 'rollForward.since']
-        .map(key => [key, null])), 'Could not clear the roll-forward record');
+      updateState(Object.fromEntries([
+        ...P1_JOBS.map(job => `rollForward.${job.key}`),
+        'rollForward.runId',
+        'rollForward.since',
+        'rollForward.planSha256',
+        'rollForward.environmentPriorReplicas',
+      ].map(key => [key, null])), 'Could not clear the roll-forward record');
       step('roll-forward-cleared');
     };
 
@@ -871,17 +1032,34 @@ export async function runDbMaintenance(options, overrides = {}) {
     // it should run: the pinned digest when this run deployed it, otherwise the image it ran.
     // Readiness is the end-to-end check, because each readiness probe verifies its schema.
     // After the schema moved, a failure tells the operator to roll forward, never back.
-    const waitReady = ({ afterMigration }) => {
+    const waitReady = ({ afterMigration, envPriorReplicas }) => {
       for (const app of receipt.appImages.filter(entry => entry.status !== 'absent')) {
         const wanted = app.deployed || app.status === 'match' ? app.expected : app.running;
-        const rollout = kubectl(['rollout', 'status', `deployment/${app.deployment}`, `--timeout=${options.readinessTimeoutSeconds}s`]);
-        if (rollout.status !== 0)
-          throw new Error(`Deployment ${app.deployment} did not become ready within ${options.readinessTimeoutSeconds} seconds: ` +
-            `${redact((rollout.stderr || rollout.stdout || '').trim())}` + (afterMigration
-            ? '. The schema is already migrated. Do not roll back; rerun the same command to roll forward to the same digests.' : ''));
+        if (app.deployment === 'environment' && envPriorReplicas === 0) {
+          if (readEnvironmentDesiredReplicas(kubectl) !== 0 || readNonTerminalEnvironmentPods(kubectl).length > 0)
+            throw new Error('Deployment environment did not remain at 0 replicas.');
+        } else {
+          const rollout = kubectl(['rollout', 'status', `deployment/${app.deployment}`, `--timeout=${options.readinessTimeoutSeconds}s`]);
+          if (rollout.status !== 0)
+            throw new Error(`Deployment ${app.deployment} did not become ready within ${options.readinessTimeoutSeconds} seconds: ` +
+              `${redact((rollout.stderr || rollout.stdout || '').trim())}` + (afterMigration
+              ? '. The schema is already migrated. Do not roll back; rerun the same command to roll forward to the same digests.' : ''));
+        }
         const image = must(kubectl(['get', 'deployment', app.deployment, '-o',
-          'jsonpath={.spec.template.spec.containers[0].image}']), `Could not read Deployment ${app.deployment}`).stdout.trim();
+          `jsonpath={.spec.template.spec.containers[?(@.name=="${app.deployment}")].image}`]),
+        `Could not read Deployment ${app.deployment}`).stdout.trim();
         if (image !== wanted) throw new Error(`Deployment ${app.deployment} runs ${image}, not ${wanted}.`);
+        if (app.deployment === 'environment' && readOnlyLedgerCutover && envPriorReplicas !== 0) {
+          const podsResult = must(kubectl(['get', 'pods', '-l', 'agentweaver.io/workload=environment', '-o', 'json']),
+            'Could not read environment pods after rollout');
+          let pods;
+          try {
+            pods = JSON.parse(podsResult.stdout);
+          } catch {
+            throw new Error('Could not parse environment pods after rollout.');
+          }
+          requireGuardAwareOwnerPods(pods, 'environment', wanted);
+        }
         step('app-ready', { deployment: app.deployment, image });
       }
     };
@@ -997,13 +1175,24 @@ export async function runDbMaintenance(options, overrides = {}) {
       waitReady({ afterMigration: Object.keys(pendingImages).length > 0 });
     }
 
+    const envAppForCutover = receipt.appImages.find(app => app.deployment === 'environment');
+    const existingEnvironmentCutover = readOnlyLedgerCutover && !options.migrationsOnly &&
+      envAppForCutover && envAppForCutover.status !== 'absent';
+    const core047Workloads = readOnlyLedgerCutover && !options.migrationsOnly
+      ? ['orchestrator']
+      : ['orchestrator', 'environment'];
     if (plan.coreVersions.includes(47)) {
       const ownerImages = checkAppImages(kubectl, options)
-        .filter(app => ['orchestrator', 'environment'].includes(app.deployment));
+        .filter(app => core047Workloads.includes(app.deployment));
+      if (existingEnvironmentCutover) {
+        const orchApp = ownerImages.find(owner => owner.deployment === 'orchestrator');
+        if (!orchApp || orchApp.status !== 'match')
+          throw new Error('Update the orchestrator Deployment to the reviewed image before Core 047.');
+      }
       for (const app of ownerImages.filter(owner => owner.status === 'mismatch')) {
         throw new Error(`Update the ${app.deployment} Deployment to the reviewed image before Core 047.`);
       }
-      for (const workload of ['orchestrator', 'environment']) {
+      for (const workload of core047Workloads) {
         const job = P1_JOBS.find(entry => entry.key === workload);
         const result = must(kubectl([
           'get', 'pods', '-l', `agentweaver.io/workload=${workload}`, '-o', 'json',
@@ -1016,6 +1205,54 @@ export async function runDbMaintenance(options, overrides = {}) {
         }
         requireGuardAwareOwnerPods(pods, workload, imageReference(job.component, options[job.digestOption]));
       }
+      if (!readOnlyLedgerCutover || options.migrationsOnly) {
+        step('terminal-cleanup-owners-checked');
+      }
+    }
+
+    let wroteRollForward = false;
+    let envPriorReplicas;
+    if (existingEnvironmentCutover) {
+      const currentReplicas = readEnvironmentDesiredReplicas(kubectl);
+      envPriorReplicas = pendingEnvPriorReplicas !== undefined
+        ? Number(pendingEnvPriorReplicas)
+        : currentReplicas;
+      updateState({
+        ...Object.fromEntries(P1_JOBS.map(item => [
+          `rollForward.${item.key}`,
+          imageReference(item.component, options[item.digestOption]),
+        ])),
+        'rollForward.planSha256': REVIEWED_PLAN_SHA256,
+        'rollForward.environmentPriorReplicas': String(envPriorReplicas),
+        'rollForward.runId': runId,
+        'rollForward.since': deps.now().toISOString(),
+      }, 'Could not record the Policy ledger cutover recovery state');
+      wroteRollForward = true;
+
+      if (currentReplicas !== 0) {
+        must(kubectl(['patch', 'deployment', 'environment', '--type', 'merge', '-p',
+          JSON.stringify({ spec: { replicas: 0 } })]),
+        'Could not scale deployment/environment to 0 before Policy ledger cutover');
+      }
+      const drainDeadline = Date.now() + options.readinessTimeoutSeconds * 1000;
+      let drained = false;
+      while (Date.now() <= drainDeadline) {
+        if (readNonTerminalEnvironmentPods(kubectl).length === 0) {
+          drained = true;
+          break;
+        }
+        await deps.sleep(5_000);
+      }
+      if (!drained)
+        throw new Error(`Timed out waiting for deployment/environment pods to stop within ${options.readinessTimeoutSeconds} seconds.`);
+      if (readEnvironmentDesiredReplicas(kubectl) !== 0 || readNonTerminalEnvironmentPods(kubectl).length > 0)
+        throw new Error('Deployment environment did not remain drained at 0 replicas and 0 non-terminal pods.');
+      step('environment-drained', { priorReplicas: envPriorReplicas });
+      if (plan.coreVersions.includes(47))
+        step('terminal-cleanup-owners-checked');
+    } else if (readOnlyLedgerCutover && !options.migrationsOnly && plan.coreVersions.includes(47)) {
+      if (readNonTerminalEnvironmentPods(kubectl).length > 0)
+        throw new Error('The Environment Policy ledger cutover requires zero non-terminal environment pods when deployment/environment is absent.');
       step('terminal-cleanup-owners-checked');
     }
 
@@ -1134,12 +1371,28 @@ export async function runDbMaintenance(options, overrides = {}) {
     ];
     for (const job of jobs) {
       if (job.key === P1_JOBS[0].key) {
-        // Before the schema moves, record the images this run will deploy afterwards. If the run
-        // then stops, the next run may only roll forward to these images.
-        if (deployAfter.length)
-          updateState({ ...Object.fromEntries(receipt.appImages.filter(app => deployAfter.includes(app.deployment))
-            .map(app => [`rollForward.${app.deployment}`, app.expected])), 'rollForward.runId': runId,
-          'rollForward.since': deps.now().toISOString() }, 'Could not record the roll-forward images');
+        if (!wroteRollForward && deployAfter.length) {
+          updateState({
+            ...Object.fromEntries(P1_JOBS.map(item => [
+              `rollForward.${item.key}`,
+              imageReference(item.component, options[item.digestOption]),
+            ])),
+            'rollForward.planSha256': REVIEWED_PLAN_SHA256,
+            'rollForward.runId': runId,
+            'rollForward.since': deps.now().toISOString(),
+          }, 'Could not record the roll-forward images');
+          wroteRollForward = true;
+        }
+        if (readOnlyLedgerCutover) {
+          if (!options.migrationsOnly && envAppForCutover && envAppForCutover.status !== 'absent') {
+            if (readEnvironmentDesiredReplicas(kubectl) !== 0 || readNonTerminalEnvironmentPods(kubectl).length > 0)
+              throw new Error('Deployment environment was scaled or has active pods immediately before environment-migration.');
+          } else {
+            const liveEnv = checkAppImages(kubectl, options).find(app => app.deployment === 'environment');
+            if ((liveEnv && liveEnv.status !== 'absent') || readNonTerminalEnvironmentPods(kubectl).length > 0)
+              throw new Error('Deployment environment or active environment pods appeared immediately before environment-migration.');
+          }
+        }
         // A planned readiness gap starts when the owner schema starts to move.
         if (ordering.order === 'planned-readiness-gap')
           receipt.readinessGap = { planned: true, deployments: ordering.services.filter(service => service.action === 'gap')
@@ -1191,14 +1444,23 @@ export async function runDbMaintenance(options, overrides = {}) {
     // schema (no gap) and those in a planned readiness gap. Then every service must be ready.
     if (!options.migrationsOnly) {
       deployImages(deployAfter);
+      if (envPriorReplicas !== undefined) {
+        must(kubectl(['patch', 'deployment', 'environment', '--type', 'merge', '-p',
+          JSON.stringify({ spec: { replicas: envPriorReplicas } })]),
+        `Could not restore deployment/environment replicas to ${envPriorReplicas}`);
+        if (readEnvironmentDesiredReplicas(kubectl) !== envPriorReplicas)
+          throw new Error(`Deployment environment replicas did not restore to ${envPriorReplicas}.`);
+      }
       // A failure here leaves the gap open in the receipt (no end time) and the roll-forward record
       // in place, so the next run can only finish the same deploy.
-      waitReady({ afterMigration: true });
+      waitReady({ afterMigration: true, envPriorReplicas });
       if (receipt.readinessGap) {
         receipt.readinessGap.endedAt = deps.now().toISOString();
         receipt.readinessGap.durationSeconds = (Date.parse(receipt.readinessGap.endedAt) - Date.parse(receipt.readinessGap.startedAt)) / 1000;
       }
-      if (deployAfter.length || Object.keys(pendingImages).length) clearRollForward();
+      if (wroteRollForward || deployAfter.length || hasPendingRecovery) clearRollForward();
+    } else if (wroteRollForward) {
+      clearRollForward();
     }
     receipt.result = 'succeeded';
   } catch (error) {

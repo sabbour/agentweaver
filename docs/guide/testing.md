@@ -608,6 +608,14 @@ certificate separation, and candidate output:
 dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --configuration Release --filter "FullyQualifiedName~PlatformPolicySourceHttpClientTests|FullyQualifiedName~PlatformPolicySourceClientCompositionTests|FullyQualifiedName~PlatformEgressAcsCompilerTests"
 ```
 
+Run the Environment Policy ledger read-only grant, runtime readiness, and database-maintenance cutover tests:
+
+```powershell
+dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj --configuration Release --filter "FullyQualifiedName~PlannedRuntimeGrants"
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --configuration Release --filter "FullyQualifiedName~EnvironmentRemoteMcpConnectionPostgresTests"
+npm run test:azure
+```
+
 ## Test project-wide Knowledge discovery
 
 Run the Knowledge service suite to check authorization, existing provider
