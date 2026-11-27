@@ -412,7 +412,7 @@ function fakeExec(calls, {
   denyEnvironmentPermission, denyEnvironmentPermissionExitCode = 0,
   denyEnvironmentPermissionOutput = 'no\n', environmentPermissionCheckError,
   denyRuntimePermission, missingSecrets = [], secretTypes = {},
-  liveStorageClass, kataNodes, clusterNodes,
+  liveStorageClass, kataNodes, clusterNodes, liveEnvironmentPresent = false,
   amaLogs = { metadata: { generation: 2 }, status: { observedGeneration: 2, desiredNumberScheduled: 3,
     numberReady: 3, numberAvailable: 3, updatedNumberScheduled: 3 } },
   amaLogsPods, denyKubeSystemPodList = false,
@@ -663,7 +663,11 @@ function fakeExec(calls, {
       };
     }
     if (args[0] === 'get' && args[1] === 'deployment') {
-      return { status: 0, stdout: JSON.stringify(liveDeployment(args[2])), stderr: '' };
+      if (args.includes('--ignore-not-found=true') && args[2] === 'environment' &&
+          !liveEnvironmentPresent && !live.deployments?.environment) {
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: JSON.stringify(live.deployments?.[args[2]] ?? liveDeployment(args[2])), stderr: '' };
     }
     if (args[0] === 'get' && args[1] === 'secret') {
       const names = args.slice(2, args.findIndex(arg => arg.startsWith('--')))
@@ -3563,6 +3567,14 @@ test('active installer guards both runtime maps, activates Environment, and reco
   environmentMap.metadata.uid = 'old-environment-uid';
   environmentMap.metadata.resourceVersion = '20';
   const environmentDeployment = workloadSource(kustomizationPath, 'environment');
+  for (const container of environmentDeployment.spec.template.spec.containers) {
+    if (container.image?.startsWith(`${REGISTRY}/`))
+      container.image = container.image.replace(/:receipt-pinned$/, `:${existingTag}`);
+    for (const setting of container.env ?? []) {
+      if (setting.value?.startsWith(`${REGISTRY}/`))
+        setting.value = setting.value.replace(/:receipt-pinned$/, `:${existingTag}`);
+    }
+  }
   environmentDeployment.spec.replicas = 3;
   const state = {
     runtimeConfig: structuredClone(runtimeConfig),
@@ -3583,8 +3595,10 @@ test('active installer guards both runtime maps, activates Environment, and reco
     sleep: async milliseconds => sleeps.push(milliseconds),
     log() {},
   };
+  const manifestPath = path.join(directory, 'runtime-map-images.json');
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-agenthost': selectedTag } }));
   try {
-    await assert.rejects(deployKustomize({ imageTag: selectedTag }, options),
+    await assert.rejects(deployKustomize({ imageManifest: manifestPath }, options),
       /Workload apply failed: simulated workload apply failure/);
 
     const scaleDown = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
@@ -3630,7 +3644,7 @@ test('active installer guards both runtime maps, activates Environment, and reco
       /agenthost/.test(call.args[2] ?? '')), false);
 
     const beforeRetry = calls.length;
-    await deployKustomize({ imageTag: selectedTag }, options);
+    await deployKustomize({ imageManifest: manifestPath }, options);
     const retry = calls.slice(beforeRetry);
     assert.equal(retry.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
       call.args[1] === '--raw'), false);
@@ -4715,6 +4729,95 @@ test('install smoke check failures name the cause and clean up', async () => {
       assert.ok(calls.some(call => call.args[0] === 'delete' &&
         call.args[1]?.startsWith('pod/agentweaver-install-smoke-')));
     }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('deploy:kustomize blocks environment-migration on existing Environment deployment or active pods before any cluster writes', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'env-manifest.json');
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver.environment': selectedTag } }));
+  try {
+    // Full release (includes identity-broker + environment) must reject BEFORE scaling identity-broker/projects-config or writing.
+    const callsFullRelease = [];
+    await assert.rejects(
+      deployKustomize({ imageTag: selectedTag }, {
+        root: directory,
+        exec: fakeExec(callsFullRelease, { liveEnvironmentPresent: true }),
+        log() {},
+      }),
+      /Existing Environment installations cannot run environment-migration through deploy:kustomize.*db:maintenance -- --execute --deploy-apps/);
+    assert.equal(callsFullRelease.some(call => call.command === 'kubectl' &&
+      ['scale', 'annotate', 'create', 'patch', 'delete', 'apply'].includes(call.args[0])), false);
+
+    const callsExisting = [];
+    await assert.rejects(
+      deployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: fakeExec(callsExisting, { liveEnvironmentPresent: true }),
+        log() {},
+      }),
+      /Existing Environment installations cannot run environment-migration through deploy:kustomize.*db:maintenance -- --execute --deploy-apps/);
+    assert.equal(callsExisting.some(call => call.command === 'kubectl' &&
+      ['scale', 'annotate', 'create', 'patch', 'delete', 'apply'].includes(call.args[0])), false);
+
+    const callsPods = [];
+    const baseExec = fakeExec(callsPods);
+    const podExec = (command, args, options) => {
+      if (command === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'environment' &&
+          args.includes('--ignore-not-found=true')) {
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (command === 'kubectl' && args[0] === 'get' && args[1] === 'pods' &&
+          args.includes('agentweaver.io/workload=environment')) {
+        return { status: 0, stdout: JSON.stringify({ items: [{ metadata: { name: 'env-0' }, status: { phase: 'Running' } }] }), stderr: '' };
+      }
+      return baseExec(command, args, options);
+    };
+    await assert.rejects(
+      deployKustomize({ imageManifest: manifestPath }, { root: directory, exec: podExec, log() {} }),
+      /Cannot run environment-migration through deploy:kustomize while non-terminal environment pods exist.*db:maintenance -- --execute --deploy-apps/);
+    assert.equal(callsPods.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      call.options?.input?.includes('environment-migration-')), false);
+
+    // If an active Environment pod appears while the Broker migration job runs, abort right before environment-migration creation.
+    const brokerAndEnvManifestPath = path.join(directory, 'broker-and-env-manifest.json');
+    writeFileSync(brokerAndEnvManifestPath, JSON.stringify({
+      images: {
+        'agentweaver.identity.broker': selectedTag,
+        'agentweaver.environment': selectedTag,
+      },
+    }));
+    const callsRace = [];
+    const baseRaceExec = fakeExec(callsRace);
+    let brokerMigrationCompleted = false;
+    const raceExec = (command, args, options) => {
+      if (command === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'environment' &&
+          args.includes('--ignore-not-found=true')) {
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      const result = baseRaceExec(command, args, options);
+      if (command === 'kubectl' && args[0] === 'wait' &&
+          args.some(arg => arg.startsWith('job/identity-broker-migration-'))) {
+        brokerMigrationCompleted = true;
+      }
+      if (brokerMigrationCompleted && command === 'kubectl' && args[0] === 'get' && args[1] === 'pods' &&
+          args.includes('agentweaver.io/workload=environment')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ items: [{ metadata: { name: 'env-race-0' }, status: { phase: 'Running' } }] }),
+          stderr: '',
+        };
+      }
+      return result;
+    };
+    await assert.rejects(
+      deployKustomize({ imageManifest: brokerAndEnvManifestPath }, { root: directory, exec: raceExec, log() {} }),
+      /Cannot run environment-migration through deploy:kustomize while non-terminal environment pods exist.*db:maintenance -- --execute --deploy-apps/);
+    assert.equal(brokerMigrationCompleted, true);
+    assert.equal(callsRace.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      call.options?.input?.includes('environment-migration-')), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

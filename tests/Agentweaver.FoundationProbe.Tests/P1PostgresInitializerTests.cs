@@ -1394,7 +1394,7 @@ public sealed class P1PostgresInitializerTests
             Schema = "environment",
             Tables =
             [
-                new("platform_policy_apply_reservations", ["SELECT", "INSERT"], null, true, null,
+                new("platform_policy_apply_reservations", ["SELECT"], null, true, null,
                 [
                     new("platform_policy_apply_reservations_consistent_identity",
                         "enforce_platform_policy_apply_reservation_identity()", 7,
@@ -1410,7 +1410,7 @@ public sealed class P1PostgresInitializerTests
                         "reject_platform_policy_apply_reservation_mutation()", 34,
                         "platform policy apply reservations are append-only", "55000"),
                 ]),
-                new("platform_policy_proof_holds", ["SELECT", "INSERT"], null, true, null,
+                new("platform_policy_proof_holds", ["SELECT"], null, true, null,
                 [
                     new("platform_policy_proof_holds_reservation_fence",
                         "enforce_platform_policy_hold_reservation_fence()", 7,
@@ -1422,7 +1422,7 @@ public sealed class P1PostgresInitializerTests
                         "reject_platform_policy_proof_mutation()", 34,
                         "platform policy proof records are append-only", "55000"),
                 ]),
-                new("platform_policy_proof_receipts", ["SELECT", "INSERT"], null, true, null,
+                new("platform_policy_proof_receipts", ["SELECT"], null, true, null,
                 [
                     new("platform_policy_proof_receipts_hold_identity",
                         "enforce_platform_policy_proof_receipt_hold()", 7,

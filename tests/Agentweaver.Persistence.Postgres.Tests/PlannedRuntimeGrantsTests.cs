@@ -10,7 +10,7 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests of plan validation; no database is needed.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "4ea7f43eb9bbb629b00b0f3a9c092b380cad46360eb3a75e531257171e615152";
+    private const string ReviewedPlanSha256 = "6b9b99aa820948014ea1d1dbc2738a6f7eafec0faf20f03c214c7790972668dd";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 13)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 18)];
@@ -104,10 +104,10 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Equal(["SELECT", "INSERT", "UPDATE"], creationLinks.Privileges);
         var reservations = Assert.Single(
             environment.Tables, table => table.Table == "platform_policy_apply_reservations");
-        Assert.Equal(["SELECT", "INSERT"], reservations.Privileges);
+        Assert.Equal(["SELECT"], reservations.Privileges);
         foreach (var tableName in new[]
                  { "platform_policy_proof_holds", "platform_policy_proof_receipts" })
-            Assert.Equal(["SELECT", "INSERT"],
+            Assert.Equal(["SELECT"],
                 Assert.Single(environment.Tables, table => table.Table == tableName).Privileges);
         foreach (var tableName in new[]
         {

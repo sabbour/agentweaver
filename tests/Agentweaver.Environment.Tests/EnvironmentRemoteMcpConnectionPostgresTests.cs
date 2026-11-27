@@ -121,9 +121,9 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             GRANT SELECT, INSERT ON environment.remote_mcp_connection_configurations TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.remote_mcp_catalog_snapshots TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.remote_mcp_connection_idempotency TO {RuntimeRole};
-            GRANT SELECT, INSERT ON environment.platform_policy_apply_reservations TO {RuntimeRole};
-            GRANT SELECT, INSERT ON environment.platform_policy_proof_holds TO {RuntimeRole};
-            GRANT SELECT, INSERT ON environment.platform_policy_proof_receipts TO {RuntimeRole};
+            GRANT SELECT ON environment.platform_policy_apply_reservations TO {RuntimeRole};
+            GRANT SELECT ON environment.platform_policy_proof_holds TO {RuntimeRole};
+            GRANT SELECT ON environment.platform_policy_proof_receipts TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.provider_host_request_receipts TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.sandbox_owner_mappings TO {RuntimeRole};
             GRANT SELECT, INSERT ON environment.sandbox_egress_flows_attributed TO {RuntimeRole};
@@ -152,11 +152,27 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
                 "runtime-object-uid",
                 "1",
                 reservationPolicy);
-            var reservation = await reservationStore.ReserveAsync(reservationRequest, CancellationToken.None);
-            var reservationReplay = await reservationStore.ReserveAsync(reservationRequest, CancellationToken.None);
-            Assert.False(reservation.Replayed);
-            Assert.True(reservationReplay.Replayed);
-            Assert.Equal(reservation.ReservationId, reservationReplay.ReservationId);
+            var deniedReservationInsert = await Assert.ThrowsAsync<PlatformEgressApplyReservationException>(() =>
+                reservationStore.ReserveAsync(reservationRequest, CancellationToken.None));
+            Assert.Equal("policy_fence_unavailable", deniedReservationInsert.Code);
+            var directInsertDenied = await Assert.ThrowsAsync<PostgresException>(() =>
+                ExecuteSqlAsync(
+                    runtimeDataSource,
+                    """
+                    INSERT INTO environment.platform_policy_apply_reservations
+                    (reservation_id, target_id, idempotency_key, request_fingerprint, source_epoch, generation,
+                     source_id, source_revision, source_hash, intent_hash, object_uid, resource_version,
+                     provider_request_json, created_at)
+                    VALUES ('00000000-0000-0000-0000-000000000001', 't', 'k', repeat('a', 64), 1, 1,
+                            's', 1, repeat('b', 64), repeat('c', 64), 'u', '1', '{}'::jsonb, NOW())
+                    """));
+            Assert.Equal("42501", directInsertDenied.SqlState);
+            await using (var selectCmd = runtimeDataSource.CreateCommand(
+                "SELECT count(*) FROM environment.platform_policy_apply_reservations"))
+            {
+                var existingReservations = (long)(await selectCmd.ExecuteScalarAsync())!;
+                Assert.True(existingReservations >= 0);
+            }
 
             var auditStore = new EnvironmentEgressAuditStore(runtimeDataSource);
             var owner = new EnvironmentOwnerIdentity(
@@ -241,6 +257,30 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
                 $"GRANT UPDATE ON environment.remote_mcp_connection_configurations TO {RuntimeRole}");
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 EnvironmentMigrator.VerifyRuntimeAuthorityAsync(runtimeDataSource));
+            await ExecuteSqlAsync(
+                fixture.DataSource,
+                $"REVOKE UPDATE ON environment.remote_mcp_connection_configurations FROM {RuntimeRole}");
+
+            await EnvironmentMigrator.VerifyRuntimeAuthorityAsync(runtimeDataSource);
+
+            var setRole = "env_set_" + Guid.NewGuid().ToString("N");
+            await ExecuteSqlAsync(fixture.DataSource, $"""
+                CREATE ROLE {setRole} NOLOGIN;
+                GRANT INSERT ON environment.platform_policy_proof_holds TO {setRole};
+                GRANT {setRole} TO {RuntimeRole} WITH INHERIT FALSE, SET TRUE;
+                """);
+            try
+            {
+                var hiddenInsertError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    EnvironmentMigrator.VerifyRuntimeAuthorityAsync(runtimeDataSource));
+                Assert.Contains("platform_policy_proof_holds", hiddenInsertError.Message);
+            }
+            finally
+            {
+                await ExecuteSqlAsync(fixture.DataSource, $"REVOKE {setRole} FROM {RuntimeRole}");
+                await ExecuteSqlAsync(fixture.DataSource, $"REVOKE ALL ON environment.platform_policy_proof_holds FROM {setRole}");
+                await ExecuteSqlAsync(fixture.DataSource, $"DROP ROLE {setRole}");
+            }
         }
         finally
         {

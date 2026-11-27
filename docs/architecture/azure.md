@@ -221,7 +221,7 @@ skipped, 13 Events versions, and 17 Environment versions. Roll out compatible
 Events & Sessions runtime and migration catalog versions together. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`4ea7f43eb9bbb629b00b0f3a9c092b380cad46360eb3a75e531257171e615152`.
+`6b9b99aa820948014ea1d1dbc2738a6f7eafec0faf20f03c214c7790972668dd`.
 It contains 150 tables, 14 row-lock columns, and 61 exact function signatures.
 The Projects & Config plan grants `SELECT, INSERT` and column-scoped
 `UPDATE (sequence, fence_generation, head_hash, updated_at)` on
@@ -267,9 +267,14 @@ reserved generation. This migration and the updated grant-plan hash are
 source-only; this change does not apply them or authorize a live grant.
 Environment schema version 13 adds
 `environment.platform_policy_apply_reservations` for durable platform-egress
-provider requests. Its planned runtime rights are `SELECT, INSERT`; an owner
-trigger rejects `UPDATE`, `DELETE`, and `TRUNCATE`. The reserved apply path is
-not registered or called. This source change updates the grant-plan hash but
+provider requests, and schema version 15 adds `environment.platform_policy_proof_holds`
+and `environment.platform_policy_proof_receipts`. Under the current reviewed plan,
+`agentweaver-id-environment` holds `SELECT` only on those three Policy ledger
+tables; the grant transaction issues `REVOKE INSERT ... RESTRICT` and verifies
+that neither `PUBLIC` nor any `USAGE`/`SET`-reachable role retains effective
+`INSERT` on the tables or their live columns. Environment startup and
+readiness run the same denial check. An owner trigger also rejects `UPDATE`,
+`DELETE`, and `TRUNCATE`. This source change updates the grant-plan hash but
 does not apply the migration or grants to a live database.
 Environment schema version 14 adds `environment.sandbox_owner_mappings`,
 `environment.sandbox_egress_flows_attributed`, and

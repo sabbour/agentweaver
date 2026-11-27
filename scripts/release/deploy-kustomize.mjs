@@ -2478,6 +2478,22 @@ export async function deployKustomize(options, overrides = {}) {
       root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs,
     );
 
+    const assertEnvironmentOutageCutoverReady = () => {
+      if (!requestedImages.has('agentweaver.environment')) return;
+      const existingEnvironment = readExistingDeployment(exec, context, root, 'environment');
+      if (existingEnvironment) {
+        fail('Existing Environment installations cannot run environment-migration through deploy:kustomize during the Policy ledger grant cutover; run npm run db:maintenance -- --execute --deploy-apps instead.');
+      }
+      const envPods = JSON.parse(kubectl(exec, context, [
+        'get', 'pods', '-l', 'agentweaver.io/workload=environment', '-o', 'json',
+      ], root, 'Could not verify environment pods before environment-migration').stdout || '{}');
+      const activeEnvPods = (envPods.items ?? []).filter(pod => !['Succeeded', 'Failed'].includes(pod.status?.phase));
+      if (activeEnvPods.length > 0) {
+        fail('Cannot run environment-migration through deploy:kustomize while non-terminal environment pods exist; run npm run db:maintenance -- --execute --deploy-apps instead.');
+      }
+    };
+    assertEnvironmentOutageCutoverReady();
+
     await reconcileAgentHostEgressCollector(exec, context, root, auditMode, log, overrides.deleteCollector);
     if (brokerMigrationResources) {
       ensureBrokerMigrationResources(brokerMigrationResources, exec, context, root, log);
@@ -2535,7 +2551,12 @@ export async function deployKustomize(options, overrides = {}) {
       }
       persistBrokerDisableFenceRequired(exec, context, root);
     }
-    for (const job of jobs) runMigrationJob(job, exec, context, root, log);
+    for (const job of jobs) {
+      if (job.metadata?.name?.startsWith('environment-migration-')) {
+        assertEnvironmentOutageCutoverReady();
+      }
+      runMigrationJob(job, exec, context, root, log);
+    }
     log('Database migrations completed.');
 
     if (activateEnvironment) {

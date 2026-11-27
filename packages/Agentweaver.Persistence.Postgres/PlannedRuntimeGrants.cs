@@ -45,6 +45,12 @@ public static class PlannedRuntimeGrants
     private static readonly string[] TablePrivileges =
         ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
     private static readonly string[] SequencePrivileges = ["USAGE", "SELECT", "UPDATE"];
+    private static readonly string[] EnvironmentReadOnlyPolicyLedgerTables =
+    [
+        "platform_policy_apply_reservations",
+        "platform_policy_proof_holds",
+        "platform_policy_proof_receipts",
+    ];
 
     /// <summary>Returns the exact embedded plan bytes, which the plan hash covers.</summary>
     public static byte[] ReadEmbeddedPlan()
@@ -172,6 +178,21 @@ public static class PlannedRuntimeGrants
             foreach (var privilege in table.Privileges)
                 if (!TablePrivileges.Contains(privilege, StringComparer.Ordinal))
                     throw new InvalidOperationException($"The plan names an unsupported privilege on {relation}.");
+            if (plan.Service == "environment" &&
+                EnvironmentReadOnlyPolicyLedgerTables.Contains(table.Table, StringComparer.Ordinal))
+            {
+                var isOwner = await ScalarAsync(connection, transaction, """
+                    SELECT pg_catalog.pg_get_userbyid(c.relowner) = current_user
+                    FROM pg_catalog.pg_class c
+                    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = @schema AND c.relname = @table
+                    """, cancellationToken, ("schema", plan.Schema), ("table", table.Table));
+                if (isOwner is not true)
+                    throw new InvalidOperationException(
+                        $"The migration principal must own {plan.Schema}.{table.Table} before revoking INSERT.");
+                await ExecuteAsync(connection, transaction,
+                    $"REVOKE INSERT ON TABLE {relation} FROM {role} RESTRICT", cancellationToken);
+            }
             if (table.Privileges.Length != 0)
                 await ExecuteAsync(connection, transaction,
                     $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {role}", cancellationToken);
@@ -272,6 +293,177 @@ public static class PlannedRuntimeGrants
             if (state is not true)
                 throw new InvalidOperationException($"Unexpected EXECUTE authority on {plan.Schema}.{function.Signature}.");
         }
+        if (plan.Service == "environment")
+            await VerifyReadOnlyPolicyLedgerAsync(connection, transaction, plan.RuntimeRole, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Verifies that the runtime role has SELECT on the three Environment Policy ledger tables and
+    /// cannot insert into any table or live column directly, through PUBLIC, via USAGE/SET-reachable
+    /// roles, or through ownership or delegated role authority.
+    /// </summary>
+    public static async Task VerifyReadOnlyPolicyLedgerAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string runtimeRole,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        if (string.IsNullOrWhiteSpace(runtimeRole))
+            throw new ArgumentException("Runtime role name is required.", nameof(runtimeRole));
+
+        var reachable = new List<(uint Oid, string Name, string Path)>();
+        await using (var roleCommand = new NpgsqlCommand("""
+            WITH RECURSIVE target AS (
+                SELECT oid
+                FROM pg_catalog.pg_roles
+                WHERE rolname = @role
+            ),
+            switchable(oid, via_admin) AS (
+                SELECT oid, false FROM target
+                UNION
+                SELECT m.roleid, s.via_admin OR m.admin_option
+                FROM switchable s
+                JOIN pg_catalog.pg_auth_members m ON m.member = s.oid
+                WHERE m.set_option OR m.admin_option
+            ),
+            inherited(oid, via_admin) AS (
+                SELECT oid, via_admin FROM switchable
+                UNION
+                SELECT m.roleid, i.via_admin
+                FROM inherited i
+                JOIN pg_catalog.pg_auth_members m ON m.member = i.oid
+                WHERE m.inherit_option
+            )
+            SELECT r.oid,
+                   r.rolname,
+                   r.rolsuper,
+                   r.rolbypassrls,
+                   r.rolcreaterole,
+                   pg_catalog.pg_has_role(t.oid, r.oid, 'USAGE') AS via_usage,
+                   pg_catalog.pg_has_role(t.oid, r.oid, 'SET') AS via_set,
+                   r.oid = t.oid AS is_self,
+                   EXISTS (SELECT 1 FROM inherited x WHERE x.oid = r.oid AND x.via_admin) AS via_admin
+            FROM target t
+            CROSS JOIN pg_catalog.pg_roles r
+            WHERE r.oid IN (SELECT oid FROM inherited)
+               OR COALESCE(pg_catalog.pg_has_role(t.oid, r.oid, 'USAGE'), true)
+               OR COALESCE(pg_catalog.pg_has_role(t.oid, r.oid, 'SET'), true)
+            """, connection, transaction))
+        {
+            roleCommand.Parameters.AddWithValue("role", runtimeRole);
+            await using var reader = await roleCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (reader.IsDBNull(5) || reader.IsDBNull(6))
+                    throw new InvalidOperationException(
+                        $"Could not resolve role membership for {runtimeRole} against {reader.GetString(1)}.");
+                var isSelf = reader.GetBoolean(7);
+                var viaUsage = reader.GetBoolean(5);
+                var viaSet = reader.GetBoolean(6);
+                var viaAdmin = reader.GetBoolean(8);
+                var roleOid = reader.GetFieldValue<uint>(0);
+                var roleName = reader.GetString(1);
+                var path = isSelf ? "direct"
+                    : viaAdmin ? "ADMIN OPTION"
+                    : viaUsage && viaSet ? "USAGE+SET"
+                    : viaUsage ? "USAGE"
+                    : viaSet ? "SET"
+                    : "delegated";
+                if (reader.GetBoolean(2) || reader.GetBoolean(3) || reader.GetBoolean(4))
+                    throw new InvalidOperationException(
+                        $"Environment Policy ledger check rejected {runtimeRole}: reachable role {roleName} ({path}) has elevated or delegated authority.");
+                reachable.Add((roleOid, roleName, path));
+            }
+        }
+
+        if (reachable.Count == 0)
+            throw new InvalidOperationException($"The Environment runtime role {runtimeRole} does not exist.");
+
+        var reachableOids = reachable.Select(item => item.Oid).ToArray();
+
+        var schemaOwner = await ScalarAsync(connection, transaction,
+            "SELECT nspowner FROM pg_catalog.pg_namespace WHERE nspname = 'environment'",
+            cancellationToken);
+        if (schemaOwner is not uint schemaOwnerOid || reachableOids.Contains(schemaOwnerOid))
+            throw new InvalidOperationException(
+                $"Environment Policy ledger check rejected {runtimeRole}: schema environment is missing or owned by a reachable role.");
+
+        foreach (var tableName in EnvironmentReadOnlyPolicyLedgerTables)
+        {
+            uint tableOid;
+            uint ownerOid;
+            string ownerName;
+            await using (var tableCommand = new NpgsqlCommand("""
+                SELECT c.oid, c.relowner, pg_catalog.pg_get_userbyid(c.relowner),
+                       pg_catalog.has_table_privilege(@role, c.oid, 'SELECT'),
+                       (SELECT count(*) FROM pg_catalog.pg_attribute a
+                        WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped),
+                       pg_catalog.has_table_privilege('public', c.oid, 'INSERT'),
+                       (SELECT string_agg(a.attname, ', ' ORDER BY a.attnum)
+                        FROM pg_catalog.pg_attribute a
+                        WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                          AND pg_catalog.has_column_privilege('public', c.oid, a.attnum, 'INSERT'))
+                FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'environment' AND c.relname = @table
+                """, connection, transaction))
+            {
+                tableCommand.Parameters.AddWithValue("role", runtimeRole);
+                tableCommand.Parameters.AddWithValue("table", tableName);
+                await using var reader = await tableCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    throw new InvalidOperationException(
+                        $"Environment Policy ledger table environment.{tableName} does not exist.");
+
+                tableOid = reader.GetFieldValue<uint>(0);
+                ownerOid = reader.GetFieldValue<uint>(1);
+                ownerName = reader.GetString(2);
+                var hasSelect = !reader.IsDBNull(3) && reader.GetBoolean(3);
+                var liveColumnCount = reader.GetInt64(4);
+                var publicTableInsert = reader.IsDBNull(5) || reader.GetBoolean(5);
+                var publicColInsert = reader.IsDBNull(6) ? null : reader.GetString(6);
+
+                if (reachableOids.Contains(ownerOid))
+                    throw new InvalidOperationException(
+                        $"environment.{tableName} cannot be owned by reachable role {ownerName} for {runtimeRole}.");
+                if (!hasSelect)
+                    throw new InvalidOperationException(
+                        $"environment.{tableName} requires SELECT for {runtimeRole}.");
+                if (liveColumnCount <= 0)
+                    throw new InvalidOperationException(
+                        $"environment.{tableName} has no resolvable live columns.");
+                if (publicTableInsert || publicColInsert is not null)
+                    throw new InvalidOperationException(
+                        $"environment.{tableName} permits INSERT via PUBLIC ({(publicTableInsert ? "table" : $"columns: {publicColInsert}")}).");
+            }
+
+            foreach (var (roleOid, roleName, path) in reachable)
+            {
+                await using var checkCommand = new NpgsqlCommand("""
+                    SELECT pg_catalog.has_table_privilege(@check_role, @table_oid, 'INSERT'),
+                           (SELECT string_agg(a.attname, ', ' ORDER BY a.attnum)
+                            FROM pg_catalog.pg_attribute a
+                            WHERE a.attrelid = @table_oid AND a.attnum > 0 AND NOT a.attisdropped
+                              AND pg_catalog.has_column_privilege(@check_role, @table_oid, a.attnum, 'INSERT'))
+                    """, connection, transaction);
+                checkCommand.Parameters.AddWithValue("check_role", NpgsqlDbType.Oid, roleOid);
+                checkCommand.Parameters.AddWithValue("table_oid", NpgsqlDbType.Oid, tableOid);
+                await using var reader = await checkCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    throw new InvalidOperationException(
+                        $"Could not verify privileges on environment.{tableName} for {roleName}.");
+                var hasTableInsert = reader.IsDBNull(0) || reader.GetBoolean(0);
+                var colInsert = reader.IsDBNull(1) ? null : reader.GetString(1);
+                if (hasTableInsert || colInsert is not null)
+                {
+                    var kind = hasTableInsert ? "table" : $"columns: {colInsert}";
+                    throw new InvalidOperationException(
+                        $"environment.{tableName} still permits INSERT for {runtimeRole} via {roleName} ({path}, {kind}).");
+                }
+            }
+        }
     }
 
     /// <summary>Reads an integer migration ledger in ascending order for the Job's final report.</summary>
@@ -303,7 +495,7 @@ public static class PlannedRuntimeGrants
 
     private static async Task<object?> ScalarAsync(
         NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
+        NpgsqlTransaction? transaction,
         string sql,
         CancellationToken cancellationToken,
         params (string Name, object Value)[] parameters)

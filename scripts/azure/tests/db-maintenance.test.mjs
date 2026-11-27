@@ -57,7 +57,7 @@ const driftedSpec = () => {
 };
 
 function world({ lease, drift = false, state, jobOutcome = () => 'Complete', logs = goodLogs, identityExists = true,
-  federated = true, accountType = 'user', relayError, appImages = {}, rolloutFails = false, probeLog,
+  federated = true, accountType = 'user', relayError, appImages = {}, appReplicas = {}, rolloutFails = false, probeLog,
   schemaRanges = {}, ownerPods = {} } = {}) {
   const calls = [];
   const imageRanges = { ...defaultSchemaRanges, ...schemaRanges };
@@ -97,8 +97,18 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
     if (action === 'get' && rest[0] === 'ciliumnetworkpolicy' && rest[1] === 'identity-broker-migration-egress' &&
         !cluster.has('ciliumnetworkpolicy/identity-broker-migration-egress'))
       return ok(JSON.stringify({ spec: drift ? driftedSpec() : brokerEgressSpec }));
-    if (action === 'get' && rest[0] === 'deployment')
-      return appImages[rest[1]] ? ok(appImages[rest[1]]) : fail(`NotFound: deployment/${rest[1]}`);
+    if (action === 'get' && rest[0] === 'deployment') {
+      if (!appImages[rest[1]]) return fail(`NotFound: deployment/${rest[1]}`);
+      if (rest.includes('jsonpath={.spec.replicas}')) return ok(String(appReplicas[rest[1]] ?? 1));
+      return ok(appImages[rest[1]]);
+    }
+    if (action === 'scale') {
+      const name = rest[0].slice('deployment/'.length);
+      const replicas = Number(rest[1].slice('--replicas='.length));
+      appReplicas[name] = replicas;
+      if (replicas === 0) ownerPods[name] = [];
+      return ok();
+    }
     if (action === 'set') {
       // kubectl set image deployment/<name> <container>=<image>
       appImages[rest[1].slice('deployment/'.length)] = rest[2].slice(rest[2].indexOf('=') + 1);
@@ -110,7 +120,17 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
         ? fail('deployment exceeded its progress deadline') : ok();
     }
     if (action === 'patch') {
-      // kubectl patch configmap <name> --type merge -p {"data":{...}}; null removes a key.
+      // kubectl patch configmap|deployment <name> --type merge -p {...}; null removes a ConfigMap key.
+      if (rest[0] === 'deployment') {
+        const name = rest[1];
+        if (!appImages[name]) return fail(`NotFound: deployment/${name}`);
+        const patch = JSON.parse(rest[rest.indexOf('-p') + 1]);
+        if (Number.isInteger(patch?.spec?.replicas)) {
+          appReplicas[name] = patch.spec.replicas;
+          if (patch.spec.replicas === 0) ownerPods[name] = [];
+        }
+        return ok(`deployment.apps/${name} patched`);
+      }
       const key = `${rest[0]}/${rest[1]}`;
       const object = cluster.get(key);
       if (!object) return fail(`NotFound: ${key}`);
@@ -168,6 +188,7 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
       exec, repoRoot: process.cwd(), sleep: async () => {}, now: () => new Date('2026-10-22T10:00:00.123Z'),
       newRunId: () => 'abcdef123456', log: () => {},
       // Image schema ranges come from this table instead of the registry, so tests stay offline.
+      readImage: async image => ({ digest: image.slice(image.indexOf('@') + 1), sourceSha: 'a'.repeat(40) }),
       imageSchemaRange: async image => imageRanges[image?.slice(image.indexOf('@') + 1)] ?? { unknown: 'not in the test registry' },
       writeReceipt: (path, receipt) => receipts.push({ path, receipt: structuredClone(receipt) }),
       relay: async options => {
@@ -360,7 +381,7 @@ test('execute applies the identity, egress, handover, and Jobs in order, then cl
     assert.equal(receipt.result, 'succeeded');
     assert.deepEqual(receipt.steps.map(step => step.name), [
       'source-verified', 'locked-restore-verified', 'plan-verified', 'cluster-access-verified', 'broker-egress-checked',
-      'migration-identity-checked', 'app-images-checked', 'lock-acquired', 'migration-identity-ready', 'serviceaccount-and-egress-applied',
+      'migration-identity-checked', 'p1-images-verified', 'app-images-checked', 'lock-acquired', 'migration-identity-ready', 'serviceaccount-and-egress-applied',
       'ownership-handover-verified', 'connectivity-verified', 'connectivity-verified', 'terminal-cleanup-owners-checked',
       'identity-broker-migrated', 'environment-migrated', 'orchestrator-migrated', 'events-and-sessions-migrated',
     ]);
@@ -510,13 +531,19 @@ const appWorld = (extra = {}) => {
 };
 
 test('services on older images block the run unless the runner deploys the matching digests', async () => {
-  const fake = appWorld();
+  const fake = world({
+    appImages: {
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('e')),
+    },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs(baseArgs), receiptDir: fake.receiptDir }, fake.deps),
       /Running services use other images \(events-and-sessions\)[\s\S]*--deploy-apps/);
     assert.equal(fake.receipts[0].receipt.result, 'failed');
     assert.deepEqual(fake.receipts[0].receipt.appImages.map(app => [app.deployment, app.status]),
-      [['environment', 'match'], ['orchestrator', 'match'], ['events-and-sessions', 'mismatch']]);
+      [['environment', 'absent'], ['orchestrator', 'match'], ['events-and-sessions', 'mismatch']]);
   } finally { fake.done(); }
   // The planned-gap refusal happens in preflight, before the lock or any Job.
   assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
@@ -526,7 +553,10 @@ test('services on older images block the run unless the runner deploys the match
 });
 
 test('migrations-only checks owner pods without rolling application Deployments', async () => {
-  const fake = appWorld();
+  const fake = world({
+    appImages: { orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
   try {
     const receipt = await runDbMaintenance({
       ...parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--execute']),
@@ -556,7 +586,11 @@ test('Core 047 refuses old or unreadable owner pods before running migration Job
   assert.throws(() => requireGuardAwareOwnerPods({}, 'orchestrator', expected), /Could not verify/);
   assert.throws(() => requireGuardAwareOwnerPods({ items: [pod(digest('f'))] }, 'orchestrator', expected), /Drain/);
 
-  const fake = appWorld({ ownerPods: { orchestrator: [pod(digest('f'))] } });
+  const fake = world({
+    appImages: { orchestrator: expected },
+    ownerPods: { orchestrator: [pod(digest('f'))] },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
   try {
     await assert.rejects(runDbMaintenance({
       ...parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--execute']),
@@ -572,9 +606,10 @@ test('Core 047 refuses old or unreadable owner pods before running migration Job
 });
 
 test('Core 047 refuses an older scaled-to-zero owner Deployment', async () => {
-  const fake = appWorld({
+  const fake = world({
     appImages: { orchestrator: imageReference('Agentweaver.Orchestrator', digest('f')) },
     ownerPods: { orchestrator: [] },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
   });
   try {
     await assert.rejects(runDbMaintenance({
@@ -1055,7 +1090,14 @@ test('deploy-first moves a service to an image that accepts the current schema b
 });
 
 test('migrate-first keeps a running image that accepts the target schema when no deploy is asked for', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(13, 13), [digest('e')]: range(8, 13) } });
+  const fake = world({
+    appImages: {
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('e')),
+    },
+    schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(13, 13), [digest('e')]: range(8, 13) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
       receiptDir: fake.receiptDir }, fake.deps);
@@ -1063,7 +1105,7 @@ test('migrate-first keeps a running image that accepts the target schema when no
     assert.equal(receipt.serviceOrder.order, 'migrate-first');
     assert.ok(!receipt.steps.some(step => step.name === 'app-image-set'));
     assert.deepEqual(receipt.steps.filter(step => step.name === 'app-ready').map(step => step.image),
-      [environmentImage('d'), imageReference('Agentweaver.Orchestrator', digest('a')),
+      [imageReference('Agentweaver.Orchestrator', digest('a')),
         imageReference('Agentweaver.EventsAndSessions', digest('e'))]);
   } finally { fake.done(); }
 });
@@ -1363,3 +1405,391 @@ test('--broker-digest fails closed before scaling when Projects image lacks sett
     fakeTimeout.done();
   }
 });
+
+test('Environment Policy ledger cutover forces a same-schema planned readiness gap and blocks migrations-only', async () => {
+  const oldEnv = imageReference('Agentweaver.Environment', digest('e'));
+  const schema18 = {
+    'environment.schema': '18',
+    'orchestrator.schema': String(Math.max(...plan.coreVersions)),
+    'events-and-sessions.schema': String(Math.max(...plan.eventsVersions)),
+    handoverPrincipalObjectId: PRINCIPAL_ID,
+  };
+  const fakeNoDeploy = world({
+    appImages: {
+      environment: oldEnv,
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    schemaRanges: { [digest('e')]: range(18, 18) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { ...schema18 } },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']), receiptDir: fakeNoDeploy.receiptDir }, fakeNoDeploy.deps),
+      /requires --deploy-apps on an existing Environment deployment/);
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--execute']), receiptDir: fakeNoDeploy.receiptDir }, fakeNoDeploy.deps),
+      /Environment Policy ledger cutover changes grants at schema 18 and requires --deploy-apps/);
+  } finally { fakeNoDeploy.done(); }
+
+  // --migrations-only is also blocked when an existing Environment Deployment already matches the target digest.
+  const fakeMatchMigOnly = world({
+    appImages: {
+      environment: imageReference('Agentweaver.Environment', digest('d')),
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { ...schema18 } },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--execute']), receiptDir: fakeMatchMigOnly.receiptDir }, fakeMatchMigOnly.deps),
+      /Environment Policy ledger cutover changes grants at schema 18 and requires --deploy-apps/);
+  } finally { fakeMatchMigOnly.done(); }
+
+  // --migrations-only also rejects if an Environment Deployment appears between preflight and acquiring the lock.
+  const fakeAppeared = world({
+    appImages: {
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+    },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  let migEnvChecks = 0;
+  const appearedExec = (command, args, settings = {}) => {
+    if (command === 'kubectl' && args[4] === 'get' && args[5] === 'deployment' && args[6] === 'environment') {
+      migEnvChecks++;
+      if (migEnvChecks >= 2)
+        return ok(imageReference('Agentweaver.Environment', digest('d')));
+    }
+    return fakeAppeared.deps.exec(command, args, settings);
+  };
+  try {
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--execute']), receiptDir: fakeAppeared.receiptDir },
+        { ...fakeAppeared.deps, exec: appearedExec }),
+      /Environment Policy ledger cutover changes grants at schema 18 and requires --deploy-apps/);
+  } finally { fakeAppeared.done(); }
+
+  // Fresh install (--migrations-only) rejects when non-terminal environment pods exist even if Deployment is absent.
+  const fakeOrphanPod = world({
+    appImages: { orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')) },
+    ownerPods: { environment: [{ metadata: { name: 'env-orphan-0' }, status: { phase: 'Running' } }] },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--execute']), receiptDir: fakeOrphanPod.receiptDir }, fakeOrphanPod.deps),
+      /requires zero non-terminal environment pods/);
+  } finally { fakeOrphanPod.done(); }
+
+  // Orchestrator Core 047 failure (mismatch or absent) happens BEFORE stopping Environment.
+  const fakeOldOrch = world({
+    appImages: {
+      environment: oldEnv,
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('f')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    appReplicas: { environment: 2 },
+    schemaRanges: { [digest('e')]: range(18, 18), [digest('f')]: coreRange() },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']), receiptDir: fakeOldOrch.receiptDir }, fakeOldOrch.deps),
+      /Update the orchestrator Deployment to the reviewed image before Core 047/);
+    assert.equal(fakeOldOrch.calls.some(call => call.command === 'kubectl' && call.args[4] === 'patch' && call.args[5] === 'deployment'), false);
+  } finally { fakeOldOrch.done(); }
+
+  const fakeAbsentOrch = world({
+    appImages: {
+      environment: oldEnv,
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    appReplicas: { environment: 2 },
+    schemaRanges: { [digest('e')]: range(18, 18) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']), receiptDir: fakeAbsentOrch.receiptDir }, fakeAbsentOrch.deps),
+      /Update the orchestrator Deployment to the reviewed image before Core 047/);
+    assert.equal(fakeAbsentOrch.calls.some(call => call.command === 'kubectl' && call.args[4] === 'patch' && call.args[5] === 'deployment'), false);
+  } finally { fakeAbsentOrch.done(); }
+
+  // Matching Environment image still requires --deploy-apps and dry-run reports environment-drain and environment-restore.
+  const fakeMatchNoDeploy = world({
+    appImages: {
+      environment: imageReference('Agentweaver.Environment', digest('d')),
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']), receiptDir: fakeMatchNoDeploy.receiptDir }, fakeMatchNoDeploy.deps),
+      /requires --deploy-apps on an existing Environment deployment/);
+    const dryRun = await runDbMaintenance(
+      { ...parseDbMaintenanceArgs([...baseArgs, '--deploy-apps']), receiptDir: fakeMatchNoDeploy.receiptDir },
+      fakeMatchNoDeploy.deps);
+    assert.equal(dryRun.result, 'dry-run-passed');
+    assert.ok(dryRun.plannedSteps.includes('environment-drain'));
+    assert.ok(dryRun.plannedSteps.includes('environment-restore'));
+    assert.ok(dryRun.plannedSteps.indexOf('environment-drain') < dryRun.plannedSteps.indexOf('environment-job'));
+    assert.ok(dryRun.plannedSteps.indexOf('events-and-sessions-job') < dryRun.plannedSteps.indexOf('environment-restore'));
+  } finally { fakeMatchNoDeploy.done(); }
+
+  // Outage cutover drains Environment via deployment patch, revokes INSERT, rolls to approved digest, restores replicas, and clears recovery.
+  const fakeDeploy = world({
+    appImages: {
+      environment: oldEnv,
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    appReplicas: { environment: 2 },
+    ownerPods: {
+      environment: [{
+        metadata: { name: 'environment-old-0' },
+        status: { phase: 'Running' },
+        spec: { containers: [{ name: 'environment', image: oldEnv }] },
+      }],
+    },
+    schemaRanges: { [digest('e')]: range(18, 18) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  try {
+    const receipt = await runDbMaintenance(
+      { ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']), receiptDir: fakeDeploy.receiptDir },
+      fakeDeploy.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.serviceOrder.order, 'planned-readiness-gap');
+    const stepNames = receipt.steps.map(step => step.name);
+    assert.ok(stepNames.indexOf('environment-drained') < stepNames.indexOf('environment-migrated'));
+    assert.ok(stepNames.indexOf('environment-migrated') < stepNames.indexOf('app-image-set'));
+    assert.ok(stepNames.indexOf('app-ready') < stepNames.indexOf('roll-forward-cleared'));
+    assert.equal(fakeDeploy.calls.some(call => call.command === 'kubectl' && call.args[4] === 'patch' &&
+      call.args[5] === 'deployment' && call.args[6] === 'environment' && call.args.includes('{"spec":{"replicas":0}}')), true);
+    assert.equal(fakeDeploy.calls.some(call => call.command === 'kubectl' && call.args[4] === 'patch' &&
+      call.args[5] === 'deployment' && call.args[6] === 'environment' && call.args.includes('{"spec":{"replicas":2}}')), true);
+    assert.equal(fakeDeploy.cluster.get(`configmap/${STATE_NAME}`).data['rollForward.environmentPriorReplicas'], undefined);
+    assert.equal(fakeDeploy.cluster.get(`configmap/${STATE_NAME}`).data['rollForward.planSha256'], undefined);
+  } finally { fakeDeploy.done(); }
+
+  // Competing scale-up immediately before environment-migration aborts before creating the grant job.
+  const fakeScaleRace = world({
+    appImages: {
+      environment: oldEnv,
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    appReplicas: { environment: 1 },
+    schemaRanges: { [digest('e')]: range(18, 18) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  let envReplicaReads = 0;
+  const raceExec = (command, args, settings = {}) => {
+    if (command === 'kubectl' && args[4] === 'get' && args[5] === 'deployment' && args[6] === 'environment' &&
+        args.includes('jsonpath={.spec.replicas}')) {
+      envReplicaReads++;
+      if (envReplicaReads >= 3) return ok('1');
+    }
+    return fakeScaleRace.deps.exec(command, args, settings);
+  };
+  try {
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']), receiptDir: fakeScaleRace.receiptDir },
+        { ...fakeScaleRace.deps, exec: raceExec }),
+      /scaled or has active pods immediately before environment-migration/);
+    assert.equal(fakeScaleRace.calls.some(call => call.command === 'kubectl' && call.args[4] === 'create' &&
+      call.settings?.input?.includes('environment-migration-')), false);
+  } finally { fakeScaleRace.done(); }
+
+  // Prior replica count 0 is preserved and restored to 0 (not 1).
+  const fakeZeroReplicas = world({
+    appImages: {
+      environment: oldEnv,
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    appReplicas: { environment: 0 },
+    schemaRanges: { [digest('e')]: range(18, 18) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  try {
+    const receipt = await runDbMaintenance(
+      { ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']), receiptDir: fakeZeroReplicas.receiptDir },
+      fakeZeroReplicas.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.steps.find(step => step.name === 'environment-drained')?.priorReplicas, 0);
+    assert.equal(fakeZeroReplicas.calls.some(call => call.command === 'kubectl' && call.args[4] === 'patch' &&
+      call.args[5] === 'deployment' && call.args[6] === 'environment' && call.args.includes('{"spec":{"replicas":0}}')), true);
+    assert.equal(fakeZeroReplicas.calls.some(call => call.command === 'kubectl' && call.args[4] === 'patch' &&
+      call.args[5] === 'deployment' && call.args[6] === 'environment' && call.args.includes('{"spec":{"replicas":1}}')), false);
+  } finally { fakeZeroReplicas.done(); }
+
+  // Stale preflight state (environment image changed before lock) is rejected under the lock.
+  const fakeStale = world({
+    appImages: {
+      environment: oldEnv,
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    schemaRanges: { [digest('e')]: range(18, 18) },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { ...schema18 } },
+  });
+  let envReads = 0;
+  const staleExec = (command, args, settings = {}) => {
+    if (command === 'kubectl' && args[4] === 'get' && args[5] === 'deployment' && args[6] === 'environment' &&
+        !args.includes('jsonpath={.spec.replicas}')) {
+      envReads++;
+      if (envReads >= 2)
+        return ok(imageReference('Agentweaver.Environment', digest('d')));
+    }
+    return fakeStale.deps.exec(command, args, settings);
+  };
+  try {
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']), receiptDir: fakeStale.receiptDir },
+        { ...fakeStale.deps, exec: staleExec }),
+      /Deployment environment image changed before acquiring the maintenance lock/);
+  } finally { fakeStale.done(); }
+});
+
+test('Environment Policy ledger cutover rejects --apps-only image changes and allows exact-digest roll-forward', async () => {
+  const oldEnv = imageReference('Agentweaver.Environment', digest('e'));
+  const fakeOld = world({
+    appImages: {
+      environment: oldEnv,
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--apps-only']), receiptDir: fakeOld.receiptDir }, fakeOld.deps),
+      /--apps-only cannot change the Environment image for the Policy ledger cutover/);
+    assert.equal(fakeOld.calls.some(call => call.command === 'kubectl' && call.args[4] === 'set'), false);
+  } finally { fakeOld.done(); }
+
+  const fakeUnknown = world({
+    appImages: {
+      environment: 'ghcr.io/sabbour/agentweaver.environment:latest',
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--apps-only']), receiptDir: fakeUnknown.receiptDir }, fakeUnknown.deps),
+      /--apps-only cannot change the Environment image for the Policy ledger cutover/);
+    assert.equal(fakeUnknown.calls.some(call => call.command === 'kubectl' && call.args[4] === 'set'), false);
+  } finally { fakeUnknown.done(); }
+
+  // Exact-digest roll-forward after interruption AFTER image write (environment already matches target digest, replicas 0).
+  const targetEnv = imageReference('Agentweaver.Environment', digest('d'));
+  const targetOrch = imageReference('Agentweaver.Orchestrator', digest('a'));
+  const targetEvents = imageReference('Agentweaver.EventsAndSessions', digest('b'));
+  const fakeResume = world({
+    appImages: {
+      environment: targetEnv,
+      orchestrator: targetOrch,
+      'events-and-sessions': targetEvents,
+    },
+    appReplicas: { environment: 0 },
+    state: {
+      kind: 'ConfigMap',
+      metadata: { name: STATE_NAME },
+      data: {
+        handoverPrincipalObjectId: PRINCIPAL_ID,
+        'rollForward.planSha256': REVIEWED_PLAN_SHA256,
+        'rollForward.environmentPriorReplicas': '2',
+        'rollForward.environment': targetEnv,
+        'rollForward.orchestrator': targetOrch,
+        'rollForward.events-and-sessions': targetEvents,
+        'rollForward.runId': 'prior-run',
+      },
+    },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({
+        ...parseDbMaintenanceArgs(['--environment-digest', digest('e'), '--orchestrator-digest', digest('a'), '--events-digest', digest('b'), '--execute', '--deploy-apps']),
+        receiptDir: fakeResume.receiptDir,
+      }, fakeResume.deps),
+      /must roll forward\. Rerun with the same digests: environment=/);
+    const receipt = await runDbMaintenance(
+      { ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']), receiptDir: fakeResume.receiptDir },
+      fakeResume.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.rollForward.pendingFromRun, 'prior-run');
+    assert.equal(receipt.rollForward.environmentPriorReplicas, 2);
+    assert.equal(fakeResume.calls.some(call => call.command === 'kubectl' && call.args[4] === 'patch' &&
+      call.args[5] === 'deployment' && call.args[6] === 'environment' && call.args.includes('{"spec":{"replicas":2}}')), true);
+    assert.equal(fakeResume.cluster.get(`configmap/${STATE_NAME}`).data['rollForward.environment'], undefined);
+    assert.equal(fakeResume.cluster.get(`configmap/${STATE_NAME}`).data['rollForward.environmentPriorReplicas'], undefined);
+    assert.equal(fakeResume.cluster.get(`configmap/${STATE_NAME}`).data['rollForward.planSha256'], undefined);
+  } finally { fakeResume.done(); }
+
+  // --apps-only cannot clear a pending Policy ledger recovery record even when environment already matches.
+  const fakeAppsOnlyRecovery = world({
+    appImages: {
+      environment: targetEnv,
+      orchestrator: targetOrch,
+      'events-and-sessions': targetEvents,
+    },
+    state: {
+      kind: 'ConfigMap',
+      metadata: { name: STATE_NAME },
+      data: {
+        handoverPrincipalObjectId: PRINCIPAL_ID,
+        'rollForward.planSha256': REVIEWED_PLAN_SHA256,
+        'rollForward.environment': targetEnv,
+        'rollForward.runId': 'prior-run',
+      },
+    },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--apps-only']), receiptDir: fakeAppsOnlyRecovery.receiptDir }, fakeAppsOnlyRecovery.deps),
+      /--apps-only cannot clear a pending Policy ledger recovery record/);
+    assert.ok(fakeAppsOnlyRecovery.cluster.get(`configmap/${STATE_NAME}`).data['rollForward.environment']);
+  } finally { fakeAppsOnlyRecovery.done(); }
+});
+
+test('Environment Policy ledger cutover rejects mixed image source revisions or platform digest mismatches', async () => {
+  const fakeWrongSha = world({
+    appImages: {
+      environment: imageReference('Agentweaver.Environment', digest('d')),
+      orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+      'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')),
+    },
+    state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  });
+  try {
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--execute']), receiptDir: fakeWrongSha.receiptDir },
+        { ...fakeWrongSha.deps, readImage: async image => ({ digest: image.slice(image.indexOf('@') + 1), sourceSha: 'b'.repeat(40) }) }),
+      /revision .* does not match reviewed checkout/);
+
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--execute']), receiptDir: fakeWrongSha.receiptDir },
+        { ...fakeWrongSha.deps, readImage: async () => ({ digest: digest('9'), sourceSha: 'a'.repeat(40) }) }),
+      /platform digest .* does not match approved digest/);
+
+    // --apps-only also verifies all three P1 image source revisions before any write.
+    await assert.rejects(
+      runDbMaintenance(
+        { ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--apps-only']), receiptDir: fakeWrongSha.receiptDir },
+        { ...fakeWrongSha.deps, readImage: async image => ({
+          digest: image.slice(image.indexOf('@') + 1),
+          sourceSha: image.includes('agentweaver.orchestrator') ? 'b'.repeat(40) : 'a'.repeat(40),
+        }) }),
+      /revision .* does not match reviewed checkout/);
+  } finally { fakeWrongSha.done(); }
+});
+
