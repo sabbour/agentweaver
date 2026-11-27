@@ -981,6 +981,153 @@ public sealed class NativeAcsPolicyTests
     }
 
     [Fact]
+    public async Task ProjectScopeComposedEvaluationRejectsPlatformNetworkAndMismatchedClosures()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(Path.Combine(WorkRoot, "missing-opa")), WorkRoot);
+        var projectArtifact = NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+            """{"allowed_action_ids":["model.turn"]}""",
+            UnifiedModelUseData,
+            UnifiedGuardrailsData,
+            skillsDataJson: """{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}""");
+        var platformArtifact = CreateUnifiedArtifact();
+        var snapshot = Snapshot("model.turn");
+
+        var network = await evaluator.EvaluateComposedAsync(
+            projectArtifact,
+            NativeAcsDomainId.PlatformNetwork,
+            InterventionPoint.PreModelCall,
+            snapshot,
+            projectScope: true,
+            CancellationToken.None);
+        var platformClosureOnProject = await evaluator.EvaluateComposedAsync(
+            platformArtifact,
+            NativeAcsDomainId.ModelUse,
+            InterventionPoint.PreModelCall,
+            snapshot,
+            projectScope: true,
+            CancellationToken.None);
+        var projectClosureOnPlatform = await evaluator.EvaluateComposedAsync(
+            projectArtifact,
+            NativeAcsDomainId.ModelUse,
+            InterventionPoint.PreModelCall,
+            snapshot,
+            projectScope: false,
+            CancellationToken.None);
+        var projectApprovalPlatformClosure = await evaluator.EvaluateComposedForApprovalAsync(
+            platformArtifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            snapshot,
+            projectScope: true,
+            CancellationToken.None);
+        using var dummyDoc = JsonDocument.Parse("{}");
+        var projectResolvePlatformClosure = await evaluator.ResolveComposedApprovalAsync(
+            platformArtifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            snapshot,
+            dummyDoc.RootElement,
+            null,
+            approve: true,
+            projectScope: true,
+            CancellationToken.None);
+
+        Assert.Equal(PolicyEvaluationOutcome.Error, network.Outcome);
+        Assert.Equal("domain_intervention_point_unsupported", network.DiagnosticCode);
+        Assert.Equal(PolicyEvaluationOutcome.Error, platformClosureOnProject.Outcome);
+        Assert.Equal("unified_file_closure", platformClosureOnProject.DiagnosticCode);
+        Assert.Equal(PolicyEvaluationOutcome.Error, projectClosureOnPlatform.Outcome);
+        Assert.Equal("unified_file_closure", projectClosureOnPlatform.DiagnosticCode);
+        Assert.Equal(PolicyEvaluationOutcome.Error, projectApprovalPlatformClosure.Outcome);
+        Assert.Equal("unified_file_closure", projectApprovalPlatformClosure.DiagnosticCode);
+        Assert.Equal(PolicyEvaluationOutcome.Error, projectResolvePlatformClosure.Outcome);
+        Assert.Equal("unified_file_closure", projectResolvePlatformClosure.DiagnosticCode);
+    }
+
+    [NativeAcsFact]
+    public async Task ProjectScopeComposedEvaluationSupportsAllThreeEvaluatorModes()
+    {
+        var artifact = NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+            """{"allowed_action_ids":["merge","model.turn"]}""",
+            UnifiedModelUseData,
+            UnifiedGuardrailsData,
+            skillsDataJson: """{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}""");
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequireNativeRuntime()), WorkRoot);
+
+        var modelAllow = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.ModelUse,
+            InterventionPoint.PreModelCall,
+            Snapshot("model.turn") with { ModelUse = ModelUseFacts() },
+            projectScope: true,
+            CancellationToken.None);
+        var skillsAllow = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Skills,
+            InterventionPoint.PreModelCall,
+            Snapshot("skill.admit") with { Skills = new NativeAcsSkillsEvaluationFacts(600, true, false) },
+            projectScope: true,
+            CancellationToken.None);
+        var skillsDeny = await evaluator.EvaluateComposedAsync(
+            artifact,
+            NativeAcsDomainId.Skills,
+            InterventionPoint.PreModelCall,
+            Snapshot("skill.admit") with { Skills = new NativeAcsSkillsEvaluationFacts(400, true, false) },
+            projectScope: true,
+            CancellationToken.None);
+
+        Assert.Equal(PolicyEvaluationOutcome.Allow, modelAllow.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Allow, skillsAllow.Outcome);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, skillsDeny.Outcome);
+
+        var guardrailsSnapshot = Snapshot("model.turn") with
+        {
+            Guardrails = GuardrailsFacts(
+                new NativeAcsGuardrailsFindingFacts(
+                    "prompt-shields", "sensitive-request", "medium")),
+            Approval = new NativeAcsApprovalEvaluationFacts("turn-project", new string('b', 64))
+        };
+        var suspended = await evaluator.EvaluateComposedForApprovalAsync(
+            artifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            guardrailsSnapshot,
+            projectScope: true,
+            CancellationToken.None);
+
+        Assert.Equal("approval_required", suspended.DiagnosticCode);
+        Assert.NotNull(suspended.RetainedPolicyInput);
+
+        var approved = await evaluator.ResolveComposedApprovalAsync(
+            artifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            guardrailsSnapshot,
+            suspended.RetainedPolicyInput!.Value,
+            suspended.RetainedApproval,
+            approve: true,
+            projectScope: true,
+            CancellationToken.None);
+        var rejected = await evaluator.ResolveComposedApprovalAsync(
+            artifact,
+            NativeAcsDomainId.Guardrails,
+            InterventionPoint.PreModelCall,
+            guardrailsSnapshot,
+            suspended.RetainedPolicyInput.Value,
+            suspended.RetainedApproval,
+            approve: false,
+            projectScope: true,
+            CancellationToken.None);
+
+        Assert.Equal(PolicyEvaluationOutcome.Allow, approved.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.Allowed, approved.ReasonCode);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, rejected.Outcome);
+        AssertNoEvaluationWorkspaces();
+    }
+
+    [Fact]
     public void UnifiedProfileRoundTripsAndKeepsDomainEditsIsolated()
     {
         var original = CreateUnifiedArtifact();

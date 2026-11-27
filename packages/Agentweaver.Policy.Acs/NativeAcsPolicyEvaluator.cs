@@ -37,6 +37,15 @@ public sealed class NativeAcsPolicyEvaluator
         CancellationToken cancellationToken = default) =>
         EvaluateCoreAsync(artifact, interventionPoint, snapshot, domain, cancellationToken);
 
+    public Task<NativeAcsEvaluationResult> EvaluateComposedAsync(
+        NativeAcsArtifact artifact,
+        NativeAcsDomainId domain,
+        InterventionPoint interventionPoint,
+        NativeAcsEvaluationSnapshot snapshot,
+        bool projectScope,
+        CancellationToken cancellationToken) =>
+        EvaluateCoreAsync(artifact, interventionPoint, snapshot, domain, cancellationToken, projectScope: projectScope);
+
     /// <summary>Evaluates a composed policy and retains the exact native input and approval handle for restart-safe resolution.</summary>
     public Task<NativeAcsEvaluationResult> EvaluateComposedForApprovalAsync(
         NativeAcsArtifact artifact,
@@ -45,6 +54,16 @@ public sealed class NativeAcsPolicyEvaluator
         NativeAcsEvaluationSnapshot snapshot,
         CancellationToken cancellationToken = default) =>
         EvaluateCoreAsync(artifact, interventionPoint, snapshot, domain, cancellationToken, retainApproval: true);
+
+    /// <summary>Evaluates a composed policy and retains the exact native input and approval handle for restart-safe resolution.</summary>
+    public Task<NativeAcsEvaluationResult> EvaluateComposedForApprovalAsync(
+        NativeAcsArtifact artifact,
+        NativeAcsDomainId domain,
+        InterventionPoint interventionPoint,
+        NativeAcsEvaluationSnapshot snapshot,
+        bool projectScope,
+        CancellationToken cancellationToken) =>
+        EvaluateCoreAsync(artifact, interventionPoint, snapshot, domain, cancellationToken, retainApproval: true, projectScope: projectScope);
 
     /// <summary>Re-evaluates and resolves the retained native escalation only when its input, handle, and action identity still match.</summary>
     public Task<NativeAcsEvaluationResult> ResolveComposedApprovalAsync(
@@ -64,6 +83,26 @@ public sealed class NativeAcsPolicyEvaluator
             cancellationToken,
             approvalBinding: new(retainedPolicyInput, retainedApproval, approve));
 
+    /// <summary>Re-evaluates and resolves the retained native escalation only when its input, handle, and action identity still match.</summary>
+    public Task<NativeAcsEvaluationResult> ResolveComposedApprovalAsync(
+        NativeAcsArtifact artifact,
+        NativeAcsDomainId domain,
+        InterventionPoint interventionPoint,
+        NativeAcsEvaluationSnapshot snapshot,
+        JsonElement retainedPolicyInput,
+        JsonElement? retainedApproval,
+        bool approve,
+        bool projectScope,
+        CancellationToken cancellationToken) =>
+        EvaluateCoreAsync(
+            artifact,
+            interventionPoint,
+            snapshot,
+            domain,
+            cancellationToken,
+            approvalBinding: new(retainedPolicyInput, retainedApproval, approve),
+            projectScope: projectScope);
+
     private async Task<NativeAcsEvaluationResult> EvaluateCoreAsync(
         NativeAcsArtifact artifact,
         InterventionPoint interventionPoint,
@@ -71,7 +110,8 @@ public sealed class NativeAcsPolicyEvaluator
         NativeAcsDomainId? domain,
         CancellationToken cancellationToken,
         bool retainApproval = false,
-        NativeAcsRetainedApprovalBinding? approvalBinding = null)
+        NativeAcsRetainedApprovalBinding? approvalBinding = null,
+        bool projectScope = false)
     {
         ArgumentNullException.ThrowIfNull(artifact);
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -81,6 +121,7 @@ public sealed class NativeAcsPolicyEvaluator
         if (domain is { } selectedDomain &&
             (!Enum.IsDefined(selectedDomain) ||
              interventionPoint != InterventionPoint.PreModelCall ||
+             projectScope && selectedDomain == NativeAcsDomainId.PlatformNetwork ||
              !NativeAcsUnifiedPolicyProfile.IsCandidate(artifact) &&
                  selectedDomain is NativeAcsDomainId.ModelUse or NativeAcsDomainId.Guardrails
                      or NativeAcsDomainId.ToolPermissions or NativeAcsDomainId.Skills))
@@ -88,7 +129,9 @@ public sealed class NativeAcsPolicyEvaluator
 
         var validation = domain is null
             ? _validator.Validate(artifact)
-            : _validator.ValidateComposed(artifact);
+            : projectScope
+                ? _validator.ValidateComposedProject(artifact)
+                : _validator.ValidateComposed(artifact);
         if (!validation.IsValid)
         {
             var failureCode = validation.DependencyFailure switch

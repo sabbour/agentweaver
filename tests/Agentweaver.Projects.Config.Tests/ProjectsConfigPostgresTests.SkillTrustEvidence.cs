@@ -280,6 +280,56 @@ public sealed partial class ProjectsConfigPostgresTests
         }
     }
 
+    [SkillAdmissionNativeAcsFact]
+    public async Task SkillAdmissionEvaluateAsyncSupportsTwelveFileProjectArtifact()
+    {
+            await using var db = CreateDbContext();
+            var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
+            var setup = await CreateTrustEvidenceSetupAsync(db, authorityStore);
+            var platformArtifact = NativeAcsUnifiedPolicyProfile.CreateArtifact(
+                """{"allowed_action_ids":["skill.admit"]}""",
+                """{"agentweaver":{"platform_egress":{"profile":"finite-network-v1","mode":"Allowlist","approved":[{"host":"approved.example.com","port":443}],"system":{"catalog":"hosted-copilot-v1","destinations":[{"host":"api.business.githubcopilot.com","port":443},{"host":"api.enterprise.githubcopilot.com","port":443},{"host":"api.github.com","port":443},{"host":"api.githubcopilot.com","port":443},{"host":"api.individual.githubcopilot.com","port":443}]}}}}""",
+                """{"rules":[]}""",
+                """{"required_checks":[],"blocked_findings":[]}""",
+                skillsDataJson: """{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}""");
+            var projectArtifact = NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+                """{"allowed_action_ids":["skill.admit"]}""",
+                """{"rules":[]}""",
+                """{"required_checks":[],"blocked_findings":[]}""",
+                skillsDataJson: """{"schemaVersion":1,"minimumScore":600,"requireCompletedEvidence":true}""");
+            var policy = new SkillAdmissionPolicySnapshot(
+                "canonical",
+                1,
+                platformArtifact.ContentSha256,
+                "canonical",
+                1,
+                projectArtifact.ContentSha256,
+                600,
+                true,
+                platformArtifact,
+                projectArtifact);
+            var admission = new SkillAdmissionService(db, TimeProvider.System);
+
+            await admission.EvaluateAsync(
+                setup.Project.Project.ProjectId,
+                policy,
+                new SkillTrustScore(SkillTrustScoreStatus.Available, 600, SkillTrustTier.Standard, true, true, true),
+                evidenceComplete: true,
+                builtInExempt: false,
+                CancellationToken.None);
+
+            var denied = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+                admission.EvaluateAsync(
+                    setup.Project.Project.ProjectId,
+                    policy,
+                    new SkillTrustScore(SkillTrustScoreStatus.Available, 550, SkillTrustTier.Standard, true, true, true),
+                    evidenceComplete: true,
+                    builtInExempt: false,
+                    CancellationToken.None));
+            Assert.Equal("skill_admission_denied", denied.Code);
+    }
+
     [Fact]
     public async Task ActiveFenceExemptsPreCutoverLegacyRevisionAndDeniesPostCutoverWithoutAdmission()
     {

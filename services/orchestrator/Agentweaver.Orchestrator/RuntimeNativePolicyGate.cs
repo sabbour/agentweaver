@@ -304,7 +304,7 @@ public sealed class RuntimeNativePolicyGate(
                 .Where(finding => checkIds.Contains(finding.CheckId))
                 .ToImmutableArray();
             var result = await EvaluateComposedForApprovalAsync(
-                revision.Source.Artifact,
+                revision.Source,
                 NativeAcsDomainId.Guardrails,
                 InterventionPoint.PreModelCall,
                 Snapshot(
@@ -393,6 +393,7 @@ public sealed class RuntimeNativePolicyGate(
                 escalation.PolicyInput,
                 escalation.Approval,
                 approve,
+                revision.Source.ScopeType == "Project",
                 cancellationToken) ??
                 throw new RuntimeAuthorizationException(UnavailableCode)).ConfigureAwait(false);
             if (result.DiagnosticCode is "approval_binding_changed" ||
@@ -466,7 +467,9 @@ public sealed class RuntimeNativePolicyGate(
                 throw new RuntimeAuthorizationException(UnavailableCode);
             if (!MatchesScope(revision, accepted))
                 throw new RuntimeAuthorizationException(StaleCode);
-            var inspection = NativeAcsUnifiedPolicyProfile.Inspect(revision.Artifact);
+            var inspection = revision.ScopeType == "Project"
+                ? NativeAcsUnifiedPolicyProfile.InspectProject(revision.Artifact)
+                : NativeAcsUnifiedPolicyProfile.Inspect(revision.Artifact);
             if (!inspection.IsValid || inspection.GuardrailsPolicy is null)
                 throw new RuntimeAuthorizationException(UnavailableCode);
             var key = (
@@ -770,7 +773,7 @@ public sealed class RuntimeNativePolicyGate(
         if (request.ActionId == "model.turn")
         {
             RequireAllowed(await EvaluateComposedAsync(
-                revision.Source.Artifact,
+                revision.Source,
                 NativeAcsDomainId.ModelUse,
                 InterventionPoint.PreModelCall,
                 Snapshot(
@@ -783,13 +786,13 @@ public sealed class RuntimeNativePolicyGate(
         }
         var tool = ReadToolFacts(registration, request);
         RequireAllowed(await EvaluateComposedAsync(
-            revision.Source.Artifact,
+            revision.Source,
             NativeAcsDomainId.Actions,
             InterventionPoint.PreModelCall,
             Snapshot(registration, request, tool: tool),
             cancellationToken).ConfigureAwait(false));
         RequireAllowed(await EvaluateComposedAsync(
-            revision.Source.Artifact,
+            revision.Source,
             NativeAcsDomainId.ToolPermissions,
             InterventionPoint.PreModelCall,
             Snapshot(registration, request, tool: tool),
@@ -797,22 +800,33 @@ public sealed class RuntimeNativePolicyGate(
     }
 
     private Task<NativeAcsEvaluationResult> EvaluateComposedAsync(
-        NativeAcsArtifact artifact,
+        RuntimeNativePolicyRevision revision,
         NativeAcsDomainId domain,
         InterventionPoint point,
         NativeAcsEvaluationSnapshot snapshot,
         CancellationToken cancellationToken) =>
-        evaluator?.EvaluateComposedAsync(artifact, domain, point, snapshot, cancellationToken)
+        evaluator?.EvaluateComposedAsync(
+            revision.Artifact,
+            domain,
+            point,
+            snapshot,
+            revision.ScopeType == "Project",
+            cancellationToken)
         ?? throw new RuntimeAuthorizationException(UnavailableCode);
 
     private Task<NativeAcsEvaluationResult> EvaluateComposedForApprovalAsync(
-        NativeAcsArtifact artifact,
+        RuntimeNativePolicyRevision revision,
         NativeAcsDomainId domain,
         InterventionPoint point,
         NativeAcsEvaluationSnapshot snapshot,
         CancellationToken cancellationToken) =>
         evaluator?.EvaluateComposedForApprovalAsync(
-            artifact, domain, point, snapshot, cancellationToken)
+            revision.Artifact,
+            domain,
+            point,
+            snapshot,
+            revision.ScopeType == "Project",
+            cancellationToken)
         ?? throw new RuntimeAuthorizationException(UnavailableCode);
 
     private static ImmutableArray<NativeAcsGuardrailsRequiredCheck> CombineRequiredChecks(

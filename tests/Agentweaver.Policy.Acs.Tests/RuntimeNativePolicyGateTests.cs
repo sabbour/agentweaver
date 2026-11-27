@@ -629,6 +629,94 @@ public sealed class RuntimeNativePolicyGateTests
             registration, request, retained, approve: true, default);
     }
 
+    [RuntimeNativePolicyFact]
+    public async Task ReadAndValidateRejectsMismatchedScopeArtifactClosure()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var (registration, accepted) = RunBinding("byok-model");
+        var request = ModelTurnRequest(registration);
+
+        var validDualScope = new DualScopeFixtureSource(
+            Artifact("allow"),
+            ProjectArtifact("allow", skillsEnabled: true));
+        var validGate = new RuntimeNativePolicyGate(
+            validDualScope, new FixtureAdmissionStore(), evaluator);
+        var prepared = await validGate.PrepareAuthorizeAsync(
+            registration, accepted, request, default);
+        Assert.Equal(2, prepared.Revisions.Length);
+
+        var projectArtifactAsPlatform = new FixtureSource(ProjectArtifact("allow", skillsEnabled: true));
+        var platformGate = new RuntimeNativePolicyGate(
+            projectArtifactAsPlatform, new FixtureAdmissionStore(), evaluator);
+        var platformFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            platformGate.PrepareAuthorizeAsync(registration, accepted, request, default));
+        Assert.Equal(RuntimeNativePolicyGate.UnavailableCode, platformFailure.Code);
+
+        var platformArtifactAsProject = new DualScopeFixtureSource(
+            Artifact("allow"),
+            Artifact("allow"));
+        var projectGate = new RuntimeNativePolicyGate(
+            platformArtifactAsProject, new FixtureAdmissionStore(), evaluator);
+        var projectFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            projectGate.PrepareAuthorizeAsync(registration, accepted, request, default));
+        Assert.Equal(RuntimeNativePolicyGate.UnavailableCode, projectFailure.Code);
+    }
+
+    [RuntimeNativePolicyFact]
+    public async Task ProjectScopeArtifactEvaluatesModelToolAndGuardrailApprovalAlongsidePlatform()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(RequirePinnedOpa()), WorkRoot);
+        var platform = Artifact("allow", escalates: true, skillsEnabled: true);
+        var project = ProjectArtifact("allow", escalates: true, skillsEnabled: true);
+        var (registration, accepted) = RunBinding("byok-model");
+        var source = new DualScopeFixtureSource(platform, project);
+        var store = new FixtureAdmissionStore();
+        var gate = new RuntimeNativePolicyGate(source, store, evaluator);
+        var request = ModelTurnRequest(registration);
+
+        var preparation = await gate.PrepareAuthorizeAsync(
+            registration, accepted, request, default);
+        var retained = await gate.RequireGuardrailsAsync(
+            preparation,
+            registration,
+            request,
+            [new NativeAcsGuardrailsCheckFacts(
+                "prompt-shields", "1.0.0", 1, "options-v1")],
+            [new NativeAcsGuardrailsFindingFacts(
+                "prompt-shields", "sensitive-request", "medium")],
+            default);
+
+        Assert.Equal(2, retained.Escalations.Length);
+        Assert.Contains(retained.Escalations, item => item.Source.ScopeType == "Platform");
+        Assert.Contains(retained.Escalations, item => item.Source.ScopeType == "Project");
+        await gate.ResolveApprovalAsync(
+            registration, request, retained, approve: true, default);
+
+        source.SetProject(ProjectArtifact("deny", escalates: false, skillsEnabled: true));
+        var modelDenied = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            gate.PrepareAuthorizeAsync(registration, accepted, request, default));
+        Assert.Equal(RuntimeNativePolicyGate.DeniedCode, modelDenied.Code);
+
+        var toolSource = new DualScopeFixtureSource(
+            ToolArtifact(allowEdit: true),
+            ProjectToolArtifact(allowEdit: true));
+        var toolStore = new FixtureAdmissionStore();
+        var toolGate = new RuntimeNativePolicyGate(toolSource, toolStore, evaluator);
+        var toolRequest = ToolRequest(registration, "invocation");
+        var toolPreparation = await toolGate.PrepareAuthorizeAsync(
+            registration, accepted, toolRequest, default);
+        await toolGate.CommitAsync(toolPreparation, null, default);
+        Assert.NotNull(await toolGate.RequireVerifyAsync(
+            registration, accepted, toolRequest, default));
+
+        toolSource.SetProject(ProjectToolArtifact(allowEdit: false));
+        var toolDenied = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            toolGate.PrepareAuthorizeAsync(registration, accepted, toolRequest, default));
+        Assert.Equal(RuntimeNativePolicyGate.DeniedCode, toolDenied.Code);
+    }
+
     private static NativeAcsArtifact Artifact(
         string effect,
         bool escalates = false,
@@ -714,6 +802,82 @@ public sealed class RuntimeNativePolicyGateTests
             skillsEnabled
                 ? """{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}"""
                 : null);
+
+    private static NativeAcsArtifact ProjectArtifact(
+        string effect,
+        bool escalates = false,
+        bool skillsEnabled = false) =>
+        NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+            """{"allowed_action_ids":["model.turn"]}""",
+            $$"""
+            {
+              "rules": [
+                {
+                  "effect": "{{effect}}",
+                  "model_selection_reference": "byok-model",
+                  "model_id": "deployment-1",
+                  "source_mode": "byok",
+                  "provider_type": "azure",
+                  "provider_id": null,
+                  "configuration_revision": "7",
+                  "configuration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              ]
+            }
+            """,
+            $$"""
+            {
+              "required_checks": [
+                {
+                  "provider_id": "prompt-shields",
+                  "adapter_version": "1.0.0",
+                  "options_schema_version": 1,
+                  "options_revision": "options-v1"
+                }
+              ],
+              "blocked_findings": [
+                {
+                  "check_id": "prompt-shields",
+                  "code": "prompt-injection",
+                  "severity": "high"
+                }
+              ],
+              {{(escalates
+                  ? """
+                    "escalation": {
+                      "version": "guardrails-escalation-v1",
+                      "rules": [
+                        {
+                          "check_id": "prompt-shields",
+                          "code": "sensitive-request",
+                          "severity": "medium"
+                        }
+                      ]
+                    }
+                    """
+                  : """
+                    "escalation": {
+                      "version": "guardrails-escalation-v1",
+                      "rules": []
+                    }
+                    """)}}
+            }
+            """,
+            domainDataJson: null,
+            skillsDataJson: skillsEnabled
+                ? """{"schemaVersion":1,"minimumScore":500,"requireCompletedEvidence":true}"""
+                : null);
+
+    private static NativeAcsArtifact ProjectToolArtifact(bool allowEdit) =>
+        NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+            """{"allowed_action_ids":["tool.write"]}""",
+            """{"rules":[]}""",
+            """{"required_checks":[],"blocked_findings":[]}""",
+            allowEdit
+                ? """
+                  {"remote_mcp_scan_requirements":[{"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}],"rules":[{"tool_name":"edit","action_id":"tool.write","phase":"invocation","permission_kind":null,"read_access":false,"write_access":true,"shell_access":false},{"tool_name":"edit","action_id":"tool.write","phase":"permission","permission_kind":"write","read_access":false,"write_access":true,"shell_access":false}]}
+                  """
+                : """{"remote_mcp_scan_requirements":[{"check_id":"mcp.accepted-baseline-drift","required":false,"maximum_risk_score":100}],"rules":[]}""");
 
     private static NativeAcsArtifact ToolArtifact(bool allowEdit) =>
         NativeAcsUnifiedPolicyProfile.CreateArtifact(
@@ -1007,6 +1171,33 @@ public sealed class RuntimeNativePolicyGateTests
             Task.FromResult(reference.SnapshotDigest == snapshot.SnapshotDigest
                 ? snapshot
                 : null);
+    }
+
+    private sealed class DualScopeFixtureSource(
+        NativeAcsArtifact platformArtifact,
+        NativeAcsArtifact projectArtifact) : IRuntimeNativePolicySource
+    {
+        private NativeAcsArtifact _projectArtifact = projectArtifact;
+        private long _projectRevision = 1;
+
+        public void SetProject(NativeAcsArtifact artifact)
+        {
+            _projectArtifact = artifact;
+            _projectRevision++;
+        }
+
+        public Task<RuntimeNativePolicySourceSnapshot> ReadAsync(
+            RuntimeRegistration registration,
+            AuthorizedRunSelection accepted,
+            CancellationToken cancellationToken)
+        {
+            ImmutableArray<RuntimeNativePolicyRevision> revisions =
+            [
+                new("Platform", "default", "runtime-policy", 1, platformArtifact.ContentSha256, platformArtifact),
+                new("Project", registration.Binding.ProjectId, "runtime-policy", _projectRevision, _projectArtifact.ContentSha256, _projectArtifact)
+            ];
+            return Task.FromResult(new RuntimeNativePolicySourceSnapshot(revisions, revisions));
+        }
     }
 
     private sealed class FixtureSource(NativeAcsArtifact artifact) : IRuntimeNativePolicySource
