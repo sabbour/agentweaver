@@ -60,6 +60,17 @@ $providerId = Read-Host "Provider ID from list or add response"
 agentweaver project byok show $providerId --project-id $projectId
 ```
 
+Pass `--credential-status` to read the provider's credential state and both
+revisions without returning key bytes:
+
+```powershell
+agentweaver project byok show $providerId --project-id $projectId --credential-status
+```
+
+The command returns `scope`, `projectId`, `providerId`, `providerRevision`,
+`state` (`not_set`, `enabled`, `disabled`, `pending`, or `quarantined`), and
+`credentialRevision`.
+
 Update the complete metadata. Copy optional values from `show` when you want
 to keep them. If you omit `--wire-api`, `--azure-api-version`,
 `--reasoning-effort`, or `--prompt-capacity-tokens`, the update clears those

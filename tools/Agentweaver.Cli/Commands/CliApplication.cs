@@ -607,7 +607,7 @@ public static class CliApplication
               --expected-settings-revision <settingsRevision>
           agentweaver platform byok deactivate --expected-settings-revision <settingsRevision>
           agentweaver project byok list [--project-id <id>] [other target options]
-          agentweaver project byok show <providerId> --project-id <id> [other target options]
+          agentweaver project byok show <providerId> --project-id <id> [--credential-status] [other target options]
           agentweaver project byok add --project-id <id> --name <name> --type <openai|azure|anthropic>
               --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
               [--rate-card-id <id> --rate-card-version <version>]

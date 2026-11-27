@@ -1175,6 +1175,254 @@ public sealed class ByokDraftCommandsTests
         Assert.Contains("JSON request body", ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("not_set", 1L, 0L)]
+    [InlineData("enabled", 1L, 1L)]
+    [InlineData("disabled", 2L, 3L)]
+    [InlineData("pending", 1L, 0L)]
+    [InlineData("pending", 2L, 1L)]
+    [InlineData("quarantined", 1L, 0L)]
+    [InlineData("quarantined", 5_000_000_000L, 6_000_000_000L)]
+    public async Task ProjectShowCredentialStatusAcceptsAllValidStateRevisionPairs(
+        string state,
+        long providerRevision,
+        long credentialRevision)
+    {
+        var previousRunId = Environment.GetEnvironmentVariable("AGENTWEAVER_RUN_ID");
+        Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", "ambient-run-ignored");
+        try
+        {
+            using var fixture = new Fixture();
+            using var stdin = new ReadTrackingStream("unused-stdin"u8.ToArray());
+            fixture.StandardInput = stdin;
+            fixture.StandardInputRedirected = true;
+            fixture.Respond = _ => JsonResponse(new JsonObject
+            {
+                ["scope"] = "project",
+                ["projectId"] = "project-1",
+                ["providerId"] = ProviderId,
+                ["providerRevision"] = providerRevision,
+                ["state"] = state,
+                ["credentialRevision"] = credentialRevision,
+            });
+
+            var exit = await fixture.RunProject("show", ProviderId, "--credential-status");
+
+            Assert.Equal(0, exit);
+            Assert.Equal(string.Empty, fixture.Error.ToString());
+            Assert.Equal(0, stdin.ReadCalls);
+            Assert.Equal("project-1", fixture.Authentication.Identity?.ProjectId);
+            Assert.Null(fixture.Authentication.Identity?.RunId);
+
+            var request = Assert.Single(fixture.Requests);
+            Assert.Equal("GET", request.Method);
+            Assert.Equal($"/api/v1/projects/project-1/byok-providers/{ProviderId}/credential", request.Path);
+            Assert.Equal(string.Empty, request.Query);
+            Assert.Empty(request.BodyBytes);
+            Assert.False(request.Headers.ContainsKey("X-Agentweaver-Project-Authorization"));
+
+            var parsed = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal(6, parsed.Count);
+            Assert.Equal("project", parsed["scope"]?.GetValue<string>());
+            Assert.Equal("project-1", parsed["projectId"]?.GetValue<string>());
+            Assert.Equal(ProviderId, parsed["providerId"]?.GetValue<string>());
+            Assert.Equal(providerRevision, parsed["providerRevision"]?.GetValue<long>());
+            Assert.Equal(state, parsed["state"]?.GetValue<string>());
+            Assert.Equal(credentialRevision, parsed["credentialRevision"]?.GetValue<long>());
+
+            var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+                c => c["operationId"]?.GetValue<string>() == "readProjectByokProviderCredential");
+            Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", previousRunId);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"not_set","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"enabled","credentialRevision":0}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"disabled","credentialRevision":0}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":0,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"pending","credentialRevision":-1}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":9223372036854775808,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1.5,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":null,"providerId":"provider-1","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":"other-project","providerId":"provider-1","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"other-provider","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"unknown","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"enabled"}""")]
+    [InlineData("""{"scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"enabled","credentialRevision":1,"secret":"sk-secret-canary"}""")]
+    [InlineData("""{"scope":"project","scope":"project","projectId":"project-1","providerId":"provider-1","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""not-json-sk-secret-canary""")]
+    public async Task ProjectShowCredentialStatusRejectsInvalidResponsesWithoutLeakingBody(string body)
+    {
+        using var fixture = new Fixture();
+        fixture.Respond = _ => JsonResponse(body);
+
+        var exit = await fixture.RunProject("show", ProviderId, "--credential-status");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readProjectByokProviderCredential");
+        Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProjectShowCredentialStatusRejectsWrongMediaTypeAndOversizedResponse()
+    {
+        using var mediaFixture = new Fixture();
+        mediaFixture.Respond = _ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("sk-secret-canary", Encoding.UTF8, "text/plain"),
+        };
+
+        var mediaExit = await mediaFixture.RunProject("show", ProviderId, "--credential-status");
+        Assert.Equal(1, mediaExit);
+        Assert.Equal(string.Empty, mediaFixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", mediaFixture.Error.ToString(), StringComparison.Ordinal);
+        var mediaCall = Assert.Single(mediaFixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readProjectByokProviderCredential");
+        Assert.Equal("[REDACTED]", mediaCall["responseBody"]?.GetValue<string>());
+
+        using var sizeFixture = new Fixture();
+        var oversized = new JsonObject
+        {
+            ["scope"] = "project",
+            ["projectId"] = "project-1",
+            ["providerId"] = ProviderId,
+            ["providerRevision"] = 1,
+            ["state"] = "enabled",
+            ["credentialRevision"] = 1,
+            ["padding"] = new string('x', 17 * 1024),
+        };
+        sizeFixture.Respond = _ => JsonResponse(oversized);
+
+        var sizeExit = await sizeFixture.RunProject("show", ProviderId, "--credential-status");
+        Assert.Equal(1, sizeExit);
+        Assert.Equal(string.Empty, sizeFixture.Output.ToString());
+    }
+
+    [Theory]
+    [InlineData("response-limit")]
+    [InlineData("schema-field")]
+    public async Task ProjectShowCredentialStatusStopsBeforeRequestOnIncompatibleDiscovery(string mutation)
+    {
+        using var fixture = new Fixture();
+        fixture.TransformOpenApi = doc =>
+        {
+            if (mutation == "response-limit")
+            {
+                doc["paths"]!["/api/v1/projects/{projectId}/byok-providers/{providerId}/credential"]!["get"]!
+                    ["x-agentweaver-max-response-bytes"] = 32 * 1024;
+            }
+            else
+            {
+                var props = doc["components"]!["schemas"]!["ModelProviderCredentialStatusResponse"]!["properties"]!.AsObject();
+                props.Remove("credentialRevision");
+            }
+        };
+
+        var exit = await fixture.RunProject("show", ProviderId, "--credential-status");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Empty(fixture.Requests);
+    }
+
+    [Fact]
+    public async Task ProjectShowCredentialStatusStopsOnTenantMismatchAndSuppressesErrorAndTransportSecrets()
+    {
+        using var tenantFixture = new Fixture();
+        tenantFixture.TransformAuthContext = ctx => { ctx["tenantId"] = "other-tenant"; return ctx; };
+        var tenantExit = await tenantFixture.RunProject("show", ProviderId, "--credential-status");
+        Assert.Equal(1, tenantExit);
+        Assert.Equal(string.Empty, tenantFixture.Output.ToString());
+        Assert.Empty(tenantFixture.Requests);
+
+        foreach (var (status, code, expectedError) in new[]
+        {
+            (HttpStatusCode.Forbidden, "forbidden", "BYOK_FORBIDDEN"),
+            (HttpStatusCode.NotFound, "not_found", "BYOK_NOT_FOUND"),
+            (HttpStatusCode.Conflict, "model_provider_draft_metadata_requires_update", "BYOK_CONFLICT"),
+            (HttpStatusCode.Conflict, "credential_write_quarantined", "BYOK_QUARANTINED"),
+            (HttpStatusCode.ServiceUnavailable, "credential_publication_pending", "BYOK_PENDING_PUBLICATION"),
+            (HttpStatusCode.ServiceUnavailable, "credential_vault_unavailable", "BYOK_VAULT_UNAVAILABLE"),
+        })
+        {
+            using var errorFixture = new Fixture();
+            errorFixture.Respond = _ => JsonResponse(new JsonObject
+            {
+                ["code"] = code,
+                ["detail"] = "sk-secret-canary",
+            }, status);
+
+            var errorExit = await errorFixture.RunProject("show", ProviderId, "--credential-status");
+            Assert.Equal(1, errorExit);
+            Assert.Equal(string.Empty, errorFixture.Output.ToString());
+            Assert.Contains(expectedError, errorFixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("sk-secret-canary", errorFixture.Error.ToString(), StringComparison.Ordinal);
+            var call = Assert.Single(errorFixture.LastCreatedClient!.Calls,
+                c => c["operationId"]?.GetValue<string>() == "readProjectByokProviderCredential");
+            Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+        }
+
+        using var transportFixture = new Fixture();
+        transportFixture.Respond = _ => throw new HttpRequestException("connection failed: sk-secret-canary");
+        var transportExit = await transportFixture.RunProject("show", ProviderId, "--credential-status");
+        Assert.Equal(1, transportExit);
+        Assert.Equal(string.Empty, transportFixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", transportFixture.Error.ToString(), StringComparison.Ordinal);
+        var transportCall = Assert.Single(transportFixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readProjectByokProviderCredential");
+        Assert.Equal("[REDACTED]", transportCall["responseBody"]?.GetValue<string>());
+        Assert.Equal("[REDACTED]", transportCall["error"]?.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("project", "show", ProviderId, "--credential-status=secret-value")]
+    [InlineData("project", "show", ProviderId, "--credential-status", "secret-value")]
+    [InlineData("project", "show", ProviderId, "--credential-status", "--credential-status")]
+    [InlineData("project", "show", ProviderId, "--credential-status", "--run-id", "run-1")]
+    [InlineData("project", "list", "--credential-status")]
+    [InlineData("platform", "show", ProviderId, "--credential-status")]
+    public async Task InvalidCredentialStatusOptionsMakeNoCallsAndDoNotEchoValues(params string[] args)
+    {
+        using var fixture = new Fixture();
+        var scope = args[0];
+        var commandArgs = args[1..];
+        var exit = scope == "project"
+            ? await fixture.RunProject(commandArgs)
+            : await fixture.Run(commandArgs);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.DoesNotContain("secret-value", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Empty(fixture.Requests);
+        Assert.Null(fixture.LastCreatedClient);
+    }
+
+    [Fact]
+    public async Task PlainProjectShowStillReturnsMetadataWithoutStatusRequest()
+    {
+        using var fixture = new Fixture();
+        fixture.Respond = _ => JsonResponse(Provider(ProviderId, "Project OpenAI", revision: 3, scope: "project", projectId: "project-1"));
+
+        var exit = await fixture.RunProject("show", ProviderId);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(fixture.Requests);
+        Assert.Equal($"/api/v1/projects/project-1/byok-providers/{ProviderId}", request.Path);
+        var parsed = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Equal(ProviderId, parsed["providerId"]?.GetValue<string>());
+        Assert.Equal(3L, parsed["revision"]?.GetValue<long>());
+        Assert.False(parsed.ContainsKey("credentialRevision"));
+    }
+
     private static string Page(IReadOnlyList<JsonObject> providers, string? nextAfterProviderId) =>
         new JsonObject
         {
@@ -1332,6 +1580,7 @@ public sealed class ByokDraftCommandsTests
         public Authentication Authentication { get; } = new();
         public Func<Request, HttpResponseMessage>? Respond { get; set; }
         public Action<JsonObject>? TransformOpenApi { get; set; }
+        public Func<JsonObject, JsonObject>? TransformAuthContext { get; set; }
         public Stream? StandardInput { get; set; }
         public bool? StandardInputRedirected { get; set; }
         public IGatewayClient? LastCreatedClient { get; private set; }
@@ -1386,7 +1635,7 @@ public sealed class ByokDraftCommandsTests
             }
             if (path == "/api/v1/authorization/context")
             {
-                return JsonResponse(new JsonObject
+                var context = new JsonObject
                 {
                     ["contractVersion"] = 1,
                     ["issuer"] = "https://identity.example/",
@@ -1396,7 +1645,10 @@ public sealed class ByokDraftCommandsTests
                     ["boundProjectId"] = Authentication.Identity?.ProjectId,
                     ["boundRunId"] = Authentication.Identity?.RunId,
                     ["effectiveAuthority"] = new JsonArray(),
-                });
+                };
+                if (TransformAuthContext is not null)
+                    context = TransformAuthContext(context);
+                return JsonResponse(context);
             }
 
             var bodyBytes = request.Content is null
