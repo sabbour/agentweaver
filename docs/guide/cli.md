@@ -738,6 +738,7 @@ agentweaver platform byok recheck-key <providerId> --expected-revision <revision
     --expected-credential-revision <credentialRevision> --operation-id <guid>
 agentweaver platform byok disable-key <providerId> --expected-revision <revision>
     --expected-credential-revision <credentialRevision> --operation-id <guid>
+agentweaver platform byok disable-key <providerId> --operation-id <guid> --cancel
 agentweaver platform byok activate <providerId> --expected-revision <providerRevision>
     --expected-settings-revision <settingsRevision>
 agentweaver platform byok deactivate --expected-settings-revision <settingsRevision>
@@ -805,8 +806,10 @@ response, the CLI checks the operation status endpoint with the same
 `operationId` and never resends the key.
 
 `recheck-key` verifies the current enabled credential version without uploading
-a key. `disable-key` disables the current credential. Both require exact
-provider and credential revisions and an explicit operation ID. `activate`
+a key. `disable-key` disables the current credential and requires exact
+provider and credential revisions and an explicit operation ID. Pass `--cancel`
+with `--operation-id <uuid>` and no revision options to cancel a pending
+credential operation without resending key material. `activate`
 switches new runs to an `Available` provider. `deactivate` restores hosted
 Copilot defaults for new runs. Activation and deactivation require the exact
 settings revision; neither changes accepted runs. For the task procedure, see
@@ -815,8 +818,10 @@ settings revision; neither changes accepted runs. For the task procedure, see
 Credential errors use fixed CLI messages. A quarantined HTTP 409 prints
 `BYOK_QUARANTINED`; another HTTP 409 prints `BYOK_CONFLICT`. A pending
 publication HTTP 503 prints `BYOK_PENDING_PUBLICATION`; a Vault-unavailable
-HTTP 503 prints `BYOK_VAULT_UNAVAILABLE`. The CLI does not print raw response
-bodies.
+HTTP 503 prints `BYOK_VAULT_UNAVAILABLE`. For `disable-key --cancel`, conflicts
+and uncertain outcomes (such as HTTP 499, 5xx, transport errors, or invalid
+receipts) print status lookup guidance with the original operation ID without
+retrying. The CLI does not print raw response bodies.
 
 ## Manage project BYOK provider drafts
 
@@ -846,6 +851,8 @@ agentweaver project byok recheck-key <providerId> --project-id <projectId>
 agentweaver project byok disable-key <providerId> --project-id <projectId>
     --expected-revision <providerRevision> --expected-credential-revision <credentialRevision>
     --operation-id <guid>
+agentweaver project byok disable-key <providerId> --project-id <projectId>
+    --operation-id <guid> --cancel
 ```
 
 The project ID selects the token binding and the Project route. The CLI sends

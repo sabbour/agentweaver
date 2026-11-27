@@ -180,8 +180,23 @@ agentweaver project byok disable-key $providerId `
   --operation-id ([guid]::NewGuid().ToString())
 ```
 
-Both commands force a project-bound identity without a run binding, even when
-`AGENTWEAVER_RUN_ID` is set.
+To cancel a pending credential operation without resending key material or
+passing revision options, pass `--cancel` with the original `--operation-id`:
+
+```powershell
+agentweaver project byok disable-key $providerId `
+  --project-id $projectId `
+  --operation-id $operationId `
+  --cancel
+```
+
+Cancellation returns `cancelled` when the operation is cancelled, or `published`
+without `credentialVersion` or `configurationHash` if the write already
+completed. If the server returns HTTP 409 or an uncertain outcome, check the
+operation status with `agentweaver project byok show $providerId --project-id $projectId --operation-id $operationId`.
+
+All project BYOK commands force a project-bound identity without a run binding,
+even when `AGENTWEAVER_RUN_ID` is set.
 
 ## Set or rotate an API key in the web app
 

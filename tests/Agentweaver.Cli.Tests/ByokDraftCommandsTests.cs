@@ -13,6 +13,7 @@ namespace Agentweaver.Cli.Tests;
 public sealed class ByokDraftCommandsTests
 {
     private const string ProviderId = "byok-platform-0001";
+    private const string ProjectId = "project-1";
     private const string OperationId = "f1b62270-3320-414c-9c2a-803493e50131";
     private static readonly string[] TargetOptions =
     [
@@ -2105,6 +2106,271 @@ public sealed class ByokDraftCommandsTests
         Assert.DoesNotContain("bogus-sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, trackingStdin.ReadCalls);
         Assert.DoesNotContain(fixture.Requests, r => r.Method == "PUT");
+    }
+
+    [Theory]
+    [InlineData(false, "cancelled", true)]
+    [InlineData(false, "cancelled", false)]
+    [InlineData(true, "cancelled", true)]
+    [InlineData(false, "published", true)]
+    [InlineData(true, "published", false)]
+    public async Task DisableKeyCancelAcceptsCancelledAndPublishedInBothScopesAndRedactsEvidence(
+        bool projectScope, string status, bool omitOptionalFields)
+    {
+        using var fixture = new Fixture();
+        using var trackingStdin = new ReadTrackingStream("sk-stdin-canary\n"u8.ToArray());
+        fixture.StandardInput = trackingStdin;
+        fixture.StandardInputRedirected = true;
+        fixture.Respond = _ =>
+        {
+            var body = new JsonObject
+            {
+                ["operationId"] = OperationId,
+                ["status"] = status,
+                ["scope"] = projectScope ? "project" : "platform",
+                ["providerId"] = ProviderId,
+            };
+            if (projectScope || !omitOptionalFields)
+                body["projectId"] = projectScope ? ProjectId : null;
+            if (status == "cancelled")
+            {
+                if (!omitOptionalFields)
+                {
+                    body["providerRevision"] = null;
+                    body["credentialRevision"] = null;
+                    body["credentialVersion"] = null;
+                    body["configurationHash"] = null;
+                    body["providerState"] = null;
+                }
+            }
+            else
+            {
+                body["providerRevision"] = 5L;
+                body["credentialVersion"] = omitOptionalFields ? null : "ver-secret-canary";
+                body["configurationHash"] = omitOptionalFields ? null : "hash-secret-canary";
+                if (!omitOptionalFields)
+                {
+                    body["credentialRevision"] = 8L;
+                    body["providerState"] = "Available";
+                }
+            }
+            return JsonResponse(body);
+        };
+
+        var exit = projectScope
+            ? await fixture.RunProject("disable-key", ProviderId, "--operation-id", OperationId, "--cancel")
+            : await fixture.Run("disable-key", ProviderId, "--operation-id", OperationId, "--cancel");
+
+        Assert.Equal(0, exit);
+        Assert.Equal(0, trackingStdin.ReadCalls);
+        var request = Assert.Single(fixture.Requests);
+        Assert.Equal(HttpMethod.Delete.Method, request.Method);
+        Assert.Equal(
+            projectScope
+                ? $"/api/v1/projects/{ProjectId}/byok-providers/{ProviderId}/credential"
+                : $"/api/v1/platform/byok-providers/{ProviderId}/credential",
+            request.Path);
+        var sent = JsonNode.Parse(request.Body)!.AsObject();
+        Assert.Equal(["cancel", "operationId"], sent.Select(p => p.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(OperationId, sent["operationId"]!.GetValue<string>());
+        Assert.True(sent["cancel"]!.GetValue<bool>());
+
+        var output = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+        Assert.Equal(OperationId, output["operationId"]!.GetValue<string>());
+        Assert.Equal(status, output["status"]!.GetValue<string>());
+        Assert.Equal(projectScope ? "project" : "platform", output["scope"]!.GetValue<string>());
+        Assert.Equal(projectScope ? ProjectId : null, output["projectId"]?.GetValue<string>());
+        Assert.Equal(ProviderId, output["providerId"]!.GetValue<string>());
+        Assert.DoesNotContain("credentialVersion", fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("configurationHash", fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("ver-secret-canary", fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("hash-secret-canary", fixture.Output.ToString(), StringComparison.Ordinal);
+
+        var opName = projectScope ? "disableProjectByokProviderCredential" : "disablePlatformByokProviderCredential";
+        var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == opName);
+        Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("disable-key byok-platform-0001 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --cancel=true")]
+    [InlineData("disable-key byok-platform-0001 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --cancel true")]
+    [InlineData("disable-key byok-platform-0001 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --cancel --cancel")]
+    [InlineData("disable-key byok-platform-0001 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --expected-revision 1 --cancel")]
+    [InlineData("disable-key byok-platform-0001 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --expected-credential-revision 1 --cancel")]
+    [InlineData("disable-key byok-platform-0001 --cancel")]
+    [InlineData("disable-key byok-platform-0001 --operation-id not-a-guid --cancel")]
+    [InlineData("show byok-platform-0001 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --cancel")]
+    [InlineData("set-key byok-platform-0001 --from-stdin --expected-revision 1 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --cancel")]
+    [InlineData("recheck-key byok-platform-0001 --expected-revision 1 --expected-credential-revision 1 --operation-id f1b62270-3320-414c-9c2a-803493e50131 --cancel")]
+    [InlineData("list --cancel")]
+    public async Task DisableKeyCancelRejectsInvalidFlagsAndOptionsBeforeDiscovery(string joinedArgs)
+    {
+        using var fixture = new Fixture();
+        var exit = await fixture.Run(joinedArgs.Split(' '));
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Empty(fixture.Requests);
+        Assert.Null(fixture.LastCreatedClient);
+    }
+
+    [Fact]
+    public async Task DisableKeyCancelRejectsMismatchedAuthorizationContextInBothScopesWithoutDeleteDispatch()
+    {
+        using var platformTenantFixture = new Fixture();
+        platformTenantFixture.TransformAuthContext = ctx => { ctx["tenantId"] = "other-tenant"; return ctx; };
+        Assert.Equal(1, await platformTenantFixture.Run("disable-key", ProviderId, "--operation-id", OperationId, "--cancel"));
+        Assert.DoesNotContain(platformTenantFixture.Requests, r => r.Method == "DELETE");
+
+        using var platformBoundProjectFixture = new Fixture();
+        platformBoundProjectFixture.TransformAuthContext = ctx => { ctx["boundProjectId"] = ProjectId; return ctx; };
+        Assert.Equal(1, await platformBoundProjectFixture.Run("disable-key", ProviderId, "--operation-id", OperationId, "--cancel"));
+        Assert.DoesNotContain(platformBoundProjectFixture.Requests, r => r.Method == "DELETE");
+
+        using var projectTenantFixture = new Fixture();
+        projectTenantFixture.TransformAuthContext = ctx => { ctx["tenantId"] = "other-tenant"; return ctx; };
+        Assert.Equal(1, await projectTenantFixture.RunProject("disable-key", ProviderId, "--operation-id", OperationId, "--cancel"));
+        Assert.DoesNotContain(projectTenantFixture.Requests, r => r.Method == "DELETE");
+
+        using var projectMismatchFixture = new Fixture();
+        projectMismatchFixture.TransformAuthContext = ctx => { ctx["boundProjectId"] = "other-project"; return ctx; };
+        Assert.Equal(1, await projectMismatchFixture.RunProject("disable-key", ProviderId, "--operation-id", OperationId, "--cancel"));
+        Assert.DoesNotContain(projectMismatchFixture.Requests, r => r.Method == "DELETE");
+
+        using var projectBoundRunFixture = new Fixture();
+        projectBoundRunFixture.TransformAuthContext = ctx => { ctx["boundRunId"] = "run-1"; return ctx; };
+        Assert.Equal(1, await projectBoundRunFixture.RunProject("disable-key", ProviderId, "--operation-id", OperationId, "--cancel"));
+        Assert.DoesNotContain(projectBoundRunFixture.Requests, r => r.Method == "DELETE");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Conflict, """{"code":"credential_slot_conflict","code":"credential_write_quarantined","detail":"sk-secret-canary"}""", "BYOK_CONFLICT")]
+    [InlineData(HttpStatusCode.Conflict, """{malformed-json sk-secret-canary""", "BYOK_CONFLICT")]
+    [InlineData((HttpStatusCode)499, """{"code":"client_closed_request","code":"other","detail":"sk-secret-canary"}""", "The cancel result is unknown.")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, """{"code":"credential_publication_pending","code":"other","detail":"sk-secret-canary"}""", "The cancel result is unknown.")]
+    [InlineData(HttpStatusCode.InternalServerError, """{"nested":{"a":1,"a":2},"detail":"sk-secret-canary"}""", "The cancel result is unknown.")]
+    public async Task DisableKeyCancelDiscardsDuplicateOrMalformedErrorBodiesWithFixedGuidanceAndNoLeak(
+        HttpStatusCode status, string rawBody, string expectedPrefix)
+    {
+        using var fixture = new Fixture { Respond = _ => JsonResponse(rawBody, status) };
+
+        var exit = await fixture.Run("disable-key", ProviderId, "--operation-id", OperationId, "--cancel");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Single(fixture.Requests);
+        var errText = fixture.Error.ToString();
+        Assert.Contains(expectedPrefix, errText, StringComparison.Ordinal);
+        Assert.Contains($"agentweaver platform byok show {ProviderId} --operation-id {OperationId}",
+            errText, StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-secret-canary", errText, StringComparison.Ordinal);
+        var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "disablePlatformByokProviderCredential");
+        Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"disabled","scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":4,"credentialRevision":7}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"quarantined","scope":"platform","projectId":null,"providerId":"byok-platform-0001"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"publication_pending","scope":"platform","projectId":null,"providerId":"byok-platform-0001"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"cancelled","scope":"platform","projectId":null,"providerId":"byok-platform-0001","extra":"sk-secret-canary"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"cancelled","scope":"platform","projectId":null,"providerId":"byok-platform-0001"}""")]
+    [InlineData("""{"operationId":"00000000-0000-0000-0000-000000000001","status":"cancelled","scope":"platform","projectId":null,"providerId":"byok-platform-0001"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"cancelled","scope":"project","projectId":null,"providerId":"byok-platform-0001"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"cancelled","scope":"platform","projectId":"project-1","providerId":"byok-platform-0001"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"cancelled","scope":"platform","projectId":null,"providerId":"other-provider"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"cancelled","scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":4}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"cancelled","scope":"platform","projectId":null,"providerId":"byok-platform-0001","credentialVersion":"v1"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"published","scope":"platform","projectId":null,"providerId":"byok-platform-0001"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"published","scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":0}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"published","scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":4,"credentialRevision":0}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"published","scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":4,"providerState":"Disabled"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","status":"published","scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":4,"credentialVersion":123}""")]
+    public async Task DisableKeyCancelRejectsInvalidOrMismatched200ReceiptsWithGuidanceAndNoLeak(string body)
+    {
+        using var fixture = new Fixture { Respond = _ => JsonResponse(body) };
+
+        var exit = await fixture.Run("disable-key", ProviderId, "--operation-id", OperationId, "--cancel");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Single(fixture.Requests);
+        Assert.Contains($"agentweaver platform byok show {ProviderId} --operation-id {OperationId}",
+            fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "disablePlatformByokProviderCredential");
+        Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task DisableKeyCancelHandlesErrorsAndCancellationWithGuidanceAndNoRetries()
+    {
+        foreach (var (status, code, expectedPrefix, expectGuidance) in new[]
+        {
+            (HttpStatusCode.Conflict, "credential_slot_conflict", "BYOK_CONFLICT", true),
+            (HttpStatusCode.Conflict, "credential_write_quarantined", "BYOK_QUARANTINED", true),
+            (HttpStatusCode.Forbidden, "forbidden", "BYOK_FORBIDDEN", false),
+            (HttpStatusCode.NotFound, "credential_slot_not_found", "BYOK_NOT_FOUND", false),
+            ((HttpStatusCode)499, "client_closed_request", "The cancel result is unknown.", true),
+            (HttpStatusCode.InternalServerError, "internal_error", "The cancel result is unknown.", true),
+            (HttpStatusCode.ServiceUnavailable, "credential_publication_pending", "BYOK_PENDING_PUBLICATION", true),
+            (HttpStatusCode.ServiceUnavailable, "credential_vault_unavailable", "BYOK_VAULT_UNAVAILABLE", true),
+            (HttpStatusCode.ServiceUnavailable, "service_unavailable", "The cancel result is unknown.", true),
+        })
+        {
+            using var errorFixture = new Fixture
+            {
+                Respond = _ => JsonResponse(new JsonObject
+                {
+                    ["code"] = code,
+                    ["detail"] = "sk-secret-canary",
+                }, status),
+            };
+
+            var exit = await errorFixture.RunProject("disable-key", ProviderId, "--operation-id", OperationId, "--cancel");
+            Assert.Equal(1, exit);
+            Assert.Equal(string.Empty, errorFixture.Output.ToString());
+            Assert.Single(errorFixture.Requests);
+            var errText = errorFixture.Error.ToString();
+            Assert.Contains(expectedPrefix, errText, StringComparison.Ordinal);
+            if (expectGuidance)
+                Assert.Contains($"agentweaver project byok show {ProviderId} --project-id {ProjectId} --operation-id {OperationId}",
+                    errText, StringComparison.Ordinal);
+            Assert.DoesNotContain("sk-secret-canary", errText, StringComparison.Ordinal);
+            Assert.DoesNotContain("Repeat the same command", errText, StringComparison.Ordinal);
+            var call = Assert.Single(errorFixture.LastCreatedClient!.Calls,
+                c => c["operationId"]?.GetValue<string>() == "disableProjectByokProviderCredential");
+            Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+        }
+
+        using var transportFixture = new Fixture
+        {
+            Respond = _ => throw new HttpRequestException("connection failed: sk-secret-canary"),
+        };
+        var transportExit = await transportFixture.Run("disable-key", ProviderId, "--operation-id", OperationId, "--cancel");
+        Assert.Equal(1, transportExit);
+        Assert.Single(transportFixture.Requests);
+        Assert.Contains($"agentweaver platform byok show {ProviderId} --operation-id {OperationId}",
+            transportFixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-secret-canary", transportFixture.Error.ToString(), StringComparison.Ordinal);
+        var transportCall = Assert.Single(transportFixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "disablePlatformByokProviderCredential");
+        Assert.Equal("[REDACTED]", transportCall["responseBody"]?.GetValue<string>());
+        Assert.Equal("[REDACTED]", transportCall["error"]?.GetValue<string>());
+
+        using var cancelFixture = new Fixture();
+        using var cts = new CancellationTokenSource();
+        cancelFixture.Respond = _ =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        };
+        var cancelExit = await cancelFixture.Run(cts.Token, "disable-key", ProviderId, "--operation-id", OperationId, "--cancel");
+        Assert.Equal(130, cancelExit);
+        Assert.Single(cancelFixture.Requests);
+        Assert.Contains($"agentweaver platform byok show {ProviderId} --operation-id {OperationId}",
+            cancelFixture.Error.ToString(), StringComparison.Ordinal);
     }
 
     private static string Page(IReadOnlyList<JsonObject> providers, string? nextAfterProviderId) =>

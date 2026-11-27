@@ -215,6 +215,20 @@ It does not upload a key or create a Vault version. `disable-key` disables the
 credential slot and returns the provider to Draft. A quarantined or
 publication-pending receipt exits with code 1.
 
+To cancel a pending credential operation without resending key material or
+passing revision options, pass `--cancel` with the original `--operation-id`:
+
+```powershell
+agentweaver platform byok disable-key $providerId `
+  --operation-id $operationId `
+  --cancel
+```
+
+Cancellation returns `cancelled` when the operation is cancelled, or `published`
+without `credentialVersion` or `configurationHash` if the write already
+completed. If the server returns HTTP 409 or an uncertain outcome, check the
+operation status with `agentweaver platform byok show $providerId --operation-id $operationId`.
+
 ## Activate or deactivate the platform default
 
 Read `platform byok list` and use its `settingsRevision`. To switch new runs

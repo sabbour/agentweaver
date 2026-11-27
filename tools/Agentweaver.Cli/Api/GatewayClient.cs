@@ -1019,7 +1019,10 @@ public sealed partial class GatewayClient : IGatewayClient
         var isByokCredentialStatusRead = operationId is
             "readPlatformByokProviderCredential" or "readProjectByokProviderCredential" or
             "readPlatformByokProviderCredentialOperation" or "readProjectByokProviderCredentialOperation";
-        var hidePolicyEvidence = isByokCredentialStatusRead || operationId is
+        var isByokCancel = operationId is
+            "disablePlatformByokProviderCredential" or "disableProjectByokProviderCredential" &&
+            IsByokCancelRequest(body);
+        var hidePolicyEvidence = isByokCredentialStatusRead || isByokCancel || operationId is
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
             "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
@@ -1144,13 +1147,30 @@ public sealed partial class GatewayClient : IGatewayClient
                 // Keep the response usable by its caller; only the separate evidence copy is redacted.
                 if (contentType is "application/json" or "application/problem+json")
                 {
-                    if (isByokCredentialStatusRead &&
-                        (int)response.StatusCode == 200 &&
-                        HasDuplicateTopLevelKeys(bytes))
+                    if (isByokCancel && (int)response.StatusCode != 200)
                     {
-                        throw new InvalidDataException("The Gateway response contained duplicate JSON fields.");
+                        if (!HasDuplicateTopLevelKeys(bytes))
+                        {
+                            try
+                            {
+                                responseBody = ParseJson(bytes) as JsonObject;
+                            }
+                            catch (ArgumentException)
+                            {
+                                responseBody = null;
+                            }
+                        }
                     }
-                    responseBody = ParseJson(bytes);
+                    else
+                    {
+                        if ((isByokCredentialStatusRead || isByokCancel) &&
+                            (int)response.StatusCode == 200 &&
+                            HasDuplicateTopLevelKeys(bytes))
+                        {
+                            throw new InvalidDataException("The Gateway response contained duplicate JSON fields.");
+                        }
+                        responseBody = ParseJson(bytes);
+                    }
                     if (recordEvidence && !hidePolicyEvidence)
                         evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
                             ? "[REDACTED]"
@@ -1186,7 +1206,7 @@ public sealed partial class GatewayClient : IGatewayClient
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            evidence["error"] = isByokCredentialStatusRead || operationId is "validateProjectNativeAcsPolicy" or
+            evidence["error"] = isByokCredentialStatusRead || isByokCancel || operationId is "validateProjectNativeAcsPolicy" or
                 "listProjectGovernanceDecisions"
                 ? "[REDACTED]"
                 : RedactText(exception.Message);
@@ -1194,7 +1214,7 @@ public sealed partial class GatewayClient : IGatewayClient
                 throw;
             var transportMessage = exception is OperationCanceledException && !ct.IsCancellationRequested
                 ? "The Gateway request timed out."
-                : isByokCredentialStatusRead
+                : isByokCredentialStatusRead || isByokCancel
                     ? "The Gateway request failed."
                     : RedactText(exception.Message);
             throw new GatewayTransportException(transportMessage, exception);
@@ -1483,6 +1503,23 @@ public sealed partial class GatewayClient : IGatewayClient
                normalized.Contains("kubeconfig", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("storagestate", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("signedurl", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsByokCancelRequest(byte[]? body)
+    {
+        if (body is null || body.Length == 0)
+            return false;
+        try
+        {
+            return JsonNode.Parse(body, documentOptions: new JsonDocumentOptions { MaxDepth = 32 }) is JsonObject obj &&
+                   obj["cancel"] is JsonValue value &&
+                   value.TryGetValue<bool>(out var cancel) &&
+                   cancel;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool HasDuplicateTopLevelKeys(byte[] bytes)
