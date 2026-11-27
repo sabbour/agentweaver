@@ -40,7 +40,9 @@ internal static class PolicyCommands
             "show" => new[] { "scope", "revision" },
             "export" => new[] { "scope", "revision", "output" },
             "history" => new[] { "scope", "page-size", "cursor" },
-            "decisions" => new[] { "scope", "policy-id", "page-size", "before-sequence" },
+            "decisions" => projectScope
+                ? new[] { "scope", "resource-type", "resource-id", "page-size", "before-sequence" }
+                : new[] { "scope", "policy-id", "page-size", "before-sequence" },
             "validate" => new[] { "scope", "input" },
             _ => new[] { "scope", "input", "expected-revision", "reason" },
         };
@@ -49,14 +51,21 @@ internal static class PolicyCommands
                 name != "run-id" && (name != "project-id" || projectScope && !projectList))).ToArray());
         if (scope is not ("platform" or "project") ||
             scope == "platform" && command == "list" ||
-            projectScope && command is not ("list" or "show" or "history" or "export" or "validate"))
+            projectScope && command is not ("list" or "show" or "history" or "export" or "decisions" or "validate"))
             throw new CliUsageException("Use `--scope platform` for Platform commands or `--scope project` for Project reads.");
         if (!projectScope && options.Many("project-id").Count > 0)
             throw new CliUsageException("Platform Policy commands use an unbound identity. Do not set --project-id.");
-        var projectId = projectScope && command is ("show" or "history" or "export" or "validate")
+        var projectId = projectScope && command is ("show" or "history" or "export" or "decisions" or "validate")
             ? ProjectIdArgument(options.Single("project-id"))
             : null;
-        var policyId = command == "decisions" ? PolicyIdArgument(options.Single("policy-id")) : null;
+        var resourceType = projectScope && command == "decisions"
+            ? SkillResourceTypeArgument(options.Single("resource-type"))
+            : null;
+        var resourceId = projectScope && command == "decisions"
+            ? SkillIdArgument(options.Single("resource-id"))
+            : !projectScope && command == "decisions"
+                ? PolicyIdArgument(options.Single("policy-id"))
+                : null;
         var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
         var inputPath = command is "validate" or "apply"
             ? InputFilePath(options.Single("input"), command)
@@ -79,7 +88,9 @@ internal static class PolicyCommands
         var pageSizeText = options.Single("page-size");
         var pageSize = 20;
         if (pageSizeText is not null &&
-            (pageSizeText.Length == 0 || pageSizeText.Any(c => c is < '0' or > '9') ||
+            (pageSizeText.Length == 0 ||
+             (projectScope && command == "decisions" && pageSizeText[0] == '0') ||
+             pageSizeText.Any(c => c is < '0' or > '9') ||
              !int.TryParse(pageSizeText, NumberStyles.None, CultureInfo.InvariantCulture, out pageSize) ||
              pageSize is < 1 or > 100))
             throw new CliUsageException("--page-size must be an integer from 1 to 100.");
@@ -117,6 +128,7 @@ internal static class PolicyCommands
             {
                 "list" => "listProjectNativeAcsPolicies",
                 "history" => "listProjectNativeAcsPolicyRevisions",
+                "decisions" => "listProjectGovernanceDecisions",
                 "validate" => "validateProjectNativeAcsPolicy",
                 _ => revision is null ? "readProjectNativeAcsPolicy" : "readProjectNativeAcsPolicyRevision",
             }
@@ -133,6 +145,7 @@ internal static class PolicyCommands
             {
                 "list" => "/api/v1/policies/projects",
                 "history" => "/api/v1/policies/projects/{projectId}/revisions",
+                "decisions" => "/api/v1/policies/projects/{projectId}/decisions",
                 "validate" => "/api/v1/policies/projects/{projectId}/validate",
                 _ => revision is null
                     ? "/api/v1/policies/projects/{projectId}"
@@ -149,8 +162,8 @@ internal static class PolicyCommands
         var query = new Dictionary<string, string>(StringComparer.Ordinal);
         if (command == "decisions")
         {
-            query["resourceType"] = "platform_policy";
-            query["resourceId"] = policyId!;
+            query["resourceType"] = projectScope ? resourceType! : "platform_policy";
+            query["resourceId"] = resourceId!;
         }
         if (pageSizeText is not null)
             query["pageSize"] = pageSizeText;
@@ -235,7 +248,14 @@ internal static class PolicyCommands
             {
                 if (response.Status != 200)
                     throw new PolicyFailureException(DecisionErrorMessage(response.Status, response.Body));
-                result = ProjectDecisions(response.Body, policyId!, pageSize, beforeSequence);
+                result = ProjectDecisions(
+                    response.Body,
+                    expectedScopeType,
+                    expectedScopeId,
+                    projectScope ? resourceType! : "platform_policy",
+                    resourceId!,
+                    pageSize,
+                    beforeSequence);
             }
             else
             {
@@ -809,16 +829,22 @@ internal static class PolicyCommands
     }
 
     private static JsonObject ProjectDecisions(
-        JsonNode? body, string expectedPolicyId, int pageSize, long? beforeSequence)
+        JsonNode? body,
+        string expectedScopeType,
+        string expectedScopeId,
+        string expectedResourceType,
+        string expectedResourceId,
+        int pageSize,
+        long? beforeSequence)
     {
         if (body is not JsonObject obj ||
             !obj.ContainsKey("nextBeforeSequence") ||
             obj["items"] is not JsonArray items ||
             items.Count > pageSize)
             throw UnexpectedResponse();
-        CheckScope(obj, "platform", "default");
-        if (String(obj, "resourceType") != "platform_policy" ||
-            String(obj, "resourceId") != expectedPolicyId)
+        CheckScope(obj, expectedScopeType, expectedScopeId);
+        if (String(obj, "resourceType") != expectedResourceType ||
+            String(obj, "resourceId") != expectedResourceId)
             throw UnexpectedResponse();
         var nextBeforeSequence = obj["nextBeforeSequence"] is null
             ? (long?)null
@@ -857,10 +883,10 @@ internal static class PolicyCommands
 
         return new JsonObject
         {
-            ["scopeType"] = "platform",
-            ["scopeId"] = "default",
-            ["resourceType"] = "platform_policy",
-            ["resourceId"] = expectedPolicyId,
+            ["scopeType"] = expectedScopeType,
+            ["scopeId"] = expectedScopeId,
+            ["resourceType"] = expectedResourceType,
+            ["resourceId"] = expectedResourceId,
             ["items"] = projected,
             ["nextBeforeSequence"] = nextBeforeSequence,
         };
@@ -982,6 +1008,20 @@ internal static class PolicyCommands
             !string.Equals(guid.ToString("D"), text, StringComparison.Ordinal))
             throw UnexpectedResponse();
         return text;
+    }
+
+    private static string SkillResourceTypeArgument(string? value)
+    {
+        if (value != "skill")
+            throw new CliUsageException("Project Policy decision reads require --resource-type skill.");
+        return value;
+    }
+
+    private static string SkillIdArgument(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 256 || value.Trim().Length != value.Length)
+            throw new CliUsageException("Project Skill decision reads require --resource-id <1-256 character ID> without leading or trailing whitespace.");
+        return value;
     }
 
     private static string PolicyIdArgument(string? value)

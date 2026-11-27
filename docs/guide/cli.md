@@ -382,6 +382,28 @@ hash. The file contains the manifest, all relative-path files, the Project ID,
 revision, hash, and timestamp. Standard output contains metadata and the output
 path, not artifact bytes. The command does not overwrite an existing file.
 
+To read recorded governance decisions for one Skill in a Project, use `decisions`:
+
+```powershell
+agentweaver policy decisions --scope project --project-id PROJECT_ID --resource-type skill --resource-id SKILL_ID --page-size 20
+agentweaver policy decisions --scope project --project-id PROJECT_ID --resource-type skill --resource-id SKILL_ID --page-size 20 --before-sequence SEQUENCE
+```
+
+Replace `PROJECT_ID` with the 32-character Project ID. Replace `SKILL_ID` with
+the exact Skill ID (1 to 256 characters, case-sensitive, with no leading or
+trailing whitespace). `--page-size` defaults to 20 and accepts 1 to 100. Pass
+the returned `nextBeforeSequence` integer digits unchanged as
+`--before-sequence` to read older records; do not round integers larger than
+53 bits through floating-point JSON parsers.
+
+The output includes the stream identity, `items`, and `nextBeforeSequence`.
+An empty stream or a read with `--before-sequence 1` returns an empty `items`
+array and `nextBeforeSequence: null` with exit code 0. Recorded Skill trust
+evidence entries keep `outcome: "pending"`, `approvalState: "pending"`, and
+`null` for `policyRevision` and `policyArtifactSha256`. Missing and
+inaccessible Projects return the same HTTP 404 status message. Decision history
+shows recorded events; it does not show active policy or Skill admission state.
+
 ### Validate a Project Policy artifact
 
 Project validation requires current Project Owner or TenantAdmin authority and

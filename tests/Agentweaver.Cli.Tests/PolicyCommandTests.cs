@@ -2362,6 +2362,368 @@ public sealed class PolicyCommandTests
         var exitCode = await CliApplication.RunAsync(["--help"], new CliRuntimeOptions { Output = output, Error = error });
         Assert.Equal(0, exitCode);
         Assert.Contains("agentweaver policy decisions --scope platform", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "agentweaver policy decisions --scope project --project-id <id> --resource-type skill --resource-id <skill-id>",
+            output.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProjectSkillDecisionsProjectsAllowlistedFieldsPreservesPendingAndNullsAndRedactsIdentity()
+    {
+        var skillId = "Skill.Alpha/v1";
+        var upperProjectId = ProjectId.ToUpperInvariant();
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Body = DecisionHistoryBody(
+                resourceId: skillId,
+                nextBeforeSequence: 9_007_199_254_740_993,
+                items:
+                [
+                    DecisionHistoryItemJson(
+                        sequence: 9_007_199_254_740_994,
+                        decisionType: "skill.trust.evidence.v1",
+                        outcome: "allow",
+                        approvalState: "approved",
+                        policyRevision: 4,
+                        includeSensitive: true),
+                    DecisionHistoryItemJson(
+                        sequence: 9_007_199_254_740_993,
+                        decisionType: "skill.trust.evidence.v1",
+                        outcome: "pending",
+                        approvalState: "pending",
+                        policyRevision: null,
+                        policyArtifactSha256: null,
+                        selectedRuleJson: "null",
+                        ownerReceiptPosition: null,
+                        includeSensitive: true),
+                ],
+                scopeType: "project",
+                scopeId: ProjectId,
+                resourceType: "skill"),
+        };
+
+        Assert.Equal(0, await fixture.Run(
+            "decisions", "--scope", "project", "--project-id", upperProjectId,
+            "--resource-type", "skill", "--resource-id", skillId, "--page-size", "2"));
+
+        var stdout = fixture.Output.ToString();
+        var output = JsonNode.Parse(stdout)!.AsObject();
+        Assert.Equal("project", output["scopeType"]!.GetValue<string>());
+        Assert.Equal(ProjectId, output["scopeId"]!.GetValue<string>());
+        Assert.Equal("skill", output["resourceType"]!.GetValue<string>());
+        Assert.Equal(skillId, output["resourceId"]!.GetValue<string>());
+        Assert.Equal(9_007_199_254_740_993L, output["nextBeforeSequence"]!.GetValue<long>());
+
+        var items = output["items"]!.AsArray();
+        Assert.Equal(2, items.Count);
+        Assert.Equal(9_007_199_254_740_994L, items[0]!["sequence"]!.GetValue<long>());
+        Assert.Equal(4, items[0]!["decision"]!["policyRevision"]!.GetValue<long>());
+        Assert.Equal("allow", items[0]!["decision"]!["outcome"]!.GetValue<string>());
+        Assert.Equal(9_007_199_254_740_993L, items[1]!["sequence"]!.GetValue<long>());
+        Assert.Equal("skill.trust.evidence.v1", items[1]!["decision"]!["decisionType"]!.GetValue<string>());
+        Assert.Equal("pending", items[1]!["decision"]!["outcome"]!.GetValue<string>());
+        Assert.Equal("pending", items[1]!["decision"]!["approvalState"]!.GetValue<string>());
+        Assert.Null(items[1]!["decision"]!["policyRevision"]);
+        Assert.Null(items[1]!["decision"]!["policyArtifactSha256"]);
+        Assert.Null(items[1]!["decision"]!["selectedRule"]);
+        Assert.Null(items[1]!["decision"]!["ownerReceiptPosition"]);
+
+        foreach (var forbidden in new[]
+        {
+            "brokerIssuer", "brokerSubject", "humanEntraOid", "tenantId",
+            "effectiveRoleRevisions", "assignmentId", Canary, "https://sensitive.example/",
+        })
+        {
+            Assert.DoesNotContain(forbidden, stdout, StringComparison.Ordinal);
+        }
+
+        Assert.Equal("GET", fixture.PolicyMethod);
+        Assert.Null(fixture.PolicyBody);
+        Assert.Equal($"/api/v1/policies/projects/{ProjectId}/decisions", fixture.PolicyPath);
+        Assert.Contains("resourceType=skill", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("resourceId=Skill.Alpha%2Fv1", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Contains("pageSize=2", fixture.PolicyQuery, StringComparison.Ordinal);
+        Assert.Null(fixture.PolicyProjectAuthorizationHeader);
+        Assert.Equal("tenant-1", fixture.Authentication.Identity!.Target.TenantId);
+        Assert.Null(fixture.Authentication.Identity.ProjectId);
+        Assert.Null(fixture.Authentication.Identity.RunId);
+        Assert.Equal(["openid", "api.read", "offline_access"], fixture.Authentication.Identity.Scopes);
+        Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProjectSkillDecisionsSupportsContinuationFullLastPageEmptyPageAndMaxInt64Cursor()
+    {
+        var maxSequence = long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var fullLastPageFixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Body = DecisionHistoryBody(
+                resourceId: "skill-1",
+                nextBeforeSequence: null,
+                items:
+                [
+                    DecisionHistoryItemJson(sequence: 9_007_199_254_740_993, decisionType: "skill.trust.evidence.v1"),
+                    DecisionHistoryItemJson(sequence: 1, decisionType: "skill.trust.evidence.v1", outcome: "pending", approvalState: "pending", policyRevision: null),
+                ],
+                scopeType: "project",
+                scopeId: ProjectId,
+                resourceType: "skill"),
+        };
+
+        Assert.Equal(0, await fullLastPageFixture.Run(
+            "decisions", "--scope", "project", "--project-id", ProjectId,
+            "--resource-type", "skill", "--resource-id", "skill-1",
+            "--page-size", "2", "--before-sequence", maxSequence));
+        Assert.Contains($"beforeSequence={maxSequence}", fullLastPageFixture.PolicyQuery, StringComparison.Ordinal);
+        var fullLastOutput = JsonNode.Parse(fullLastPageFixture.Output.ToString())!.AsObject();
+        Assert.Equal(2, fullLastOutput["items"]!.AsArray().Count);
+        Assert.Null(fullLastOutput["nextBeforeSequence"]);
+
+        var emptyFixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Body = DecisionHistoryBody(
+                resourceId: "skill-1",
+                nextBeforeSequence: null,
+                items: [],
+                scopeType: "project",
+                scopeId: ProjectId,
+                resourceType: "skill"),
+        };
+        Assert.Equal(0, await emptyFixture.Run(
+            "decisions", "--scope", "project", "--project-id", ProjectId,
+            "--resource-type", "skill", "--resource-id", "skill-1",
+            "--before-sequence", "1"));
+        var emptyOutput = JsonNode.Parse(emptyFixture.Output.ToString())!.AsObject();
+        Assert.Empty(emptyOutput["items"]!.AsArray());
+        Assert.Null(emptyOutput["nextBeforeSequence"]);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, "unauthorized", "HTTP 401")]
+    [InlineData(HttpStatusCode.Forbidden, "native_acs_forbidden", "denied (HTTP 403)")]
+    [InlineData(HttpStatusCode.BadRequest, "governance_decision_history_request_invalid", "HTTP 400, governance_decision_history_request_invalid")]
+    [InlineData(HttpStatusCode.InternalServerError, "governance_decision_corrupt", "HTTP 500, governance_decision_corrupt")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "governance_decision_source_unavailable", "HTTP 503, governance_decision_source_unavailable")]
+    public async Task ProjectSkillDecisionsReportsControlledRedactedErrors(
+        HttpStatusCode status, string code, string expectedMessage)
+    {
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Status = status,
+            MediaType = "application/problem+json",
+            Body = $$"""{"code":"{{code}}","detail":"{{Canary}}","brokerSubject":"{{Canary}}","unknownField":"{{Canary}}"}""",
+        };
+
+        Assert.Equal(1, await fixture.Run(
+            "decisions", "--scope", "project", "--project-id", ProjectId,
+            "--resource-type", "skill", "--resource-id", "skill-1"));
+        Assert.Empty(fixture.Output.ToString());
+        Assert.Contains(expectedMessage, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("project_not_found", "missing project")]
+    [InlineData("project_forbidden", "inaccessible project")]
+    public async Task ProjectSkillDecisions404ReturnsSameGenericMessageAndRedactsResponseBody(string code, string detail)
+    {
+        var fixture = new Fixture
+        {
+            UseGatewayContract = true,
+            Status = HttpStatusCode.NotFound,
+            MediaType = "application/problem+json",
+            Body = $$"""{"code":"{{code}}","detail":"{{detail}} {{Canary}}"}""",
+        };
+
+        Assert.Equal(1, await fixture.Run(
+            "decisions", "--scope", "project", "--project-id", ProjectId,
+            "--resource-type", "skill", "--resource-id", "skill-1"));
+        Assert.Empty(fixture.Output.ToString());
+        Assert.Equal("The policy decision history request failed (HTTP 404).", fixture.Error.ToString().Trim());
+        Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(code, fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProjectSkillDecisionsRedactsGatewayDispatchExceptionAndHandlesCancellation()
+    {
+        var transportFixture = new Fixture
+        {
+            UseGatewayContract = true,
+            PolicyException = new HttpRequestException($"upstream failure {Canary}"),
+        };
+
+        Assert.Equal(1, await transportFixture.Run(
+            "decisions", "--scope", "project", "--project-id", ProjectId,
+            "--resource-type", "skill", "--resource-id", "skill-1"));
+        Assert.Empty(transportFixture.Output.ToString());
+        Assert.DoesNotContain(Canary, transportFixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal("[REDACTED]", transportFixture.Client!.Calls.Last()["error"]!.GetValue<string>());
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var cancelFixture = new Fixture { UseGatewayContract = true };
+        Assert.Equal(130, await cancelFixture.RunWithCancellation(
+            cts.Token,
+            "decisions", "--scope", "project", "--project-id", ProjectId,
+            "--resource-type", "skill", "--resource-id", "skill-1"));
+        Assert.Empty(cancelFixture.Output.ToString());
+    }
+
+    [Theory]
+    [InlineData("wrongScope")]
+    [InlineData("wrongProjectId")]
+    [InlineData("wrongResourceType")]
+    [InlineData("wrongResourceId")]
+    [InlineData("outOfOrder")]
+    [InlineData("sequenceAtCursor")]
+    [InlineData("missingNextCursor")]
+    [InlineData("cursorOnShortPage")]
+    [InlineData("cursorOne")]
+    public async Task ProjectSkillDecisionsFailsClosedOnWrongStreamOrMalformedData(string mode)
+    {
+        var otherProjectId = "11111111111111111111111111111111";
+        var body = mode switch
+        {
+            "wrongScope" => DecisionHistoryBody("skill-1", null, [], scopeType: "platform", scopeId: "default", resourceType: "skill"),
+            "wrongProjectId" => DecisionHistoryBody("skill-1", null, [], scopeType: "project", scopeId: otherProjectId, resourceType: "skill"),
+            "wrongResourceType" => DecisionHistoryBody("skill-1", null, [], scopeType: "project", scopeId: ProjectId, resourceType: "project_policy"),
+            "wrongResourceId" => DecisionHistoryBody("other-skill", null, [], scopeType: "project", scopeId: ProjectId, resourceType: "skill"),
+            "outOfOrder" => DecisionHistoryBody("skill-1", null,
+                [DecisionHistoryItemJson(4), DecisionHistoryItemJson(5)],
+                scopeType: "project", scopeId: ProjectId, resourceType: "skill"),
+            "sequenceAtCursor" => DecisionHistoryBody("skill-1", null,
+                [DecisionHistoryItemJson(10)],
+                scopeType: "project", scopeId: ProjectId, resourceType: "skill"),
+            "missingNextCursor" => $$"""{"scopeType":"project","scopeId":"{{ProjectId}}","resourceType":"skill","resourceId":"skill-1","items":[]}""",
+            "cursorOnShortPage" => DecisionHistoryBody("skill-1", nextBeforeSequence: 5,
+                items: [DecisionHistoryItemJson(5)],
+                scopeType: "project", scopeId: ProjectId, resourceType: "skill"),
+            _ => DecisionHistoryBody("skill-1", nextBeforeSequence: 1,
+                items: [DecisionHistoryItemJson(2), DecisionHistoryItemJson(1)],
+                scopeType: "project", scopeId: ProjectId, resourceType: "skill"),
+        };
+        var args = mode is "cursorOnShortPage" or "cursorOne"
+            ? new[] { "decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--page-size", "2" }
+            : mode == "sequenceAtCursor"
+                ? new[] { "decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--before-sequence", "10" }
+                : new[] { "decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1" };
+        var fixture = new Fixture { UseGatewayContract = true, Body = body };
+
+        Assert.Equal(1, await fixture.Run(args));
+        Assert.Empty(fixture.Output.ToString());
+        Assert.Contains("invalid policy response", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("missing-project-id")]
+    [InlineData("bad-project-id")]
+    [InlineData("missing-resource-type")]
+    [InlineData("bad-resource-type")]
+    [InlineData("missing-resource-id")]
+    [InlineData("empty-resource-id")]
+    [InlineData("blank-resource-id")]
+    [InlineData("leading-space-resource-id")]
+    [InlineData("trailing-space-resource-id")]
+    [InlineData("too-long-resource-id")]
+    [InlineData("page-size-zero")]
+    [InlineData("page-size-leading-zero")]
+    [InlineData("page-size-too-large")]
+    [InlineData("before-sequence-zero")]
+    [InlineData("before-sequence-leading-zero")]
+    [InlineData("before-sequence-overflow")]
+    [InlineData("run-id")]
+    [InlineData("project-rejects-policy-id")]
+    [InlineData("project-rejects-cursor")]
+    [InlineData("platform-rejects-project-id")]
+    [InlineData("platform-rejects-resource-type")]
+    [InlineData("platform-rejects-resource-id")]
+    public async Task ProjectAndPlatformDecisionsRejectInvalidAndCrossScopeOptionsBeforeNetwork(string mode)
+    {
+        var fixture = new Fixture();
+        string[] args = mode switch
+        {
+            "missing-project-id" => ["decisions", "--scope", "project", "--resource-type", "skill", "--resource-id", "skill-1"],
+            "bad-project-id" => ["decisions", "--scope", "project", "--project-id", "not-a-guid", "--resource-type", "skill", "--resource-id", "skill-1"],
+            "missing-resource-type" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-id", "skill-1"],
+            "bad-resource-type" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "project_policy", "--resource-id", "skill-1"],
+            "missing-resource-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill"],
+            "empty-resource-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", ""],
+            "blank-resource-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "   "],
+            "leading-space-resource-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", " skill-1"],
+            "trailing-space-resource-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1 "],
+            "too-long-resource-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", new string('a', 257)],
+            "page-size-zero" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--page-size", "0"],
+            "page-size-leading-zero" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--page-size", "01"],
+            "page-size-too-large" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--page-size", "101"],
+            "before-sequence-zero" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--before-sequence", "0"],
+            "before-sequence-leading-zero" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--before-sequence", "01"],
+            "before-sequence-overflow" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--before-sequence", "9223372036854775808"],
+            "run-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--run-id", "run-1"],
+            "project-rejects-policy-id" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--policy-id", "canonical"],
+            "project-rejects-cursor" => ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--cursor", "abc"],
+            "platform-rejects-project-id" => ["decisions", "--scope", "platform", "--project-id", ProjectId],
+            "platform-rejects-resource-type" => ["decisions", "--scope", "platform", "--resource-type", "skill"],
+            _ => ["decisions", "--scope", "platform", "--resource-id", "skill-1"],
+        };
+
+        Assert.Equal(1, await fixture.Run(args));
+        Assert.Equal(0, fixture.RequestCount);
+        Assert.Empty(fixture.Output.ToString());
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("wrongPath")]
+    [InlineData("postMethod")]
+    [InlineData("requestBody")]
+    [InlineData("secondaryProjectAuthHeader")]
+    [InlineData("oversizedResponse")]
+    public async Task ProjectSkillDecisionsRejectsIncompatibleDiscoveryBeforeDispatch(string mode)
+    {
+        var fixture = new Fixture
+        {
+            UseGatewayContract = mode != "missing",
+            MutateOpenApi = doc =>
+            {
+                const string pathKey = "/api/v1/policies/projects/{projectId}/decisions";
+                var pathItem = doc["paths"]![pathKey]!.AsObject();
+                var op = pathItem["get"]!.AsObject();
+                switch (mode)
+                {
+                    case "wrongPath":
+                        doc["paths"]!.AsObject().Remove(pathKey);
+                        doc["paths"]!["/api/v1/policies/projects/{projectId}/other"] = pathItem;
+                        break;
+                    case "postMethod":
+                        pathItem.Remove("get");
+                        pathItem["post"] = op;
+                        break;
+                    case "requestBody":
+                        op["requestBody"] = JsonNode.Parse("""{"required":false,"content":{"application/json":{"schema":{"type":"object"}}}}""");
+                        break;
+                    case "secondaryProjectAuthHeader":
+                        op["parameters"]!.AsArray().Add(JsonNode.Parse("""{"name":"X-Agentweaver-Project-Authorization","in":"header","required":false,"schema":{"type":"string"}}"""));
+                        break;
+                    case "oversizedResponse":
+                        op["x-agentweaver-max-response-bytes"] = 5 * 1024 * 1024 + 1;
+                        break;
+                }
+            },
+        };
+
+        Assert.Equal(1, await fixture.Run(
+            "decisions", "--scope", "project", "--project-id", ProjectId,
+            "--resource-type", "skill", "--resource-id", "skill-1"));
+        Assert.Equal(0, fixture.PolicyRequestCount);
+        Assert.Empty(fixture.Output.ToString());
     }
 
     private static string DecisionHistoryBody(
@@ -2369,27 +2731,34 @@ public sealed class PolicyCommandTests
         long? nextBeforeSequence,
         string[] items,
         string scopeType = "platform",
+        string scopeId = "default",
         string resourceType = "platform_policy")
     {
         var next = nextBeforeSequence is null ? "null" : nextBeforeSequence.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $$"""{"scopeType":"{{scopeType}}","scopeId":"default","resourceType":"{{resourceType}}","resourceId":"{{resourceId}}","items":[{{string.Join(",", items)}}],"nextBeforeSequence":{{next}}}""";
+        return $$"""{"scopeType":"{{scopeType}}","scopeId":"{{scopeId}}","resourceType":"{{resourceType}}","resourceId":"{{resourceId}}","items":[{{string.Join(",", items)}}],"nextBeforeSequence":{{next}}}""";
     }
 
     private static string DecisionHistoryItemJson(
         long sequence,
+        string decisionType = "platform_policy_preparation",
         string outcome = "allow",
         string approvalState = "notRequired",
         long? policyRevision = 4,
+        string? policyArtifactSha256 = null,
         bool includeSensitive = false,
-        string selectedRuleJson = "\"platform.allow\"")
+        string selectedRuleJson = "\"platform.allow\"",
+        long? ownerReceiptPosition = null)
     {
         var rev = policyRevision is null ? "null" : policyRevision.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var artifactSha = policyArtifactSha256 ?? (policyRevision is null ? null : Hash);
+        var artifactShaJson = artifactSha is null ? "null" : $"\"{artifactSha}\"";
+        var receiptPosJson = ownerReceiptPosition is null ? "null" : ownerReceiptPosition.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sensitive = includeSensitive
             ? $$"""
                 ,"humanEntraOid":"00000000-0000-0000-0000-000000000099","tenantId":"00000000-0000-0000-0000-000000000088","brokerIssuer":"https://sensitive.example/","brokerSubject":"{{Canary}}","effectiveRoleRevisions":[{"assignmentId":"00000000-0000-0000-0000-000000000077","revision":2}]
                 """
             : string.Empty;
-        return $$$"""{"decisionId":"00000000-0000-0000-0000-00000000000{{{sequence % 10}}}","sequence":{{{sequence}}},"previousHash":"{{{ArtifactHash(1)}}}","recordHash":"{{{ArtifactHash(2)}}}","recordedAt":"{{{Time}}}","decision":{"decisionType":"platform_policy_preparation","outcome":"{{{outcome}}}","approvalState":"{{{approvalState}}}","policyRevision":{{{rev}}},"policyArtifactSha256":"{{{Hash}}}","selectedRule":{{{selectedRuleJson}}},"interventionPoint":null,"requestId":"req-1","actionId":null,"runId":null,"agentId":null,"roleId":null,"ownerReceiptId":"prep-1","ownerReceiptPosition":{{{sequence}}},"compilerGeneration":null,"applicationGeneration":null,"correlationId":"corr-1","decidedAt":"{{{Time}}}"{{{sensitive}}}}}""";
+        return $$$"""{"decisionId":"00000000-0000-0000-0000-00000000000{{{sequence % 10}}}","sequence":{{{sequence}}},"previousHash":"{{{ArtifactHash(1)}}}","recordHash":"{{{ArtifactHash(2)}}}","recordedAt":"{{{Time}}}","decision":{"decisionType":"{{{decisionType}}}","outcome":"{{{outcome}}}","approvalState":"{{{approvalState}}}","policyRevision":{{{rev}}},"policyArtifactSha256":{{{artifactShaJson}}},"selectedRule":{{{selectedRuleJson}}},"interventionPoint":null,"requestId":"req-1","actionId":null,"runId":null,"agentId":null,"roleId":null,"ownerReceiptId":"prep-1","ownerReceiptPosition":{{{receiptPosJson}}},"compilerGeneration":null,"applicationGeneration":null,"correlationId":"corr-1","decidedAt":"{{{Time}}}"{{{sensitive}}}}}""";
     }
 
     private sealed class FailingTextWriter : TextWriter
@@ -2437,6 +2806,7 @@ public sealed class PolicyCommandTests
         public string? ProjectValidationSchemaMutation;
         public bool WrongPath;
         public bool UseGatewayContract;
+        public Action<JsonObject>? MutateOpenApi;
         public Exception? PolicyException;
         public int RequestCount;
         public string? PolicyPath;
@@ -2451,12 +2821,15 @@ public sealed class PolicyCommandTests
         public IGatewayClient Create(CliIdentity identity) =>
             Client = new GatewayClient(new HttpClient(this, disposeHandler: false), identity, Authentication);
 
-        public Task<int> Run(params string[] args) => CliApplication.RunAsync(
+        public Task<int> Run(params string[] args) => RunWithCancellation(CancellationToken.None, args);
+
+        public Task<int> RunWithCancellation(CancellationToken ct, params string[] args) => CliApplication.RunAsync(
             ["policy", .. args, .. Target],
             new CliRuntimeOptions(GatewayClientFactory: this, Authentication: Authentication, Output: Output, Error: Error)
             {
                 PolicyApplyStateDirectory = this.PolicyApplyStateDirectory,
-            });
+            },
+            ct);
 
         public void CleanupPolicyState()
         {
@@ -2506,6 +2879,7 @@ public sealed class PolicyCommandTests
                 var emitted = type.GetMethod("CreateDocument", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, null);
                 var publishedDocument = JsonNode.Parse(
                     JsonSerializer.Serialize(emitted, new JsonSerializerOptions(JsonSerializerDefaults.Web)))!.AsObject();
+                MutateOpenApi?.Invoke(publishedDocument);
                 if (ProjectValidationSchemaMutation is not null)
                 {
                     var schema = publishedDocument["paths"]!["/api/v1/policies/projects/{projectId}/validate"]!
