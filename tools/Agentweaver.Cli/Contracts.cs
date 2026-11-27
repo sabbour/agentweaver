@@ -91,6 +91,10 @@ public interface IGatewayClient
     /// <summary>Discovers and validates the supported live Gateway contract.</summary>
     Task<JsonObject> DiscoverAsync(CancellationToken ct);
 
+    /// <summary>Discovers and validates the supported live Gateway contract with optional diagnostic recording.</summary>
+    Task<JsonObject> DiscoverAsync(CancellationToken ct, bool recordEvidence) =>
+        DiscoverAsync(ct);
+
     /// <summary>Checks that the Gateway returns an issuer, tenant, actor, and the exact selected project/run context.</summary>
     Task<JsonObject> ValidateAuthorizationContextAsync(CancellationToken ct);
 

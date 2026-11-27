@@ -73,8 +73,12 @@ public static class CliApplication
             {
                 var actualRuntime = runtime ?? new CliRuntimeOptions();
                 using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                var httpClient = actualRuntime.HttpClient ?? ownedClient!;
+                if (args.Length >= 2 && args[1] == "egress")
+                    return await PlatformEgressCommands.RunAsync(
+                        args[1..], actualRuntime, httpClient, output, ct).ConfigureAwait(false);
                 return await ByokDraftCommands.RunAsync(
-                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, error,
+                    args[1..], actualRuntime, httpClient, output, error,
                     projectScope: false, ct).ConfigureAwait(false);
             }
             if (args[0] == "project")
@@ -588,6 +592,8 @@ public static class CliApplication
           agentweaver policy decisions --scope project --project-id <id> --resource-type skill --resource-id <skill-id> [--page-size <1-100>] [--before-sequence <sequence>] [target options]
           agentweaver run egress <runId> [--limit <1-100>] [--cursor <cursor>]
               [--scope projects.admin] [target options without project/run binding]
+          agentweaver platform egress provider-requests list [--limit <1-100>] [--cursor <cursor>]
+              [target options without project/run binding]
           agentweaver platform byok list [target options]
           agentweaver platform byok show <providerId> [--credential-status | --operation-id <uuid>] [target options]
           agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
