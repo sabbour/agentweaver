@@ -79,6 +79,17 @@ function pricingStatus(provider: ProjectModelProviderDraft): 'missing' | 'attach
   return 'unavailable';
 }
 
+function projectDraftPricingChip(provider: ProjectModelProviderDraft): 'required' | 'unavailable' | null {
+  if (provider.state === 'Draft' &&
+      provider.rate_card_id === null &&
+      provider.rate_card_version === null) {
+    return 'required';
+  }
+  const status = pricingStatus(provider);
+  if (status === 'missing') return null;
+  return status === 'unavailable' ? 'unavailable' : null;
+}
+
 function emptyEditor(): ProviderEditor {
   return {
     name: '',
@@ -1557,6 +1568,12 @@ export function ProjectModelProviderDrafts({
                       <Badge appearance="tint" color={provider.hasCredential ? 'success' : 'subtle'}>
                         {provider.hasCredential ? 'Key saved' : 'No key saved'}
                       </Badge>
+                      {projectDraftPricingChip(provider) === 'required' && (
+                        <Badge appearance="outline" color="warning">Pricing required</Badge>
+                      )}
+                      {projectDraftPricingChip(provider) === 'unavailable' && (
+                        <Badge appearance="outline" color="warning">Pricing status unavailable</Badge>
+                      )}
                     </li>
                   ))}
                 </ul>
