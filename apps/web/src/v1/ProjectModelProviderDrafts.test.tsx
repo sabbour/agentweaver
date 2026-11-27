@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
 import { createProjectCredentialOperationStore } from './projectCredentialOperations';
@@ -1599,5 +1599,213 @@ describe('Project BYOK provider drafts', () => {
     const sent = mocks.update.mock.calls[0][3] as Record<string, unknown>;
     expect('rate_card_id' in sent).toBe(false);
     expect('rate_card_version' in sent).toBe(false);
+  });
+
+  it('shows the project draft pricing chips only for the reviewed price-card states', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [
+        provider({ id: 'missing', name: 'Missing pricing', state: 'Draft', rate_card_id: null, rate_card_version: null }),
+        provider({ id: 'omitted', name: 'Omitted pricing', state: 'Draft', rate_card_id: undefined, rate_card_version: undefined }),
+        provider({ id: 'partial', name: 'Partial pricing', state: 'Draft', rate_card_id: 'card-a', rate_card_version: null }),
+        provider({ id: 'malformed', name: 'Malformed pricing', state: 'Draft', rate_card_id: 'bad id', rate_card_version: '1' }),
+        provider({ id: 'valid', name: 'Valid pricing', state: 'Draft', rate_card_id: 'card-b', rate_card_version: '2' }),
+        provider({ id: 'available', name: 'Available provider', state: 'Available', rate_card_id: null, rate_card_version: null }),
+      ],
+      nextAfterProviderId: null,
+    });
+
+    render(
+      <ProjectModelProviderDrafts
+        projectId="project-1"
+        tenantSelector="tenant-1"
+        platformProviders={[
+          {
+            id: 'platform-no-chip',
+            name: 'Platform provider',
+            type: 'openai',
+            model: 'gpt-4o',
+            reasoningEfforts: [],
+            isActive: false,
+            reference: null,
+          },
+        ]}
+      />,
+    );
+
+    await screen.findByRole('button', { name: 'Missing pricing' });
+    const draftList = screen.getByRole('list', { name: 'Project provider drafts' });
+    const draftRows = within(draftList).getAllByRole('listitem');
+    const rowFor = (name: string) => {
+      const row = draftRows.find((candidate) => within(candidate).queryByRole('button', { name }));
+      if (!row) throw new Error(`Missing project provider row: ${name}`);
+      return row;
+    };
+
+    expect(within(rowFor('Missing pricing')).getByText('Pricing required')).toBeTruthy();
+    expect(within(rowFor('Omitted pricing')).getByText('Pricing status unavailable')).toBeTruthy();
+    expect(within(rowFor('Partial pricing')).getByText('Pricing status unavailable')).toBeTruthy();
+    expect(within(rowFor('Malformed pricing')).getByText('Pricing status unavailable')).toBeTruthy();
+    expect(within(rowFor('Valid pricing')).queryByText(/Pricing (required|status unavailable)/)).toBeNull();
+    expect(within(rowFor('Available provider')).queryByText(/Pricing (required|status unavailable)/)).toBeNull();
+
+    const platformList = screen.getByRole('list', { name: 'Available platform providers' });
+    const platformRow = within(platformList).getByText('Platform provider').closest('li');
+    expect(platformRow).not.toBeNull();
+    expect(within(platformRow!).queryByText(/Pricing (required|status unavailable)/)).toBeNull();
+  });
+
+  it('removes the pricing chip after saving a pair and returning to the project draft list', async () => {
+    const missing = provider({
+      id: 'missing',
+      name: 'Missing pricing',
+      state: 'Draft',
+      rate_card_id: null,
+      rate_card_version: null,
+      revision: 1,
+    });
+    const valid = provider({
+      id: 'missing',
+      name: 'Missing pricing',
+      state: 'Draft',
+      rate_card_id: 'card-b',
+      rate_card_version: '2',
+      revision: 2,
+    });
+    mocks.list
+      .mockResolvedValueOnce({ providers: [missing], nextAfterProviderId: null })
+      .mockResolvedValueOnce({ providers: [valid], nextAfterProviderId: null });
+    mocks.read.mockResolvedValueOnce(missing).mockResolvedValueOnce(valid);
+    mocks.update.mockResolvedValueOnce(valid);
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    expect(await screen.findByText('Pricing required')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Missing pricing' }));
+    expect(await screen.findByText('Pricing')).toBeTruthy();
+    expect(screen.getByText('Pricing').parentElement?.textContent).toContain('Not set');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit metadata' }));
+    fireEvent.change(screen.getByLabelText('Rate-card ID'), { target: { value: 'card-b' } });
+    fireEvent.change(screen.getByLabelText('Rate-card version'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save metadata' }));
+    await screen.findByText('Provider draft saved.');
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1));
+    expect(mocks.update.mock.calls[0][3]).toMatchObject({
+      rate_card_id: 'card-b',
+      rate_card_version: '2',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Back to provider drafts' }));
+
+    await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('button', { name: 'Missing pricing' })).toBeTruthy();
+    const draftList = screen.getByRole('list', { name: 'Project provider drafts' });
+    const refreshedRow = within(draftList).getByRole('button', { name: 'Missing pricing' }).closest('li');
+    expect(refreshedRow).not.toBeNull();
+    expect(within(refreshedRow!).queryByText('Pricing required')).toBeNull();
+    expect(within(refreshedRow!).queryByText('Pricing status unavailable')).toBeNull();
+  });
+
+  it('keeps Load more existing rows visible until 403, then clears the rows, chip, and pagination', async () => {
+    let denyLoadMore!: (reason: Error) => void;
+    mocks.list
+      .mockResolvedValueOnce({
+        providers: [
+          provider({
+            id: 'missing',
+            name: 'Missing pricing',
+            state: 'Draft',
+            rate_card_id: null,
+            rate_card_version: null,
+          }),
+        ],
+        nextAfterProviderId: 'cursor-1',
+      })
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        denyLoadMore = reject;
+      }));
+
+    render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    expect(await screen.findByText('Pricing required')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+
+    expect(screen.getByRole('button', { name: 'Missing pricing' })).toBeTruthy();
+    expect(screen.getByText('Pricing required')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeTruthy();
+
+    denyLoadMore(new GatewayError(403, { code: 'forbidden' }, 'Access denied.'));
+
+    expect(await screen.findByText('Access denied.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Missing pricing' })).toBeNull();
+    expect(screen.queryByText('Pricing required')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it('ignores a deferred old-scope Load more response after switching project scope', async () => {
+    let finishOldScopePage!: (value: { providers: ReturnType<typeof provider>[]; nextAfterProviderId: string | null }) => void;
+    mocks.list.mockImplementation((_token, projectId, _limit, afterProviderId) => {
+      if (projectId === 'project-1' && afterProviderId === 'cursor-1') {
+        return new Promise((resolve) => {
+          finishOldScopePage = resolve;
+        });
+      }
+      if (projectId === 'project-2') {
+        return Promise.resolve({
+          providers: [provider({
+            id: 'project-2-provider',
+            name: 'Project 2 provider',
+            projectId: 'project-2',
+            state: 'Available',
+            rate_card_id: null,
+            rate_card_version: null,
+          })],
+          nextAfterProviderId: null,
+        });
+      }
+      return Promise.resolve({
+        providers: [
+          provider({
+            id: 'old-scope-provider',
+            name: 'Old scope provider',
+            state: 'Draft',
+            rate_card_id: null,
+            rate_card_version: null,
+          }),
+        ],
+        nextAfterProviderId: 'cursor-1',
+      });
+    });
+
+    const rendered = render(
+      <ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />,
+    );
+    expect(await screen.findByText('Pricing required')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(screen.getByRole('button', { name: 'Old scope provider' })).toBeTruthy();
+
+    mocks.auth.session = { binding: { projectId: 'project-2' } };
+    rendered.rerender(
+      <ProjectModelProviderDrafts projectId="project-2" tenantSelector="tenant-1" />,
+    );
+    expect(await screen.findByRole('button', { name: 'Project 2 provider' })).toBeTruthy();
+
+    await act(async () => {
+      finishOldScopePage({
+        providers: [
+          provider({
+            id: 'late-old-scope-provider',
+            name: 'Late old scope provider',
+            state: 'Draft',
+            rate_card_id: null,
+            rate_card_version: null,
+          }),
+        ],
+        nextAfterProviderId: null,
+      });
+    });
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Late old scope provider' })).toBeNull());
+    expect(screen.getByRole('button', { name: 'Project 2 provider' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Old scope provider' })).toBeNull();
+    expect(screen.queryByText('Pricing required')).toBeNull();
+    expect(screen.queryByText('Pricing status unavailable')).toBeNull();
   });
 });

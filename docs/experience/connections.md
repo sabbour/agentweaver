@@ -41,6 +41,13 @@ saved**), host-request status, host, and port from the server response. Select
 saving the provider. Select **Save metadata** to save changes. The create and
 edit metadata forms do not accept or store API keys or other credentials.
 
+In the **BYOK provider drafts** list, a `Draft` provider with both saved
+rate-card fields set to `null` shows **Pricing required**. Omitted, partial,
+or malformed rate-card fields show **Pricing status unavailable**. A valid
+rate-card ID and version show no pricing chip. An `Available` provider with
+two `null` fields shows no chip. The chip describes the saved project draft
+link only.
+
 When a provider shows **No key saved** on the detail view, you can enter its
 first API key in **Add API key** and select **Save key**. The browser clears the
 key field before sending the request once without automatic retry. It does not
