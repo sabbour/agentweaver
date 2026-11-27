@@ -73,7 +73,7 @@ internal static class ByokDraftCommands
         var commandOptions = command switch
         {
             "list" => [],
-            "show" => projectScope ? ["credential-status"] : [],
+            "show" => ["credential-status"],
             "prices" => ["region", "search"],
             "save-prices" => ["source", "input"],
             "add" => SaveOptions,
@@ -89,7 +89,7 @@ internal static class ByokDraftCommands
             projectScope ? name != "run-id" : name is not ("project-id" or "run-id"));
         options.RequireOnly(commandOptions.Concat(targetOptions).ToArray());
 
-        var credentialStatus = projectScope && command == "show" && options.HasFlag("credential-status");
+        var credentialStatus = command == "show" && options.HasFlag("credential-status");
         var identity = CliConfiguration.ReadIdentity(
             ["projects.admin"],
             options: options,
@@ -147,7 +147,8 @@ internal static class ByokDraftCommands
             throw UnexpectedResponse();
         var projected = command switch
         {
-            "show" when credentialStatus => ProjectCredentialStatus(response.Body, projectId!, args[2]),
+            "show" when credentialStatus => ProjectCredentialStatus(
+                response.Body, projectScope ? "project" : "platform", projectId, args[2]),
             "show" or "add" or "update" => ProjectProvider(
                 response.Body,
                 projectScope ? "project" : "platform",
@@ -185,7 +186,7 @@ internal static class ByokDraftCommands
             "disable-key" => $"Usage: agentweaver {scope} byok disable-key <providerId> --expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid>",
             "show" => scope == "project"
                 ? "Usage: agentweaver project byok show <providerId> --project-id <projectId> [--credential-status] [target options]"
-                : "Usage: agentweaver platform byok show <providerId> [target options]",
+                : "Usage: agentweaver platform byok show <providerId> [--credential-status] [target options]",
             "update" => $"Usage: agentweaver {scope} byok update <providerId> --expected-revision <revision> --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
             "add" => $"Usage: agentweaver {scope} byok add --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
             _ => $"Usage: agentweaver {scope} byok {command} [target options]",
@@ -205,9 +206,10 @@ internal static class ByokDraftCommands
             "list" => [Operation($"list{prefix}ByokProviderDrafts", "GET", path, null, null,
                 [..ProjectPathParameters(projectScope), "pageSize", "afterProviderId"],
                 ["200:ModelProviderDraftPage"], 4 * 1024 * 1024)],
-            "show" when credentialStatus => [Operation("readProjectByokProviderCredential", "GET",
-                ProjectPath + "/{providerId}/credential", null, null,
-                ["projectId", "providerId"], ["200:ModelProviderCredentialStatusResponse"], 16 * 1024)],
+            "show" when credentialStatus => [Operation($"read{prefix}ByokProviderCredential", "GET",
+                path + "/{providerId}/credential", null, null,
+                [..ProjectPathParameters(projectScope), "providerId"],
+                ["200:ModelProviderCredentialStatusResponse"], 16 * 1024)],
             "show" => [Operation($"read{prefix}ByokProviderDraft", "GET", path + "/{providerId}", null, null,
                 [..ProjectPathParameters(projectScope), "providerId"], ["200:ModelProviderDraft"], 32 * 1024)],
             "add" => [Operation($"create{prefix}ByokProviderDraft", "POST", path,
@@ -315,14 +317,14 @@ internal static class ByokDraftCommands
         if (operation.MaximumRequestBytes != contract.MaximumRequestBytes ||
             operation.MaximumResponseBytes != contract.MaximumResponseBytes)
             throw ContractDrift(scopeName);
+        if (operation.Parameters.Count(parameter =>
+                parameter.Location == "header" && parameter.Name == "X-Agentweaver-Tenant" && !parameter.Required) != 1)
+            throw ContractMismatch();
         var operationParameters = operation.Parameters
-            .Where(parameter => parameter.Name != "X-Agentweaver-Tenant")
+            .Where(parameter => !(parameter.Location == "header" && parameter.Name == "X-Agentweaver-Tenant" && !parameter.Required))
             .ToArray();
         if (!operationParameters.Select(parameter => parameter.Name).Order(StringComparer.Ordinal)
                 .SequenceEqual(contract.ParameterNames.Order(StringComparer.Ordinal), StringComparer.Ordinal))
-            throw ContractMismatch();
-        if (operation.Parameters.Count(parameter =>
-                parameter.Location == "header" && parameter.Name == "X-Agentweaver-Tenant" && !parameter.Required) != 1)
             throw ContractMismatch();
         foreach (var parameter in operationParameters)
             RequireParameterShape(contract, parameter);
@@ -1306,17 +1308,32 @@ internal static class ByokDraftCommands
 
     private static JsonObject ProjectCredentialStatus(
         JsonNode? body,
-        string expectedProjectId,
+        string expectedScope,
+        string? expectedProjectId,
         string expectedProviderId)
     {
         if (body is not JsonObject status || status.Count != 6)
             throw UnexpectedResponse();
         var scope = RequiredString(status, "scope");
-        var projectId = RequiredString(status, "projectId");
+        if (!status.TryGetPropertyValue("projectId", out var projectIdNode))
+            throw UnexpectedResponse();
+        string? projectId;
+        if (expectedProjectId is null)
+        {
+            if (projectIdNode is not null)
+                throw UnexpectedResponse();
+            projectId = null;
+        }
+        else
+        {
+            projectId = RequiredString(status, "projectId");
+            if (!string.Equals(projectId, expectedProjectId, StringComparison.Ordinal))
+                throw UnexpectedResponse();
+        }
+
         var providerId = RequiredString(status, "providerId");
-        if (scope != "project" ||
-            projectId != expectedProjectId ||
-            providerId != expectedProviderId)
+        if (!string.Equals(scope, expectedScope, StringComparison.Ordinal) ||
+            !string.Equals(providerId, expectedProviderId, StringComparison.Ordinal))
             throw UnexpectedResponse();
 
         var providerRevision = PositiveInt64(status, "providerRevision");

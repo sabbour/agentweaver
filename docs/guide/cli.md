@@ -724,7 +724,7 @@ These commands use an unbound identity. They ignore
 
 ```text
 agentweaver platform byok list [target options]
-agentweaver platform byok show <providerId> [target options]
+agentweaver platform byok show <providerId> [--credential-status] [target options]
 agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
     [--rate-card-id <id> --rate-card-version <version>]
@@ -759,6 +759,10 @@ resource host without an API path.
 Each provider has a stable `providerId`, a mutable display `name`, provider
 metadata, and a `revision`. Use the `providerId` from `list` or from the `add`
 response for `show` and `update`. A display name does not identify a provider.
+Pass `--credential-status` to `platform byok show` to read the saved credential
+state (`not_set`, `enabled`, `disabled`, `pending`, or `quarantined`) and both
+revision numbers (`providerRevision` and `credentialRevision`) without
+returning key bytes. For platform responses, `projectId` is `null`.
 
 `add` creates a Draft at revision 1. `update` writes a complete metadata
 revision and requires the current `--expected-revision`. Omitted optional

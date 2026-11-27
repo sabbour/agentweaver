@@ -98,6 +98,17 @@ credential checks.
    agentweaver platform byok show $providerId
    ```
 
+   Pass `--credential-status` to read the provider's credential state and both
+   revisions without returning key bytes:
+
+   ```powershell
+   agentweaver platform byok show $providerId --credential-status
+   ```
+
+   The command returns `scope`, `projectId` (`null` for platform providers),
+   `providerId`, `providerRevision`, `state` (`not_set`, `enabled`, `disabled`,
+   `pending`, or `quarantined`), and `credentialRevision`.
+
 3. Enter the full metadata for the new revision. Copy optional values from
    `show` when you want to keep them. If you omit `--wire-api`,
    `--azure-api-version`, `--reasoning-effort`, or

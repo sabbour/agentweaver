@@ -1016,12 +1016,13 @@ public sealed partial class GatewayClient : IGatewayClient
             ["contentType"] = null,
             ["operationId"] = operationId,
         };
-        var hidePolicyEvidence = operationId is
+        var isByokCredentialStatusRead = operationId is
+            "readPlatformByokProviderCredential" or "readProjectByokProviderCredential";
+        var hidePolicyEvidence = isByokCredentialStatusRead || operationId is
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
             "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
-            "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions" or
-            "readProjectByokProviderCredential";
+            "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 
@@ -1142,7 +1143,7 @@ public sealed partial class GatewayClient : IGatewayClient
                 // Keep the response usable by its caller; only the separate evidence copy is redacted.
                 if (contentType is "application/json" or "application/problem+json")
                 {
-                    if (operationId == "readProjectByokProviderCredential" &&
+                    if (isByokCredentialStatusRead &&
                         (int)response.StatusCode == 200 &&
                         HasDuplicateTopLevelKeys(bytes))
                     {
@@ -1184,15 +1185,15 @@ public sealed partial class GatewayClient : IGatewayClient
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            evidence["error"] = operationId is "validateProjectNativeAcsPolicy" or
-                "listProjectGovernanceDecisions" or "readProjectByokProviderCredential"
+            evidence["error"] = isByokCredentialStatusRead || operationId is "validateProjectNativeAcsPolicy" or
+                "listProjectGovernanceDecisions"
                 ? "[REDACTED]"
                 : RedactText(exception.Message);
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 throw;
             var transportMessage = exception is OperationCanceledException && !ct.IsCancellationRequested
                 ? "The Gateway request timed out."
-                : operationId == "readProjectByokProviderCredential"
+                : isByokCredentialStatusRead
                     ? "The Gateway request failed."
                     : RedactText(exception.Message);
             throw new GatewayTransportException(transportMessage, exception);

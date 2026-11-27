@@ -1389,7 +1389,12 @@ public sealed class ByokDraftCommandsTests
     [InlineData("project", "show", ProviderId, "--credential-status", "--credential-status")]
     [InlineData("project", "show", ProviderId, "--credential-status", "--run-id", "run-1")]
     [InlineData("project", "list", "--credential-status")]
-    [InlineData("platform", "show", ProviderId, "--credential-status")]
+    [InlineData("platform", "show", ProviderId, "--credential-status=secret-value")]
+    [InlineData("platform", "show", ProviderId, "--credential-status", "secret-value")]
+    [InlineData("platform", "show", ProviderId, "--credential-status", "--credential-status")]
+    [InlineData("platform", "show", ProviderId, "--credential-status", "--project-id", "project-1")]
+    [InlineData("platform", "show", ProviderId, "--credential-status", "--run-id", "run-1")]
+    [InlineData("platform", "list", "--credential-status")]
     public async Task InvalidCredentialStatusOptionsMakeNoCallsAndDoNotEchoValues(params string[] args)
     {
         using var fixture = new Fixture();
@@ -1404,6 +1409,234 @@ public sealed class ByokDraftCommandsTests
         Assert.DoesNotContain("secret-value", fixture.Error.ToString(), StringComparison.Ordinal);
         Assert.Empty(fixture.Requests);
         Assert.Null(fixture.LastCreatedClient);
+    }
+
+    [Theory]
+    [InlineData("not_set", 1L, 0L)]
+    [InlineData("enabled", 1L, 1L)]
+    [InlineData("disabled", 2L, 3L)]
+    [InlineData("pending", 1L, 0L)]
+    [InlineData("pending", 2L, 1L)]
+    [InlineData("quarantined", 1L, 0L)]
+    [InlineData("quarantined", 5_000_000_000L, 6_000_000_000L)]
+    public async Task PlatformShowCredentialStatusAcceptsAllValidStateRevisionPairs(
+        string state,
+        long providerRevision,
+        long credentialRevision)
+    {
+        var previousProjectId = Environment.GetEnvironmentVariable("AGENTWEAVER_PROJECT_ID");
+        var previousRunId = Environment.GetEnvironmentVariable("AGENTWEAVER_RUN_ID");
+        Environment.SetEnvironmentVariable("AGENTWEAVER_PROJECT_ID", "ambient-project-ignored");
+        Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", "ambient-run-ignored");
+        try
+        {
+            using var fixture = new Fixture();
+            using var stdin = new ReadTrackingStream("unused-stdin"u8.ToArray());
+            fixture.StandardInput = stdin;
+            fixture.StandardInputRedirected = true;
+            fixture.Respond = _ => JsonResponse(new JsonObject
+            {
+                ["scope"] = "platform",
+                ["projectId"] = null,
+                ["providerId"] = ProviderId,
+                ["providerRevision"] = providerRevision,
+                ["state"] = state,
+                ["credentialRevision"] = credentialRevision,
+            });
+
+            var exit = await fixture.Run("show", ProviderId, "--credential-status");
+
+            Assert.Equal(0, exit);
+            Assert.Equal(string.Empty, fixture.Error.ToString());
+            Assert.Equal(0, stdin.ReadCalls);
+            Assert.Null(fixture.Authentication.Identity?.ProjectId);
+            Assert.Null(fixture.Authentication.Identity?.RunId);
+            Assert.Contains("projects.admin", fixture.Authentication.Identity?.Scopes ?? []);
+
+            var request = Assert.Single(fixture.Requests);
+            Assert.Equal("GET", request.Method);
+            Assert.Equal($"/api/v1/platform/byok-providers/{ProviderId}/credential", request.Path);
+            Assert.Equal(string.Empty, request.Query);
+            Assert.Empty(request.BodyBytes);
+            Assert.False(request.Headers.ContainsKey("X-Agentweaver-Project-Authorization"));
+
+            var parsed = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+            Assert.Equal(6, parsed.Count);
+            Assert.Equal("platform", parsed["scope"]?.GetValue<string>());
+            Assert.True(parsed.TryGetPropertyValue("projectId", out var projectIdNode));
+            Assert.Null(projectIdNode);
+            Assert.Equal(ProviderId, parsed["providerId"]?.GetValue<string>());
+            Assert.Equal(providerRevision, parsed["providerRevision"]?.GetValue<long>());
+            Assert.Equal(state, parsed["state"]?.GetValue<string>());
+            Assert.Equal(credentialRevision, parsed["credentialRevision"]?.GetValue<long>());
+
+            var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+                c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredential");
+            Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AGENTWEAVER_PROJECT_ID", previousProjectId);
+            Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", previousRunId);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"not_set","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":0}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"disabled","credentialRevision":0}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":0,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"pending","credentialRevision":-1}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":9223372036854775808,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1.5,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"project","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":"project-1","providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":"","providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":123,"providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1,"extra":"sk-secret-canary"}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"other-provider","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"unknown","credentialRevision":1}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"enabled"}""")]
+    [InlineData("""{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1,"secret":"sk-secret-canary"}""")]
+    [InlineData("""{"scope":"platform","scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1}""")]
+    [InlineData("""not-json-sk-secret-canary""")]
+    public async Task PlatformShowCredentialStatusRejectsInvalidResponsesWithoutLeakingBody(string body)
+    {
+        using var fixture = new Fixture();
+        fixture.Respond = _ => JsonResponse(body);
+
+        var exit = await fixture.Run("show", ProviderId, "--credential-status");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredential");
+        Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task PlatformShowCredentialStatusRejectsWrongMediaTypeAndOversizedResponse()
+    {
+        using var mediaFixture = new Fixture();
+        mediaFixture.Respond = _ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("sk-secret-canary", Encoding.UTF8, "text/plain"),
+        };
+
+        var mediaExit = await mediaFixture.Run("show", ProviderId, "--credential-status");
+        Assert.Equal(1, mediaExit);
+        Assert.Equal(string.Empty, mediaFixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", mediaFixture.Error.ToString(), StringComparison.Ordinal);
+        var mediaCall = Assert.Single(mediaFixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredential");
+        Assert.Equal("[REDACTED]", mediaCall["responseBody"]?.GetValue<string>());
+
+        using var sizeFixture = new Fixture();
+        var oversized =
+            """{"scope":"platform","projectId":null,"providerId":"byok-platform-0001","providerRevision":1,"state":"enabled","credentialRevision":1}""" +
+            new string(' ', 17 * 1024);
+        sizeFixture.Respond = _ => JsonResponse(oversized);
+
+        var sizeExit = await sizeFixture.Run("show", ProviderId, "--credential-status");
+        Assert.Equal(1, sizeExit);
+        Assert.Equal(string.Empty, sizeFixture.Output.ToString());
+    }
+
+    [Theory]
+    [InlineData("response-limit")]
+    [InlineData("schema-field")]
+    [InlineData("extra-tenant-query")]
+    public async Task PlatformShowCredentialStatusStopsBeforeRequestOnIncompatibleDiscovery(string mutation)
+    {
+        using var fixture = new Fixture();
+        fixture.TransformOpenApi = doc =>
+        {
+            if (mutation == "response-limit")
+            {
+                doc["paths"]!["/api/v1/platform/byok-providers/{providerId}/credential"]!["get"]!
+                    ["x-agentweaver-max-response-bytes"] = 32 * 1024;
+            }
+            else if (mutation == "extra-tenant-query")
+            {
+                var parameters = doc["paths"]!["/api/v1/platform/byok-providers/{providerId}/credential"]!["get"]!
+                    ["parameters"]!.AsArray();
+                parameters.Add(new JsonObject
+                {
+                    ["name"] = "X-Agentweaver-Tenant",
+                    ["in"] = "query",
+                    ["required"] = false,
+                    ["schema"] = new JsonObject { ["type"] = "string" },
+                });
+            }
+            else
+            {
+                var props = doc["components"]!["schemas"]!["ModelProviderCredentialStatusResponse"]!["properties"]!.AsObject();
+                props.Remove("credentialRevision");
+            }
+        };
+
+        var exit = await fixture.Run("show", ProviderId, "--credential-status");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Empty(fixture.Requests);
+    }
+
+    [Fact]
+    public async Task PlatformShowCredentialStatusStopsOnTenantMismatchAndSuppressesErrorAndTransportSecrets()
+    {
+        using var tenantFixture = new Fixture();
+        tenantFixture.TransformAuthContext = ctx => { ctx["tenantId"] = "other-tenant"; return ctx; };
+        var tenantExit = await tenantFixture.Run("show", ProviderId, "--credential-status");
+        Assert.Equal(1, tenantExit);
+        Assert.Equal(string.Empty, tenantFixture.Output.ToString());
+        Assert.Empty(tenantFixture.Requests);
+
+        using var boundFixture = new Fixture();
+        boundFixture.TransformAuthContext = ctx => { ctx["boundProjectId"] = "project-1"; return ctx; };
+        var boundExit = await boundFixture.Run("show", ProviderId, "--credential-status");
+        Assert.Equal(1, boundExit);
+        Assert.Equal(string.Empty, boundFixture.Output.ToString());
+        Assert.Empty(boundFixture.Requests);
+
+        foreach (var (status, code, expectedError) in new[]
+        {
+            (HttpStatusCode.Forbidden, "forbidden", "BYOK_FORBIDDEN"),
+            (HttpStatusCode.NotFound, "not_found", "BYOK_NOT_FOUND"),
+            (HttpStatusCode.Conflict, "model_provider_draft_metadata_requires_update", "BYOK_CONFLICT"),
+            (HttpStatusCode.Conflict, "credential_write_quarantined", "BYOK_QUARANTINED"),
+            (HttpStatusCode.ServiceUnavailable, "credential_publication_pending", "BYOK_PENDING_PUBLICATION"),
+            (HttpStatusCode.ServiceUnavailable, "credential_vault_unavailable", "BYOK_VAULT_UNAVAILABLE"),
+        })
+        {
+            using var errorFixture = new Fixture();
+            errorFixture.Respond = _ => JsonResponse(new JsonObject
+            {
+                ["code"] = code,
+                ["detail"] = "sk-secret-canary",
+            }, status);
+
+            var errorExit = await errorFixture.Run("show", ProviderId, "--credential-status");
+            Assert.Equal(1, errorExit);
+            Assert.Equal(string.Empty, errorFixture.Output.ToString());
+            Assert.Contains(expectedError, errorFixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("sk-secret-canary", errorFixture.Error.ToString(), StringComparison.Ordinal);
+            var call = Assert.Single(errorFixture.LastCreatedClient!.Calls,
+                c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredential");
+            Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+        }
+
+        using var transportFixture = new Fixture();
+        transportFixture.Respond = _ => throw new HttpRequestException("connection failed: sk-secret-canary");
+        var transportExit = await transportFixture.Run("show", ProviderId, "--credential-status");
+        Assert.Equal(1, transportExit);
+        Assert.Equal(string.Empty, transportFixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", transportFixture.Error.ToString(), StringComparison.Ordinal);
+        var transportCall = Assert.Single(transportFixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredential");
+        Assert.Equal("[REDACTED]", transportCall["responseBody"]?.GetValue<string>());
+        Assert.Equal("[REDACTED]", transportCall["error"]?.GetValue<string>());
     }
 
     [Fact]
