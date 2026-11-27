@@ -724,7 +724,7 @@ These commands use an unbound identity. They ignore
 
 ```text
 agentweaver platform byok list [target options]
-agentweaver platform byok show <providerId> [--credential-status] [target options]
+agentweaver platform byok show <providerId> [--credential-status | --operation-id <uuid>] [target options]
 agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
     [--rate-card-id <id> --rate-card-version <version>]
@@ -763,6 +763,12 @@ Pass `--credential-status` to `platform byok show` to read the saved credential
 state (`not_set`, `enabled`, `disabled`, `pending`, or `quarantined`) and both
 revision numbers (`providerRevision` and `credentialRevision`) without
 returning key bytes. For platform responses, `projectId` is `null`.
+Pass `--operation-id <uuid>` to `platform byok show` instead of
+`--credential-status` to read the status of one credential write or disable
+operation (`pending`, `publication_pending`, `published`, `quarantined`,
+`cancelled`, `disable_pending`, or `disabled`) without resending key bytes.
+All valid operation statuses exit `0`. Do not combine `--credential-status` and
+`--operation-id`.
 
 `add` creates a Draft at revision 1. `update` writes a complete metadata
 revision and requires the current `--expected-revision`. Omitted optional
@@ -823,7 +829,7 @@ grant either role.
 ```text
 agentweaver auth login --scope projects.admin --project-id <projectId>
 agentweaver project byok list --project-id <projectId> [other target options]
-agentweaver project byok show <providerId> --project-id <projectId> [--credential-status] [other target options]
+agentweaver project byok show <providerId> --project-id <projectId> [--credential-status | --operation-id <uuid>] [other target options]
 agentweaver project byok add --project-id <projectId> --name <name> --type <openai|azure|anthropic>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
     [--rate-card-id <id> --rate-card-version <version>]
@@ -854,7 +860,9 @@ Use the stable `providerId` field from `list` or `add` with `show` and
 `--credential-status` to `project byok show` to read the saved credential
 state (`not_set`, `enabled`, `disabled`, `pending`, or `quarantined`) and both
 revision numbers (`providerRevision` and `credentialRevision`) without
-returning key bytes. `add` creates a Draft. `update` writes a complete metadata
+returning key bytes. Pass `--operation-id <uuid>` instead of
+`--credential-status` to read one credential operation's status without
+resending key bytes. `add` creates a Draft. `update` writes a complete metadata
 revision and requires the current `--expected-revision`. The metadata options
 and write recovery rules match
 [platform BYOK](#manage-platform-byok-provider-drafts).

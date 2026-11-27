@@ -1656,6 +1656,457 @@ public sealed class ByokDraftCommandsTests
         Assert.False(parsed.ContainsKey("credentialRevision"));
     }
 
+    [Theory]
+    [InlineData("pending", null, null)]
+    [InlineData("publication_pending", null, null)]
+    [InlineData("published", 5_000_000_000L, true)]
+    [InlineData("quarantined", null, null)]
+    [InlineData("cancelled", null, null)]
+    [InlineData("disable_pending", null, null)]
+    [InlineData("disabled", 4L, null)]
+    public async Task ShowOperationStatusAcceptsAllValidStatesInBothScopes(
+        string status,
+        long? providerRevision,
+        bool? hasCredential)
+    {
+        var previousProject = Environment.GetEnvironmentVariable("AGENTWEAVER_PROJECT_ID");
+        var previousRun = Environment.GetEnvironmentVariable("AGENTWEAVER_RUN_ID");
+        Environment.SetEnvironmentVariable("AGENTWEAVER_PROJECT_ID", "ambient-project-ignored");
+        Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", "ambient-run-ignored");
+        try
+        {
+            foreach (var projectScope in new[] { false, true })
+            {
+                using var fixture = new Fixture();
+                using var stdin = new ReadTrackingStream("unused-stdin"u8.ToArray());
+                fixture.StandardInput = stdin;
+                fixture.StandardInputRedirected = true;
+                var expectedScope = projectScope ? "project" : "platform";
+                var expectedProjectId = projectScope ? "project-1" : null;
+                fixture.Respond = _ =>
+                {
+                    var body = new JsonObject
+                    {
+                        ["operationId"] = OperationId,
+                        ["scope"] = expectedScope,
+                        ["projectId"] = expectedProjectId,
+                        ["providerId"] = ProviderId,
+                        ["status"] = status,
+                    };
+                    if (providerRevision is not null)
+                        body["providerRevision"] = providerRevision;
+                    if (hasCredential is not null)
+                        body["hasCredential"] = hasCredential;
+                    return JsonResponse(body);
+                };
+
+                var exit = projectScope
+                    ? await fixture.RunProject("show", ProviderId, "--operation-id", OperationId)
+                    : await fixture.Run("show", ProviderId, "--operation-id", OperationId);
+
+                Assert.Equal(0, exit);
+                Assert.Equal(string.Empty, fixture.Error.ToString());
+                Assert.Equal(0, stdin.ReadCalls);
+                Assert.Equal(expectedProjectId, fixture.Authentication.Identity?.ProjectId);
+                Assert.Null(fixture.Authentication.Identity?.RunId);
+
+                var request = Assert.Single(fixture.Requests);
+                Assert.Equal("GET", request.Method);
+                var expectedPath = projectScope
+                    ? $"/api/v1/projects/project-1/byok-providers/{ProviderId}/credential/operations/{OperationId}"
+                    : $"/api/v1/platform/byok-providers/{ProviderId}/credential/operations/{OperationId}";
+                Assert.Equal(expectedPath, request.Path);
+                Assert.Equal(string.Empty, request.Query);
+
+                var parsed = JsonNode.Parse(fixture.Output.ToString())!.AsObject();
+                Assert.Equal(OperationId, parsed["operationId"]?.GetValue<string>());
+                Assert.Equal(expectedScope, parsed["scope"]?.GetValue<string>());
+                Assert.Equal(expectedProjectId, parsed["projectId"]?.GetValue<string>());
+                Assert.Equal(ProviderId, parsed["providerId"]?.GetValue<string>());
+                Assert.Equal(status, parsed["status"]?.GetValue<string>());
+                Assert.Equal(providerRevision, parsed["providerRevision"]?.GetValue<long?>());
+                Assert.Equal(hasCredential, parsed["hasCredential"]?.GetValue<bool?>());
+
+                var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+                    c => c["operationId"]?.GetValue<string>() ==
+                        (projectScope ? "readProjectByokProviderCredentialOperation" : "readPlatformByokProviderCredentialOperation"));
+                Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AGENTWEAVER_PROJECT_ID", previousProject);
+            Environment.SetEnvironmentVariable("AGENTWEAVER_RUN_ID", previousRun);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"published","hasCredential":true}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"published","providerRevision":0,"hasCredential":true}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"published","providerRevision":1}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"published","providerRevision":1,"hasCredential":false}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"disabled","providerRevision":null,"hasCredential":null}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"disabled","providerRevision":1,"hasCredential":true}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"disabled","providerRevision":1,"hasCredential":false}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"pending","providerRevision":1,"hasCredential":null}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"publication_pending","providerRevision":null,"hasCredential":true}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"quarantined","providerRevision":null,"hasCredential":false}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"cancelled","providerRevision":2}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"disable_pending","hasCredential":true}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"unknown_status"}""")]
+    [InlineData("""{"operationId":"00000000-0000-0000-0000-000000000001","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"pending"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"project","projectId":null,"providerId":"byok-platform-0001","status":"pending"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":"project-1","providerId":"byok-platform-0001","status":"pending"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","providerId":"byok-platform-0001","status":"pending"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"other-provider","status":"pending"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"pending","secret":"sk-secret-canary"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"pending"}""")]
+    [InlineData("""not-json-sk-secret-canary""")]
+    public async Task ShowOperationStatusRejectsInvalidMismatchedExtraAndDuplicateResponsesWithoutLeak(string body)
+    {
+        using var fixture = new Fixture();
+        fixture.Respond = _ => JsonResponse(body);
+
+        var exit = await fixture.Run("show", ProviderId, "--operation-id", OperationId);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        var call = Assert.Single(fixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredentialOperation");
+        Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("other-project")]
+    public async Task ProjectShowOperationStatusRejectsMismatchedProjectId(string? responseProjectId)
+    {
+        using var fixture = new Fixture();
+        fixture.Respond = _ => JsonResponse(new JsonObject
+        {
+            ["operationId"] = OperationId,
+            ["scope"] = "project",
+            ["projectId"] = responseProjectId,
+            ["providerId"] = ProviderId,
+            ["status"] = "pending",
+        });
+
+        var exit = await fixture.RunProject("show", ProviderId, "--operation-id", OperationId);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+    }
+
+    [Theory]
+    [InlineData("show|byok-platform-0001|--credential-status|--operation-id|f1b62270-3320-414c-9c2a-803493e50131")]
+    [InlineData("show|byok-platform-0001|--operation-id|")]
+    [InlineData("show|byok-platform-0001|--operation-id|not-a-uuid")]
+    [InlineData("show|byok-platform-0001|--operation-id|00000000-0000-0000-0000-000000000000")]
+    [InlineData("show|byok-platform-0001|--operation-id")]
+    [InlineData("show|byok-platform-0001|--operation-id|f1b62270-3320-414c-9c2a-803493e50131|--project-id|project-1")]
+    public async Task PlatformShowOperationStatusRejectsInvalidOptionsBeforeDiscovery(string joinedArgs)
+    {
+        using var fixture = new Fixture();
+        var discoveryCalled = false;
+        fixture.TransformOpenApi = _ => discoveryCalled = true;
+
+        var exit = await fixture.Run(joinedArgs.Split('|'));
+
+        Assert.Equal(1, exit);
+        Assert.False(discoveryCalled);
+        Assert.Empty(fixture.Requests);
+    }
+
+    [Fact]
+    public async Task ProjectShowOperationStatusRejectsRunIdAndMutuallyExclusiveFlagsBeforeDiscovery()
+    {
+        using var fixture = new Fixture();
+        var discoveryCalled = false;
+        fixture.TransformOpenApi = _ => discoveryCalled = true;
+
+        Assert.Equal(1, await fixture.RunProject("show", ProviderId, "--operation-id", OperationId, "--run-id", "run-1"));
+        Assert.Equal(1, await fixture.RunProject("show", ProviderId, "--credential-status", "--operation-id", OperationId));
+        Assert.False(discoveryCalled);
+        Assert.Empty(fixture.Requests);
+    }
+
+    [Fact]
+    public async Task ShowOperationStatusRejectsWrongMediaTypeAndOversizedValidPaddedJson()
+    {
+        using var mediaFixture = new Fixture();
+        mediaFixture.Respond = _ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("sk-secret-canary", Encoding.UTF8, "text/plain"),
+        };
+
+        var mediaExit = await mediaFixture.Run("show", ProviderId, "--operation-id", OperationId);
+        Assert.Equal(1, mediaExit);
+        Assert.Equal(string.Empty, mediaFixture.Output.ToString());
+        Assert.DoesNotContain("sk-secret-canary", mediaFixture.Error.ToString(), StringComparison.Ordinal);
+        var mediaCall = Assert.Single(mediaFixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredentialOperation");
+        Assert.Equal("[REDACTED]", mediaCall["responseBody"]?.GetValue<string>());
+
+        using var sizeFixture = new Fixture();
+        var oversized =
+            $$"""{"operationId":"{{OperationId}}","scope":"platform","projectId":null,"providerId":"{{ProviderId}}","status":"pending"}""" +
+            new string(' ', 17 * 1024);
+        sizeFixture.Respond = _ => JsonResponse(oversized);
+
+        var sizeExit = await sizeFixture.Run("show", ProviderId, "--operation-id", OperationId);
+        Assert.Equal(1, sizeExit);
+        Assert.Equal(string.Empty, sizeFixture.Output.ToString());
+    }
+
+    [Theory]
+    [InlineData("response-limit")]
+    [InlineData("schema-field")]
+    [InlineData("extra-tenant-query")]
+    [InlineData("extra-response-media-type")]
+    public async Task ShowOperationStatusStopsBeforeRequestOnIncompatibleDiscovery(string mutation)
+    {
+        foreach (var projectScope in new[] { false, true })
+        {
+            using var fixture = new Fixture();
+            fixture.Respond = _ => JsonResponse(new JsonObject
+            {
+                ["operationId"] = OperationId,
+                ["scope"] = projectScope ? "project" : "platform",
+                ["projectId"] = projectScope ? "project-1" : null,
+                ["providerId"] = ProviderId,
+                ["status"] = "pending",
+            });
+            var openApiPath = projectScope
+                ? "/api/v1/projects/{projectId}/byok-providers/{providerId}/credential/operations/{operationId}"
+                : "/api/v1/platform/byok-providers/{providerId}/credential/operations/{operationId}";
+            fixture.TransformOpenApi = doc =>
+            {
+                if (mutation == "response-limit")
+                {
+                    doc["paths"]![openApiPath]!["get"]!["x-agentweaver-max-response-bytes"] = 32 * 1024;
+                }
+                else if (mutation == "extra-tenant-query")
+                {
+                    var parameters = doc["paths"]![openApiPath]!["get"]!["parameters"]!.AsArray();
+                    parameters.Add(new JsonObject
+                    {
+                        ["name"] = "X-Agentweaver-Tenant",
+                        ["in"] = "query",
+                        ["required"] = false,
+                        ["schema"] = new JsonObject { ["type"] = "string" },
+                    });
+                }
+                else if (mutation == "extra-response-media-type")
+                {
+                    var content = doc["paths"]![openApiPath]!["get"]!["responses"]!["200"]!["content"]!.AsObject();
+                    content["application/problem+json"] = new JsonObject
+                    {
+                        ["schema"] = new JsonObject { ["$ref"] = "#/components/schemas/ModelProviderCredentialOperationStatusResponse" },
+                    };
+                }
+                else
+                {
+                    var props = doc["components"]!["schemas"]!["ModelProviderCredentialOperationStatusResponse"]!["properties"]!.AsObject();
+                    props.Remove("hasCredential");
+                }
+            };
+
+            var exit = projectScope
+                ? await fixture.RunProject("show", ProviderId, "--operation-id", OperationId)
+                : await fixture.Run("show", ProviderId, "--operation-id", OperationId);
+
+            Assert.Equal(1, exit);
+            Assert.Equal(string.Empty, fixture.Output.ToString());
+            Assert.Empty(fixture.Requests);
+        }
+    }
+
+    [Fact]
+    public async Task ShowOperationStatusEnforcesAuthAndHandlesErrorsAndCancellationWithoutWriteGuidanceOrSecrets()
+    {
+        using var tenantFixture = new Fixture();
+        tenantFixture.TransformAuthContext = ctx => { ctx["tenantId"] = "other-tenant"; return ctx; };
+        Assert.Equal(1, await tenantFixture.Run("show", ProviderId, "--operation-id", OperationId));
+        Assert.Empty(tenantFixture.Requests);
+
+        using var boundProjectFixture = new Fixture();
+        boundProjectFixture.TransformAuthContext = ctx => { ctx["boundProjectId"] = "project-1"; return ctx; };
+        Assert.Equal(1, await boundProjectFixture.Run("show", ProviderId, "--operation-id", OperationId));
+        Assert.Empty(boundProjectFixture.Requests);
+
+        using var boundRunFixture = new Fixture();
+        boundRunFixture.TransformAuthContext = ctx => { ctx["boundRunId"] = "run-1"; return ctx; };
+        Assert.Equal(1, await boundRunFixture.RunProject("show", ProviderId, "--operation-id", OperationId));
+        Assert.Empty(boundRunFixture.Requests);
+
+        foreach (var (status, code, expectedError) in new[]
+        {
+            (HttpStatusCode.NotFound, "credential_operation_not_found", "BYOK_NOT_FOUND"),
+            (HttpStatusCode.Forbidden, "forbidden", "BYOK_FORBIDDEN"),
+            (HttpStatusCode.Conflict, "model_provider_draft_metadata_requires_update", "BYOK_CONFLICT"),
+            (HttpStatusCode.Conflict, "credential_write_quarantined", "BYOK_QUARANTINED"),
+            (HttpStatusCode.ServiceUnavailable, "credential_publication_pending", "BYOK_PENDING_PUBLICATION"),
+            (HttpStatusCode.InternalServerError, "internal_error", "BYOK_REQUEST_FAILED_500"),
+        })
+        {
+            using var errorFixture = new Fixture();
+            errorFixture.Respond = _ => JsonResponse(new JsonObject
+            {
+                ["code"] = code,
+                ["detail"] = "sk-secret-canary",
+            }, status);
+
+            var errorExit = await errorFixture.Run("show", ProviderId, "--operation-id", OperationId);
+            Assert.Equal(1, errorExit);
+            Assert.Equal(string.Empty, errorFixture.Output.ToString());
+            Assert.Single(errorFixture.Requests);
+            Assert.Contains(expectedError, errorFixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Repeat the same command", errorFixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("sk-secret-canary", errorFixture.Error.ToString(), StringComparison.Ordinal);
+            var call = Assert.Single(errorFixture.LastCreatedClient!.Calls,
+                c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredentialOperation");
+            Assert.Equal("[REDACTED]", call["responseBody"]?.GetValue<string>());
+        }
+
+        using var transportFixture = new Fixture();
+        transportFixture.Respond = _ => throw new HttpRequestException("connection failed: sk-secret-canary");
+        var transportExit = await transportFixture.Run("show", ProviderId, "--operation-id", OperationId);
+        Assert.Equal(1, transportExit);
+        Assert.DoesNotContain("sk-secret-canary", transportFixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Repeat the same command", transportFixture.Error.ToString(), StringComparison.Ordinal);
+        var transportCall = Assert.Single(transportFixture.LastCreatedClient!.Calls,
+            c => c["operationId"]?.GetValue<string>() == "readPlatformByokProviderCredentialOperation");
+        Assert.Equal("[REDACTED]", transportCall["responseBody"]?.GetValue<string>());
+        Assert.Equal("[REDACTED]", transportCall["error"]?.GetValue<string>());
+
+        using var cancelFixture = new Fixture();
+        using var cts = new CancellationTokenSource();
+        cancelFixture.Respond = _ =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        };
+        var cancelExit = await cancelFixture.Run(cts.Token, "show", ProviderId, "--operation-id", OperationId);
+        Assert.Equal(130, cancelExit);
+        Assert.DoesNotContain("Repeat the same command", cancelFixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"other-provider","status":"published","providerRevision":2,"hasCredential":true,"secret":"sk-secret-canary"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"published","providerRevision":2,"hasCredential":false,"secret":"sk-secret-canary"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"published","providerRevision":2,"hasCredential":true}""")]
+    public async Task SetKeyRecoveryReportsFixedUnknownMessageOnInvalidOrMismatchedOperationStatusWithoutLeak(string recoveryBody)
+    {
+        const string secret = "sk-recover-invalid-123";
+        using var fixture = new Fixture();
+        using var stdin = new MemoryStream(Encoding.UTF8.GetBytes(secret + "\n"));
+        fixture.StandardInput = stdin;
+        fixture.StandardInputRedirected = true;
+        var getStatusCalls = 0;
+        fixture.Respond = request =>
+        {
+            if (request.Method == "GET" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}")
+                return JsonResponse(Provider(ProviderId, "Primary", revision: 1));
+            if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+            {
+                getStatusCalls++;
+                return getStatusCalls == 1
+                    ? JsonResponse(new JsonObject { ["code"] = "credential_operation_not_found" }, HttpStatusCode.NotFound)
+                    : JsonResponse(recoveryBody);
+            }
+            if (request.Method == "PUT")
+                return JsonResponse("{\"code\":\"unavailable\"}", HttpStatusCode.ServiceUnavailable);
+            return JsonResponse("{}", HttpStatusCode.NotFound);
+        };
+
+        var exit = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "1", "--operation-id", OperationId);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Contains($"Operation {OperationId} result is unknown. Check operation status before retrying; do not resend the key.",
+            fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetKeyRecoveryPreservesNonPublishedValidStatusMessage()
+    {
+        const string secret = "sk-recover-pending-123";
+        using var fixture = new Fixture();
+        using var stdin = new MemoryStream(Encoding.UTF8.GetBytes(secret + "\n"));
+        fixture.StandardInput = stdin;
+        fixture.StandardInputRedirected = true;
+        var getStatusCalls = 0;
+        fixture.Respond = request =>
+        {
+            if (request.Method == "GET" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}")
+                return JsonResponse(Provider(ProviderId, "Primary", revision: 1));
+            if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+            {
+                getStatusCalls++;
+                return getStatusCalls == 1
+                    ? JsonResponse(new JsonObject { ["code"] = "credential_operation_not_found" }, HttpStatusCode.NotFound)
+                    : JsonResponse(new JsonObject
+                    {
+                        ["operationId"] = OperationId,
+                        ["scope"] = "platform",
+                        ["projectId"] = null,
+                        ["providerId"] = ProviderId,
+                        ["status"] = "quarantined",
+                    });
+            }
+            if (request.Method == "PUT")
+                return JsonResponse("{\"code\":\"unavailable\"}", HttpStatusCode.ServiceUnavailable);
+            return JsonResponse("{}", HttpStatusCode.NotFound);
+        };
+
+        var exit = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "1", "--operation-id", OperationId);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Contains($"Operation {OperationId} status is 'quarantined'. Do not resend the key.",
+            fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"bogus-sk-secret-canary"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"other-provider","status":"pending","secret":"sk-secret-canary"}""")]
+    [InlineData("""{"operationId":"f1b62270-3320-414c-9c2a-803493e50131","scope":"platform","projectId":null,"providerId":"byok-platform-0001","status":"published","providerRevision":1,"hasCredential":false}""")]
+    public async Task SetKeyPreflightRejectsInvalidOperationStatusWithoutReadingStdinOrSendingPut(string preflightBody)
+    {
+        using var fixture = new Fixture();
+        using var trackingStdin = new ReadTrackingStream("sk-stdin-canary\n"u8.ToArray());
+        fixture.StandardInput = trackingStdin;
+        fixture.StandardInputRedirected = true;
+        fixture.Respond = request =>
+        {
+            if (request.Method == "GET" && request.Path == $"/api/v1/platform/byok-providers/{ProviderId}")
+                return JsonResponse(Provider(ProviderId, "Primary", revision: 1));
+            if (request.Method == "GET" && request.Path.EndsWith($"/credential/operations/{OperationId}", StringComparison.Ordinal))
+                return JsonResponse(preflightBody);
+            return JsonResponse("{}", HttpStatusCode.NotFound);
+        };
+
+        var exit = await fixture.Run(
+            "set-key", ProviderId, "--from-stdin",
+            "--expected-revision", "1", "--operation-id", OperationId);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(string.Empty, fixture.Output.ToString());
+        Assert.Contains("The Gateway returned an invalid BYOK response.", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("bogus-sk-secret-canary", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, trackingStdin.ReadCalls);
+        Assert.DoesNotContain(fixture.Requests, r => r.Method == "PUT");
+    }
+
     private static string Page(IReadOnlyList<JsonObject> providers, string? nextAfterProviderId) =>
         new JsonObject
         {

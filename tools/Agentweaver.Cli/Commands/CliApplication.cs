@@ -589,7 +589,7 @@ public static class CliApplication
           agentweaver run egress <runId> [--limit <1-100>] [--cursor <cursor>]
               [--scope projects.admin] [target options without project/run binding]
           agentweaver platform byok list [target options]
-          agentweaver platform byok show <providerId> [--credential-status] [target options]
+          agentweaver platform byok show <providerId> [--credential-status | --operation-id <uuid>] [target options]
           agentweaver platform byok add --name <name> --type <openai|azure|anthropic>
               --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
               [--rate-card-id <id> --rate-card-version <version>]
@@ -607,7 +607,7 @@ public static class CliApplication
               --expected-settings-revision <settingsRevision>
           agentweaver platform byok deactivate --expected-settings-revision <settingsRevision>
           agentweaver project byok list [--project-id <id>] [other target options]
-          agentweaver project byok show <providerId> --project-id <id> [--credential-status] [other target options]
+          agentweaver project byok show <providerId> --project-id <id> [--credential-status | --operation-id <uuid>] [other target options]
           agentweaver project byok add --project-id <id> --name <name> --type <openai|azure|anthropic>
               --base-url <https-url> --model <model> [metadata options] [--operation-id <guid>]
               [--rate-card-id <id> --rate-card-version <version>]
