@@ -949,9 +949,22 @@ describe('Gateway API client', () => {
       providerRevision: 2,
       hasCredential: true,
     };
+    const deleteResponse = {
+      operationId: '33333333-3333-4333-8333-333333333333',
+      status: 'disabled',
+      scope: 'platform',
+      projectId: null,
+      providerId: 'provider/1',
+      providerRevision: 3,
+      credentialRevision: 2,
+      credentialVersion: null,
+      configurationHash: 'hash-2',
+      providerState: 'Draft',
+    };
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify(putResponse), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(statusResponse), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(statusResponse), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(deleteResponse), { status: 200 }));
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
 
     await expect(client.setPlatformByokProviderCredential('token', 'provider/1', {
@@ -967,6 +980,27 @@ describe('Gateway API client', () => {
       '22222222-2222-4222-8222-222222222222',
       'tenant-1',
     )).resolves.toEqual(statusResponse);
+
+    await expect(client.deletePlatformByokProviderCredential('token', 'provider/1', {
+      operationId: '33333333-3333-4333-8333-333333333333',
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 1,
+    }, 'tenant-1')).resolves.toEqual(deleteResponse);
+
+    const [deleteUrl, deleteInit] = fetcher.mock.calls[2];
+    expect(String(deleteUrl)).toBe(
+      'https://gateway.example.test/api/v1/platform/byok-providers/provider%2F1/credential',
+    );
+    expect(deleteInit?.method).toBe('DELETE');
+    expect(deleteInit?.credentials).toBe('omit');
+    expect(deleteInit?.cache).toBe('no-store');
+    expect(new Headers(deleteInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(new Headers(deleteInit?.headers).get('Content-Type')).toBe('application/json');
+    expect(JSON.parse(String(deleteInit?.body))).toEqual({
+      operationId: '33333333-3333-4333-8333-333333333333',
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 1,
+    });
 
     const [putUrl, putInit] = fetcher.mock.calls[0];
     expect(String(putUrl)).toBe(

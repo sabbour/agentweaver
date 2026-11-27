@@ -126,6 +126,7 @@ interface AuthContextValue {
     },
   ) => Promise<T>;
   projectCredentialOperations?: ProjectCredentialOperationStore;
+  projectDisableCredentialOperations?: ProjectCredentialOperationStore;
   establishPlatformPolicyAccess: (
     tenantSelector: string,
     signal?: AbortSignal,
@@ -319,6 +320,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const policySilentAttemptRef = useRef<PlatformPolicySilentAttempt | null>(null);
   const policySilentPromiseRef = useRef<Promise<boolean> | null>(null);
   const projectCredentialOperations = useMemo(
+    () => createProjectCredentialOperationStore(),
+    [],
+  );
+  const projectDisableCredentialOperations = useMemo(
     () => createProjectCredentialOperationStore(),
     [],
   );
@@ -1121,6 +1126,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         actorId: confirmedContext.actorId,
         tenantId: confirmedContext.tenantId,
       });
+      projectDisableCredentialOperations.retainIdentity({
+        issuer: confirmedContext.issuer,
+        actorId: confirmedContext.actorId,
+        tenantId: confirmedContext.tenantId,
+      });
       setAuthorizationContextState(confirmedContext);
       return confirmedContext;
     } catch (reason) {
@@ -1135,7 +1145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (requestGeneration === authorizationContextRequestRef.current)
         setAuthorizationContextLoading(false);
     }
-  }, [apiCall, projectCredentialOperations]);
+  }, [apiCall, projectCredentialOperations, projectDisableCredentialOperations]);
 
   const apiCallOnce = useCallback(async <T,>(
     operation: (accessToken: string, tenantSelector: string) => Promise<T>,
@@ -1545,12 +1555,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     transactionRef.current = null;
     setSession(null);
     projectCredentialOperations.clear();
+    projectDisableCredentialOperations.clear();
     setConsent(null);
     setError(null);
     forgetSignIn();
     clearRecentRuns();
     setRestoringSession(false);
-  }, [projectCredentialOperations, setSession]);
+  }, [projectCredentialOperations, projectDisableCredentialOperations, setSession]);
 
   const getAuthorizationContextError = useCallback(() => authorizationContextErrorRef.current, []);
 
@@ -1572,6 +1583,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     apiCall,
     apiCallOnce,
     projectCredentialOperations,
+    projectDisableCredentialOperations,
     establishPlatformPolicyAccess,
     getPlatformPolicyRevisionHistory,
     readPlatformPolicyRevision,
@@ -1588,6 +1600,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     apiCall,
     apiCallOnce,
     projectCredentialOperations,
+    projectDisableCredentialOperations,
     authSessionGeneration,
     authSessionEpoch,
     authorizationContext,
