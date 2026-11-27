@@ -29,6 +29,7 @@ import { GatewayError, gatewayClient } from './api';
 import type {
   ModelProviderCredentialOperationStatusResponse,
   ModelProviderCredentialResponse,
+  ModelProviderCredentialStatusResponse,
   PlatformModelProviderDraft,
   ProjectModelProviderDraftSaveRequest,
 } from './contracts';
@@ -36,6 +37,7 @@ import { errorMessage } from './errors';
 import { ErrorNotice, Loading } from './pageParts';
 import {
   createProjectCredentialOperationStore,
+  requireModelProviderCredentialStatus,
   type ProjectCredentialOperation,
   type ProjectCredentialOperationKey,
 } from './projectCredentialOperations';
@@ -290,10 +292,25 @@ export function PlatformModelProviders() {
   const [credentialRevisions, setCredentialRevisions] = useState<Record<string, number>>({});
   const [operationRevision, setOperationRevision] = useState(0);
   const [confirmingResetProviderId, setConfirmingResetProviderId] = useState<string | null>(null);
+  const [editCredentialStatus, setEditCredentialStatus] = useState<ModelProviderCredentialStatusResponse | null>(null);
+  const [editCredentialStatusLoading, setEditCredentialStatusLoading] = useState(false);
+  const [editCredentialStatusError, setEditCredentialStatusError] = useState<unknown>(null);
+  const [rotatingProvider, setRotatingProvider] = useState<PlatformModelProviderDraft | null>(null);
+  const [rotationStatus, setRotationStatus] = useState<ModelProviderCredentialStatusResponse | null>(null);
+  const [rotationStatusLoading, setRotationStatusLoading] = useState(false);
+  const [rotationStatusError, setRotationStatusError] = useState<unknown>(null);
+  const [rotationApiKey, setRotationApiKey] = useState('');
+  const [showRotationKey, setShowRotationKey] = useState(false);
+  const [rotationSaving, setRotationSaving] = useState(false);
+  const [rotationError, setRotationError] = useState<unknown>(null);
   const metadataOperation = useRef<{ fingerprint: string; operationId: string } | null>(null);
   const mountedRef = useRef(true);
   const clearPendingKeyRef = useRef<(() => void) | null>(null);
+  const clearPendingRotationKeyRef = useRef<(() => void) | null>(null);
   const requestGeneration = useRef(0);
+  const rotationGeneration = useRef(0);
+  const rotationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const sectionHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const switchGenerationRef = useRef(0);
   const switchingRef = useRef(false);
   const loadedSwitchSnapshotRef = useRef<{
@@ -346,8 +363,11 @@ export function PlatformModelProviders() {
       mountedRef.current = false;
       clearPendingKeyRef.current?.();
       clearPendingKeyRef.current = null;
+      clearPendingRotationKeyRef.current?.();
+      clearPendingRotationKeyRef.current = null;
       requestGeneration.current += 1;
       editorGeneration.current += 1;
+      rotationGeneration.current += 1;
       accessGeneration.current += 1;
     };
   }, []);
@@ -355,11 +375,14 @@ export function PlatformModelProviders() {
   const clearRows = useCallback(() => {
     clearPendingKeyRef.current?.();
     clearPendingKeyRef.current = null;
+    clearPendingRotationKeyRef.current?.();
+    clearPendingRotationKeyRef.current = null;
     requestGeneration.current += 1;
     switchGenerationRef.current += 1;
     switchingRef.current = false;
     loadedSwitchSnapshotRef.current = null;
     editorGeneration.current += 1;
+    rotationGeneration.current += 1;
     focusPricingProviderId.current = null;
     setProviders([]);
     setNextAfterProviderId(null);
@@ -378,6 +401,18 @@ export function PlatformModelProviders() {
     setCredentialActionError(null);
     setCredentialRevisions({});
     setConfirmingResetProviderId(null);
+    setEditCredentialStatus(null);
+    setEditCredentialStatusLoading(false);
+    setEditCredentialStatusError(null);
+    setRotatingProvider(null);
+    setRotationStatus(null);
+    setRotationStatusLoading(false);
+    setRotationStatusError(null);
+    setRotationApiKey('');
+    setShowRotationKey(false);
+    setRotationSaving(false);
+    setRotationError(null);
+    rotationTriggerRef.current = null;
     metadataOperation.current = null;
     setLoadError(null);
     setSwitchConflictError(null);
@@ -666,17 +701,96 @@ export function PlatformModelProviders() {
       !query || item.label.toLowerCase().includes(query) || item.description.toLowerCase().includes(query));
   }, [typeQuery]);
 
+  const closeRotationForm = useCallback((restoreFocus = false) => {
+    clearPendingRotationKeyRef.current?.();
+    clearPendingRotationKeyRef.current = null;
+    rotationGeneration.current += 1;
+    setRotatingProvider(null);
+    setRotationStatus(null);
+    setRotationStatusLoading(false);
+    setRotationStatusError(null);
+    setRotationApiKey('');
+    setShowRotationKey(false);
+    setRotationSaving(false);
+    setRotationError(null);
+    if (restoreFocus) {
+      const target = rotationTriggerRef.current;
+      rotationTriggerRef.current = null;
+      window.setTimeout(() => {
+        if (!mountedRef.current) return;
+        if (target && target.isConnected) {
+          target.focus();
+        } else {
+          sectionHeadingRef.current?.focus();
+        }
+      }, 0);
+    } else {
+      rotationTriggerRef.current = null;
+    }
+  }, []);
+
+  const loadRotationStatus = useCallback(async (
+    snapshot: AccessSnapshot,
+    providerId: string,
+    generation: number,
+  ) => {
+    setRotationStatusLoading(true);
+    setRotationStatusError(null);
+    try {
+      const raw = await boundCall(snapshot, (token) =>
+        gatewayClient.getPlatformByokProviderCredential(token, providerId, snapshot.tenant));
+      if (generation !== rotationGeneration.current || !isCurrent(snapshot)) return;
+      const checked = requireModelProviderCredentialStatus(raw, 'platform', null, providerId);
+      setRotationStatus(checked);
+    } catch (reason) {
+      if (!isCurrent(snapshot)) return;
+      if (handleAccessFailure(reason)) return;
+      if (generation === rotationGeneration.current) {
+        setRotationStatus(null);
+        setRotationStatusError(reason);
+      }
+    } finally {
+      if (mountedRef.current && generation === rotationGeneration.current && isCurrent(snapshot))
+        setRotationStatusLoading(false);
+    }
+  }, [boundCall, handleAccessFailure, isCurrent]);
+
+  const startRotate = (
+    provider: PlatformModelProviderDraft,
+    triggerButton: HTMLButtonElement | null,
+  ) => {
+    if (!access || !isCurrent(access)) return;
+    closeEditor();
+    setPickerOpen(false);
+    clearPendingRotationKeyRef.current?.();
+    clearPendingRotationKeyRef.current = null;
+    const generation = ++rotationGeneration.current;
+    rotationTriggerRef.current = triggerButton;
+    setRotatingProvider(provider);
+    setRotationStatus(null);
+    setRotationStatusError(null);
+    setRotationApiKey('');
+    setShowRotationKey(false);
+    setRotationSaving(false);
+    setRotationError(null);
+    void loadRotationStatus(access, provider.id, generation);
+  };
+
   const closeEditor = () => {
     editorGeneration.current += 1;
     focusPricingProviderId.current = null;
     setEditor(null);
     setEditingProvider(null);
+    setEditCredentialStatus(null);
+    setEditCredentialStatusLoading(false);
+    setEditCredentialStatusError(null);
     setShowKey(false);
     setSaveError(null);
   };
 
   const startEdit = async (provider: PlatformModelProviderDraft, focusPricing = false) => {
     if (!access) return;
+    closeRotationForm(false);
     const snapshot = access;
     const generation = ++editorGeneration.current;
     const listGeneration = requestGeneration.current;
@@ -684,6 +798,9 @@ export function PlatformModelProviders() {
     setPickerOpen(false);
     setEditor(null);
     setEditingProvider(null);
+    setEditCredentialStatus(null);
+    setEditCredentialStatusLoading(false);
+    setEditCredentialStatusError(null);
     setShowKey(false);
     setSaveError(null);
     setCredentialActionError(null);
@@ -702,6 +819,32 @@ export function PlatformModelProviders() {
       setEditingProvider(checked);
       setEditor(editorFromProvider(checked));
       setShowKey(false);
+      setEditCredentialStatusLoading(true);
+      try {
+        const rawStatus = await boundCall(snapshot, (token) =>
+          gatewayClient.getPlatformByokProviderCredential(token, checked.id, snapshot.tenant));
+        if (generation !== editorGeneration.current ||
+            listGeneration !== requestGeneration.current ||
+            !isCurrent(snapshot)) return;
+        setEditCredentialStatus(
+          requireModelProviderCredentialStatus(rawStatus, 'platform', null, checked.id),
+        );
+      } catch (statusReason) {
+        if (!isCurrent(snapshot)) return;
+        if (handleAccessFailure(statusReason)) return;
+        if (generation === editorGeneration.current &&
+            listGeneration === requestGeneration.current) {
+          setEditCredentialStatus(null);
+          setEditCredentialStatusError(statusReason);
+        }
+      } finally {
+        if (mountedRef.current &&
+            generation === editorGeneration.current &&
+            listGeneration === requestGeneration.current &&
+            isCurrent(snapshot)) {
+          setEditCredentialStatusLoading(false);
+        }
+      }
     } catch (reason) {
       if (!isCurrent(snapshot)) return;
       if (handleAccessFailure(reason)) return;
@@ -841,7 +984,13 @@ export function PlatformModelProviders() {
     setConfirmingResetProviderId(null);
     setEditor((current) => current ? { ...current, apiKey: '' } : current);
     setShowKey(false);
-    const keyWasSubmitted = !hasUnresolvedOp && Boolean(pendingKey.trim());
+    const canSubmitFirstKey = !hasUnresolvedOp && (
+      !source ||
+      (!editCredentialStatusLoading &&
+       editCredentialStatusError == null &&
+       editCredentialStatus?.state === 'not_set')
+    );
+    const keyWasSubmitted = canSubmitFirstKey && Boolean(pendingKey.trim());
     if (!keyWasSubmitted) {
       pendingKey = null;
       clearPendingKeyRef.current = null;
@@ -979,10 +1128,23 @@ export function PlatformModelProviders() {
               setEditingProvider(checked);
               if (reason instanceof GatewayError && reason.status === 409 &&
                   reason.code === 'credential_slot_conflict') {
+                setEditCredentialStatus(null);
+                setEditCredentialStatusError(reason);
                 setSaveError(new Error(
                   'This provider already has an existing or disabled credential slot and cannot accept a first key from this form.',
                 ));
               } else {
+                if (!source) {
+                  setEditCredentialStatus({
+                    scope: 'platform',
+                    projectId: null,
+                    providerId: checked.id,
+                    providerRevision: checked.revision,
+                    state: 'not_set',
+                    credentialRevision: 0,
+                  });
+                  setEditCredentialStatusError(null);
+                }
                 setSaveError(reason);
               }
             }
@@ -1455,6 +1617,191 @@ export function PlatformModelProviders() {
     }
   };
 
+  const submitRotation = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!access || !isCurrent(access) || !rotatingProvider || !rotationStatus) return;
+    if (rotationStatusLoading || rotationStatusError != null) return;
+    if (rotationStatus.state !== 'enabled') return;
+    const opKey = buildOperationKey(access, rotatingProvider.id);
+    if (!opKey) {
+      setRotationError(new GatewayError(
+        403,
+        { code: 'forbidden' },
+        'Confirm platform access before rotating an API key.',
+      ));
+      return;
+    }
+    if (operationStore.get(opKey)) return;
+
+    let pendingKey: string | null = rotationApiKey;
+    clearPendingRotationKeyRef.current = () => { pendingKey = null; };
+    setRotationApiKey('');
+    setShowRotationKey(false);
+    setRotationError(null);
+    setConfirmingResetProviderId(null);
+
+    if (!pendingKey.trim()) {
+      pendingKey = null;
+      clearPendingRotationKeyRef.current = null;
+      setRotationError(new Error('Enter a new API key.'));
+      return;
+    }
+
+    const snapshot = access;
+    const provider = rotatingProvider;
+    const generation = rotationGeneration.current;
+    const operationId = crypto.randomUUID();
+    const expectedProviderRevision = rotationStatus.providerRevision;
+    const expectedCredentialRevision = rotationStatus.credentialRevision;
+    let dispatched = false;
+    setRotationSaving(true);
+    try {
+      const result = await apiCallOnce(
+        (token, liveTenant) => {
+          const apiKey = pendingKey;
+          pendingKey = null;
+          clearPendingRotationKeyRef.current = null;
+          if (generation !== rotationGeneration.current ||
+              !isCurrent(snapshot) ||
+              liveTenant !== snapshot.tenant ||
+              apiKey === null) {
+            return Promise.reject(new StaleRequestError());
+          }
+          dispatched = true;
+          setStoredOperation(opKey, {
+            operationId,
+            expectedProviderRevision,
+            expectedCredentialRevision,
+            status: 'uncertain',
+          });
+          return gatewayClient.setPlatformByokProviderCredential(
+            token,
+            provider.id,
+            {
+              operationId,
+              expectedProviderRevision,
+              expectedCredentialRevision,
+              apiKey,
+            },
+            liveTenant,
+          );
+        },
+        null,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedIdentity(snapshot)) return;
+      if (operationStore.get(opKey)?.operationId !== operationId) return;
+      const checked = requirePlatformCredentialResponse(result, provider.id, operationId);
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === rotationGeneration.current &&
+        isCurrent(snapshot);
+      const outcome = handleCredentialPutOutcome(
+        opKey,
+        provider.id,
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        checked,
+        false,
+        canUpdateUi,
+      );
+      if (!canUpdateUi) return;
+      if (outcome === 'published') {
+        const providerState = checked.providerState ?? provider.state;
+        setNotice(`API key rotated. Provider state: ${providerState}.`);
+        closeRotationForm(true);
+        await loadPage(snapshot);
+      } else {
+        closeRotationForm(true);
+        await loadPage(snapshot);
+      }
+    } catch (reason) {
+      pendingKey = null;
+      clearPendingRotationKeyRef.current = null;
+      if (reason instanceof StaleRequestError) return;
+      if (!dispatched) {
+        if (isCurrent(snapshot) && !handleAccessFailure(reason) && generation === rotationGeneration.current)
+          setRotationError(reason);
+        return;
+      }
+      if (!isSameConfirmedIdentity(snapshot)) return;
+      if (operationStore.get(opKey)?.operationId !== operationId) return;
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === rotationGeneration.current &&
+        isCurrent(snapshot);
+      if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
+        if (canUpdateUi) closeRotationForm(false);
+        handleAccessFailure(reason);
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 409 &&
+          reason.code === 'credential_slot_conflict') {
+        deleteStoredOperation(opKey);
+        if (canUpdateUi) {
+          setRotationError(new Error('The credential state changed. Review the refreshed status and enter the new API key again.'));
+          void loadRotationStatus(snapshot, provider.id, generation);
+        }
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 409 &&
+          reason.code === 'model_provider_draft_conflict') {
+        setStoredOperation(opKey, {
+          operationId,
+          expectedProviderRevision,
+          expectedCredentialRevision,
+          status: 'uncertain',
+        });
+        if (canUpdateUi) {
+          setRotationError(reason);
+          void loadRotationStatus(snapshot, provider.id, generation);
+        }
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 503 &&
+          reason.code === 'credential_publication_pending') {
+        setStoredOperation(opKey, {
+          operationId,
+          expectedProviderRevision,
+          expectedCredentialRevision,
+          status: 'publication_pending',
+        });
+        if (canUpdateUi) closeRotationForm(true);
+        return;
+      }
+      if (reason instanceof GatewayError && (
+        (reason.status === 409 && reason.code === 'credential_write_quarantined') ||
+        (reason.status === 503 && reason.code === 'credential_write_uncertain')
+      )) {
+        setStoredOperation(opKey, {
+          operationId,
+          expectedProviderRevision,
+          expectedCredentialRevision,
+          status: 'quarantined',
+        });
+        if (canUpdateUi) closeRotationForm(true);
+        return;
+      }
+      setStoredOperation(opKey, {
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        status: 'uncertain',
+      });
+      if (canUpdateUi) closeRotationForm(true);
+    } finally {
+      pendingKey = null;
+      clearPendingRotationKeyRef.current = null;
+      if (mountedRef.current && generation === rotationGeneration.current)
+        setRotationSaving(false);
+    }
+  };
+
   const switchDefault = async (provider?: PlatformModelProviderDraft) => {
     if (switchingRef.current || pendingSwitchReload !== null || !access || !isCurrent(access) || !isPositiveSafeInt(settingsRevision)) return;
     if (provider && (detailReplacedProviderIds.has(provider.id) || !isPositiveSafeInt(provider.revision))) return;
@@ -1530,6 +1877,13 @@ export function PlatformModelProviders() {
     return key ? operationStore.get(key) : null;
   }, [access, buildOperationKey, editingProvider, operationRevision, operationStore]);
 
+  const rotatingOperation = useMemo(() => {
+    void operationRevision;
+    if (!access || !rotatingProvider) return null;
+    const key = buildOperationKey(access, rotatingProvider.id);
+    return key ? operationStore.get(key) : null;
+  }, [access, buildOperationKey, operationRevision, operationStore, rotatingProvider]);
+
   const contextConfirmed = authorizationContext !== null && (
     !access || (
       authorizationContext.tenantId === access.tenant &&
@@ -1537,7 +1891,7 @@ export function PlatformModelProviders() {
       (authorizationContext.issuer == null || access.issuer === null || authorizationContext.issuer === access.issuer)
     )
   );
-  const controlsDisabled = forbidden || !access || !contextConfirmed || loading || saving || switching !== null || pendingSwitchReload !== null;
+  const controlsDisabled = forbidden || !access || !contextConfirmed || loading || saving || rotationSaving || switching !== null || pendingSwitchReload !== null;
   const activeSessionMessage = !session
     ? 'Sign in to manage platform providers.'
     : 'Switch to a platform sign-in before managing providers. Provider controls use an unbound Broker session.';
@@ -1548,6 +1902,7 @@ export function PlatformModelProviders() {
       description="Save provider metadata and exact prices, store a write-only key, and choose the default for new runs."
       actions={<Button appearance="primary" icon={<AddRegular />} disabled={controlsDisabled}
         onClick={() => {
+          closeRotationForm(false);
           editorGeneration.current += 1;
           focusPricingProviderId.current = null;
           setEditor(null);
@@ -1556,6 +1911,7 @@ export function PlatformModelProviders() {
           setTypeQuery('');
         }}>Add provider</Button>}
     >
+      <div ref={sectionHeadingRef} tabIndex={-1} />
       {checkingAccess && <Loading label="Checking platform access" />}
       {!checkingAccess && !access && !accessError && (
         <div className="v1-stack">
@@ -1730,6 +2086,15 @@ export function PlatformModelProviders() {
                         <Button onClick={() => void recheckSavedKey(provider)}
                           disabled={controlsDisabled}>Recheck saved key</Button>
                       )}
+                      {(provider.state === 'Available' ||
+                        (provider.state === 'Draft' && provider.hasCredential)) && (
+                        <Button
+                          aria-label={`Rotate API key for ${provider.name}`}
+                          onClick={(event) => startRotate(provider, event.currentTarget)}
+                          disabled={controlsDisabled || rotationSaving || Boolean(op)}>
+                          Rotate API key
+                        </Button>
+                      )}
                       {isDefault &&
                         !detailReplacedProviderIds.has(provider.id) &&
                         provider.state === 'Available' &&
@@ -1903,6 +2268,20 @@ export function PlatformModelProviders() {
               Key operation is {editingOperation.status.replaceAll('_', ' ')} (operation ID:{' '}
               <code>{editingOperation.operationId}</code>). New key entry is blocked until this operation is resolved. You can still save metadata changes.
             </MessageBarBody></MessageBar>
+          ) : editingProvider && editCredentialStatusLoading ? (
+            <Loading label="Checking credential status…" />
+          ) : editingProvider && editCredentialStatusError != null ? (
+            <ErrorNotice>{errorMessage(editCredentialStatusError)}</ErrorNotice>
+          ) : editingProvider && editCredentialStatus?.state !== 'not_set' ? (
+            <MessageBar intent="warning"><MessageBarBody>
+              {editCredentialStatus?.state === 'enabled'
+                ? 'A key is already saved. Use Rotate API key on the provider card to replace it. You can still save metadata changes.'
+                : editCredentialStatus?.state === 'disabled'
+                  ? 'Credential disabled. Disabled credential slots cannot accept a new key. You can still save metadata changes.'
+                  : editCredentialStatus?.state === 'pending'
+                    ? 'A credential update is already in progress. New key entry is blocked, but you can still save metadata changes.'
+                    : 'The last credential write was quarantined. Operator recovery is required before entering a new key. You can still save metadata changes.'}
+            </MessageBarBody></MessageBar>
           ) : (
             <Field label="API key" hint="The key stays in this form only. Leave it blank to keep the saved key.">
               <Input aria-label="API key" type={showKey ? 'text' : 'password'} autoComplete="new-password"
@@ -1921,6 +2300,118 @@ export function PlatformModelProviders() {
               {saving ? 'Saving…' : editingProvider ? 'Save changes' : 'Save provider'}
             </Button>
             {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+          </div>
+        </form>
+      )}
+
+      {access && contextConfirmed && !forbidden && rotatingProvider && (
+        <form
+          className="v1-form"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="rotate-platform-provider-heading"
+          onSubmit={(event) => void submitRotation(event)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !rotationSaving) {
+              event.preventDefault();
+              closeRotationForm(true);
+            }
+          }}
+        >
+          <h3 id="rotate-platform-provider-heading">
+            Rotate API key for {rotatingProvider.name}
+          </h3>
+          {rotationStatusLoading && <Loading label="Checking credential status…" />}
+          {!rotationStatusLoading && rotationStatusError != null && (
+            <ErrorNotice>{errorMessage(rotationStatusError)}</ErrorNotice>
+          )}
+          {!rotationStatusLoading && rotationStatusError == null && rotatingOperation && !rotationSaving && (
+            <MessageBar intent="warning"><MessageBarBody>
+              A key operation is already {rotatingOperation.status.replaceAll('_', ' ')} (operation ID:{' '}
+              <code>{rotatingOperation.operationId}</code>). Resolve it on the provider card before rotating the key.
+            </MessageBarBody></MessageBar>
+          )}
+          {!rotationStatusLoading && rotationStatusError == null && !rotatingOperation &&
+            rotationStatus?.state === 'not_set' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              No key is saved yet. Use Edit to add the first API key.
+            </MessageBarBody></MessageBar>
+          )}
+          {!rotationStatusLoading && rotationStatusError == null && !rotatingOperation &&
+            rotationStatus?.state === 'disabled' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              Credential disabled. Disabled credential slots cannot be rotated or re-enabled.
+            </MessageBarBody></MessageBar>
+          )}
+          {!rotationStatusLoading && rotationStatusError == null && !rotatingOperation &&
+            rotationStatus?.state === 'pending' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              A credential update is in progress. Select Refresh, or use Check key status on the provider card.
+            </MessageBarBody></MessageBar>
+          )}
+          {!rotationStatusLoading && rotationStatusError == null && !rotatingOperation &&
+            rotationStatus?.state === 'quarantined' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              The last credential write was quarantined. Operator recovery is required before rotating the key.
+            </MessageBarBody></MessageBar>
+          )}
+          {!rotationStatusLoading && rotationStatusError == null && (!rotatingOperation || rotationSaving) &&
+            rotationStatus?.state === 'enabled' && (
+            <Field label="New API key" required hint="The key stays in this form only.">
+              <Input
+                aria-label="New API key"
+                type={showRotationKey ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={rotationApiKey}
+                disabled={rotationSaving}
+                onChange={(_, data) => {
+                  setRotationApiKey(data.value);
+                  setRotationError(null);
+                }}
+                contentAfter={
+                  <Button
+                    type="button"
+                    appearance="transparent"
+                    size="small"
+                    aria-label={showRotationKey ? 'Hide API key' : 'Show API key'}
+                    icon={showRotationKey ? <EyeOff24Regular /> : <Eye24Regular />}
+                    disabled={rotationSaving}
+                    onClick={() => setShowRotationKey((current) => !current)}
+                  />
+                }
+              />
+            </Field>
+          )}
+          {rotationError != null && <ErrorNotice>{errorMessage(rotationError)}</ErrorNotice>}
+          <div className="v1-actions">
+            <Button
+              type="button"
+              disabled={rotationSaving}
+              onClick={() => closeRotationForm(true)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={rotationSaving || rotationStatusLoading}
+              onClick={() => {
+                if (access && isCurrent(access))
+                  void loadRotationStatus(access, rotatingProvider.id, rotationGeneration.current);
+              }}
+            >
+              Refresh
+            </Button>
+            {!rotationStatusLoading && rotationStatusError == null && (!rotatingOperation || rotationSaving) &&
+              rotationStatus?.state === 'enabled' && (
+              <Button
+                type="submit"
+                appearance="primary"
+                disabled={rotationSaving || !rotationApiKey.trim()}
+              >
+                {rotationSaving ? 'Rotating…' : 'Save new API key'}
+              </Button>
+            )}
+            {rotationSaving && <Spinner size="extra-tiny" aria-hidden="true" />}
           </div>
         </form>
       )}

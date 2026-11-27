@@ -86,7 +86,8 @@ the key, key hashes, or vault secret names. Each `PUT` accepts `operationId`,
 (upload or rotate), `recoverySecretVersion` (recover a quarantined write for the
 same `operationId`), or `recheckExistingVersion: true` (verify the stored,
 enabled Vault version against the current provider revision without uploading a
-key or creating a new Vault version). Existing-vault reference attachment
+key or creating a new Vault version, or replay an in-flight `PublicationPending`
+or `Published` upload or rotation using the original claim fingerprint). Existing-vault reference attachment
 is rejected (`400 existing_vault_reference_not_supported`). On publication,
 Projects checks the locked revision's `rate_card_id` and `rate_card_version`
 against Events; a verified card transitions the provider to `Available`, while

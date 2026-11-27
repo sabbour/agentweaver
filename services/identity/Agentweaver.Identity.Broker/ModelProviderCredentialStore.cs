@@ -1687,6 +1687,48 @@ internal sealed class ModelProviderCredentialStore(
         ValidateOpaque(request.Tenant, 256);
     }
 
+    internal bool TryResolvePublicationReplayIsRecheck(
+        ModelProviderCredentialWriteClaim claim,
+        bool hasRecheck,
+        out bool isRecheck)
+    {
+        isRecheck = false;
+        if (claim.ExpectedProviderRevision is null ||
+            string.IsNullOrEmpty(claim.Purpose) ||
+            string.IsNullOrEmpty(claim.Issuer) ||
+            string.IsNullOrEmpty(claim.Tenant))
+            return false;
+
+        var vaultUri = vaults.Resolve(claim.VaultSource);
+        var writeReq = new ClaimModelProviderCredentialWrite(
+            claim.OperationId,
+            claim.ExpectedRevision,
+            claim.CredentialSlotId,
+            claim.Scope,
+            claim.ProjectId,
+            claim.ProviderId,
+            claim.VaultSource,
+            claim.SecretName,
+            claim.ActorId);
+
+        var writePub = new ClaimModelProviderCredentialPublication(
+            writeReq, claim.ExpectedProviderRevision.Value, claim.Purpose, claim.Issuer, claim.Tenant, IsRecheck: false);
+        if (StringComparer.Ordinal.Equals(claim.RequestFingerprint, BuildClaimFingerprint(writeReq, writePub, vaultUri)))
+            return true;
+
+        if (hasRecheck)
+        {
+            var recheckPub = writePub with { IsRecheck = true };
+            if (StringComparer.Ordinal.Equals(claim.RequestFingerprint, BuildClaimFingerprint(writeReq, recheckPub, vaultUri)))
+            {
+                isRecheck = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string BuildClaimFingerprint(
         ClaimModelProviderCredentialWrite request,
         ClaimModelProviderCredentialPublication? publication,

@@ -2373,6 +2373,314 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+    [Fact]
+    public async Task Gateway_KeylessReplayOfPendingRotation_CompletesPublicationAndReplaysWithoutVaultWrite()
+    {
+        using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var projects = _runBindingProjects;
+
+        var fakeVault = new FakeByokVault();
+        await using var broker = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                settings["IdentityBroker__SecretRedemption__ByokVaultUri"] =
+                    "https://agentweaver-byok-kv-v1.vault.azure.net/";
+                settings["IdentityBroker__SecretRedemption__ByokVaultHost"] =
+                    "agentweaver-byok-kv-v1.vault.azure.net";
+                for (var i = 0; i < ProjectScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                services.RemoveAll<IModelProviderByokVault>();
+                services.AddSingleton<IModelProviderByokVault>(fakeVault);
+                services.RemoveAll<ModelProviderCredentialRedemptionBackends>();
+                services.AddSingleton(new ModelProviderCredentialRedemptionBackends(fakeVault));
+            });
+
+        using var brokerClient = broker.CreateClient();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(signingCert),
+            () => new ForwardToClientHandler(projects.Client),
+            async (owner, req, ct) =>
+            {
+                var client = owner == GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker
+                    ? brokerClient
+                    : projects.Client;
+                using var clone = new HttpRequestMessage(req.Method, req.RequestUri!.PathAndQuery);
+                foreach (var header in req.Headers)
+                {
+                    if (!string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase))
+                        clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                if (req.Content is not null)
+                {
+                    var bytes = await req.Content.ReadAsByteArrayAsync(ct);
+                    clone.Content = new ByteArrayContent(bytes);
+                    foreach (var header in req.Content.Headers)
+                        clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                var resp = await client.SendAsync(clone, ct);
+                resp.RequestMessage = req;
+                return resp;
+            });
+
+        var adminToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, null, null, ["platform_admin"]))
+            .GetProperty("access_token").GetString()!;
+        var adminClaims = new JwtSecurityTokenHandler().ReadJwtToken(adminToken).Claims.ToArray();
+        var adminSub = SingleClaim(adminClaims, "sub");
+        var adminIssuer = SingleClaim(adminClaims, "iss");
+        var adminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, adminSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            adminMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            adminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant,
+            TenantId,
+            ProjectAuthorityRole.TenantAdmin);
+
+        var project = await CreateProjectsTestProjectAsync(
+            projects.Client, adminToken, TenantId, "Rotation Replay Project");
+        var projectToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, project.ProjectId, null, ["project_owner"]))
+            .GetProperty("access_token").GetString()!;
+        var projectClaims = new JwtSecurityTokenHandler().ReadJwtToken(projectToken).Claims.ToArray();
+        var projectSub = SingleClaim(projectClaims, "sub");
+        var projectIssuer = SingleClaim(projectClaims, "iss");
+        var projectMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, projectSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            projectMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner);
+
+        // 1. Project scope: initial key + PublicationPending rotation at expectedCredentialRevision = 1.
+        string projectProviderId;
+        using (var createProj = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, $"/api/v1/projects/{project.ProjectId}/byok-providers", projectToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0L,
+                name = "Project Rotation Replay",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-4o",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, createProj.StatusCode);
+            using var doc = JsonDocument.Parse(await createProj.Content.ReadAsStringAsync());
+            projectProviderId = doc.RootElement.GetProperty("id").GetString()!;
+        }
+
+        using (var initialProjPut = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{projectProviderId}/credential", projectToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 1L,
+                expectedCredentialRevision = 0L,
+                apiKey = "sk-proj-v1",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialProjPut.StatusCode);
+        }
+        Assert.Equal(1, fakeVault.WriteCalls);
+
+        var projRotateOp = Guid.NewGuid();
+        string projRotatedVersion;
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = scope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var head = await store.ReadHeadByProviderAsync(
+                ModelProviderCredentialScope.Project, project.ProjectId, projectProviderId);
+            Assert.NotNull(head);
+            var preflight = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    projRotateOp, ModelProviderBindingScope.Project, project.ProjectId, projectProviderId,
+                    projectIssuer, projectSub, TenantId, null, project.ProjectId, "draft-snapshot"),
+                CancellationToken.None);
+            var secretName = $"byok-project-{projectProviderId}";
+            var pubClaim = new ClaimModelProviderCredentialPublication(
+                new ClaimModelProviderCredentialWrite(
+                    projRotateOp, 1L, head!.CredentialSlotId, ModelProviderCredentialScope.Project,
+                    project.ProjectId, projectProviderId, ModelProviderCredentialVaultSource.Byok,
+                    secretName, projectSub),
+                2L, "credential-publication", projectIssuer, preflight.ResolvedTenant);
+            _ = await store.ClaimPublicationWriteAsync(pubClaim, CancellationToken.None);
+            await store.MarkPublicationDispatchedAsync(pubClaim, CancellationToken.None);
+            var writtenRef = await fakeVault.WriteVersionAsync(
+                secretName,
+                new SecretCredential("sk-proj-v2", DateTimeOffset.UtcNow.AddDays(30)),
+                projRotateOp, head.CredentialSlotId, CancellationToken.None);
+            projRotatedVersion = writtenRef.Version;
+            _ = await store.CompletePublicationWriteAsync(pubClaim, writtenRef, CancellationToken.None);
+        }
+        Assert.Equal(2, fakeVault.WriteCalls);
+
+        // Mismatched expectedCredentialRevision must still fail (409).
+        using (var badRev = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{projectProviderId}/credential", projectToken,
+            new
+            {
+                operationId = projRotateOp,
+                expectedProviderRevision = 2L,
+                expectedCredentialRevision = 0L,
+                recheckExistingVersion = true,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, badRev.StatusCode);
+        }
+
+        // Keyless retry with original revisions completes publication without another Vault write.
+        using (var retry1 = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{projectProviderId}/credential", projectToken,
+            new
+            {
+                operationId = projRotateOp,
+                expectedProviderRevision = 2L,
+                expectedCredentialRevision = 1L,
+                recheckExistingVersion = true,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, retry1.StatusCode);
+            using var doc = JsonDocument.Parse(await retry1.Content.ReadAsStringAsync());
+            Assert.Equal("published", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal(3L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+            Assert.Equal(2L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+            Assert.Equal(projRotatedVersion, doc.RootElement.GetProperty("credentialVersion").GetString());
+        }
+        Assert.Equal(2, fakeVault.WriteCalls);
+
+        // Second retry replays the saved result with no Vault write.
+        using (var retry2 = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{projectProviderId}/credential", projectToken,
+            new
+            {
+                operationId = projRotateOp,
+                expectedProviderRevision = 2L,
+                expectedCredentialRevision = 1L,
+                recheckExistingVersion = true,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, retry2.StatusCode);
+            using var doc = JsonDocument.Parse(await retry2.Content.ReadAsStringAsync());
+            Assert.Equal("published", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal(3L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+            Assert.Equal(2L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+        }
+        Assert.Equal(2, fakeVault.WriteCalls);
+
+        // 2. Platform scope: initial key + PublicationPending rotation at expectedCredentialRevision = 1.
+        string platformProviderId;
+        using (var createPlat = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, "/api/v1/platform/byok-providers", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0L,
+                name = "Platform Rotation Replay",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-4o",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, createPlat.StatusCode);
+            using var doc = JsonDocument.Parse(await createPlat.Content.ReadAsStringAsync());
+            platformProviderId = doc.RootElement.GetProperty("id").GetString()!;
+        }
+
+        using (var initialPlatPut = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential", adminToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 1L,
+                expectedCredentialRevision = 0L,
+                apiKey = "sk-plat-v1",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialPlatPut.StatusCode);
+        }
+        Assert.Equal(3, fakeVault.WriteCalls);
+
+        var platRotateOp = Guid.NewGuid();
+        string platRotatedVersion;
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = scope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var head = await store.ReadHeadByProviderAsync(
+                ModelProviderCredentialScope.Platform, null, platformProviderId);
+            Assert.NotNull(head);
+            var preflight = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    platRotateOp, ModelProviderBindingScope.Platform, null, platformProviderId,
+                    adminIssuer, adminSub, TenantId, null, null, "draft-snapshot"),
+                CancellationToken.None);
+            var secretName = $"byok-platform-{platformProviderId}";
+            var pubClaim = new ClaimModelProviderCredentialPublication(
+                new ClaimModelProviderCredentialWrite(
+                    platRotateOp, 1L, head!.CredentialSlotId, ModelProviderCredentialScope.Platform,
+                    null, platformProviderId, ModelProviderCredentialVaultSource.Byok,
+                    secretName, adminSub),
+                2L, "credential-publication", adminIssuer, preflight.ResolvedTenant);
+            _ = await store.ClaimPublicationWriteAsync(pubClaim, CancellationToken.None);
+            await store.MarkPublicationDispatchedAsync(pubClaim, CancellationToken.None);
+            var writtenRef = await fakeVault.WriteVersionAsync(
+                secretName,
+                new SecretCredential("sk-plat-v2", DateTimeOffset.UtcNow.AddDays(30)),
+                platRotateOp, head.CredentialSlotId, CancellationToken.None);
+            platRotatedVersion = writtenRef.Version;
+            _ = await store.CompletePublicationWriteAsync(pubClaim, writtenRef, CancellationToken.None);
+        }
+        Assert.Equal(4, fakeVault.WriteCalls);
+
+        using (var platRetry = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put,
+            $"/api/v1/platform/byok-providers/{platformProviderId}/credential", adminToken,
+            new
+            {
+                operationId = platRotateOp,
+                expectedProviderRevision = 2L,
+                expectedCredentialRevision = 1L,
+                recheckExistingVersion = true,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, platRetry.StatusCode);
+            using var doc = JsonDocument.Parse(await platRetry.Content.ReadAsStringAsync());
+            Assert.Equal("published", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal(3L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+            Assert.Equal(2L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+            Assert.Equal(platRotatedVersion, doc.RootElement.GetProperty("credentialVersion").GetString());
+        }
+        Assert.Equal(4, fakeVault.WriteCalls);
+    }
+
     private sealed class InMemoryLogCollector : ILoggerProvider
     {
         private readonly ConcurrentQueue<string> _lines = new();
