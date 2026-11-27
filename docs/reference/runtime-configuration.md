@@ -571,19 +571,25 @@ An endpoint override that changes Broker's certificate or protocols fails startu
 | --- | --- |
 | `ProjectsConfig__PolicySource__Enabled` | Optional Boolean. Defaults to `false`. When `true`, require the CA fingerprint and one to four Environment leaf pins. |
 | `ProjectsConfig__PolicySource__BackendCaSha256` | Required when enabled. SHA-256 of the mounted backend CA certificate's DER bytes. Use 64 hexadecimal characters. Projects checks the fingerprint at startup and for each request. |
-| `ProjectsConfig__PolicySource__EnvironmentPins__<index>__Sha256` | Required for each pin. Indexes are sequential from `0`; configure one to four unique SHA-256 leaf fingerprints, each as 64 hexadecimal characters. |
-| `ProjectsConfig__PolicySource__EnvironmentPins__<index>__RetireAtUtc` | Required with each pin. Use an ISO 8601 UTC timestamp that ends in `Z`. Every configured retirement time must be later than startup. At runtime, the pin stops matching at the exact retirement instant. |
+| `ProjectsConfig__PolicySource__EnvironmentPins__<index>__Sha256` | Required for each Environment pin. Indexes are sequential from `0`; configure one to four unique SHA-256 leaf fingerprints, each as 64 hexadecimal characters. |
+| `ProjectsConfig__PolicySource__EnvironmentPins__<index>__RetireAtUtc` | Required with each Environment pin. Use an ISO 8601 UTC timestamp that ends in `Z`. Every configured retirement time must be later than startup. At runtime, the pin stops matching at the exact retirement instant. |
+| `ProjectsConfig__PolicySource__PreparationWorkerPins__<index>__Sha256` | Optional Policy worker pin set for `GET /internal/policy-source/platform/preparations/{preparationId}`. Omit this section to leave the preparation route disabled while keeping the head route active. When configured, indexes are sequential from `0` with one to four unique SHA-256 leaf fingerprints, each as 64 hexadecimal characters. |
+| `ProjectsConfig__PolicySource__PreparationWorkerPins__<index>__RetireAtUtc` | Required with each configured Policy worker pin. Use an ISO 8601 UTC timestamp that ends in `Z` later than startup. |
 | `Kestrel__Endpoints__EnvironmentPolicySource__Url` | Obsolete. Remove this endpoint setting; startup rejects it. The source uses the existing Projects HTTPS address. |
 
 With the source enabled, startup rejects ambiguous addresses, duplicate ports,
 SNI overrides, HTTP/3, `PreferHostingUrls=true`, required or delayed client
 certificates, and incompatible certificate-validation callbacks. Environment,
-AgentHost and issue-sync peer pins must be distinct.
+Policy worker, AgentHost, provider host-request, and issue-sync peer pins must
+be distinct.
 
 The mounted CA file is
 `/var/run/service-backend-ca/ca.crt`. Each Environment leaf must chain to that
 single pinned CA, include client authentication EKU, and contain exactly the
-DNS SAN `environment.agentweaver.svc.cluster.local`. Projects checks the leaf
+DNS SAN `environment.agentweaver.svc.cluster.local`. Each Policy worker leaf
+must chain to that same pinned CA, include client authentication EKU, and
+contain exactly the DNS SAN
+`environment-platform-egress-writer.agentweaver.svc.cluster.local`. Projects checks the leaf
 pin, SAN, validity, custom-root chain, and online revocation status. The
 platform certificate chain builder uses its CRL cache. A newer CRL takes effect
 after the cached CRL's `nextUpdate`. A revoked certificate can remain accepted

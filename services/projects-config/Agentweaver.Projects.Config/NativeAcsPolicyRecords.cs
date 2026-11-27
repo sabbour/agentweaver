@@ -54,6 +54,16 @@ public sealed record NativeAcsPolicyReadResult(
     NativeAcsArtifact Artifact,
     DateTimeOffset UpdatedAt);
 
+public sealed record NativeAcsPlatformPolicyExpectedHead(
+    string PolicyId,
+    long Revision,
+    string ContentSha256);
+
+public sealed record NativeAcsPlatformPolicyPreparationReadResult(
+    NativeAcsArtifact Artifact,
+    string ProposedContentSha256,
+    NativeAcsPlatformPolicyExpectedHead? ExpectedHead);
+
 public sealed record NativeAcsPolicyRevisionSummary(
     long Revision,
     string ContentSha256,

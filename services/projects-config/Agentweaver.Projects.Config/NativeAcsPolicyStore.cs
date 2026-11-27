@@ -22,6 +22,9 @@ internal sealed class NativeAcsPolicyStore(
     private const string PolicyRevisionEventType = "native_acs.policy_revision_committed.v1";
     private const string PlatformPolicyPreparationResourceType = "platform_policy";
     private const string PlatformPolicyPreparationDecisionType = "platform.policy.preparation.v1";
+    private const int MaximumPolicySourceResponseBytes = 5_242_880;
+    // A valid 1 MiB artifact with 3-digit byte arrays and PostgreSQL jsonb::text spacing can reach ~5.35 MB.
+    private const int MaximumPreparationStorageJsonBytes = 5_500_000;
     private const int MaximumPolicySourceManifestBytes = 65_536;
     private const int MaximumPolicySourceFiles = 64;
     private const int MaximumPolicySourceFileBytes = 262_144;
@@ -651,6 +654,132 @@ internal sealed class NativeAcsPolicyStore(
             head.UpdatedAt);
     }
 
+    internal async Task<NativeAcsPlatformPolicyPreparationReadResult?> ReadPlatformPolicyPreparationAsync(
+        Guid preparationId,
+        CancellationToken cancellationToken)
+    {
+        if (preparationId == Guid.Empty)
+            throw ReadRequestInvalid();
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+            .ConfigureAwait(false);
+        await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken)
+            .ConfigureAwait(false);
+
+        var metadata = await db.Database
+            .SqlQuery<PlatformPolicyPreparationMetadataRow>($"""
+                SELECT expected_head_policy_id AS "ExpectedHeadPolicyId",
+                       expected_head_revision AS "ExpectedHeadRevision",
+                       expected_head_content_sha256 AS "ExpectedHeadContentSha256",
+                       proposed_content_sha256 AS "ProposedContentSha256",
+                       octet_length(artifact::text)::bigint AS "ArtifactJsonBytes"
+                FROM projects_config.native_acs_policy_preparations
+                WHERE preparation_id = {preparationId}
+                  AND scope_type = 'Platform'
+                  AND scope_id = 'default'
+                """)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (metadata is null)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
+        if (metadata.ArtifactJsonBytes is < 2 or > MaximumPreparationStorageJsonBytes)
+            throw Corrupt("The stored native ACS policy preparation artifact exceeds its storage limits.");
+
+        var artifactJson = await db.NativeAcsPolicyPreparations.AsNoTracking()
+            .Where(item =>
+                item.PreparationId == preparationId &&
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId)
+            .Select(item => item.ArtifactJson)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw Corrupt("The stored native ACS policy preparation is unavailable.");
+
+        if (System.Text.Encoding.UTF8.GetByteCount(artifactJson) > MaximumPreparationStorageJsonBytes)
+            throw Corrupt("The stored native ACS policy preparation artifact exceeds its storage limits.");
+
+        NativeAcsPlatformPolicyExpectedHead? expectedHead;
+        if (metadata.ExpectedHeadPolicyId is null &&
+            metadata.ExpectedHeadRevision is null &&
+            metadata.ExpectedHeadContentSha256 is null)
+        {
+            expectedHead = null;
+        }
+        else if (string.IsNullOrWhiteSpace(metadata.ExpectedHeadPolicyId) ||
+            metadata.ExpectedHeadRevision is not > 0 ||
+            metadata.ExpectedHeadContentSha256 is not { Length: 64 } ||
+            !metadata.ExpectedHeadContentSha256.All(c => char.IsAsciiHexDigitLower(c)))
+        {
+            throw Corrupt("The stored native ACS policy preparation expected head is invalid.");
+        }
+        else
+        {
+            expectedHead = new NativeAcsPlatformPolicyExpectedHead(
+                metadata.ExpectedHeadPolicyId,
+                metadata.ExpectedHeadRevision.Value,
+                metadata.ExpectedHeadContentSha256);
+        }
+
+        NativeAcsArtifact? artifact;
+        try
+        {
+            artifact = JsonSerializer.Deserialize<NativeAcsArtifact>(artifactJson, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw Corrupt("The stored native ACS policy preparation artifact is invalid.");
+        }
+
+        if (artifact is null ||
+            artifact.ManifestBytes.IsDefaultOrEmpty ||
+            artifact.Files.IsDefault ||
+            artifact.Files.Any(file =>
+                file is null ||
+                string.IsNullOrWhiteSpace(file.RelativePath) ||
+                file.RelativePath.Length > 256 ||
+                file.Bytes.IsDefault) ||
+            artifact.Files.Select(file => file.RelativePath).Distinct(StringComparer.Ordinal).Count() !=
+            artifact.Files.Length)
+            throw Corrupt("The stored native ACS policy preparation artifact is invalid.");
+
+        if (artifact.ManifestBytes.Length is < 1 or > MaximumPolicySourceManifestBytes ||
+            artifact.Files.Length > MaximumPolicySourceFiles ||
+            artifact.Files.Any(file => file.Bytes.Length > MaximumPolicySourceFileBytes))
+            throw Corrupt("The stored native ACS policy preparation artifact exceeds its storage limits.");
+
+        var totalBytes = (long)artifact.ManifestBytes.Length;
+        foreach (var file in artifact.Files)
+            totalBytes += file.Bytes.Length;
+        if (totalBytes > MaximumPolicySourceArtifactBytes)
+            throw Corrupt("The stored native ACS policy preparation artifact exceeds its total size limit.");
+
+        string computedDigest;
+        try
+        {
+            computedDigest = NativeAcsArtifactHash.Compute(artifact);
+        }
+        catch (ArgumentException)
+        {
+            throw Corrupt("The stored native ACS policy preparation artifact failed its integrity check.");
+        }
+
+        if (!string.Equals(computedDigest, artifact.ContentSha256, StringComparison.Ordinal) ||
+            !string.Equals(computedDigest, metadata.ProposedContentSha256, StringComparison.Ordinal))
+            throw Corrupt("The stored native ACS policy preparation artifact failed its integrity check.");
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new NativeAcsPlatformPolicyPreparationReadResult(
+            artifact,
+            metadata.ProposedContentSha256,
+            expectedHead);
+    }
+
     internal Task<NativeAcsPolicyRevisionPage> ReadHistoryAsync(
         int pageSize,
         string? cursor,
@@ -1208,6 +1337,13 @@ internal sealed class NativeAcsPolicyStore(
         ProjectConfigException.Invalid(
             "native_acs_policy_read_request_invalid",
             $"The {scope} Policy read request is invalid.");
+
+    private sealed record PlatformPolicyPreparationMetadataRow(
+        string? ExpectedHeadPolicyId,
+        long? ExpectedHeadRevision,
+        string? ExpectedHeadContentSha256,
+        string ProposedContentSha256,
+        long ArtifactJsonBytes);
 
     internal sealed record HistoryCursor(
         int Version,

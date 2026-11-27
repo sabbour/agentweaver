@@ -25,6 +25,179 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed class PlatformPolicySourceTlsTests
 {
     [Fact]
+    public void JsonBackedPreparationWorkerPinsRejectNullEmptyArrayEmptyObjectAndInvalidEntries()
+    {
+        using var certificates = new PolicySourceCertificates();
+        var caSha256 = certificates.Configuration()["ProjectsConfig:PolicySource:BackendCaSha256"];
+        var retireAtUtc = DateTimeOffset.UtcNow.AddDays(2).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'");
+
+        WebApplicationBuilder BuildFromJson(string workerPinsProperty)
+        {
+            var json = $$"""
+            {
+              "urls": "https://+:8443",
+              "ProjectsConfig": {
+                "PolicySource": {
+                  "Enabled": true,
+                  "BackendCaSha256": "{{caSha256}}",
+                  "EnvironmentPins": [
+                    {
+                      "Sha256": "{{certificates.EnvironmentPin}}",
+                      "RetireAtUtc": "{{retireAtUtc}}"
+                    }
+                  ]{{workerPinsProperty}}
+                },
+                "Tls": {
+                  "CertificatePath": "{{certificates.ServerCertificatePath.Replace("\\", "\\\\")}}",
+                  "KeyPath": "{{certificates.ServerKeyPath.Replace("\\", "\\\\")}}",
+                  "ServerCertificateSha256": "{{certificates.ServerPin}}"
+                }
+              }
+            }
+            """;
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
+            builder.Configuration.Sources.Clear();
+            builder.Configuration.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)));
+            return builder;
+        }
+
+        var omittedBuilder = BuildFromJson("");
+        Assert.True(PlatformPolicySourceTls.Configure(omittedBuilder, certificates.CaPath));
+        using (var app = omittedBuilder.Build())
+        {
+            Assert.False(app.Services.GetRequiredService<PlatformPolicySourceTlsIdentity>().IsPreparationReadEnabled);
+        }
+
+        var validBuilder = BuildFromJson(
+            $$""", "PreparationWorkerPins": [ { "Sha256": "{{certificates.PreparationWorkerPin}}", "RetireAtUtc": "{{retireAtUtc}}" } ]""");
+        Assert.True(PlatformPolicySourceTls.Configure(validBuilder, certificates.CaPath));
+        using (var app = validBuilder.Build())
+        {
+            Assert.True(app.Services.GetRequiredService<PlatformPolicySourceTlsIdentity>().IsPreparationReadEnabled);
+        }
+
+        foreach (var invalidProperty in new[]
+        {
+            """, "PreparationWorkerPins": null""",
+            """, "PreparationWorkerPins": []""",
+            """, "PreparationWorkerPins": {}""",
+            $$""", "PreparationWorkerPins": [ { "Sha256": "invalid", "RetireAtUtc": "{{retireAtUtc}}" } ]""",
+        })
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+                PlatformPolicySourceTls.Configure(BuildFromJson(invalidProperty), certificates.CaPath));
+        }
+    }
+
+    [Fact]
+    public void PreparationWorkerPinsRequireNonEmptyDisjointValidPinsAndRemainOptional()
+    {
+        using var certificates = new PolicySourceCertificates();
+        var omittedBuilder = Builder(certificates.Configuration());
+        Assert.True(PlatformPolicySourceTls.Configure(omittedBuilder, certificates.CaPath));
+
+        var configuredBuilder = Builder(certificates.Configuration(includePreparationWorkerPins: true));
+        Assert.True(PlatformPolicySourceTls.Configure(configuredBuilder, certificates.CaPath));
+
+        var invalidProfiles = new[]
+        {
+            new Dictionary<string, string?>(certificates.Configuration())
+            {
+                ["ProjectsConfig:PolicySource:PreparationWorkerPins"] = "",
+            },
+            new Dictionary<string, string?>(certificates.Configuration(includePreparationWorkerPins: true))
+            {
+                ["ProjectsConfig:PolicySource:PreparationWorkerPins:0:RetireAtUtc"] =
+                    DateTimeOffset.UtcNow.AddMinutes(-1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+            },
+            new Dictionary<string, string?>(certificates.Configuration(includePreparationWorkerPins: true))
+            {
+                ["ProjectsConfig:PolicySource:PreparationWorkerPins:1:Sha256"] =
+                    certificates.PreparationWorkerPin,
+                ["ProjectsConfig:PolicySource:PreparationWorkerPins:1:RetireAtUtc"] =
+                    DateTimeOffset.UtcNow.AddDays(1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+            },
+            new Dictionary<string, string?>(certificates.Configuration(includePreparationWorkerPins: true))
+            {
+                ["ProjectsConfig:PolicySource:PreparationWorkerPins:0:Sha256"] =
+                    certificates.EnvironmentPin,
+            },
+            new Dictionary<string, string?>(certificates.Configuration(includePreparationWorkerPins: true))
+            {
+                ["ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256"] =
+                    certificates.PreparationWorkerPin,
+            },
+            new Dictionary<string, string?>(certificates.Configuration(includePreparationWorkerPins: true))
+            {
+                ["ProjectsConfig:IssueSync:IdentityTls:PeerCertificateSha256Pins:0"] =
+                    certificates.PreparationWorkerPin,
+            },
+            new Dictionary<string, string?>(certificates.Configuration(includePreparationWorkerPins: true))
+            {
+                ["Kestrel:Endpoints:ProviderHostRequest:Url"] = "https://+:8444",
+                ["ProjectsConfig:ProviderHostRequest:Tls:PeerCertificateSha256Pins:0"] =
+                    certificates.PreparationWorkerPin,
+            },
+        };
+
+        foreach (var profile in invalidProfiles)
+            Assert.Throws<InvalidOperationException>(() =>
+                PlatformPolicySourceTls.Configure(Builder(profile), certificates.CaPath));
+    }
+
+    [Fact]
+    public async Task PreparationWorkerValidationEnforcesExactSanRootClientAuthRotationAndPeerSeparation()
+    {
+        using var certificates = new PolicySourceCertificates();
+        var time = new MutableTimeProvider(DateTimeOffset.UtcNow);
+        using var rotatedWorker = certificates.CreateClient(
+            PlatformPolicySourceTls.PreparationWorkerDnsName,
+            clientAuthentication: true);
+        using var wrongSanWorker = certificates.CreateClient(
+            PlatformPolicySourceTls.EnvironmentDnsName,
+            clientAuthentication: true);
+        using var wrongRootWorker = certificates.CreateClient(
+            PlatformPolicySourceTls.PreparationWorkerDnsName,
+            clientAuthentication: true,
+            issuedByOtherCa: true);
+        using var noClientAuthWorker = certificates.CreateClient(
+            PlatformPolicySourceTls.PreparationWorkerDnsName,
+            clientAuthentication: false);
+
+        var identity = certificates.CreateIdentity(
+            retireAtUtc: time.GetUtcNow().AddMinutes(10),
+            timeProvider: time,
+            workerPins: [certificates.PreparationWorkerClient, rotatedWorker, wrongSanWorker, wrongRootWorker, noClientAuthWorker],
+            workerRetireAtUtc: time.GetUtcNow().AddMinutes(5));
+
+        Assert.True(identity.IsPreparationReadEnabled);
+        Assert.True(identity.AcceptPreparationWorkerClientCertificate(
+            certificates.PreparationWorkerClient, null, SslPolicyErrors.None));
+        Assert.True(identity.AcceptPreparationWorkerClientCertificate(
+            rotatedWorker, null, SslPolicyErrors.None));
+        Assert.False(identity.AcceptPreparationWorkerClientCertificate(
+            certificates.EnvironmentClient, null, SslPolicyErrors.None));
+        Assert.False(identity.AcceptClientCertificate(
+            certificates.PreparationWorkerClient, null, SslPolicyErrors.None));
+        Assert.False(identity.AcceptPreparationWorkerClientCertificate(
+            wrongSanWorker, null, SslPolicyErrors.None));
+        Assert.False(identity.AcceptPreparationWorkerClientCertificate(
+            wrongRootWorker, null, SslPolicyErrors.None));
+        Assert.False(identity.AcceptPreparationWorkerClientCertificate(
+            noClientAuthWorker, null, SslPolicyErrors.None));
+        Assert.False(await identity.IsPreparationWorkerPeerAsync(
+            certificates.EnvironmentClient, CancellationToken.None));
+        Assert.False(await identity.IsEnvironmentPeerAsync(
+            certificates.PreparationWorkerClient, CancellationToken.None));
+
+        time.SetUtcNow(time.GetUtcNow().AddMinutes(5));
+        Assert.False(identity.AcceptPreparationWorkerClientCertificate(
+            certificates.PreparationWorkerClient, null, SslPolicyErrors.None));
+        Assert.True(identity.AcceptClientCertificate(
+            certificates.EnvironmentClient, null, SslPolicyErrors.None));
+    }
+
+    [Fact]
     public void DisabledProfileAddsNoPrivateEndpointAndDoesNotLoadTheCa()
     {
         var builder = Builder([]);
@@ -693,6 +866,12 @@ public sealed class PlatformPolicySourceTlsTests
                 clientAuthentication: true,
                 notAfter: null,
                 issuer: _ca);
+            PreparationWorkerClient = CreateClient(
+                PlatformPolicySourceTls.PreparationWorkerDnsName,
+                crlUri,
+                clientAuthentication: true,
+                notAfter: null,
+                issuer: _ca);
             ServerCertificate = CreateServer();
 
             var keyPath = Path.Combine(_fixtureDirectory, "server");
@@ -711,30 +890,44 @@ public sealed class PlatformPolicySourceTlsTests
         internal X509Certificate2 BackendCa => _ca;
         internal X509Certificate2 EnvironmentClient { get; }
         internal X509Certificate2 AgentHostClient { get; }
+        internal X509Certificate2 PreparationWorkerClient { get; }
         internal X509Certificate2 ServerCertificate { get; }
         internal int CrlRequestCount => _crlServer.RequestCount;
         internal string EnvironmentPin => Fingerprint(EnvironmentClient);
         internal string AgentHostPin => Fingerprint(AgentHostClient);
+        internal string PreparationWorkerPin => Fingerprint(PreparationWorkerClient);
         internal string ServerPin => Fingerprint(ServerCertificate);
 
-        internal Dictionary<string, string?> Configuration() => new()
+        internal Dictionary<string, string?> Configuration(bool includePreparationWorkerPins = false)
         {
-            ["urls"] = "https://+:8443",
-            ["ProjectsConfig:PolicySource:Enabled"] = "true",
-            ["ProjectsConfig:PolicySource:BackendCaSha256"] = Fingerprint(_ca),
-            ["ProjectsConfig:PolicySource:EnvironmentPins:0:Sha256"] = EnvironmentPin,
-            ["ProjectsConfig:PolicySource:EnvironmentPins:0:RetireAtUtc"] =
-                DateTimeOffset.UtcNow.AddDays(2).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
-            ["ProjectsConfig:Tls:CertificatePath"] = ServerCertificatePath,
-            ["ProjectsConfig:Tls:KeyPath"] = ServerKeyPath,
-            ["ProjectsConfig:Tls:ServerCertificateSha256"] = ServerPin,
-        };
+            var values = new Dictionary<string, string?>
+            {
+                ["urls"] = "https://+:8443",
+                ["ProjectsConfig:PolicySource:Enabled"] = "true",
+                ["ProjectsConfig:PolicySource:BackendCaSha256"] = Fingerprint(_ca),
+                ["ProjectsConfig:PolicySource:EnvironmentPins:0:Sha256"] = EnvironmentPin,
+                ["ProjectsConfig:PolicySource:EnvironmentPins:0:RetireAtUtc"] =
+                    DateTimeOffset.UtcNow.AddDays(2).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                ["ProjectsConfig:Tls:CertificatePath"] = ServerCertificatePath,
+                ["ProjectsConfig:Tls:KeyPath"] = ServerKeyPath,
+                ["ProjectsConfig:Tls:ServerCertificateSha256"] = ServerPin,
+            };
+            if (includePreparationWorkerPins)
+            {
+                values["ProjectsConfig:PolicySource:PreparationWorkerPins:0:Sha256"] = PreparationWorkerPin;
+                values["ProjectsConfig:PolicySource:PreparationWorkerPins:0:RetireAtUtc"] =
+                    DateTimeOffset.UtcNow.AddDays(2).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'");
+            }
+            return values;
+        }
 
         internal PlatformPolicySourceTlsIdentity CreateIdentity(
             X509Certificate2[]? additionalPins = null,
             DateTimeOffset? retireAtUtc = null,
             TimeProvider? timeProvider = null,
-            DateTimeOffset? additionalPinsRetireAtUtc = null)
+            DateTimeOffset? additionalPinsRetireAtUtc = null,
+            X509Certificate2[]? workerPins = null,
+            DateTimeOffset? workerRetireAtUtc = null)
         {
             var defaultRetirement = retireAtUtc ?? DateTimeOffset.UtcNow.AddDays(2);
             var pins = new[] { (Certificate: EnvironmentClient, RetireAtUtc: defaultRetirement) }
@@ -746,8 +939,14 @@ public sealed class PlatformPolicySourceTlsTests
                     Fingerprint(pin.Certificate),
                     pin.RetireAtUtc))
                 .ToImmutableArray();
+            var workers = (workerPins ?? [])
+                .DistinctBy(Fingerprint)
+                .Select(certificate => new PlatformPolicySourceLeafPin(
+                    Fingerprint(certificate),
+                    workerRetireAtUtc ?? defaultRetirement))
+                .ToImmutableArray();
             return new PlatformPolicySourceTlsIdentity(
-                new PlatformPolicySourceTlsOptions(Fingerprint(_ca), pins),
+                new PlatformPolicySourceTlsOptions(Fingerprint(_ca), pins, workers),
                 CaPath,
                 timeProvider ?? TimeProvider.System);
         }

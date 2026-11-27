@@ -20,8 +20,11 @@ internal static class PlatformPolicySourceTls
     internal const string SectionName = "ProjectsConfig:PolicySource";
     internal const string EndpointUrlKey = "Kestrel:Endpoints:EnvironmentPolicySource:Url";
     internal const string RoutePath = "/internal/policy-source/platform";
+    internal const string PreparationRoutePrefix = "/internal/policy-source/platform/preparations/";
+    internal const string PreparationRoutePattern = "/internal/policy-source/platform/preparations/{preparationId}";
     internal const string BackendCaFile = "/var/run/service-backend-ca/ca.crt";
     internal const string EnvironmentDnsName = "environment.agentweaver.svc.cluster.local";
+    internal const string PreparationWorkerDnsName = "environment-platform-egress-writer.agentweaver.svc.cluster.local";
 
     private const string PublicEndpointName = "ProjectsHttps";
     internal static bool IsEnabled(IConfiguration configuration)
@@ -42,7 +45,10 @@ internal static class PlatformPolicySourceTls
         if (!IsEnabled(builder.Configuration))
             return false;
 
-        var options = ReadOptions(builder.Configuration.GetSection(SectionName), (timeProvider ?? TimeProvider.System).GetUtcNow());
+        var options = ReadOptions(
+            builder.Configuration,
+            builder.Configuration.GetSection(SectionName),
+            (timeProvider ?? TimeProvider.System).GetUtcNow());
         var otherPins = builder.Configuration
             .GetSection("ProjectsConfig:IssueSync:IdentityTls:PeerCertificateSha256Pins")
             .GetChildren().Select(pin => pin.Value)
@@ -52,6 +58,7 @@ internal static class PlatformPolicySourceTls
             .Append(builder.Configuration[$"{HostedModelCatalogPublicationTls.SectionName}:AgentHostCertificateSha256"])
             .Where(pin => pin is not null).ToArray();
         if (options.EnvironmentPins.Any(pin => otherPins.Contains(pin.Sha256, StringComparer.OrdinalIgnoreCase)) ||
+            options.PreparationWorkerPins.Any(pin => otherPins.Contains(pin.Sha256, StringComparer.OrdinalIgnoreCase)) ||
             otherPins.Length != otherPins.Distinct(StringComparer.OrdinalIgnoreCase).Count())
             throw InvalidConfiguration();
 
@@ -108,6 +115,9 @@ internal static class PlatformPolicySourceTls
                     if (certificate is null)
                         return false;
                     var pin = Convert.ToHexString(SHA256.HashData(certificate.RawData));
+                    if (options.PreparationWorkerPins.Any(item =>
+                            string.Equals(item.Sha256, pin, StringComparison.OrdinalIgnoreCase)))
+                        return identity.AcceptPreparationWorkerClientCertificate(certificate, chain, errors);
                     if (options.EnvironmentPins.Any(item =>
                             string.Equals(item.Sha256, pin, StringComparison.OrdinalIgnoreCase)))
                         return identity.AcceptClientCertificate(certificate, chain, errors);
@@ -167,6 +177,7 @@ internal static class PlatformPolicySourceTls
     }
 
     private static PlatformPolicySourceTlsOptions ReadOptions(
+        IConfiguration configuration,
         IConfigurationSection section,
         DateTimeOffset now)
     {
@@ -175,16 +186,48 @@ internal static class PlatformPolicySourceTls
             "Enabled",
             "BackendCaSha256",
             "EnvironmentPins",
+            "PreparationWorkerPins",
         };
         if (section.GetChildren().Any(child => !allowedKeys.Contains(child.Key)))
             throw InvalidConfiguration();
 
         var caSha256 = section["BackendCaSha256"];
-        var pinSection = section.GetSection("EnvironmentPins");
+        if (!IsSha256(caSha256))
+            throw InvalidConfiguration();
+
+        var environmentPins = ReadLeafPins(section.GetSection("EnvironmentPins"), now);
+        var workerPinSection = section.GetSection("PreparationWorkerPins");
+        var workerPins = IsPreparationWorkerPinsConfigured(configuration, workerPinSection)
+            ? ReadLeafPins(workerPinSection, now)
+            : [];
+        if (workerPins.Any(workerPin => environmentPins.Any(envPin =>
+                string.Equals(envPin.Sha256, workerPin.Sha256, StringComparison.OrdinalIgnoreCase))))
+            throw InvalidConfiguration();
+        return new PlatformPolicySourceTlsOptions(caSha256!, environmentPins, workerPins);
+    }
+
+    private static bool IsPreparationWorkerPinsConfigured(
+        IConfiguration configuration,
+        IConfigurationSection workerPinSection)
+    {
+        if (workerPinSection.Exists())
+            return true;
+        if (configuration is IConfigurationRoot root)
+        {
+            const string key = $"{SectionName}:PreparationWorkerPins";
+            return root.Providers.Any(provider => provider.TryGet(key, out _));
+        }
+        return false;
+    }
+
+    private static ImmutableArray<PlatformPolicySourceLeafPin> ReadLeafPins(
+        IConfigurationSection pinSection,
+        DateTimeOffset now)
+    {
         var pinItems = pinSection.GetChildren()
             .OrderBy(item => item.Key, StringComparer.Ordinal)
             .ToArray();
-        if (!IsSha256(caSha256) || pinItems.Length is < 1 or > 4)
+        if (pinItems.Length is < 1 or > 4)
             throw InvalidConfiguration();
 
         var pins = ImmutableArray.CreateBuilder<PlatformPolicySourceLeafPin>(pinItems.Length);
@@ -212,7 +255,7 @@ internal static class PlatformPolicySourceTls
 
         if (pins.Select(pin => pin.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() != pins.Count)
             throw InvalidConfiguration();
-        return new PlatformPolicySourceTlsOptions(caSha256!, pins.MoveToImmutable());
+        return pins.MoveToImmutable();
     }
 
     private static bool IsSha256(string? value) =>
@@ -226,11 +269,13 @@ internal sealed record PlatformPolicySourceLeafPin(string Sha256, DateTimeOffset
 
 internal sealed record PlatformPolicySourceTlsOptions(
     string BackendCaSha256,
-    ImmutableArray<PlatformPolicySourceLeafPin> EnvironmentPins);
+    ImmutableArray<PlatformPolicySourceLeafPin> EnvironmentPins,
+    ImmutableArray<PlatformPolicySourceLeafPin> PreparationWorkerPins = default);
 
 internal sealed class PlatformPolicySourceTlsIdentity
 {
     internal int ListenerPort { get; set; }
+    internal bool IsPreparationReadEnabled => !_workerPins.IsDefaultOrEmpty;
     internal const SslProtocols AllowedProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
     private const string ClientAuthenticationOid = "1.3.6.1.5.5.7.3.2";
     private const int MaximumPeerIntermediates = 8;
@@ -239,6 +284,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
     private readonly PlatformPolicySourceTlsOptions _options;
     private readonly byte[] _backendCaDigest;
     private readonly ImmutableArray<(byte[] Digest, DateTimeOffset RetireAtUtc)> _pins;
+    private readonly ImmutableArray<(byte[] Digest, DateTimeOffset RetireAtUtc)> _workerPins;
     private readonly string _backendCaFile;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, ImmutableArray<byte[]>> _peerIntermediates =
@@ -256,6 +302,11 @@ internal sealed class PlatformPolicySourceTlsIdentity
         _pins = options.EnvironmentPins
             .Select(pin => (Digest: Convert.FromHexString(pin.Sha256), pin.RetireAtUtc))
             .ToImmutableArray();
+        _workerPins = options.PreparationWorkerPins.IsDefault
+            ? []
+            : options.PreparationWorkerPins
+                .Select(pin => (Digest: Convert.FromHexString(pin.Sha256), pin.RetireAtUtc))
+                .ToImmutableArray();
 
         try
         {
@@ -275,14 +326,37 @@ internal sealed class PlatformPolicySourceTlsIdentity
         X509Certificate2? certificate,
         X509Chain? chain,
         SslPolicyErrors errors) =>
-        ValidatePeer(certificate, chain, errors, _timeProvider.GetUtcNow(), cacheIntermediates: true);
+        ValidatePeer(certificate, chain, errors, _timeProvider.GetUtcNow(), cacheIntermediates: true,
+            _pins, PlatformPolicySourceTls.EnvironmentDnsName);
 
-    internal async Task<bool> IsEnvironmentPeerAsync(
+    internal bool AcceptPreparationWorkerClientCertificate(
         X509Certificate2? certificate,
+        X509Chain? chain,
+        SslPolicyErrors errors) =>
+        !_workerPins.IsDefaultOrEmpty &&
+        ValidatePeer(certificate, chain, errors, _timeProvider.GetUtcNow(), cacheIntermediates: true,
+            _workerPins, PlatformPolicySourceTls.PreparationWorkerDnsName);
+
+    internal Task<bool> IsEnvironmentPeerAsync(
+        X509Certificate2? certificate,
+        CancellationToken cancellationToken) =>
+        IsPinnedPeerAsync(certificate, _pins, PlatformPolicySourceTls.EnvironmentDnsName, cancellationToken);
+
+    internal Task<bool> IsPreparationWorkerPeerAsync(
+        X509Certificate2? certificate,
+        CancellationToken cancellationToken) =>
+        _workerPins.IsDefaultOrEmpty
+            ? Task.FromResult(false)
+            : IsPinnedPeerAsync(certificate, _workerPins, PlatformPolicySourceTls.PreparationWorkerDnsName, cancellationToken);
+
+    private async Task<bool> IsPinnedPeerAsync(
+        X509Certificate2? certificate,
+        ImmutableArray<(byte[] Digest, DateTimeOffset RetireAtUtc)> pins,
+        string expectedDnsName,
         CancellationToken cancellationToken)
     {
         if (certificate is null ||
-            !IsPinnedEnvironmentLeaf(certificate, _timeProvider.GetUtcNow(), out var digest))
+            !IsPinnedLeaf(certificate, _timeProvider.GetUtcNow(), pins, expectedDnsName, out var digest))
             return false;
 
         var peer = X509CertificateLoader.LoadCertificate(certificate.RawData);
@@ -291,7 +365,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
                 {
                     using (peer)
                         return ValidatePeer(peer, null, SslPolicyErrors.None, _timeProvider.GetUtcNow(),
-                            cacheIntermediates: false, digest, cancellationToken);
+                            cacheIntermediates: false, pins, expectedDnsName, digest, cancellationToken);
                 },
                 CancellationToken.None)
             .WaitAsync(cancellationToken)
@@ -304,6 +378,8 @@ internal sealed class PlatformPolicySourceTlsIdentity
         SslPolicyErrors errors,
         DateTimeOffset now,
         bool cacheIntermediates,
+        ImmutableArray<(byte[] Digest, DateTimeOffset RetireAtUtc)> pins,
+        string expectedDnsName,
         byte[]? knownDigest = null,
         CancellationToken cancellationToken = default)
     {
@@ -315,7 +391,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
             ? null
             : X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
         var leaf = certificate as X509Certificate2 ?? converted!;
-        if (!IsPinnedEnvironmentLeaf(leaf, now, out var digest) ||
+        if (!IsPinnedLeaf(leaf, now, pins, expectedDnsName, out var digest) ||
             knownDigest is not null &&
             !CryptographicOperations.FixedTimeEquals(knownDigest, digest))
             return false;
@@ -357,7 +433,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
                 cancellationToken.ThrowIfCancellationRequested();
                 var chainElements = validationChain.ChainElements;
                 var verifiedAt = _timeProvider.GetUtcNow();
-                if (!IsPinnedEnvironmentLeaf(leaf, verifiedAt, out var currentDigest) ||
+                if (!IsPinnedLeaf(leaf, verifiedAt, pins, expectedDnsName, out var currentDigest) ||
                     !CryptographicOperations.FixedTimeEquals(digest, currentDigest) ||
                     chainElements.Cast<X509ChainElement>()
                         .Any(element => !IsCertificateCurrentlyValid(element.Certificate, verifiedAt)))
@@ -400,9 +476,11 @@ internal sealed class PlatformPolicySourceTlsIdentity
         return root;
     }
 
-    private bool IsPinnedEnvironmentLeaf(
+    private static bool IsPinnedLeaf(
         X509Certificate2 certificate,
         DateTimeOffset now,
+        ImmutableArray<(byte[] Digest, DateTimeOffset RetireAtUtc)> pins,
+        string expectedDnsName,
         out byte[] digest)
     {
         var leafDigest = SHA256.HashData(certificate.RawData);
@@ -412,10 +490,10 @@ internal sealed class PlatformPolicySourceTlsIdentity
             certificate.Extensions.OfType<X509BasicConstraintsExtension>()
                 .Any(extension => extension.CertificateAuthority) ||
             !HasClientAuthenticationPurpose(certificate) ||
-            !HasExactEnvironmentSan(certificate))
+            !HasExactDnsSan(certificate, expectedDnsName))
             return false;
 
-        return _pins.Any(pin =>
+        return pins.Any(pin =>
             now < pin.RetireAtUtc &&
             CryptographicOperations.FixedTimeEquals(pin.Digest, leafDigest));
     }
@@ -429,7 +507,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
         certificate.Extensions.OfType<X509BasicConstraintsExtension>()
             .Any(extension => extension.CertificateAuthority);
 
-    private static bool HasExactEnvironmentSan(X509Certificate2 certificate)
+    private static bool HasExactDnsSan(X509Certificate2 certificate, string expectedDnsName)
     {
         var extensions = certificate.Extensions
             .OfType<X509SubjectAlternativeNameExtension>()
@@ -453,7 +531,7 @@ internal sealed class PlatformPolicySourceTlsIdentity
             reader.ThrowIfNotEmpty();
             return string.Equals(
                 dnsName,
-                PlatformPolicySourceTls.EnvironmentDnsName,
+                expectedDnsName,
                 StringComparison.OrdinalIgnoreCase);
         }
         catch (AsnContentException)

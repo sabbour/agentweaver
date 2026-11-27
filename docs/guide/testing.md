@@ -556,7 +556,7 @@ The route and PostgreSQL snapshot tests use disposable PostgreSQL. Hosted CI
 runs them:
 
 ```powershell
-dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~PrivatePlatformPolicySource
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --no-build --no-restore --configuration Release --filter "FullyQualifiedName~PrivatePlatformPolicySource|FullyQualifiedName~PrivatePlatformPolicyPreparationRead"
 ```
 
 The TLS tests check shared-listener composition with neither workload profile,

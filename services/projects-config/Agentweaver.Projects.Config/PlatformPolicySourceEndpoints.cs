@@ -29,10 +29,15 @@ internal static class PlatformPolicySourceEndpoints
             var policySourceArea = context.Request.Path.StartsWithSegments(
                 "/internal/policy-source",
                 StringComparison.OrdinalIgnoreCase);
-            var exactPath = string.Equals(
-                context.Request.Path.Value,
+            var path = context.Request.Path.Value ?? string.Empty;
+            var tls = context.RequestServices.GetRequiredService<PlatformPolicySourceTlsIdentity>();
+            var isHeadRoute = string.Equals(
+                path,
                 PlatformPolicySourceTls.RoutePath,
                 StringComparison.Ordinal);
+            var isPreparationRoute = !isHeadRoute &&
+                tls.IsPreparationReadEnabled &&
+                IsPreparationRoutePath(path);
             if (!policySourceArea)
             {
                 await next(context).ConfigureAwait(false);
@@ -40,7 +45,7 @@ internal static class PlatformPolicySourceEndpoints
             }
 
             context.Response.Headers.CacheControl = "no-store";
-            if (!isSourceListener || !exactPath)
+            if (!isSourceListener || (!isHeadRoute && !isPreparationRoute))
             {
                 await WriteErrorAsync(
                     context,
@@ -58,10 +63,10 @@ internal static class PlatformPolicySourceEndpoints
             {
                 var protocol = context.Features.Get<ITlsHandshakeFeature>()?.Protocol;
                 var certificate = context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate;
-                var tls = context.RequestServices.GetRequiredService<PlatformPolicySourceTlsIdentity>();
                 if (!context.Request.IsHttps ||
                     protocol is not (SslProtocols.Tls12 or SslProtocols.Tls13) ||
-                    !await tls.IsEnvironmentPeerAsync(certificate, deadline.Token).ConfigureAwait(false))
+                    !await IsAuthorizedPeerAsync(tls, isPreparationRoute, certificate, deadline.Token)
+                        .ConfigureAwait(false))
                 {
                     await WriteErrorAsync(
                         context,
@@ -93,7 +98,9 @@ internal static class PlatformPolicySourceEndpoints
                 }
 
                 context.Response.Body = transport;
-                if (!await tls.IsEnvironmentPeerAsync(
+                if (!await IsAuthorizedPeerAsync(
+                        tls,
+                        isPreparationRoute,
                         context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate,
                         deadline.Token).ConfigureAwait(false))
                 {
@@ -128,15 +135,93 @@ internal static class PlatformPolicySourceEndpoints
         });
     }
 
+    private static bool IsPreparationRoutePath(string path)
+    {
+        if (!path.StartsWith(PlatformPolicySourceTls.PreparationRoutePrefix, StringComparison.Ordinal))
+            return false;
+        var idSegment = path.AsSpan(PlatformPolicySourceTls.PreparationRoutePrefix.Length);
+        return !idSegment.IsEmpty && !idSegment.Contains('/');
+    }
+
+    private static Task<bool> IsAuthorizedPeerAsync(
+        PlatformPolicySourceTlsIdentity tls,
+        bool isPreparationRoute,
+        System.Security.Cryptography.X509Certificates.X509Certificate2? certificate,
+        CancellationToken cancellationToken) =>
+        isPreparationRoute
+            ? tls.IsPreparationWorkerPeerAsync(certificate, cancellationToken)
+            : tls.IsEnvironmentPeerAsync(certificate, cancellationToken);
+
     internal static void MapPlatformPolicySource(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet(PlatformPolicySourceTls.RoutePath, HandleGetAsync)
             .WithName("ReadPlatformPolicySource");
+        if (endpoints.ServiceProvider.GetService<PlatformPolicySourceTlsIdentity>()?.IsPreparationReadEnabled == true)
+        {
+            endpoints.MapGet(PlatformPolicySourceTls.PreparationRoutePattern, HandleGetPreparationAsync)
+                .WithName("ReadPlatformPolicySourcePreparation");
+        }
     }
 
-    private static async Task HandleGetAsync(
+    private static Task HandleGetAsync(
         HttpContext context,
-        NativeAcsPolicyStore policyStore)
+        NativeAcsPolicyStore policyStore) =>
+        ExecuteBoundedReadAsync(context, async cancellationToken =>
+        {
+            var result = await policyStore.ReadPlatformPolicySourceAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (result is null)
+                return null;
+            return new PlatformPolicySourceResponse(
+                result.ScopeType,
+                result.ScopeId,
+                result.PolicyId,
+                result.Revision,
+                result.ContentSha256,
+                result.UpdatedAt,
+                result.Artifact,
+                new PlatformPolicyAdmission("pending", null));
+        });
+
+    private static Task HandleGetPreparationAsync(
+        HttpContext context,
+        NativeAcsPolicyStore policyStore,
+        string preparationId) =>
+        ExecuteBoundedReadAsync(context, async cancellationToken =>
+        {
+            if (preparationId.Length != 36 ||
+                !Guid.TryParseExact(preparationId, "D", out var parsedPreparationId) ||
+                parsedPreparationId == Guid.Empty)
+            {
+                await WriteErrorAsync(
+                    context,
+                    StatusCodes.Status400BadRequest,
+                    "policy_source_request_invalid",
+                    cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+
+            var result = await policyStore.ReadPlatformPolicyPreparationAsync(
+                parsedPreparationId,
+                cancellationToken).ConfigureAwait(false);
+            if (result is null)
+                return null;
+            var expectedHead = result.ExpectedHead is null
+                ? null
+                : new PlatformPolicyExpectedHead(
+                    result.ExpectedHead.PolicyId,
+                    result.ExpectedHead.Revision,
+                    result.ExpectedHead.ContentSha256);
+            return new PlatformPolicyPreparationResponse(
+                result.Artifact,
+                result.ProposedContentSha256,
+                expectedHead);
+        });
+
+    private static async Task ExecuteBoundedReadAsync<TResponse>(
+        HttpContext context,
+        Func<CancellationToken, Task<TResponse?>> readAsync)
+        where TResponse : class
     {
         context.Response.Headers.CacheControl = "no-store";
         var cancellationToken = context.Items.TryGetValue(DeadlineTokenKey, out var value) &&
@@ -159,9 +244,10 @@ internal static class PlatformPolicySourceEndpoints
                 return;
             }
 
-            var result = await policyStore.ReadPlatformPolicySourceAsync(cancellationToken)
-                .ConfigureAwait(false);
-            if (result is null)
+            var response = await readAsync(cancellationToken).ConfigureAwait(false);
+            if (context.Response.HasStarted || context.Response.StatusCode != StatusCodes.Status200OK)
+                return;
+            if (response is null)
             {
                 await WriteErrorAsync(
                     context,
@@ -171,15 +257,6 @@ internal static class PlatformPolicySourceEndpoints
                 return;
             }
 
-            var response = new PlatformPolicySourceResponse(
-                result.ScopeType,
-                result.ScopeId,
-                result.PolicyId,
-                result.Revision,
-                result.ContentSha256,
-                result.UpdatedAt,
-                result.Artifact,
-                new PlatformPolicyAdmission("pending", null));
             using var buffer = new BoundedMemoryStream(MaximumResponseBytes);
             try
             {
@@ -289,6 +366,16 @@ internal static class PlatformPolicySourceEndpoints
         PlatformPolicyAdmission Admission);
 
     private sealed record PlatformPolicyAdmission(string State, long? Checkpoint);
+
+    private sealed record PlatformPolicyPreparationResponse(
+        Agentweaver.Abstractions.NativeAcsArtifact Artifact,
+        string ProposedContentSha256,
+        PlatformPolicyExpectedHead? ExpectedHead);
+
+    private sealed record PlatformPolicyExpectedHead(
+        string PolicyId,
+        long Revision,
+        string ContentSha256);
 
     private sealed record PolicySourceError(string Code);
 
