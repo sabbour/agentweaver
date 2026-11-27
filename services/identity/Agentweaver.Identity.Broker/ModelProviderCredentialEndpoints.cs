@@ -739,8 +739,20 @@ internal static class ModelProviderCredentialEndpoints
                 caller.Issuer,
                 preflight1.ResolvedTenant);
 
-            var claimResult = await store.ClaimPublicationWriteAsync(pubRequest, cancellationToken)
-                .ConfigureAwait(false);
+            ModelProviderCredentialPublicationClaimResult claimResult;
+            try
+            {
+                claimResult = await store.ClaimPublicationWriteAsync(pubRequest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ModelProviderCredentialException ex) when (ex.Code == "credential_slot_conflict")
+            {
+                if (!await TrySettleOlderDisableClaimAsync(providerId, store, publicationClient, cancellationToken)
+                        .ConfigureAwait(false))
+                    throw;
+                claimResult = await store.ClaimPublicationWriteAsync(pubRequest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             if (claimResult.Status == ModelProviderCredentialWriteClaimStatus.Cancelled)
                 return Error("credential_operation_cancelled", 409);
             if (claimResult.Status is ModelProviderCredentialWriteClaimStatus.Quarantined)
@@ -913,7 +925,12 @@ internal static class ModelProviderCredentialEndpoints
             {
                 if (await store.HasActiveWriteClaimForProviderAsync(providerId, cancellationToken)
                         .ConfigureAwait(false))
-                    return Error("credential_slot_conflict", 409);
+                {
+                    var activeDisable = await store.ReadActiveDisableClaimForProviderAsync(providerId, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (activeDisable?.PreflightId is null)
+                        return Error("credential_slot_conflict", 409);
+                }
 
                 preflight1 = await publicationClient.PreflightAsync(
                     new ModelProviderCredentialPublicationPreflightRequest(
@@ -989,8 +1006,20 @@ internal static class ModelProviderCredentialEndpoints
                 caller.Issuer,
                 resolvedTenant);
 
-            var claimResult = await store.ClaimPublicationWriteAsync(pubRequest, cancellationToken)
-                .ConfigureAwait(false);
+            ModelProviderCredentialPublicationClaimResult claimResult;
+            try
+            {
+                claimResult = await store.ClaimPublicationWriteAsync(pubRequest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ModelProviderCredentialException ex) when (ex.Code == "credential_slot_conflict")
+            {
+                if (!await TrySettleOlderDisableClaimAsync(providerId, store, publicationClient, cancellationToken)
+                        .ConfigureAwait(false))
+                    throw;
+                claimResult = await store.ClaimPublicationWriteAsync(pubRequest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             if (claimResult.Status == ModelProviderCredentialWriteClaimStatus.Cancelled)
                 return Error("credential_operation_cancelled", 409);
             if (claimResult.Status is ModelProviderCredentialWriteClaimStatus.Quarantined)
@@ -1232,30 +1261,86 @@ internal static class ModelProviderCredentialEndpoints
                     (expectedCredentialRevision is not null && existingClaim.ExpectedRevision != expectedCredentialRevision))
                     return Error("credential_slot_conflict", 409);
 
-                var authPreflight = await publicationClient.PreflightAsync(
+                if (existingClaim.State == ModelProviderCredentialWriteClaimState.Disabled)
+                {
+                    var authPreflight = await publicationClient.PreflightAsync(
+                        new ModelProviderCredentialPublicationPreflightRequest(
+                            operationId, scope, projectId, providerId,
+                            caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                            caller.BoundProjectId, "authority-only"),
+                        cancellationToken).ConfigureAwait(false);
+                    if (existingClaim.Tenant is not null &&
+                        !StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
+                        return Error("forbidden", 403);
+                    return Error("credential_slot_conflict", 409);
+                }
+
+                if (existingClaim.State == ModelProviderCredentialWriteClaimState.Cancelled)
+                {
+                    var authPreflight = await publicationClient.PreflightAsync(
+                        new ModelProviderCredentialPublicationPreflightRequest(
+                            operationId, scope, projectId, providerId,
+                            caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                            caller.BoundProjectId, "authority-only"),
+                        cancellationToken).ConfigureAwait(false);
+                    if (existingClaim.Tenant is not null &&
+                        !StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
+                        return Error("forbidden", 403);
+                    return Results.Ok(ToResponse(operationId, "cancelled", scope, projectId, providerId,
+                        null, null, null, null));
+                }
+
+                if (existingClaim.PreflightId is { } claimPreflightId)
+                {
+                    var settleResult = await publicationClient.CancelAsync(
+                        new ModelProviderCredentialCancelRequest(
+                            operationId, claimPreflightId, scope, projectId, providerId,
+                            caller.Issuer, caller.ActorId, null, null, null,
+                            caller.TenantSelector, caller.TenantClaim, SettleOnly: true),
+                        cancellationToken).ConfigureAwait(false);
+
+                    if (string.Equals(settleResult.Outcome, "disabled", StringComparison.Ordinal) &&
+                        settleResult.DisableReceipt is { } dr)
+                    {
+                        var resolvedSlotId = dr.CredentialSlotId ?? existingClaim.CredentialSlotId;
+                        if (resolvedSlotId != Guid.Empty)
+                        {
+                            _ = await store.CompleteDisableAsync(
+                                new CompleteModelProviderCredentialDisable(
+                                    operationId, dr.OriginalCredentialRevision, resolvedSlotId,
+                                    credScope, projectId, providerId, caller.ActorId, existingClaim.RequestFingerprint,
+                                    dr.ProviderRevision, dr.ConfigurationHash, dr.ResolvedTenant),
+                                cancellationToken).ConfigureAwait(false);
+                        }
+                        return Error("credential_slot_conflict", 409);
+                    }
+
+                    if (!string.Equals(settleResult.Outcome, "cancelled", StringComparison.Ordinal) ||
+                        string.IsNullOrWhiteSpace(settleResult.ResolvedTenant))
+                        return Error("credential_slot_conflict", 409);
+
+                    await store.CancelDisableClaimAsync(
+                        operationId, settleResult.ResolvedTenant, existingClaim.RequestFingerprint, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(ToResponse(operationId, "cancelled", scope, projectId, providerId,
+                        null, null, null, null));
+                }
+
+                var legacyPreflight = await publicationClient.PreflightAsync(
                     new ModelProviderCredentialPublicationPreflightRequest(
                         operationId, scope, projectId, providerId,
                         caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
                         caller.BoundProjectId, "authority-only"),
                     cancellationToken).ConfigureAwait(false);
                 if (existingClaim.Tenant is not null &&
-                    !StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
+                    !StringComparer.Ordinal.Equals(legacyPreflight.ResolvedTenant, existingClaim.Tenant))
                     return Error("forbidden", 403);
-
-                if (existingClaim.State == ModelProviderCredentialWriteClaimState.Disabled)
-                    return Error("credential_slot_conflict", 409);
-
-                if (existingClaim.State == ModelProviderCredentialWriteClaimState.Cancelled)
-                {
-                    return Results.Ok(ToResponse(operationId, "cancelled", scope, projectId, providerId,
-                        null, null, null, null));
-                }
 
                 var cancelResult = await publicationClient.CancelAsync(
                     new ModelProviderCredentialCancelRequest(
-                        operationId, authPreflight.PreflightId, scope, projectId, providerId,
-                        caller.Issuer, caller.ActorId, authPreflight.ResolvedTenant,
-                        authPreflight.MembershipId, authPreflight.MembershipRevision,
+                        operationId, legacyPreflight.PreflightId, scope, projectId, providerId,
+                        caller.Issuer, caller.ActorId, legacyPreflight.ResolvedTenant,
+                        legacyPreflight.MembershipId, legacyPreflight.MembershipRevision,
                         caller.TenantSelector, caller.TenantClaim),
                     cancellationToken).ConfigureAwait(false);
 
@@ -1263,52 +1348,182 @@ internal static class ModelProviderCredentialEndpoints
                     return Error("credential_slot_conflict", 409);
 
                 await store.CancelDisableClaimAsync(
-                    operationId, authPreflight.ResolvedTenant, existingClaim.RequestFingerprint, cancellationToken)
+                    operationId, legacyPreflight.ResolvedTenant, existingClaim.RequestFingerprint, cancellationToken)
                     .ConfigureAwait(false);
                 return Results.Ok(ToResponse(operationId, "cancelled", scope, projectId, providerId,
                     null, null, null, null));
             }
 
-            var claim = await store.ClaimDisableAsync(
-                new ClaimModelProviderCredentialDisable(
-                    operationId, expectedProviderRevision, expectedCredentialRevision,
-                    credScope, projectId, providerId, caller!.ActorId, caller.Issuer),
-                cancellationToken).ConfigureAwait(false);
-
-            if (claim.Status is ModelProviderCredentialWriteClaimStatus.Disabled or ModelProviderCredentialWriteClaimStatus.Cancelled)
+            if (existingClaim is not null)
             {
-                var authPreflight = await publicationClient.PreflightAsync(
+                if (existingClaim.Scope != credScope ||
+                    existingClaim.ProjectId != projectId ||
+                    !StringComparer.Ordinal.Equals(existingClaim.ProviderId, providerId) ||
+                    !StringComparer.Ordinal.Equals(existingClaim.ActorId, caller!.ActorId) ||
+                    !StringComparer.Ordinal.Equals(existingClaim.Issuer, caller.Issuer) ||
+                    (expectedProviderRevision is not null && existingClaim.ExpectedProviderRevision != expectedProviderRevision) ||
+                    (expectedCredentialRevision is not null && existingClaim.ExpectedRevision != expectedCredentialRevision))
+                    return Error("credential_slot_conflict", 409);
+
+                if (existingClaim.State is ModelProviderCredentialWriteClaimState.Disabled or ModelProviderCredentialWriteClaimState.Cancelled)
+                {
+                    var authPreflight = await publicationClient.PreflightAsync(
+                        new ModelProviderCredentialPublicationPreflightRequest(
+                            operationId, scope, projectId, providerId,
+                            caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                            caller.BoundProjectId, "authority-only"),
+                        cancellationToken).ConfigureAwait(false);
+                    if (existingClaim.Tenant is not null &&
+                        !StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
+                        return Error("forbidden", 403);
+
+                    if (existingClaim.State == ModelProviderCredentialWriteClaimState.Cancelled)
+                        return Error("credential_operation_cancelled", 409);
+
+                    return Results.Ok(ToResponse(operationId, "disabled", scope, projectId, providerId,
+                        existingClaim.PublishedProviderRevision, existingClaim.CompletedRevision,
+                        null, existingClaim.PublishedConfigurationHash, "Draft"));
+                }
+
+                if (existingClaim.State != ModelProviderCredentialWriteClaimState.DisablePending)
+                    return Error("credential_slot_conflict", 409);
+
+                ModelProviderCredentialDisableReceipt existingReceipt;
+                try
+                {
+                    existingReceipt = await publicationClient.DisableAsync(
+                        new ModelProviderCredentialDisableRequest(
+                            operationId, expectedProviderRevision, existingClaim.ExpectedRevision,
+                            existingClaim.CredentialSlotId, existingClaim.PendingSecretVersion ?? string.Empty,
+                            scope, projectId, providerId,
+                            caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                            existingClaim.PreflightId),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (BrokerCredentialPublicationV2Exception ex)
+                    when (ex.StatusCode == HttpStatusCode.Conflict &&
+                          string.Equals(ex.ErrorCode, "credential_operation_cancelled", StringComparison.Ordinal) &&
+                          existingClaim.PreflightId is { } existingPid)
+                {
+                    var settled = await publicationClient.CancelAsync(
+                        new ModelProviderCredentialCancelRequest(
+                            operationId, existingPid, scope, projectId, providerId,
+                            caller.Issuer, caller.ActorId, null, null, null,
+                            caller.TenantSelector, caller.TenantClaim, SettleOnly: true),
+                        cancellationToken).ConfigureAwait(false);
+                    if (string.Equals(settled.Outcome, "cancelled", StringComparison.Ordinal) &&
+                        !string.IsNullOrWhiteSpace(settled.ResolvedTenant))
+                    {
+                        await store.CancelDisableClaimAsync(
+                            operationId, settled.ResolvedTenant, existingClaim.RequestFingerprint, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    return Error("credential_operation_cancelled", 409);
+                }
+
+                var existingSlotId = existingReceipt.CredentialSlotId ?? existingClaim.CredentialSlotId;
+                if (existingSlotId == Guid.Empty)
+                    return Error("credential_slot_not_found", 404);
+
+                var completedExisting = await store.CompleteDisableAsync(
+                    new CompleteModelProviderCredentialDisable(
+                        operationId, existingReceipt.OriginalCredentialRevision, existingSlotId,
+                        credScope, projectId, providerId, caller.ActorId, existingClaim.RequestFingerprint,
+                        existingReceipt.ProviderRevision, existingReceipt.ConfigurationHash, existingReceipt.ResolvedTenant),
+                    cancellationToken).ConfigureAwait(false);
+
+                return Results.Ok(ToResponse(operationId, "disabled", scope, projectId, providerId,
+                    completedExisting.PublishedProviderRevision, completedExisting.CompletedCredentialRevision,
+                    null, completedExisting.PublishedConfigurationHash, "Draft"));
+            }
+
+            var existingDisable = await store.ReadDisableByOperationAsync(operationId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existingDisable is not null)
+            {
+                var originalRevision = existingDisable.Revision - 1;
+                if (existingDisable.Scope != credScope ||
+                    existingDisable.ProjectId != projectId ||
+                    !StringComparer.Ordinal.Equals(existingDisable.ProviderId, providerId) ||
+                    !StringComparer.Ordinal.Equals(existingDisable.ActorId, caller!.ActorId) ||
+                    originalRevision <= 0 ||
+                    (expectedCredentialRevision is not null && originalRevision != expectedCredentialRevision))
+                    return Error("credential_slot_conflict", 409);
+
+                _ = await publicationClient.PreflightAsync(
                     new ModelProviderCredentialPublicationPreflightRequest(
                         operationId, scope, projectId, providerId,
                         caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
                         caller.BoundProjectId, "authority-only"),
                     cancellationToken).ConfigureAwait(false);
-                if (existingClaim?.Tenant is not null &&
-                    !StringComparer.Ordinal.Equals(authPreflight.ResolvedTenant, existingClaim.Tenant))
-                    return Error("forbidden", 403);
-
-                if (claim.Status == ModelProviderCredentialWriteClaimStatus.Cancelled)
-                    return Error("credential_operation_cancelled", 409);
 
                 return Results.Ok(ToResponse(operationId, "disabled", scope, projectId, providerId,
-                    claim.PublishedProviderRevision, claim.CompletedCredentialRevision,
-                    null, claim.PublishedConfigurationHash, "Draft"));
+                    null, existingDisable.Revision, null, null, "Draft"));
+            }
+
+            // Perform initial exact-owner preflight before creating a new DisablePending claim.
+            var initialPreflight = await publicationClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    operationId, scope, projectId, providerId,
+                    caller!.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                    caller.BoundProjectId, "draft-snapshot"),
+                cancellationToken).ConfigureAwait(false);
+            if (initialPreflight.IsCancelled)
+                return Error("credential_operation_cancelled", 409);
+            if (initialPreflight.ExistingReceipt is not null)
+                return Error("credential_slot_conflict", 409);
+            if (expectedProviderRevision is { } expectedRev && initialPreflight.ProviderRevision != expectedRev)
+                return Error("model_provider_draft_conflict", 409);
+
+            ModelProviderCredentialDisableClaimResult claim;
+            var disableClaimRequest = new ClaimModelProviderCredentialDisable(
+                operationId, expectedProviderRevision, expectedCredentialRevision,
+                credScope, projectId, providerId, caller.ActorId, caller.Issuer, initialPreflight.PreflightId);
+            try
+            {
+                claim = await store.ClaimDisableAsync(disableClaimRequest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ModelProviderCredentialException ex) when (ex.Code == "credential_slot_conflict")
+            {
+                if (!await TrySettleOlderDisableClaimAsync(providerId, store, publicationClient, cancellationToken)
+                        .ConfigureAwait(false))
+                    throw;
+                claim = await store.ClaimDisableAsync(disableClaimRequest, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             // Projects blocks new pins under the run-selection provider lock and returns durable receipt.
-            var disableReceipt = await publicationClient.DisableAsync(
-                new ModelProviderCredentialDisableRequest(
-                    operationId, expectedProviderRevision, claim.OriginalCredentialRevision,
-                    claim.CredentialSlotId, claim.CurrentVersion,
-                    scope, projectId, providerId,
-                    caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim),
-                cancellationToken).ConfigureAwait(false);
-
-            if (claim.Status == ModelProviderCredentialWriteClaimStatus.Completed)
+            ModelProviderCredentialDisableReceipt disableReceipt;
+            try
             {
-                return Results.Ok(ToResponse(operationId, "disabled", scope, projectId, providerId,
-                    disableReceipt.ProviderRevision, claim.CompletedCredentialRevision,
-                    null, disableReceipt.ConfigurationHash, "Draft"));
+                disableReceipt = await publicationClient.DisableAsync(
+                    new ModelProviderCredentialDisableRequest(
+                        operationId, expectedProviderRevision, claim.OriginalCredentialRevision,
+                        claim.CredentialSlotId, claim.CurrentVersion,
+                        scope, projectId, providerId,
+                        caller.Issuer, caller.ActorId, caller.TenantSelector, caller.TenantClaim,
+                        initialPreflight.PreflightId),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (BrokerCredentialPublicationV2Exception ex)
+                when (ex.StatusCode == HttpStatusCode.Conflict &&
+                      string.Equals(ex.ErrorCode, "credential_operation_cancelled", StringComparison.Ordinal))
+            {
+                var settled = await publicationClient.CancelAsync(
+                    new ModelProviderCredentialCancelRequest(
+                        operationId, initialPreflight.PreflightId, scope, projectId, providerId,
+                        caller.Issuer, caller.ActorId, null, null, null,
+                        caller.TenantSelector, caller.TenantClaim, SettleOnly: true),
+                    cancellationToken).ConfigureAwait(false);
+                if (string.Equals(settled.Outcome, "cancelled", StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(settled.ResolvedTenant))
+                {
+                    await store.CancelDisableClaimAsync(
+                        operationId, settled.ResolvedTenant, claim.RequestFingerprint, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                return Error("credential_operation_cancelled", 409);
             }
 
             var slotId = disableReceipt.CredentialSlotId ?? claim.CredentialSlotId;
@@ -1338,6 +1553,80 @@ internal static class ModelProviderCredentialEndpoints
         {
             return Results.StatusCode(499);
         }
+    }
+
+    private static async Task<bool> TrySettleOlderDisableClaimAsync(
+        string providerId,
+        ModelProviderCredentialStore store,
+        BrokerModelProviderCredentialPublicationV2Client publicationClient,
+        CancellationToken cancellationToken)
+    {
+        var olderClaim = await store.ReadActiveDisableClaimForProviderAsync(providerId, cancellationToken)
+            .ConfigureAwait(false);
+        if (olderClaim is null ||
+            olderClaim.State != ModelProviderCredentialWriteClaimState.DisablePending ||
+            olderClaim.Purpose != "credential-disable" ||
+            olderClaim.PreflightId is not { } olderPreflightId ||
+            string.IsNullOrWhiteSpace(olderClaim.Issuer))
+            return false;
+
+        var olderScope = olderClaim.Scope == ModelProviderCredentialScope.Platform
+            ? ModelProviderBindingScope.Platform
+            : ModelProviderBindingScope.Project;
+
+        var cancelResult = await publicationClient.CancelAsync(
+            new ModelProviderCredentialCancelRequest(
+                olderClaim.OperationId,
+                olderPreflightId,
+                olderScope,
+                olderClaim.ProjectId,
+                olderClaim.ProviderId,
+                olderClaim.Issuer,
+                olderClaim.ActorId,
+                null,
+                null,
+                null,
+                null,
+                null,
+                SettleOnly: true),
+            cancellationToken).ConfigureAwait(false);
+
+        if (string.Equals(cancelResult.Outcome, "disabled", StringComparison.Ordinal) &&
+            cancelResult.DisableReceipt is { } receipt)
+        {
+            var slotId = receipt.CredentialSlotId ?? olderClaim.CredentialSlotId;
+            if (slotId != Guid.Empty)
+            {
+                _ = await store.CompleteDisableAsync(
+                    new CompleteModelProviderCredentialDisable(
+                        olderClaim.OperationId,
+                        receipt.OriginalCredentialRevision,
+                        slotId,
+                        olderClaim.Scope,
+                        olderClaim.ProjectId,
+                        olderClaim.ProviderId,
+                        olderClaim.ActorId,
+                        olderClaim.RequestFingerprint,
+                        receipt.ProviderRevision,
+                        receipt.ConfigurationHash,
+                        receipt.ResolvedTenant),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            return false;
+        }
+
+        if (string.Equals(cancelResult.Outcome, "cancelled", StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(cancelResult.ResolvedTenant))
+        {
+            await store.CancelDisableClaimAsync(
+                olderClaim.OperationId,
+                cancelResult.ResolvedTenant,
+                olderClaim.RequestFingerprint,
+                cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        return false;
     }
 
     private static async Task<IResult> PublishAndAcknowledgeAsync(

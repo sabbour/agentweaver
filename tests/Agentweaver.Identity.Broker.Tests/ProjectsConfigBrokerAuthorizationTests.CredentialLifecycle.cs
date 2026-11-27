@@ -627,7 +627,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Contains("\"published\"", await replayAfterBump.Content.ReadAsStringAsync());
         }
 
-        // 2. Lock contention on tenant_memberships fails closed (503) and keeps DisablePending fenced until cancelled.
+        // 2. Lock contention on tenant_memberships fails closed (503) at initial preflight without creating DisablePending.
         var contendedOp = Guid.NewGuid();
         await using (var lockConn = await projects.PrivilegedFixtureDataSource.OpenConnectionAsync())
         await using (var lockTx = await lockConn.BeginTransactionAsync())
@@ -650,7 +650,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             $"/api/v1/platform/byok-providers/{providerId}/credential?operationId={contendedOp:D}&cancel=true",
             adminToken, null))
         {
-            Assert.Equal(HttpStatusCode.OK, cancelContended.StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, cancelContended.StatusCode);
         }
 
         // 3. Stale expectedCredentialRevision on DELETE returns 409 BEFORE Projects clears the binding.
@@ -961,7 +961,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var disableClaim = await store.ClaimDisableAsync(
                 new ClaimModelProviderCredentialDisable(
                     opDisable, null, null, ModelProviderCredentialScope.Platform, null, platformProviderId,
-                    adminSub, issuer),
+                    adminSub, issuer, Guid.NewGuid()),
                 CancellationToken.None);
             _ = await pubClient.DisableAsync(
                 new ModelProviderCredentialDisableRequest(
@@ -1750,10 +1750,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using (var scope = broker.Services.CreateScope())
         {
             var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = scope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var preflight = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opDisable, ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                    projectIssuer, projectSub, TenantId, null, project.ProjectId, "draft-snapshot"),
+                CancellationToken.None);
             _ = await store.ClaimDisableAsync(
                 new ClaimModelProviderCredentialDisable(
                     opDisable, null, null, ModelProviderCredentialScope.Project, project.ProjectId, providerId,
-                    projectSub, projectIssuer),
+                    projectSub, projectIssuer, preflight.PreflightId),
                 CancellationToken.None);
         }
         using (var pendingDisable = await SendCredentialJsonAsync(
@@ -2272,6 +2278,338 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             adminToken, null))
         {
             Assert.Equal(HttpStatusCode.Forbidden, revokedDeleteReplay.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectKeyDisableEnforcesAuthorityPreflightSettleOnlyWithoutAuthorityAndOlderClaimSettlement()
+    {
+        using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString,
+            new X509SecurityKey(signingCert),
+            brokerRunBindingAudience: BrokerRunBindingAudience,
+            brokerRunBindingServerCertificate: _runBindingTlsAuthority.ServerCertificate);
+
+        var fakeVault = new FakeByokVault();
+        await using var broker = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                settings["IdentityBroker__RunBinding__ProjectsOwnerAddress"] = projects.BaseAddress.AbsoluteUri;
+                settings["IdentityBroker__SecretRedemption__ByokVaultUri"] =
+                    "https://agentweaver-byok-kv-v1.vault.azure.net/";
+                settings["IdentityBroker__SecretRedemption__ByokVaultHost"] =
+                    "agentweaver-byok-kv-v1.vault.azure.net";
+                for (var i = 0; i < ProjectScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                services.RemoveAll<IModelProviderByokVault>();
+                services.AddSingleton<IModelProviderByokVault>(fakeVault);
+                services.RemoveAll<ModelProviderCredentialRedemptionBackends>();
+                services.AddSingleton(new ModelProviderCredentialRedemptionBackends(fakeVault));
+            });
+
+        using var brokerClient = broker.CreateClient();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(signingCert),
+            () => new ForwardToClientHandler(projects.Client),
+            async (owner, req, ct) =>
+            {
+                var client = owner == GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker
+                    ? brokerClient
+                    : projects.Client;
+                using var clone = new HttpRequestMessage(req.Method, req.RequestUri!.PathAndQuery);
+                foreach (var header in req.Headers)
+                {
+                    if (!string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase))
+                        clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                if (req.Content is not null)
+                {
+                    var bytes = await req.Content.ReadAsByteArrayAsync(ct);
+                    clone.Content = new ByteArrayContent(bytes);
+                    foreach (var header in req.Content.Headers)
+                        clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                var resp = await client.SendAsync(clone, ct);
+                resp.RequestMessage = req;
+                return resp;
+            });
+
+        var bootstrapToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, null, null, ["projects.admin"]))
+            .GetProperty("access_token").GetString()!;
+        var bootstrapSub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(bootstrapToken).Claims, "sub");
+        var bootstrapMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, bootstrapSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, bootstrapMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant, TenantId, ProjectAuthorityRole.TenantAdmin);
+
+        var project = await CreateProjectsTestProjectAsync(
+            projects.Client, bootstrapToken, TenantId, "Disable Recovery Project");
+        var projectId = project.ProjectId;
+
+        var ownerAToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, projectId, null, ["project_owner"]))
+            .GetProperty("access_token").GetString()!;
+        var ownerASub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(ownerAToken).Claims, "sub");
+        var ownerAMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, ownerASub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, ownerAMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner);
+
+        var ownerBToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, projectId, null, ["project_owner"]))
+            .GetProperty("access_token").GetString()!;
+        var ownerBSub = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(ownerBToken).Claims, "sub");
+        var ownerBMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, ownerBSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, ownerBMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner);
+
+        var outsiderToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, projectId, null, ["project_owner"]))
+            .GetProperty("access_token").GetString()!;
+
+        // 1. Create provider and set initial key.
+        string providerId;
+        using (var create = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Post, $"/api/v1/projects/{projectId}/byok-providers",
+            ownerAToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0,
+                name = "Project Disable Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-5",
+                wire_api = "responses",
+                reasoning_efforts = new[] { "high" },
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, create.StatusCode);
+            providerId = JsonDocument.Parse(await create.Content.ReadAsStringAsync())
+                .RootElement.GetProperty("id").GetString()!;
+        }
+
+        string initialVersion;
+        using (var put = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential",
+            ownerAToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 1,
+                expectedCredentialRevision = 0,
+                apiKey = "sk-proj-initial-11111",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+            initialVersion = JsonDocument.Parse(await put.Content.ReadAsStringAsync())
+                .RootElement.GetProperty("credentialVersion").GetString()!;
+        }
+
+        // 2. Unauthorized caller DELETE fails 403 BEFORE creating any DisablePending claim.
+        var deniedOp = Guid.NewGuid();
+        using (var deniedDelete = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential",
+            outsiderToken, new
+            {
+                operationId = deniedOp,
+                expectedProviderRevision = 2,
+                expectedCredentialRevision = 1,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, deniedDelete.StatusCode);
+        }
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            Assert.Null(await store.ReadWriteClaimByOperationAsync(deniedOp));
+        }
+
+        // 3. Stale provider revision fails 409 before creating any DisablePending claim.
+        var staleProvOp = Guid.NewGuid();
+        using (var staleProvDelete = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential",
+            ownerAToken, new
+            {
+                operationId = staleProvOp,
+                expectedProviderRevision = 99,
+                expectedCredentialRevision = 1,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, staleProvDelete.StatusCode);
+        }
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            Assert.Null(await store.ReadWriteClaimByOperationAsync(staleProvOp));
+        }
+
+        // 4. Revoked owner cannot dispatch new disable, but settle-only Cancel succeeds without current authority.
+        var opRevoked = Guid.NewGuid();
+        var issuer = new JwtSecurityTokenHandler().ReadJwtToken(ownerAToken).Issuer;
+        Guid revokedPreflightId;
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = scope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var preflight = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opRevoked, ModelProviderBindingScope.Project, projectId, providerId,
+                    issuer, ownerASub, TenantId, null, projectId, "draft-snapshot"),
+                CancellationToken.None);
+            revokedPreflightId = preflight.PreflightId;
+            var claim = await store.ClaimDisableAsync(
+                new ClaimModelProviderCredentialDisable(
+                    opRevoked, 2, 1, ModelProviderCredentialScope.Project, projectId, providerId,
+                    ownerASub, issuer, revokedPreflightId),
+                CancellationToken.None);
+            Assert.Equal(ModelProviderCredentialWriteClaimStatus.DisablePending, claim.Status);
+        }
+
+        // Revoke Owner A's project role.
+        await using (var revokeConn = await projects.PrivilegedFixtureDataSource.OpenConnectionAsync())
+        await using (var revokeCmd = new NpgsqlCommand("""
+            UPDATE projects_config.project_role_assignments
+            SET state = 'Revoked',
+                revision = revision + 1
+            WHERE membership_id = @membershipId
+              AND resource_id = @projectId
+            """, revokeConn))
+        {
+            revokeCmd.Parameters.AddWithValue("membershipId", ownerAMembership.MembershipId);
+            revokeCmd.Parameters.AddWithValue("projectId", projectId);
+            await revokeCmd.ExecuteNonQueryAsync();
+        }
+
+        // Retrying DELETE (dispatch) fails 403 because new/pending dispatch requires current authority.
+        using (var revokedDispatch = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential",
+            ownerAToken, new
+            {
+                operationId = opRevoked,
+                expectedProviderRevision = 2,
+                expectedCredentialRevision = 1,
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, revokedDispatch.StatusCode);
+        }
+
+        // Settle-only cancel (?cancel=true) succeeds WITHOUT current authority using bound preflight.
+        using (var settleRevoked = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Delete,
+            $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential?operationId={opRevoked:D}&cancel=true",
+            ownerAToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, settleRevoked.StatusCode);
+            using var doc = JsonDocument.Parse(await settleRevoked.Content.ReadAsStringAsync());
+            Assert.Equal("cancelled", doc.RootElement.GetProperty("status").GetString());
+        }
+
+        // 5. Later authorized Owner B settles Owner A's abandoned DisablePending claim without dispatching it, then rotates key.
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, ownerAMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner);
+
+        var opAbandoned = Guid.NewGuid();
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = scope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var preflight = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opAbandoned, ModelProviderBindingScope.Project, projectId, providerId,
+                    issuer, ownerASub, TenantId, null, projectId, "draft-snapshot"),
+                CancellationToken.None);
+            _ = await store.ClaimDisableAsync(
+                new ClaimModelProviderCredentialDisable(
+                    opAbandoned, 2, 1, ModelProviderCredentialScope.Project, projectId, providerId,
+                    ownerASub, issuer, preflight.PreflightId),
+                CancellationToken.None);
+        }
+
+        using (var ownerBRotate = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential",
+            ownerBToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 2,
+                expectedCredentialRevision = 1,
+                apiKey = "sk-proj-rotated-22222",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, ownerBRotate.StatusCode);
+            using var doc = JsonDocument.Parse(await ownerBRotate.Content.ReadAsStringAsync());
+            Assert.Equal("published", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal(3L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+        }
+
+        // 6. Later authorized Owner B settles Owner A's lost-reply Disable (already committed on Projects) -> reconciles Disabled and rejects Owner B's PUT with 409 without disclosing Owner A's operationId.
+        var opLostDisable = Guid.NewGuid();
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            var pubClient = scope.ServiceProvider.GetRequiredService<BrokerModelProviderCredentialPublicationV2Client>();
+            var preflight = await pubClient.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opLostDisable, ModelProviderBindingScope.Project, projectId, providerId,
+                    issuer, ownerASub, TenantId, null, projectId, "draft-snapshot"),
+                CancellationToken.None);
+            var claim = await store.ClaimDisableAsync(
+                new ClaimModelProviderCredentialDisable(
+                    opLostDisable, 3, 2, ModelProviderCredentialScope.Project, projectId, providerId,
+                    ownerASub, issuer, preflight.PreflightId),
+                CancellationToken.None);
+            _ = await pubClient.DisableAsync(
+                new ModelProviderCredentialDisableRequest(
+                    opLostDisable, 3, 2, claim.CredentialSlotId, claim.CurrentVersion,
+                    ModelProviderBindingScope.Project, projectId, providerId,
+                    issuer, ownerASub, TenantId, null, preflight.PreflightId),
+                CancellationToken.None);
+        }
+
+        using (var ownerBBlockedPut = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Put, $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential",
+            ownerBToken, new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 4,
+                expectedCredentialRevision = 2,
+                apiKey = "sk-proj-should-not-write-33333",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, ownerBBlockedPut.StatusCode);
+            var body = await ownerBBlockedPut.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(opLostDisable.ToString("D"), body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(initialVersion, body, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using (var statusAfterSettle = await SendCredentialJsonAsync(
+            gateway.Client, HttpMethod.Get,
+            $"/api/v1/projects/{projectId}/byok-providers/{providerId}/credential",
+            ownerBToken, null))
+        {
+            Assert.Equal(HttpStatusCode.OK, statusAfterSettle.StatusCode);
+            using var doc = JsonDocument.Parse(await statusAfterSettle.Content.ReadAsStringAsync());
+            Assert.Equal("disabled", doc.RootElement.GetProperty("state").GetString());
         }
     }
 

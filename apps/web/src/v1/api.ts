@@ -83,6 +83,7 @@ import type {
   PlatformModelProviderDraft,
   PlatformModelProviderDraftPage,
   ModelProviderCredentialOperationStatusResponse,
+  ModelProviderCredentialDeleteRequest,
   ModelProviderCredentialRequest,
   ModelProviderCredentialResponse,
   ModelProviderCredentialStatusResponse,
@@ -748,6 +749,28 @@ export class AgentweaverGatewayClient {
       `/projects/${encodeSegments(projectId, 'byok-providers', providerId, 'credential')}`,
       {
         method: 'PUT',
+        body: JSON.stringify(request),
+        credentials: 'omit',
+        cache: 'no-store',
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Disables a project BYOK provider credential without caching or cookies. */
+  deleteProjectByokProviderCredential(
+    token: string,
+    projectId: string,
+    providerId: string,
+    request: ModelProviderCredentialDeleteRequest,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers', providerId, 'credential')}`,
+      {
+        method: 'DELETE',
         body: JSON.stringify(request),
         credentials: 'omit',
         cache: 'no-store',

@@ -1123,12 +1123,23 @@ internal sealed class ModelProviderCredentialStore(
         }
     }
 
+    internal async Task<ModelProviderCredentialWriteClaim?> ReadActiveDisableClaimForProviderAsync(
+        string providerId,
+        CancellationToken cancellationToken = default) =>
+        await db.ModelProviderCredentialWriteClaims.AsNoTracking()
+            .SingleOrDefaultAsync(row =>
+                row.ProviderId == providerId &&
+                row.State == ModelProviderCredentialWriteClaimState.DisablePending,
+                cancellationToken)
+            .ConfigureAwait(false);
+
     internal async Task<ModelProviderCredentialDisableClaimResult> ClaimDisableAsync(
         ClaimModelProviderCredentialDisable request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.OperationId == Guid.Empty ||
+            request.PreflightId == Guid.Empty ||
             request.ExpectedProviderRevision is <= 0 or long.MaxValue ||
             request.ExpectedCredentialRevision is <= 0 or long.MaxValue ||
             string.IsNullOrWhiteSpace(request.ProviderId) ||
@@ -1145,7 +1156,8 @@ internal sealed class ModelProviderCredentialStore(
             request.ProjectId,
             request.ProviderId,
             request.ActorId,
-            request.Issuer));
+            request.Issuer,
+            request.PreflightId));
 
         try
         {
@@ -1238,6 +1250,7 @@ internal sealed class ModelProviderCredentialStore(
                 Purpose = "credential-disable",
                 Issuer = request.Issuer,
                 Tenant = null,
+                PreflightId = request.PreflightId,
             });
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -1554,7 +1567,8 @@ internal sealed class ModelProviderCredentialStore(
         string? ProjectId,
         string ProviderId,
         string ActorId,
-        string Issuer);
+        string Issuer,
+        Guid PreflightId);
 
     private async Task LockCredentialWriteAsync(
         string providerId,

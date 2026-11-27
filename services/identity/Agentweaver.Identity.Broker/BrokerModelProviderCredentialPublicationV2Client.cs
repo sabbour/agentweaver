@@ -79,12 +79,19 @@ internal sealed class BrokerModelProviderCredentialPublicationV2Client(
             request.ActorId,
             request.Issuer,
             response => response.OperationId == request.OperationId &&
-                        (response.Outcome == "cancelled" && response.Receipt is null ||
+                        (response.Outcome == "cancelled" && response.Receipt is null && response.DisableReceipt is null ||
                          response.Outcome == "published" && response.Receipt is { IsValid: true } r &&
                          r.OperationId == request.OperationId &&
                          r.Scope == request.Scope &&
                          r.ProjectId == request.ProjectId &&
-                         r.ProviderId == request.ProviderId),
+                         r.ProviderId == request.ProviderId ||
+                         response.Outcome == "disabled" && response.DisableReceipt is { } dr &&
+                         dr.OperationId == request.OperationId &&
+                         dr.Scope == request.Scope &&
+                         dr.ProjectId == request.ProjectId &&
+                         dr.ProviderId == request.ProviderId &&
+                         dr.OriginalProviderRevision > 0 &&
+                         dr.ProviderRevision == dr.OriginalProviderRevision + 1),
             cancellationToken);
 
     internal Task<ModelProviderCredentialDisableReceipt> DisableAsync(

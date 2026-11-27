@@ -301,6 +301,12 @@ export interface ModelProviderCredentialRequest {
   recheckExistingVersion?: boolean;
 }
 
+export interface ModelProviderCredentialDeleteRequest {
+  operationId: string;
+  expectedProviderRevision: number;
+  expectedCredentialRevision: number;
+}
+
 export type ModelProviderCredentialStatus =
   | 'not_set'
   | 'enabled'

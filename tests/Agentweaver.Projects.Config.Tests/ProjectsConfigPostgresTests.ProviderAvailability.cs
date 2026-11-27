@@ -867,6 +867,125 @@ public sealed partial class ProjectsConfigPostgresTests
         }
     }
 
+    [Fact]
+    public async Task ConcurrentDisableAndSettleOnlyProduceExactlyOneTerminalOutcome()
+    {
+        await RunWithIsolatedProjectsAsync(async tests =>
+        {
+            await using var db = tests.CreateDbContext();
+            var factory = new CountingDbContextFactory(tests.CreateDbContext);
+            var store = new ProjectsConfigPrivilegedAuthorityStore(tests.CreateDbContextOptions(), TimeProvider.System);
+            var configService = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System, factory);
+            var suffix = Guid.NewGuid().ToString("N")[..8];
+            var tenantId = "race-tenant-" + suffix;
+            var actorId = "race-owner-" + suffix;
+            var admin = await SeedCallerAsync(db, store, "race-admin-" + suffix, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+            var owner = await SeedCallerAsync(db, store, actorId, tenantId,
+                ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+                tenantId, ProjectAuthorityRole.TenantAdmin);
+            var head = await configService.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+            _ = await configService.UpdatePlatformRuntimeDefaultsAsync(
+                admin, head.Revision, PlatformDefaults(), CancellationToken.None);
+            var project = await configService.CreateProjectAsync(owner, "Race Project " + suffix, CancellationToken.None);
+            var caller = await ResolveCallerAsync(
+                db, actorId, tenantId, ["api.read", "projects.admin"], boundProjectId: project.ProjectId);
+
+            var draftService = new ModelProviderDraftService(db, TimeProvider.System);
+            var providerId = "race-prov-" + suffix;
+            await draftService.SaveAsync(caller, ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                new SaveModelProviderDraftRequest(
+                    Guid.NewGuid(), 0, "Race Provider", "openai", "https://api.openai.com/v1", "gpt-5",
+                    WireApi: "responses", ReasoningEfforts: ["high"]),
+                CancellationToken.None);
+
+            var pubService = new ModelProviderCredentialPublicationV2Service(db, TimeProvider.System);
+            var opPub = Guid.NewGuid();
+            var slotId = Guid.NewGuid();
+            var credVersion = new string('a', 32);
+            var prePub = await pubService.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opPub, ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                    caller.Issuer, actorId, tenantId, null, project.ProjectId, "draft-snapshot"),
+                CancellationToken.None);
+            _ = await pubService.PublishAsync(
+                new ModelProviderCredentialPublicationV2Request(
+                    opPub, prePub.PreflightId, 1, ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                    credVersion, new ModelCredentialIdentity(slotId, ModelProviderBindingScope.Project, project.ProjectId, providerId),
+                    new SecretRef($"byok-project-{providerId}", credVersion), caller.Issuer, actorId, tenantId,
+                    prePub.MembershipId, prePub.MembershipRevision, tenantId, null),
+                CancellationToken.None);
+
+            var opDisable = Guid.NewGuid();
+            var preDisable = await pubService.PreflightAsync(
+                new ModelProviderCredentialPublicationPreflightRequest(
+                    opDisable, ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                    caller.Issuer, actorId, tenantId, null, project.ProjectId, "draft-snapshot"),
+                CancellationToken.None);
+
+            var disableTask = Task.Run(async () =>
+            {
+                await using var db1 = tests.CreateDbContext();
+                var svc1 = new ModelProviderCredentialPublicationV2Service(db1, TimeProvider.System);
+                try
+                {
+                    var receipt = await svc1.DisableAsync(
+                        new ModelProviderCredentialDisableRequest(
+                            opDisable, 2, 1, slotId, credVersion,
+                            ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                            caller.Issuer, actorId, tenantId, null, preDisable.PreflightId),
+                        CancellationToken.None);
+                    return (Outcome: "disabled", Receipt: (ModelProviderCredentialDisableReceipt?)receipt);
+                }
+                catch (ModelProviderCredentialPublicationV2Exception ex) when (ex.Code == "credential_operation_cancelled")
+                {
+                    return (Outcome: "cancelled", Receipt: (ModelProviderCredentialDisableReceipt?)null);
+                }
+            });
+
+            var settleTask = Task.Run(async () =>
+            {
+                await using var db2 = tests.CreateDbContext();
+                var svc2 = new ModelProviderCredentialPublicationV2Service(db2, TimeProvider.System);
+                return await svc2.CancelAsync(
+                    new ModelProviderCredentialCancelRequest(
+                        opDisable, preDisable.PreflightId, ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                        caller.Issuer, actorId, null, null, null, null, null, SettleOnly: true),
+                    CancellationToken.None);
+            });
+
+            var disableResult = await disableTask;
+            var settleResult = await settleTask;
+
+            var opRow = await db.ModelProviderCredentialOperations.AsNoTracking()
+                .SingleAsync(op => op.OperationId == opDisable);
+            if (opRow.OperationKind == ModelProviderCredentialOperationKind.Disable)
+            {
+                Assert.Equal("disabled", disableResult.Outcome);
+                Assert.Equal("disabled", settleResult.Outcome);
+                Assert.NotNull(settleResult.DisableReceipt);
+                Assert.Equal(3L, settleResult.DisableReceipt!.ProviderRevision);
+            }
+            else
+            {
+                Assert.Equal(ModelProviderCredentialOperationKind.Cancel, opRow.OperationKind);
+                Assert.Equal("cancelled", disableResult.Outcome);
+                Assert.Equal("cancelled", settleResult.Outcome);
+                Assert.Null(settleResult.DisableReceipt);
+
+                var delayedEx = await Assert.ThrowsAsync<ModelProviderCredentialPublicationV2Exception>(() =>
+                    pubService.DisableAsync(
+                        new ModelProviderCredentialDisableRequest(
+                            opDisable, 2, 1, slotId, credVersion,
+                            ModelProviderBindingScope.Project, project.ProjectId, providerId,
+                            caller.Issuer, actorId, tenantId, null, preDisable.PreflightId),
+                        CancellationToken.None));
+                Assert.Equal("credential_operation_cancelled", delayedEx.Code);
+            }
+        });
+    }
+
     private sealed class DelegateRateCardHandler(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) : HttpMessageHandler
     {

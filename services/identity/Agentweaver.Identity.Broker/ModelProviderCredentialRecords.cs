@@ -125,6 +125,7 @@ public sealed class ModelProviderCredentialWriteClaim
     public string? Purpose { get; set; }
     public string? Issuer { get; set; }
     public string? Tenant { get; set; }
+    public Guid? PreflightId { get; set; }
     public long? PublishedProviderRevision { get; set; }
     public string? PublishedConfigurationHash { get; set; }
     public string? PublishedProviderState { get; set; }
@@ -187,7 +188,8 @@ internal sealed record ClaimModelProviderCredentialDisable(
     string? ProjectId,
     string ProviderId,
     string ActorId,
-    string Issuer);
+    string Issuer,
+    Guid PreflightId);
 
 internal sealed record CompleteModelProviderCredentialDisable(
     Guid OperationId,

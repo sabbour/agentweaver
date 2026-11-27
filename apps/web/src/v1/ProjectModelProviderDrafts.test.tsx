@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   getCredential: vi.fn(),
   setCredential: vi.fn(),
+  deleteCredential: vi.fn(),
   getCredentialOp: vi.fn(),
   auth: {
     apiCall: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock('./api', async (importOriginal) => ({
     updateProjectByokProviderDraft: mocks.update,
     getProjectByokProviderCredential: mocks.getCredential,
     setProjectByokProviderCredential: mocks.setCredential,
+    deleteProjectByokProviderCredential: mocks.deleteCredential,
     getProjectByokProviderCredentialOperation: mocks.getCredentialOp,
   },
 }));
@@ -117,6 +119,19 @@ describe('Project BYOK provider drafts', () => {
       providerRevision: 2,
       credentialRevision: 1,
       credentialVersion: 'v1',
+      configurationHash: 'b'.repeat(64),
+      providerState: 'Draft',
+    });
+    mocks.deleteCredential.mockReset();
+    mocks.deleteCredential.mockResolvedValue({
+      operationId: 'op-disable-1',
+      status: 'disabled',
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      providerRevision: 3,
+      credentialRevision: 2,
+      credentialVersion: null,
       configurationHash: 'b'.repeat(64),
       providerState: 'Draft',
     });
@@ -1975,5 +1990,219 @@ describe('Project BYOK provider drafts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
     expect(await screen.findByText(/Recover or cancel it via CLI before rotating the key/i)).toBeTruthy();
     expect(screen.queryByLabelText(/API key/i)).toBeNull();
+  });
+
+  it('requires confirmation, cancels without DELETE, and sends one-shot DELETE with exact revisions and refreshes detail, status, and list', async () => {
+    mocks.list
+      .mockResolvedValueOnce({
+        providers: [provider({ hasCredential: true, revision: 2, state: 'Available' })],
+        nextAfterProviderId: null,
+      })
+      .mockResolvedValueOnce({
+        providers: [provider({ hasCredential: false, revision: 3, state: 'Draft' })],
+        nextAfterProviderId: null,
+      });
+    mocks.read
+      .mockResolvedValueOnce(provider({ hasCredential: true, revision: 2, state: 'Available' }))
+      .mockResolvedValueOnce(provider({ hasCredential: false, revision: 3, state: 'Draft' }));
+    mocks.getCredential
+      .mockResolvedValueOnce({
+        scope: 'project',
+        projectId: 'project-1',
+        providerId: 'provider-stable-id',
+        providerRevision: 2,
+        state: 'enabled',
+        credentialRevision: 1,
+      })
+      .mockResolvedValueOnce({
+        scope: 'project',
+        projectId: 'project-1',
+        providerId: 'provider-stable-id',
+        providerRevision: 3,
+        state: 'disabled',
+        credentialRevision: 2,
+      });
+
+    let resolveDelete!: (value: unknown) => void;
+    mocks.deleteCredential.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    const putStore = createProjectCredentialOperationStore();
+    const disableStore = createProjectCredentialOperationStore();
+    mocks.auth.projectCredentialOperations = putStore;
+
+    render(
+      <ProjectModelProviderDrafts
+        projectId="project-1"
+        tenantSelector="tenant-1"
+        projectDisableCredentialOperations={disableStore}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    const disableBtn = await screen.findByRole('button', { name: 'Disable API key' });
+    fireEvent.click(disableBtn);
+
+    expect(await screen.findByText('Disable API key for Customer model?')).toBeTruthy();
+    expect(screen.getByText(/Runs already assigned this key can continue to use it/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(mocks.deleteCredential).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable API key' }));
+    const confirmBtn = await screen.findByRole('button', { name: 'Confirm disable' });
+    fireEvent.click(confirmBtn);
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => expect(mocks.deleteCredential).toHaveBeenCalledTimes(1));
+    expect(mocks.deleteCredential.mock.calls[0][3]).toMatchObject({
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 1,
+    });
+    expect(typeof mocks.deleteCredential.mock.calls[0][3].operationId).toBe('string');
+
+    await act(async () => {
+      resolveDelete({
+        operationId: mocks.deleteCredential.mock.calls[0][3].operationId,
+        status: 'disabled',
+        scope: 'project',
+        projectId: 'project-1',
+        providerId: 'provider-stable-id',
+        providerRevision: 3,
+        credentialRevision: 2,
+        credentialVersion: null,
+        configurationHash: 'b'.repeat(64),
+        providerState: 'Draft',
+      });
+    });
+
+    expect(await screen.findByText('API key disabled.')).toBeTruthy();
+    await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(mocks.getCredential).toHaveBeenCalledTimes(2);
+    expect(putStore.get({
+      issuer: 'broker', actorId: 'actor-1', tenantId: 'tenant-1',
+      scope: 'project', projectId: 'project-1', providerId: 'provider-stable-id',
+    })).toBeNull();
+  });
+
+  it('keeps disable recovery separate from PUT on lost reply, does not auto-replay, and stops on terminal conflict', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [provider({ hasCredential: true, revision: 2, state: 'Available' })],
+      nextAfterProviderId: null,
+    });
+    mocks.read.mockResolvedValue(provider({ hasCredential: true, revision: 2, state: 'Available' }));
+    mocks.getCredential.mockResolvedValue({
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      providerRevision: 2,
+      state: 'enabled',
+      credentialRevision: 1,
+    });
+
+    mocks.deleteCredential
+      .mockRejectedValueOnce(new Error('Network timeout'))
+      .mockRejectedValueOnce(new GatewayError(409, { code: 'credential_operation_cancelled' }, 'Cancelled'));
+
+    const putStore = createProjectCredentialOperationStore();
+    const disableStore = createProjectCredentialOperationStore();
+    mocks.auth.projectCredentialOperations = putStore;
+
+    render(
+      <ProjectModelProviderDrafts
+        projectId="project-1"
+        tenantSelector="tenant-1"
+        projectDisableCredentialOperations={disableStore}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable API key' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm disable' }));
+
+    await screen.findByRole('button', { name: 'Retry disable' });
+    expect(mocks.deleteCredential).toHaveBeenCalledTimes(1);
+    const firstOpId = mocks.deleteCredential.mock.calls[0][3].operationId;
+    expect(screen.getByText(firstOpId)).toBeTruthy();
+
+    // PUT store remains untouched; disable recovery is isolated in disableStore.
+    const key = {
+      issuer: 'broker', actorId: 'actor-1', tenantId: 'tenant-1',
+      scope: 'project' as const, projectId: 'project-1', providerId: 'provider-stable-id',
+    };
+    expect(putStore.get(key)).toBeNull();
+    expect(disableStore.get(key)?.operationId).toBe(firstOpId);
+    expect(disableStore.get(key)?.status).toBe('disable_pending');
+
+    // Check status returns pending -> stays in recovery without auto-replaying DELETE.
+    mocks.getCredentialOp.mockResolvedValueOnce({
+      operationId: firstOpId,
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      status: 'disable_pending',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check disable status' }));
+    await waitFor(() => expect(mocks.getCredentialOp).toHaveBeenCalledTimes(1));
+    expect(mocks.deleteCredential).toHaveBeenCalledTimes(1);
+
+    // Manual Retry disable reuses exact operationId and original revisions, and stops on 409 conflict.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry disable' }));
+    await waitFor(() => expect(mocks.deleteCredential).toHaveBeenCalledTimes(2));
+    expect(mocks.deleteCredential.mock.calls[1][3]).toEqual({
+      operationId: firstOpId,
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 1,
+    });
+    expect(await screen.findByText(/Key disable was cancelled/i)).toBeTruthy();
+    expect(disableStore.get(key)).toBeNull();
+  });
+
+  it('fails closed on scope/tenant change during in-flight DELETE without updating UI', async () => {
+    mocks.list.mockResolvedValue({
+      providers: [provider({ hasCredential: true, revision: 2, state: 'Available' })],
+      nextAfterProviderId: null,
+    });
+    mocks.read.mockResolvedValue(provider({ hasCredential: true, revision: 2, state: 'Available' }));
+    mocks.getCredential.mockResolvedValue({
+      scope: 'project',
+      projectId: 'project-1',
+      providerId: 'provider-stable-id',
+      providerRevision: 2,
+      state: 'enabled',
+      credentialRevision: 1,
+    });
+
+    let resolveDelete!: (value: unknown) => void;
+    mocks.deleteCredential.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    const { rerender } = render(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable API key' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm disable' }));
+
+    await waitFor(() => expect(mocks.deleteCredential).toHaveBeenCalledTimes(1));
+
+    // Switch tenant while DELETE is in flight.
+    rerender(<ProjectModelProviderDrafts projectId="project-1" tenantSelector="tenant-2" />);
+    await act(async () => {
+      resolveDelete({
+        operationId: mocks.deleteCredential.mock.calls[0][3].operationId,
+        status: 'disabled',
+        scope: 'project',
+        projectId: 'project-1',
+        providerId: 'provider-stable-id',
+        providerRevision: 3,
+        credentialRevision: 2,
+        credentialVersion: null,
+        configurationHash: 'b'.repeat(64),
+        providerState: 'Draft',
+      });
+    });
+
+    expect(screen.queryByText('API key disabled.')).toBeNull();
   });
 });
