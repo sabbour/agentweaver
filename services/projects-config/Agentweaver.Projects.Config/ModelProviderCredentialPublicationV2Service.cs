@@ -360,20 +360,128 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
         if (!request.IsValid)
             throw ModelProviderCredentialPublicationV2Exception.InvalidRequest();
 
-        var fingerprint = Hash(new
-        {
-            kind = "cancel-v2",
-            request.OperationId,
-            request.Scope,
-            request.ProjectId,
-            request.ProviderId,
-            request.Issuer,
-            request.ActorId,
-            request.OriginalTenant,
-        });
-
         return ExecuteWithRetryAsync(async () =>
         {
+            if (request.SettleOnly)
+            {
+                _ = await LockProviderHeadAsync(
+                    request.ProviderId, request.Scope, request.ProjectId, forUpdate: true, cancellationToken)
+                    .ConfigureAwait(false);
+
+                var existingSettleOp = await db.ModelProviderCredentialOperations.AsNoTracking()
+                    .SingleOrDefaultAsync(op => op.OperationId == request.OperationId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (existingSettleOp is not null)
+                {
+                    if (existingSettleOp.Scope != request.Scope ||
+                        existingSettleOp.ProjectId != request.ProjectId ||
+                        !StringComparer.Ordinal.Equals(existingSettleOp.ProviderId, request.ProviderId) ||
+                        !StringComparer.Ordinal.Equals(existingSettleOp.Issuer, request.Issuer) ||
+                        !StringComparer.Ordinal.Equals(existingSettleOp.ActorId, request.ActorId))
+                        throw ModelProviderCredentialPublicationV2Exception.Conflict();
+                    if (request.TenantSelector is not null &&
+                        !StringComparer.Ordinal.Equals(request.TenantSelector, existingSettleOp.OriginalTenant))
+                        throw ModelProviderCredentialPublicationV2Exception.Forbidden();
+                    if (request.TenantClaim is not null &&
+                        !StringComparer.Ordinal.Equals(request.TenantClaim, existingSettleOp.OriginalTenant))
+                        throw ModelProviderCredentialPublicationV2Exception.Forbidden();
+
+                    if (existingSettleOp.OperationKind == ModelProviderCredentialOperationKind.Publish)
+                        return new ModelProviderCredentialCancelResponse(
+                            request.OperationId, "published", ToPublicationReceipt(existingSettleOp), null, existingSettleOp.OriginalTenant);
+                    if (existingSettleOp.OperationKind == ModelProviderCredentialOperationKind.Disable)
+                        return new ModelProviderCredentialCancelResponse(
+                            request.OperationId, "disabled", null, ToDisableReceipt(existingSettleOp), existingSettleOp.OriginalTenant);
+                    if (existingSettleOp.OperationKind == ModelProviderCredentialOperationKind.Cancel)
+                        return new ModelProviderCredentialCancelResponse(
+                            request.OperationId, "cancelled", null, null, existingSettleOp.OriginalTenant);
+                    throw ModelProviderCredentialPublicationV2Exception.Conflict();
+                }
+
+                var preflight = await db.ModelProviderCredentialPreflights.AsNoTracking()
+                    .SingleOrDefaultAsync(p => p.PreflightId == request.PreflightId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (preflight is null ||
+                    preflight.ConsumedAt is not null ||
+                    preflight.OperationId != request.OperationId ||
+                    preflight.Scope != request.Scope ||
+                    preflight.ProjectId != request.ProjectId ||
+                    !StringComparer.Ordinal.Equals(preflight.ProviderId, request.ProviderId) ||
+                    !StringComparer.Ordinal.Equals(preflight.Issuer, request.Issuer) ||
+                    !StringComparer.Ordinal.Equals(preflight.ActorId, request.ActorId) ||
+                    (request.OriginalMembershipId is { } omid && omid != preflight.MembershipId) ||
+                    (request.OriginalMembershipRevision is { } omrev && omrev != preflight.MembershipRevision))
+                    throw ModelProviderCredentialPublicationV2Exception.Conflict();
+
+                if ((request.OriginalTenant is not null &&
+                     !StringComparer.Ordinal.Equals(request.OriginalTenant, preflight.TenantId)) ||
+                    (request.TenantSelector is not null &&
+                     !StringComparer.Ordinal.Equals(request.TenantSelector, preflight.TenantId)) ||
+                    (request.TenantClaim is not null &&
+                     !StringComparer.Ordinal.Equals(request.TenantClaim, preflight.TenantId)))
+                    throw ModelProviderCredentialPublicationV2Exception.Forbidden();
+
+                var settleNow = timeProvider.GetUtcNow();
+                var kindName = ModelProviderCredentialOperationKind.Cancel.ToString();
+                var consumed = await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"""
+                    UPDATE projects_config.model_provider_credential_preflights
+                    SET consumed_at = {settleNow},
+                        consumed_by_kind = {kindName}
+                    WHERE preflight_id = {request.PreflightId}
+                      AND consumed_at IS NULL
+                    """,
+                    cancellationToken).ConfigureAwait(false);
+                if (consumed != 1)
+                    throw ModelProviderCredentialPublicationV2Exception.Conflict();
+
+                var settleFingerprint = Hash(new
+                {
+                    kind = "cancel-v2",
+                    request.OperationId,
+                    request.Scope,
+                    request.ProjectId,
+                    request.ProviderId,
+                    request.Issuer,
+                    request.ActorId,
+                    OriginalTenant = preflight.TenantId,
+                });
+                db.ModelProviderCredentialOperations.Add(new ModelProviderCredentialOperationRecord
+                {
+                    OperationId = request.OperationId,
+                    OperationKind = ModelProviderCredentialOperationKind.Cancel,
+                    ProviderId = request.ProviderId,
+                    Scope = request.Scope,
+                    ProjectId = request.ProjectId,
+                    OriginalTenant = preflight.TenantId,
+                    OriginalMembershipId = preflight.MembershipId,
+                    OriginalMembershipRevision = preflight.MembershipRevision,
+                    CurrentMembershipId = preflight.MembershipId,
+                    CurrentMembershipRevision = preflight.MembershipRevision,
+                    CurrentAssignmentId = preflight.AssignmentId,
+                    CurrentAssignmentRevision = preflight.AssignmentRevision,
+                    Issuer = request.Issuer,
+                    ActorId = request.ActorId,
+                    RequestFingerprint = settleFingerprint,
+                    RecordedAt = settleNow,
+                });
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return new ModelProviderCredentialCancelResponse(
+                    request.OperationId, "cancelled", null, null, preflight.TenantId);
+            }
+
+            var fingerprint = Hash(new
+            {
+                kind = "cancel-v2",
+                request.OperationId,
+                request.Scope,
+                request.ProjectId,
+                request.ProviderId,
+                request.Issuer,
+                request.ActorId,
+                request.OriginalTenant,
+            });
+
             var authority = await ResolveAndLockAuthorityAsync(
                 request.Issuer, request.ActorId, request.Scope, request.ProjectId,
                 request.TenantSelector, request.TenantClaim, cancellationToken).ConfigureAwait(false);
@@ -405,10 +513,19 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
             {
                 if (existingOp.OperationKind == ModelProviderCredentialOperationKind.Publish)
                     return new ModelProviderCredentialCancelResponse(
-                        request.OperationId, "published", ToPublicationReceipt(existingOp));
+                        request.OperationId, "published", ToPublicationReceipt(existingOp), null, existingOp.OriginalTenant);
+                if (existingOp.OperationKind == ModelProviderCredentialOperationKind.Disable &&
+                    existingOp.Scope == request.Scope &&
+                    existingOp.ProjectId == request.ProjectId &&
+                    StringComparer.Ordinal.Equals(existingOp.ProviderId, request.ProviderId) &&
+                    StringComparer.Ordinal.Equals(existingOp.Issuer, request.Issuer) &&
+                    StringComparer.Ordinal.Equals(existingOp.ActorId, request.ActorId))
+                    return new ModelProviderCredentialCancelResponse(
+                        request.OperationId, "disabled", null, ToDisableReceipt(existingOp), existingOp.OriginalTenant);
                 if (existingOp.OperationKind == ModelProviderCredentialOperationKind.Cancel &&
                     StringComparer.Ordinal.Equals(existingOp.RequestFingerprint, fingerprint))
-                    return new ModelProviderCredentialCancelResponse(request.OperationId, "cancelled", null);
+                    return new ModelProviderCredentialCancelResponse(
+                        request.OperationId, "cancelled", null, null, existingOp.OriginalTenant);
                 throw ModelProviderCredentialPublicationV2Exception.Conflict();
             }
 
@@ -419,9 +536,9 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 ProviderId = request.ProviderId,
                 Scope = request.Scope,
                 ProjectId = request.ProjectId,
-                OriginalTenant = request.OriginalTenant,
-                OriginalMembershipId = request.OriginalMembershipId,
-                OriginalMembershipRevision = request.OriginalMembershipRevision,
+                OriginalTenant = request.OriginalTenant!,
+                OriginalMembershipId = request.OriginalMembershipId!.Value,
+                OriginalMembershipRevision = request.OriginalMembershipRevision!.Value,
                 CurrentMembershipId = authority.Membership.MembershipId,
                 CurrentMembershipRevision = authority.Membership.Revision,
                 CurrentAssignmentId = authority.Assignment.AssignmentId,
@@ -432,7 +549,8 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 RecordedAt = now,
             });
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return new ModelProviderCredentialCancelResponse(request.OperationId, "cancelled", null);
+            return new ModelProviderCredentialCancelResponse(
+                request.OperationId, "cancelled", null, null, authority.Membership.TenantId);
         }, cancellationToken);
     }
 
@@ -461,10 +579,6 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
 
         return ExecuteWithRetryAsync(async () =>
         {
-            var authority = await ResolveAndLockAuthorityAsync(
-                request.Issuer, request.ActorId, request.Scope, request.ProjectId,
-                request.TenantSelector, request.TenantClaim, cancellationToken).ConfigureAwait(false);
-
             // FOR UPDATE serializes with AcceptRunSelectionAsync's FOR SHARE on model_providers.
             var head = await LockProviderHeadAsync(
                 request.ProviderId, request.Scope, request.ProjectId, forUpdate: true, cancellationToken)
@@ -475,10 +589,48 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 .ConfigureAwait(false);
             if (existingOp is not null)
             {
+                if (existingOp.OperationKind == ModelProviderCredentialOperationKind.Cancel)
+                {
+                    if (existingOp.Scope == request.Scope &&
+                        existingOp.ProjectId == request.ProjectId &&
+                        StringComparer.Ordinal.Equals(existingOp.ProviderId, request.ProviderId) &&
+                        StringComparer.Ordinal.Equals(existingOp.Issuer, request.Issuer) &&
+                        StringComparer.Ordinal.Equals(existingOp.ActorId, request.ActorId))
+                        throw ModelProviderCredentialPublicationV2Exception.Conflict("credential_operation_cancelled");
+                    throw ModelProviderCredentialPublicationV2Exception.Conflict();
+                }
                 if (existingOp.OperationKind == ModelProviderCredentialOperationKind.Disable &&
                     StringComparer.Ordinal.Equals(existingOp.RequestFingerprint, fingerprint))
+                {
+                    if ((request.TenantClaim is not null &&
+                         !StringComparer.Ordinal.Equals(request.TenantClaim, existingOp.OriginalTenant)) ||
+                        (request.TenantSelector is not null &&
+                         !StringComparer.Ordinal.Equals(request.TenantSelector, existingOp.OriginalTenant)))
+                        throw ModelProviderCredentialPublicationV2Exception.Forbidden();
                     return ToDisableReceipt(existingOp);
+                }
                 throw ModelProviderCredentialPublicationV2Exception.Conflict();
+            }
+
+            var authority = await ResolveAndLockAuthorityAsync(
+                request.Issuer, request.ActorId, request.Scope, request.ProjectId,
+                request.TenantSelector, request.TenantClaim, cancellationToken).ConfigureAwait(false);
+
+            var now = timeProvider.GetUtcNow();
+            if (request.PreflightId is { } preflightId)
+            {
+                await ConsumePreflightAsync(
+                    preflightId,
+                    ModelProviderCredentialOperationKind.Disable,
+                    request.OperationId,
+                    request.Scope,
+                    request.ProjectId,
+                    request.ProviderId,
+                    request.Issuer,
+                    request.ActorId,
+                    authority,
+                    now,
+                    cancellationToken).ConfigureAwait(false);
             }
 
             if (request.ExpectedProviderRevision is { } expected && head.CurrentRevision != expected)
@@ -493,7 +645,6 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
                 !StringComparer.Ordinal.Equals(current.CredentialVersion, request.ExpectedCredentialVersion))
                 throw ModelProviderCredentialPublicationV2Exception.Conflict();
 
-            var now = timeProvider.GetUtcNow();
             var nextRevision = head.CurrentRevision + 1;
 
             var updated = await db.ModelProviderDrafts

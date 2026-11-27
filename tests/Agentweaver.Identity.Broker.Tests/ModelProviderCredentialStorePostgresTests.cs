@@ -1611,7 +1611,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
 
         var claimDisable = new ClaimModelProviderCredentialDisable(
             opDisable, null, 1, identity.Scope, identity.ProjectId, identity.ProviderId,
-            "broker:actor", "https://issuer.example/");
+            "broker:actor", "https://issuer.example/", Guid.NewGuid());
 
         await using (var db = CreateDb(connectionString))
         {
@@ -1685,10 +1685,10 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             INSERT INTO identity_broker.model_provider_credential_write_claims
             (operation_id, credential_slot_id, scope, project_id, provider_id, vault_source, vault_uri,
              secret_name, expected_revision, request_fingerprint, actor_id, state, claimed_at,
-             pending_secret_version, purpose, issuer, tenant)
+             pending_secret_version, purpose, issuer, tenant, preflight_id)
             VALUES (@op, @slot, 'Project', 'project-1', @provider, 'Existing', @vault,
              'provider-key', 1, @fp, 'broker:actor', 'DisablePending', now(),
-             @ver, 'credential-disable', 'https://issuer.example/', 'tenant-1')
+             @ver, 'credential-disable', 'https://issuer.example/', 'tenant-1', @preflight)
             """, conn))
         {
             insertWithTenant.Parameters.AddWithValue("op", Guid.NewGuid());
@@ -1697,6 +1697,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             insertWithTenant.Parameters.AddWithValue("vault", ExistingVault);
             insertWithTenant.Parameters.AddWithValue("fp", new string('c', 64));
             insertWithTenant.Parameters.AddWithValue("ver", new string('d', 32));
+            insertWithTenant.Parameters.AddWithValue("preflight", Guid.NewGuid());
             var err = await Assert.ThrowsAsync<PostgresException>(() => insertWithTenant.ExecuteNonQueryAsync());
             Assert.Equal(PostgresErrorCodes.CheckViolation, err.SqlState);
         }
@@ -1722,7 +1723,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         await using (var db = CreateDb(connectionString))
             await Store(db).ClaimDisableAsync(new ClaimModelProviderCredentialDisable(
                 opDisable, null, 1, identity.Scope, identity.ProjectId, identity.ProviderId,
-                "broker:actor", "https://issuer.example/"));
+                "broker:actor", "https://issuer.example/", Guid.NewGuid()));
 
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
@@ -1755,7 +1756,7 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
         var opDisable = Guid.NewGuid();
         var claimDisable = new ClaimModelProviderCredentialDisable(
             opDisable, 3, 1, identity.Scope, identity.ProjectId, identity.ProviderId,
-            "broker:actor", "https://issuer.example/");
+            "broker:actor", "https://issuer.example/", Guid.NewGuid());
         ModelProviderCredentialDisableClaimResult pending;
         await using (var db = CreateDb(connectionString))
             pending = await Store(db).ClaimDisableAsync(claimDisable);
@@ -1768,6 +1769,84 @@ public sealed class ModelProviderCredentialStorePostgresTests(PostgresContainerF
             var rotated = await Store(db).RecordReferenceAsync(
                 Record(Guid.NewGuid(), 1, identity, Ref("provider-key", 'b')));
             Assert.Equal(2, rotated.Revision);
+        }
+    }
+
+    [Fact]
+    public async Task AddCredentialDisablePreflightIdMigrationPreservesLegacyNullAndEnforcesNewClaims()
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        await using (var initDb = CreateDb(connectionString))
+            await initDb.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>()
+                .MigrateAsync("20261124020000_AddCredentialDisableClaims");
+        var identity = Identity();
+        var opRecord = Guid.NewGuid();
+        var legacyOp = Guid.NewGuid();
+
+        await using (var db = CreateDb(connectionString))
+        {
+            var store = Store(db);
+            await store.RecordReferenceAsync(Record(opRecord, 0, identity, Ref("provider-key", 'a')));
+        }
+
+        // Insert a legacy DisablePending row (preflight_id does not exist yet on 20261124020000).
+        await using (var conn = new NpgsqlConnection(connectionString))
+        {
+            await conn.OpenAsync();
+            await using var insertLegacy = new NpgsqlCommand("""
+                INSERT INTO identity_broker.model_provider_credential_write_claims
+                (operation_id, credential_slot_id, scope, project_id, provider_id, vault_source, vault_uri,
+                 secret_name, expected_revision, request_fingerprint, actor_id, state, claimed_at,
+                 pending_secret_version, purpose, issuer, tenant)
+                VALUES (@op, @slot, 'Project', @project, @provider, 'Existing', @vault,
+                 'provider-key', 1, @fp, 'broker:actor', 'DisablePending', now(),
+                 @ver, 'credential-disable', 'https://issuer.example/', NULL)
+                """, conn);
+            insertLegacy.Parameters.AddWithValue("op", legacyOp);
+            insertLegacy.Parameters.AddWithValue("slot", identity.CredentialSlotId);
+            insertLegacy.Parameters.AddWithValue("project", identity.ProjectId!);
+            insertLegacy.Parameters.AddWithValue("provider", identity.ProviderId);
+            insertLegacy.Parameters.AddWithValue("vault", ExistingVault);
+            insertLegacy.Parameters.AddWithValue("fp", new string('a', 64));
+            insertLegacy.Parameters.AddWithValue("ver", new string('a', 32));
+            await insertLegacy.ExecuteNonQueryAsync();
+        }
+
+        // Migrate forward to latest (AddCredentialDisablePreflightId).
+        await using (var db = CreateDb(connectionString))
+        {
+            await db.Database.MigrateAsync();
+            var legacyRow = await db.ModelProviderCredentialWriteClaims.AsNoTracking()
+                .SingleAsync(row => row.OperationId == legacyOp);
+            Assert.Equal(ModelProviderCredentialWriteClaimState.DisablePending, legacyRow.State);
+            Assert.Null(legacyRow.PreflightId);
+
+            // Legacy claim can still be cancelled cleanly.
+            await Store(db).CancelDisableClaimAsync(legacyOp, "tenant-1", new string('a', 64));
+        }
+
+        // New DisablePending insert with NULL preflight_id is rejected by trigger.
+        await using (var conn = new NpgsqlConnection(connectionString))
+        {
+            await conn.OpenAsync();
+            await using var insertNullPreflight = new NpgsqlCommand("""
+                INSERT INTO identity_broker.model_provider_credential_write_claims
+                (operation_id, credential_slot_id, scope, project_id, provider_id, vault_source, vault_uri,
+                 secret_name, expected_revision, request_fingerprint, actor_id, state, claimed_at,
+                 pending_secret_version, purpose, issuer, tenant, preflight_id)
+                VALUES (@op, @slot, 'Project', 'project-2', @provider, 'Existing', @vault,
+                 'provider-key', 1, @fp, 'broker:actor', 'DisablePending', now(),
+                 @ver, 'credential-disable', 'https://issuer.example/', NULL, NULL)
+                """, conn);
+            insertNullPreflight.Parameters.AddWithValue("op", Guid.NewGuid());
+            insertNullPreflight.Parameters.AddWithValue("slot", Guid.NewGuid());
+            insertNullPreflight.Parameters.AddWithValue("provider", Guid.NewGuid().ToString("N"));
+            insertNullPreflight.Parameters.AddWithValue("vault", ExistingVault);
+            insertNullPreflight.Parameters.AddWithValue("fp", new string('b', 64));
+            insertNullPreflight.Parameters.AddWithValue("ver", new string('d', 32));
+            var err = await Assert.ThrowsAsync<PostgresException>(() => insertNullPreflight.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.CheckViolation, err.SqlState);
+            Assert.Equal("credential_write_claim_initial_state_invalid", err.MessageText);
         }
     }
 

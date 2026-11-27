@@ -18,6 +18,7 @@ import {
   requireModelProviderCredentialStatus,
   type ProjectCredentialOperation,
   type ProjectCredentialOperationKey,
+  type ProjectCredentialOperationStore,
 } from './projectCredentialOperations';
 import {
   hostRequestHostText,
@@ -189,12 +190,14 @@ export function ProjectModelProviderDrafts({
   platformProviders,
   platformProvidersLoading = false,
   platformProvidersError = false,
+  projectDisableCredentialOperations,
 }: {
   projectId: string;
   tenantSelector?: string | null;
   platformProviders?: AvailablePlatformProvider[] | null;
   platformProvidersLoading?: boolean;
   platformProvidersError?: boolean;
+  projectDisableCredentialOperations?: ProjectCredentialOperationStore;
 }) {
   const {
     apiCall,
@@ -215,6 +218,8 @@ export function ProjectModelProviderDrafts({
   } = useAuth();
   const [fallbackOperationStore] = useState(() => createProjectCredentialOperationStore());
   const operationStore = projectCredentialOperations ?? fallbackOperationStore;
+  const [fallbackDisableOperationStore] = useState(() => createProjectCredentialOperationStore());
+  const disableOperationStore = projectDisableCredentialOperations ?? fallbackDisableOperationStore;
   const binding = useMemo(() => ({ projectId }), [projectId]);
   const [resolvedTenant, setResolvedTenant] = useState<string | null>(null);
   const selectedTenant = tenantSelector ?? resolvedTenant;
@@ -243,6 +248,7 @@ export function ProjectModelProviderDrafts({
   const [credentialError, setCredentialError] = useState<unknown>(null);
   const [credentialMessage, setCredentialMessage] = useState<string | null>(null);
   const [confirmingOperationReset, setConfirmingOperationReset] = useState(false);
+  const [confirmingDisable, setConfirmingDisable] = useState(false);
   const [operationRevision, setOperationRevision] = useState(0);
 
   const mountedRef = useRef(true);
@@ -372,6 +378,7 @@ export function ProjectModelProviderDrafts({
     setCredentialError(null);
     setCredentialMessage(null);
     setConfirmingOperationReset(false);
+    setConfirmingDisable(false);
   }, []);
 
   const invalidateScopeGenerations = useCallback(() => {
@@ -753,6 +760,7 @@ export function ProjectModelProviderDrafts({
     setCredentialBusy(false);
     if (!options?.preserveCredentialError) setCredentialError(null);
     setConfirmingOperationReset(false);
+    setConfirmingDisable(false);
     if (!options?.preserveCredentialMessage) setCredentialMessage(null);
     if (!options?.preserveSavedMessage) setSavedMessage(null);
     try {
@@ -1081,6 +1089,12 @@ export function ProjectModelProviderDrafts({
     return buildOperationKey(selectedProvider.id);
   }, [buildOperationKey, selectedProvider, view]);
 
+  const activeDisableOp = useMemo(() => {
+    if (!activeOperationKey) return null;
+    void operationRevision;
+    return disableOperationStore.get(activeOperationKey);
+  }, [activeOperationKey, disableOperationStore, operationRevision]);
+
   const activeCredentialOp = useMemo(() => {
     if (!activeOperationKey) return null;
     void operationRevision;
@@ -1145,8 +1159,9 @@ export function ProjectModelProviderDrafts({
     setCredentialError(null);
     setCredentialMessage(null);
     setConfirmingOperationReset(false);
+    setConfirmingDisable(false);
 
-    if (!selectedProvider || !credentialStatus || activeCredentialOp) return;
+    if (!selectedProvider || !credentialStatus || activeCredentialOp || activeDisableOp) return;
     if (credentialStatus.state !== 'not_set' && credentialStatus.state !== 'enabled') return;
     if (!submittedApiKey.trim()) {
       setCredentialError(new Error('Enter an API key.'));
@@ -1498,6 +1513,310 @@ export function ProjectModelProviderDrafts({
     }
   };
 
+  const executeDisableRequest = async (
+    opKey: ProjectCredentialOperationKey,
+    providerId: string,
+    operationId: string,
+    expectedProviderRevision: number,
+    expectedCredentialRevision: number,
+  ) => {
+    const capturedScope = currentScopeRef.current;
+    const generation = ++credentialGeneration.current;
+    let dispatched = false;
+
+    setCredentialBusy(true);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    try {
+      const response = await apiCallOnce(
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              generation !== credentialGeneration.current ||
+              activeViewRef.current !== 'detail' ||
+              activeProviderIdRef.current !== providerId ||
+              liveTenant !== opKey.tenantId) {
+            return Promise.reject(new StaleRequestError());
+          }
+          dispatched = true;
+          return gatewayClient.deleteProjectByokProviderCredential(
+            token,
+            projectId,
+            providerId,
+            {
+              operationId,
+              expectedProviderRevision,
+              expectedCredentialRevision,
+            },
+            liveTenant,
+          );
+        },
+        binding,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedScope(capturedScope)) return;
+      const checked = requireProjectCredentialResponse(response, projectId, providerId, operationId);
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === credentialGeneration.current &&
+        activeViewRef.current === 'detail' &&
+        activeProviderIdRef.current === providerId;
+      if (checked.status === 'disabled') {
+        disableOperationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (mountedRef.current) listNeedsReload.current = true;
+        if (!canUpdateUi) return;
+        setConfirmingDisable(false);
+        setCredentialMessage('API key disabled.');
+        void openProvider(providerId, {
+          preserveSavedMessage: Boolean(savedMessage),
+          preserveCredentialMessage: true,
+        });
+        void loadPage(null, false);
+        return;
+      }
+      if (checked.status === 'cancelled') {
+        disableOperationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (!canUpdateUi) return;
+        setConfirmingDisable(false);
+        setCredentialError(new Error('Key disable was cancelled. Refreshing provider status.'));
+        void openProvider(providerId, {
+          preserveSavedMessage: Boolean(savedMessage),
+          preserveCredentialError: true,
+        });
+        void loadPage(null, false);
+        return;
+      }
+      disableOperationStore.set(opKey, {
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        status: 'disable_pending',
+      });
+      if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (!dispatched) {
+        if (isSameScope(capturedScope) && generation === credentialGeneration.current) {
+          if (!handleAccessFailure(reason))
+            setCredentialError(reason);
+        }
+        return;
+      }
+      if (!isSameConfirmedScope(capturedScope)) return;
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === credentialGeneration.current &&
+        activeViewRef.current === 'detail' &&
+        activeProviderIdRef.current === providerId;
+      if (reason instanceof GatewayError && (reason.status === 401 || reason.status === 403)) {
+        disableOperationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (isSameScope(capturedScope) && generation === credentialGeneration.current)
+          handleAccessFailure(reason);
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 409) {
+        disableOperationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (canUpdateUi) {
+          setConfirmingDisable(false);
+          setCredentialError(new Error(
+            reason.code === 'credential_operation_cancelled'
+              ? 'Key disable was cancelled. Refreshing provider status.'
+              : 'The provider or key state changed. Refreshing provider status.',
+          ));
+          void openProvider(providerId, {
+            preserveSavedMessage: Boolean(savedMessage),
+            preserveCredentialError: true,
+          });
+          void loadPage(null, false);
+        }
+        return;
+      }
+      disableOperationStore.set(opKey, {
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        status: 'disable_pending',
+      });
+      if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+      if (canUpdateUi) {
+        setConfirmingDisable(false);
+        setCredentialError(reason);
+      }
+    } finally {
+      if (mountedRef.current && generation === credentialGeneration.current)
+        setCredentialBusy(false);
+    }
+  };
+
+  const confirmDisableKey = async () => {
+    setCredentialError(null);
+    setCredentialMessage(null);
+    if (!selectedProvider || !credentialStatus || activeCredentialOp || activeDisableOp) return;
+    if (credentialStatus.state !== 'enabled' ||
+        credentialStatus.providerRevision !== selectedProvider.revision)
+      return;
+    const opKey = buildOperationKey(selectedProvider.id);
+    if (!opKey) {
+      setCredentialError(new GatewayError(
+        403,
+        { code: 'forbidden' },
+        'Confirm project access before disabling an API key.',
+      ));
+      return;
+    }
+    const operationId = crypto.randomUUID();
+    await executeDisableRequest(
+      opKey,
+      selectedProvider.id,
+      operationId,
+      credentialStatus.providerRevision,
+      credentialStatus.credentialRevision,
+    );
+  };
+
+  const retryDisableKey = async () => {
+    if (!selectedProvider || !activeDisableOp || !activeOperationKey) return;
+    if (activeDisableOp.status !== 'disable_pending' && activeDisableOp.status !== 'uncertain') return;
+    await executeDisableRequest(
+      activeOperationKey,
+      selectedProvider.id,
+      activeDisableOp.operationId,
+      activeDisableOp.expectedProviderRevision,
+      activeDisableOp.expectedCredentialRevision ?? 0,
+    );
+  };
+
+  const checkDisableStatus = async () => {
+    if (!selectedProvider || !activeDisableOp || !activeOperationKey) return;
+    const opKey = activeOperationKey;
+    const providerId = selectedProvider.id;
+    const { operationId, expectedProviderRevision, expectedCredentialRevision = 0 } = activeDisableOp;
+    const capturedScope = currentScopeRef.current;
+    const generation = ++credentialGeneration.current;
+
+    setCredentialBusy(true);
+    setCredentialError(null);
+    setCredentialMessage(null);
+    try {
+      const status = await apiCallOnce(
+        (token, liveTenant) => {
+          if (!isSameScope(capturedScope) ||
+              generation !== credentialGeneration.current ||
+              activeViewRef.current !== 'detail' ||
+              activeProviderIdRef.current !== providerId ||
+              liveTenant !== opKey.tenantId) {
+            return Promise.reject(new StaleRequestError());
+          }
+          return gatewayClient.getProjectByokProviderCredentialOperation(
+            token,
+            projectId,
+            providerId,
+            operationId,
+            liveTenant,
+          );
+        },
+        binding,
+        {
+          tenantId: opKey.tenantId,
+          actorId: opKey.actorId,
+          issuer: opKey.issuer,
+        },
+      );
+      if (!isSameConfirmedScope(capturedScope)) return;
+      const checked = requireProjectCredentialOperationStatus(
+        status,
+        projectId,
+        providerId,
+        operationId,
+      );
+      const canUpdateUi =
+        mountedRef.current &&
+        generation === credentialGeneration.current &&
+        activeViewRef.current === 'detail' &&
+        activeProviderIdRef.current === providerId;
+      if (checked.status === 'disabled') {
+        disableOperationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (mountedRef.current) listNeedsReload.current = true;
+        if (!canUpdateUi) return;
+        setConfirmingDisable(false);
+        setCredentialMessage('API key disabled.');
+        void openProvider(providerId, {
+          preserveSavedMessage: Boolean(savedMessage),
+          preserveCredentialMessage: true,
+        });
+        void loadPage(null, false);
+        return;
+      }
+      if (checked.status === 'cancelled') {
+        disableOperationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (!canUpdateUi) return;
+        setConfirmingDisable(false);
+        setCredentialError(new Error('Key disable was cancelled. Refreshing provider status.'));
+        void openProvider(providerId, {
+          preserveSavedMessage: Boolean(savedMessage),
+          preserveCredentialError: true,
+        });
+        void loadPage(null, false);
+        return;
+      }
+      disableOperationStore.set(opKey, {
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        status: checked.status === 'disable_pending' ? 'disable_pending' : 'pending',
+      });
+      if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+    } catch (reason) {
+      if (reason instanceof StaleRequestError) return;
+      if (!isSameConfirmedScope(capturedScope)) return;
+      if (reason instanceof GatewayError &&
+          reason.status === 404 &&
+          reason.code === 'credential_operation_not_found') {
+        disableOperationStore.set(opKey, {
+          operationId,
+          expectedProviderRevision,
+          expectedCredentialRevision,
+          status: 'disable_pending',
+        });
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 409) {
+        disableOperationStore.delete(opKey);
+        if (mountedRef.current) setOperationRevision((revision) => revision + 1);
+        if (mountedRef.current &&
+            generation === credentialGeneration.current &&
+            activeViewRef.current === 'detail' &&
+            activeProviderIdRef.current === providerId) {
+          setConfirmingDisable(false);
+          setCredentialError(new Error('The provider or key state changed. Refreshing provider status.'));
+          void openProvider(providerId, {
+            preserveSavedMessage: Boolean(savedMessage),
+            preserveCredentialError: true,
+          });
+          void loadPage(null, false);
+        }
+        return;
+      }
+      if (isSameScope(capturedScope) && generation === credentialGeneration.current) {
+        if (!handleAccessFailure(reason))
+          setCredentialError(reason);
+      }
+    } finally {
+      if (mountedRef.current && generation === credentialGeneration.current)
+        setCredentialBusy(false);
+    }
+  };
+
   const confirmResetPendingOperation = async () => {
     if (!selectedProvider || !activeCredentialOp || !activeOperationKey ||
         (activeCredentialOp.status !== 'uncertain' && activeCredentialOp.status !== 'pending'))
@@ -1783,7 +2102,32 @@ export function ProjectModelProviderDrafts({
                       </div>
                     </div>
                   )}
-                  {!credentialStatusLoading && credentialStatusError == null && activeCredentialOp && (
+                  {!credentialStatusLoading && credentialStatusError == null && activeDisableOp && (
+                    <div className="v1-stack">
+                      <Text role="status">
+                        Disabling the API key did not finish. Check key status or retry disabling with the same operation ID. Operation ID:{' '}
+                        <code>{activeDisableOp.operationId}</code>
+                      </Text>
+                      <div className="v1-actions">
+                        <Button
+                          appearance="primary"
+                          type="button"
+                          onClick={() => void retryDisableKey()}
+                          disabled={credentialBusy}
+                        >
+                          {credentialBusy ? 'Disabling key…' : 'Retry disable'}
+                        </Button>
+                        <Button
+                          type="button"
+                          onClick={() => void checkDisableStatus()}
+                          disabled={credentialBusy}
+                        >
+                          Check disable status
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {!credentialStatusLoading && credentialStatusError == null && !activeDisableOp && activeCredentialOp && (
                     <div className="v1-stack">
                       {activeCredentialOp.status === 'uncertain' && (
                         <Text role="status">
@@ -1879,63 +2223,109 @@ export function ProjectModelProviderDrafts({
                       )}
                     </div>
                   )}
-                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                  {!credentialStatusLoading && credentialStatusError == null && !activeDisableOp && !activeCredentialOp &&
                     credentialStatus?.state === 'disabled' && (
                     <Text role="status">
                       Credential disabled. Disabled credential slots cannot accept a new key.
                     </Text>
                   )}
-                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                  {!credentialStatusLoading && credentialStatusError == null && !activeDisableOp && !activeCredentialOp &&
                     credentialStatus?.state === 'pending' && (
                     <Text role="status">
                       A credential update is already in progress. Refresh to check when it finishes.
                     </Text>
                   )}
-                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                  {!credentialStatusLoading && credentialStatusError == null && !activeDisableOp && !activeCredentialOp &&
                     credentialStatus?.state === 'quarantined' && (
                     <Text role="status">
                       The last credential write was quarantined. Recover or cancel it via CLI before rotating the key.
                     </Text>
                   )}
-                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                  {!credentialStatusLoading && credentialStatusError == null && !activeDisableOp && !activeCredentialOp &&
                     credentialStatus && (credentialStatus.state === 'not_set' || credentialStatus.state === 'enabled') && (
-                    <form className="v1-form" onSubmit={(event) => void submitKey(event)}>
-                      <Field
-                        label={credentialStatus.state === 'enabled' ? 'Rotate API key' : 'Add API key'}
-                        required
-                      >
-                        <div className="v1-actions">
-                          <Input
-                            type={showKey ? 'text' : 'password'}
-                            autoComplete="new-password"
-                            placeholder={credentialStatus.state === 'enabled' ? 'Enter a new API key to rotate' : undefined}
-                            value={apiKeyInput}
-                            onChange={(_, data) => {
-                              setApiKeyInput(data.value);
-                              setCredentialError(null);
-                              setCredentialMessage(null);
-                            }}
-                            disabled={credentialBusy}
-                          />
-                          <Button
-                            type="button"
-                            onClick={() => setShowKey((current) => !current)}
-                            disabled={credentialBusy}
-                          >
-                            {showKey ? 'Hide key' : 'Show key'}
-                          </Button>
-                        </div>
-                      </Field>
-                      <div className="v1-actions">
-                        <Button
-                          appearance="primary"
-                          type="submit"
-                          disabled={credentialBusy || !apiKeyInput.trim()}
+                    <div className="v1-stack">
+                      <form className="v1-form" onSubmit={(event) => void submitKey(event)}>
+                        <Field
+                          label={credentialStatus.state === 'enabled' ? 'Rotate API key' : 'Add API key'}
+                          required
                         >
-                          {credentialBusy ? 'Saving key…' : 'Save key'}
-                        </Button>
-                      </div>
-                    </form>
+                          <div className="v1-actions">
+                            <Input
+                              type={showKey ? 'text' : 'password'}
+                              autoComplete="new-password"
+                              placeholder={credentialStatus.state === 'enabled' ? 'Enter a new API key to rotate' : undefined}
+                              value={apiKeyInput}
+                              onChange={(_, data) => {
+                                setApiKeyInput(data.value);
+                                setCredentialError(null);
+                                setCredentialMessage(null);
+                              }}
+                              disabled={credentialBusy || confirmingDisable}
+                            />
+                            <Button
+                              type="button"
+                              onClick={() => setShowKey((current) => !current)}
+                              disabled={credentialBusy || confirmingDisable}
+                            >
+                              {showKey ? 'Hide key' : 'Show key'}
+                            </Button>
+                          </div>
+                        </Field>
+                        <div className="v1-actions">
+                          <Button
+                            appearance="primary"
+                            type="submit"
+                            disabled={credentialBusy || confirmingDisable || !apiKeyInput.trim()}
+                          >
+                            {credentialBusy ? 'Saving key…' : 'Save key'}
+                          </Button>
+                          {credentialStatus.state === 'enabled' &&
+                            credentialStatus.providerRevision === selectedProvider.revision &&
+                            !confirmingDisable && (
+                            <Button
+                              type="button"
+                              onClick={() => {
+                                setCredentialError(null);
+                                setCredentialMessage(null);
+                                setConfirmingDisable(true);
+                              }}
+                              disabled={credentialBusy}
+                            >
+                              Disable API key
+                            </Button>
+                          )}
+                        </div>
+                      </form>
+                      {credentialStatus.state === 'enabled' &&
+                        credentialStatus.providerRevision === selectedProvider.revision &&
+                        confirmingDisable && (
+                        <div className="v1-stack" role="region" aria-label="Confirm disable API key">
+                          <Text weight="semibold">
+                            Disable API key for {selectedProvider.name}?
+                          </Text>
+                          <Text>
+                            New runs that use this provider cannot use this key. Runs already assigned this key can continue to use it. The provider settings stay saved.
+                          </Text>
+                          <div className="v1-actions">
+                            <Button
+                              appearance="primary"
+                              type="button"
+                              onClick={() => void confirmDisableKey()}
+                              disabled={credentialBusy}
+                            >
+                              {credentialBusy ? 'Disabling key…' : 'Confirm disable'}
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => setConfirmingDisable(false)}
+                              disabled={credentialBusy}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </>
               )}

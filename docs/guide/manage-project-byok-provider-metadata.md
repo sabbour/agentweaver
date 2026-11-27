@@ -187,5 +187,23 @@ Project owners can add or rotate a project BYOK provider API key in
    **Check key status** for an in-flight operation, or recover or cancel a
    quarantined write with the CLI using the shown operation ID.
 
+## Disable an API key in the web app
+
+Project owners can disable an enabled project BYOK provider API key in
+**Project settings > Connections > BYOK provider drafts**:
+
+1. Open a project provider draft whose credential status is **Key saved** and
+   whose provider revision matches the detail view, with no credential
+   operation in progress.
+2. Select **Disable API key**.
+3. Review the confirmation prompt (**Disable API key for {provider name}?**)
+   and select **Confirm disable**, or select **Cancel** to keep the key active.
+   Disabling the key creates a `Draft` revision without a credential binding.
+   Runs already assigned this key continue to use it, and the provider
+   settings stay saved.
+4. If the reply is lost, use **Check disable status** or **Retry disable**
+   with the shown operation ID. If the provider or key state changes before
+   the disable finishes, the page refreshes and requires a new confirmation.
+
 For command syntax and metadata options, see
 [Manage project BYOK provider drafts](./cli.md#manage-project-byok-provider-drafts).

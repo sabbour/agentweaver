@@ -465,11 +465,6 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("cancelled_at");
 
-                    b.Property<string>("PendingSecretVersion")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("pending_secret_version");
-
                     b.Property<DateTimeOffset>("ClaimedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("claimed_at");
@@ -502,6 +497,15 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)")
                         .HasColumnName("issuer");
+
+                    b.Property<string>("PendingSecretVersion")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("pending_secret_version");
+
+                    b.Property<Guid?>("PreflightId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("preflight_id");
 
                     b.Property<string>("ProjectId")
                         .HasMaxLength(32)

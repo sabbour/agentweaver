@@ -217,11 +217,12 @@ public sealed record ModelProviderCredentialCancelRequest(
     string ProviderId,
     string Issuer,
     string ActorId,
-    string OriginalTenant,
-    Guid OriginalMembershipId,
-    long OriginalMembershipRevision,
+    string? OriginalTenant,
+    Guid? OriginalMembershipId,
+    long? OriginalMembershipRevision,
     string? TenantSelector,
-    string? TenantClaim)
+    string? TenantClaim,
+    bool SettleOnly = false)
 {
     [JsonIgnore]
     public bool IsValid =>
@@ -234,9 +235,13 @@ public sealed record ModelProviderCredentialCancelRequest(
         IsIdentifier(ProviderId, 128) &&
         !string.IsNullOrWhiteSpace(Issuer) && Issuer.Length <= 2048 &&
         IsIdentifier(ActorId, 256) &&
-        IsIdentifier(OriginalTenant, 256) &&
-        OriginalMembershipId != Guid.Empty &&
-        OriginalMembershipRevision > 0 &&
+        (SettleOnly
+            ? (OriginalTenant is null || IsIdentifier(OriginalTenant, 256)) &&
+              (OriginalMembershipId is null or not { } || OriginalMembershipId != Guid.Empty) &&
+              (OriginalMembershipRevision is null or > 0)
+            : IsIdentifier(OriginalTenant, 256) &&
+              OriginalMembershipId is { } mid && mid != Guid.Empty &&
+              OriginalMembershipRevision is > 0) &&
         (TenantSelector is null || IsIdentifier(TenantSelector, 256)) &&
         (TenantClaim is null || IsIdentifier(TenantClaim, 256));
 
@@ -251,7 +256,9 @@ public sealed record ModelProviderCredentialCancelRequest(
 public sealed record ModelProviderCredentialCancelResponse(
     Guid OperationId,
     string Outcome,
-    ModelProviderCredentialPublicationReceipt? Receipt);
+    ModelProviderCredentialPublicationReceipt? Receipt,
+    ModelProviderCredentialDisableReceipt? DisableReceipt = null,
+    string? ResolvedTenant = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ModelProviderCredentialDisableRequest(
@@ -267,11 +274,13 @@ public sealed record ModelProviderCredentialDisableRequest(
     string Issuer,
     string ActorId,
     string? TenantSelector,
-    string? TenantClaim)
+    string? TenantClaim,
+    Guid? PreflightId = null)
 {
     [JsonIgnore]
     public bool IsValid =>
         OperationId != Guid.Empty &&
+        (PreflightId is null || PreflightId != Guid.Empty) &&
         (ExpectedProviderRevision is null or (> 0 and < long.MaxValue)) &&
         OriginalCredentialRevision is > 0 and < long.MaxValue &&
         ExpectedCredentialSlotId != Guid.Empty &&

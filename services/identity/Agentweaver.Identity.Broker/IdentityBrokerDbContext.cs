@@ -373,6 +373,7 @@ public sealed class IdentityBrokerDbContext : DbContext
             entity.Property(claim => claim.Purpose).HasColumnName("purpose").HasMaxLength(32);
             entity.Property(claim => claim.Issuer).HasColumnName("issuer").HasMaxLength(2048);
             entity.Property(claim => claim.Tenant).HasColumnName("tenant").HasMaxLength(256);
+            entity.Property(claim => claim.PreflightId).HasColumnName("preflight_id");
             entity.Property(claim => claim.PublishedProviderRevision).HasColumnName("published_provider_revision");
             entity.Property(claim => claim.PublishedConfigurationHash).HasColumnName("published_configuration_hash").HasMaxLength(64);
             entity.Property(claim => claim.PublishedProviderState).HasColumnName("published_provider_state").HasMaxLength(16);

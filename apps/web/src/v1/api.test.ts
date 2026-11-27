@@ -882,6 +882,40 @@ describe('Gateway API client', () => {
       apiKey: 'secret-key',
     });
 
+    const deleteResponse = {
+      operationId: '22222222-2222-4222-8222-222222222222',
+      status: 'disabled',
+      scope: 'project',
+      projectId: 'project/1',
+      providerId: 'provider/1',
+      providerRevision: 3,
+      credentialRevision: 2,
+      credentialVersion: null,
+      configurationHash: 'b'.repeat(64),
+      providerState: 'Draft',
+    };
+    fetcher.mockResolvedValueOnce(new Response(JSON.stringify(deleteResponse), { status: 200 }));
+    await expect(client.deleteProjectByokProviderCredential('token', 'project/1', 'provider/1', {
+      operationId: '22222222-2222-4222-8222-222222222222',
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 1,
+    }, 'tenant-1')).resolves.toEqual(deleteResponse);
+
+    const [deleteUrl, deleteInit] = fetcher.mock.calls[2];
+    expect(String(deleteUrl)).toBe(
+      'https://gateway.example.test/api/v1/projects/project%2F1/byok-providers/provider%2F1/credential',
+    );
+    expect(deleteInit?.method).toBe('DELETE');
+    expect(deleteInit?.credentials).toBe('omit');
+    expect(deleteInit?.cache).toBe('no-store');
+    expect(new Headers(deleteInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(new Headers(deleteInit?.headers).get('Content-Type')).toBe('application/json');
+    expect(JSON.parse(String(deleteInit?.body))).toEqual({
+      operationId: '22222222-2222-4222-8222-222222222222',
+      expectedProviderRevision: 2,
+      expectedCredentialRevision: 1,
+    });
+
     const [getUrl, getInit] = fetcher.mock.calls[1];
     expect(String(getUrl)).toBe(
       'https://gateway.example.test/api/v1/projects/project%2F1/byok-providers/provider%2F1/credential/operations/11111111-1111-4111-8111-111111111111',
