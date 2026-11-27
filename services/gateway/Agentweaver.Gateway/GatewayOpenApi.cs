@@ -123,9 +123,11 @@ internal static partial class GatewayOpenApi
             ["readProjectByokProviderDraft"] = C(null, "ModelProviderDraft", "200"),
             ["createProjectByokProviderDraft"] = C("ModelProviderDraftProjectCreateRequest", "ModelProviderDraft", "200"),
             ["updateProjectByokProviderDraft"] = C("ModelProviderDraftSaveRequest", "ModelProviderDraft", "200"),
+            ["readPlatformByokProviderCredential"] = C(null, "ModelProviderCredentialStatusResponse", "200"),
             ["setPlatformByokProviderCredential"] = C("ModelProviderCredentialPutRequest", "ModelProviderCredentialOperationResponse", "200"),
             ["readPlatformByokProviderCredentialOperation"] = C(null, "ModelProviderCredentialOperationStatusResponse", "200"),
             ["disablePlatformByokProviderCredential"] = C("ModelProviderCredentialDeleteRequest", "ModelProviderCredentialOperationResponse", "200"),
+            ["readProjectByokProviderCredential"] = C(null, "ModelProviderCredentialStatusResponse", "200"),
             ["setProjectByokProviderCredential"] = C("ModelProviderCredentialPutRequest", "ModelProviderCredentialOperationResponse", "200"),
             ["readProjectByokProviderCredentialOperation"] = C(null, "ModelProviderCredentialOperationStatusResponse", "200"),
             ["disableProjectByokProviderCredential"] = C("ModelProviderCredentialDeleteRequest", "ModelProviderCredentialOperationResponse", "200"),
@@ -550,7 +552,9 @@ internal static partial class GatewayOpenApi
                         "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         route.OperationId is "getAuthorizationTargetContext" or
+                            "readPlatformByokProviderCredential" or
                             "readPlatformByokProviderCredentialOperation" or
+                            "readProjectByokProviderCredential" or
                             "readProjectByokProviderCredentialOperation" ||
                         IsModelProviderDraftRoute(route.OperationId)) && status == "200") ||
                         ((route.OperationId is "savePlatformManualRuntimeRateCard" or "savePlatformAzureRetailRuntimeRateCard") &&
@@ -851,6 +855,12 @@ else if (route.OperationId is
                 "The owner did not find the capture or file, or withholds captures while the run is failed or indeterminate.");
             responses["409"] = ProblemResponse("The accepted run selection or owner authority changed during the request.");
             responses["503"] = ProblemResponse("The capture store is unavailable or failed an integrity check.");
+        }
+        else if (route.OperationId is "readPlatformByokProviderCredential" or "readProjectByokProviderCredential")
+        {
+            responses["400"] = ProblemResponse("The request included query parameters, a body, or invalid identifiers.");
+            responses["403"] = ProblemResponse("The caller lacks current authority or the token does not match the target scope.");
+            responses["404"] = ProblemResponse("No matching BYOK provider exists for this caller and target.");
         }
         else if (route.OperationId is "readPlatformByokProviderCredentialOperation" or "readProjectByokProviderCredentialOperation")
         {
@@ -2828,6 +2838,14 @@ else if (route.OperationId is
             ("status", Enum("pending", "publication_pending", "published", "quarantined", "cancelled", "disable_pending", "disabled")),
             ("providerRevision", Nullable(new { type = "integer", format = "int64" })),
             ("hasCredential", Nullable(Bool()))),
+        ["ModelProviderCredentialStatusResponse"] = StrictObj(
+            ["scope", "projectId", "providerId", "providerRevision", "state", "credentialRevision"],
+            ("scope", Enum("platform", "project")),
+            ("projectId", NullableStr()),
+            ("providerId", Str()),
+            ("providerRevision", new { type = "integer", format = "int64", minimum = 1L }),
+            ("state", Enum("not_set", "enabled", "disabled", "pending", "quarantined")),
+            ("credentialRevision", new { type = "integer", format = "int64", minimum = 0L })),
         ["ModelProviderDraftPlatformCreateRequest"] = WithRateCardPair(WithReferencePin(StrictObj(
             ["operationId", "expectedRevision", "name", "type", "base_url", "model"],
             ("operationId", Uuid()), ("expectedRevision", new { type = "integer", format = "int64", @const = 0 }),

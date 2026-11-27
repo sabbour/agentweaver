@@ -85,6 +85,7 @@ import type {
   ModelProviderCredentialOperationStatusResponse,
   ModelProviderCredentialRequest,
   ModelProviderCredentialResponse,
+  ModelProviderCredentialStatusResponse,
   PlatformModelDefaultSwitchRequest,
   ModelProviderDefaultSwitchResponse,
   KnowledgeRecordRevisionPage,
@@ -710,6 +711,25 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'byok-providers', providerId)}`,
       { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads project BYOK provider credential status and revision without caching or secrets. */
+  getProjectByokProviderCredential(
+    token: string,
+    projectId: string,
+    providerId: string,
+    tenantSelector?: string | null,
+  ): Promise<ModelProviderCredentialStatusResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'byok-providers', providerId, 'credential')}`,
+      {
+        credentials: 'omit',
+        cache: 'no-store',
+      },
       this.baseUrl,
       tenantSelector,
     );

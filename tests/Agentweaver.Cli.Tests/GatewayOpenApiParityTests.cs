@@ -98,6 +98,36 @@ public sealed class GatewayOpenApiParityTests
             .Select(value => value!.GetValue<string>()).ToArray();
         Assert.Contains("sourceCheckpointId", requiredEventFields);
         Assert.DoesNotContain("currentStep", requiredEventFields);
+
+        foreach (string opId in new[]
+        {
+            "readPlatformByokProviderCredential",
+            "readProjectByokProviderCredential",
+        })
+        {
+            JsonObject statusOp = FindOperation(discovered, opId);
+            Assert.Equal("#/components/schemas/ModelProviderCredentialStatusResponse",
+                statusOp["responses"]?["200"]?["content"]?["application/json"]?["schema"]?["$ref"]?
+                    .GetValue<string>());
+            Assert.NotNull(statusOp["responses"]?["200"]?["headers"]?["Cache-Control"]);
+            Assert.True(statusOp["x-agentweaver-mcp-excluded"]?.GetValue<bool>());
+            JsonObject statusResponses = Assert.IsType<JsonObject>(statusOp["responses"]);
+            Assert.Contains("400", statusResponses.Select(item => item.Key));
+            Assert.Contains("403", statusResponses.Select(item => item.Key));
+            Assert.Contains("404", statusResponses.Select(item => item.Key));
+        }
+
+        JsonObject credStatusSchema = Assert.IsType<JsonObject>(schemas["ModelProviderCredentialStatusResponse"]);
+        var requiredCredStatusFields = Assert.IsType<JsonArray>(credStatusSchema["required"])
+            .Select(value => value!.GetValue<string>()).ToArray();
+        Assert.Equal(
+            ["scope", "projectId", "providerId", "providerRevision", "state", "credentialRevision"],
+            requiredCredStatusFields);
+        JsonObject credStatusProps = Assert.IsType<JsonObject>(credStatusSchema["properties"]);
+        Assert.Equal(
+            ["not_set", "enabled", "disabled", "pending", "quarantined"],
+            Assert.IsType<JsonArray>(credStatusProps["state"]?["enum"])
+                .Select(value => value!.GetValue<string>()).ToArray());
         Assert.DoesNotContain("decisionStateVersion", requiredEventFields);
         Assert.Equal("#/components/schemas/CheckpointRecoveryRequest",
             schemas["RecoverRunExecutionRequest"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());

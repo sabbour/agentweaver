@@ -571,6 +571,24 @@ internal sealed class ModelProviderCredentialStore(
                 row.ProviderId == providerId, cancellationToken)
             .ConfigureAwait(false);
 
+    internal async Task<ModelProviderCredentialWriteClaim?> ReadActiveWriteClaimByProviderAsync(
+        ModelProviderCredentialScope scope,
+        string? projectId,
+        string providerId,
+        CancellationToken cancellationToken = default) =>
+        await db.ModelProviderCredentialWriteClaims.AsNoTracking()
+            .Where(row =>
+                row.Scope == scope &&
+                row.ProjectId == projectId &&
+                row.ProviderId == providerId &&
+                (row.State == ModelProviderCredentialWriteClaimState.Claimed ||
+                 row.State == ModelProviderCredentialWriteClaimState.Quarantined ||
+                 row.State == ModelProviderCredentialWriteClaimState.PublicationPending ||
+                 row.State == ModelProviderCredentialWriteClaimState.DisablePending))
+            .OrderByDescending(row => row.ClaimedAt)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
     internal async Task MarkPublicationDispatchedAsync(
         ClaimModelProviderCredentialPublication request,
         CancellationToken cancellationToken = default)

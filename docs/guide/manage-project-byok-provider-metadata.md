@@ -159,5 +159,22 @@ agentweaver project byok disable-key $providerId `
 Both commands force a project-bound identity without a run binding, even when
 `AGENTWEAVER_RUN_ID` is set.
 
+## Set or rotate an API key in the web app
+
+Project owners can add or rotate a project BYOK provider API key in
+**Project settings > Connections > BYOK provider drafts**:
+
+1. Open a project provider draft. The page loads the provider metadata and
+   its current credential status without displaying any saved key.
+2. When the credential status is **No key saved**, enter the key in **Add API key**
+   and select **Save key**.
+3. When the credential status is **Key saved**, enter the replacement key in
+   **Rotate API key** and select **Save key**. The form sends the current
+   provider and credential revisions and clears the typed key immediately.
+4. If the credential status is **Pending**, **Quarantined**, **Disabled**, or
+   unavailable, the key input stays disabled. Use **Retry publication** or
+   **Check key status** for an in-flight operation, or recover or cancel a
+   quarantined write with the CLI using the shown operation ID.
+
 For command syntax and metadata options, see
 [Manage project BYOK provider drafts](./cli.md#manage-project-byok-provider-drafts).

@@ -126,6 +126,23 @@ internal sealed class BrokerModelProviderCredentialPublicationV2Client(
                         response.Outcome is null or "published" or "cancelled" or "disabled",
             cancellationToken);
 
+    internal Task<ModelProviderCredentialStatusCheckResponse> CheckStatusAsync(
+        ModelProviderCredentialStatusCheckRequest request,
+        CancellationToken cancellationToken) =>
+        SendAsync<ModelProviderCredentialStatusCheckRequest, ModelProviderCredentialStatusCheckResponse>(
+            "/internal/byok/credential-publications/v2/status-check",
+            request,
+            request.OperationId,
+            request.Scope,
+            request.ProjectId,
+            request.ProviderId,
+            request.ActorId,
+            request.Issuer,
+            response => response.Request == request &&
+                        !string.IsNullOrWhiteSpace(response.ResolvedTenant) &&
+                        response.ProviderRevision > 0,
+            cancellationToken);
+
     private async Task<TResponse> SendAsync<TRequest, TResponse>(
         string path,
         TRequest payload,

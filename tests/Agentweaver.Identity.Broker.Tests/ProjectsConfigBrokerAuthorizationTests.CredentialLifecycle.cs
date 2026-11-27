@@ -1526,6 +1526,342 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+    [Fact]
+    public async Task Gateway_ReadCredentialStatus_DistinguishesStates_EnforcesAuthority_AndWritesNoPreflights()
+    {
+        using var signingCert = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var projects = _runBindingProjects;
+
+        var fakeVault = new FakeByokVault();
+        await using var broker = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                settings["IdentityBroker__SecretRedemption__ByokVaultUri"] =
+                    "https://agentweaver-byok-kv-v1.vault.azure.net/";
+                settings["IdentityBroker__SecretRedemption__ByokVaultHost"] =
+                    "agentweaver-byok-kv-v1.vault.azure.net";
+                for (var i = 0; i < ProjectScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                services.RemoveAll<IModelProviderByokVault>();
+                services.AddSingleton<IModelProviderByokVault>(fakeVault);
+                services.RemoveAll<ModelProviderCredentialRedemptionBackends>();
+                services.AddSingleton(new ModelProviderCredentialRedemptionBackends(fakeVault));
+            });
+
+        using var brokerClient = broker.CreateClient();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(signingCert),
+            () => new ForwardToClientHandler(projects.Client),
+            async (owner, req, ct) =>
+            {
+                var client = owner == GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker
+                    ? brokerClient
+                    : projects.Client;
+                using var clone = new HttpRequestMessage(req.Method, req.RequestUri!.PathAndQuery);
+                foreach (var header in req.Headers)
+                {
+                    if (!string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase))
+                        clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                if (req.Content is not null)
+                {
+                    var bytes = await req.Content.ReadAsByteArrayAsync(ct);
+                    clone.Content = new ByteArrayContent(bytes);
+                    foreach (var header in req.Content.Headers)
+                        clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+                var resp = await client.SendAsync(clone, ct);
+                resp.RequestMessage = req;
+                return resp;
+            });
+
+        var adminToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, null, null, ["platform_admin"]))
+            .GetProperty("access_token").GetString()!;
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(adminToken);
+        var adminSub = SingleClaim(jwt.Claims, "sub");
+        var adminIssuer = SingleClaim(jwt.Claims, "iss");
+        var adminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, adminSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            adminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant,
+            TenantId,
+            ProjectAuthorityRole.TenantAdmin);
+
+        var project = await CreateProjectsTestProjectAsync(
+            projects.Client, adminToken, TenantId, "Status Check Project");
+        var projectToken = (await IssueTokensAsync(
+            broker, "projects.admin", [TenantId], null, project.ProjectId, null, ["project_owner"]))
+            .GetProperty("access_token").GetString()!;
+        var projectClaims = new JwtSecurityTokenHandler().ReadJwtToken(projectToken).Claims.ToArray();
+        var projectSub = SingleClaim(projectClaims, "sub");
+        var projectIssuer = SingleClaim(projectClaims, "iss");
+        var projectMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, projectSub, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            projectMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner);
+
+        string providerId;
+        using (var create = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Post,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers",
+            projectToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0L,
+                name = "Status Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-4o",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, create.StatusCode);
+            using var doc = JsonDocument.Parse(await create.Content.ReadAsStringAsync());
+            providerId = doc.RootElement.GetProperty("id").GetString()!;
+        }
+
+        // Unauthenticated Gateway credential GET still returns Cache-Control: no-store + nosniff.
+        using (var unauth = await gateway.Client.GetAsync(
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential"))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, unauth.StatusCode);
+            Assert.True(unauth.Headers.CacheControl?.NoStore);
+            Assert.Equal("nosniff", Assert.Single(unauth.Headers.GetValues("X-Content-Type-Options")));
+        }
+
+        // Unbound token on project credential GET is rejected (403) and writes zero preflights.
+        var preflightsBefore = await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
+        using (var unbound = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            adminToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, unbound.StatusCode);
+            Assert.True(unbound.Headers.CacheControl?.NoStore);
+        }
+
+        // 1. not_set -> credentialRevision 0, zero preflight inserts, no secret fields.
+        using (var notSet = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.OK, notSet.StatusCode);
+            Assert.True(notSet.Headers.CacheControl?.NoStore);
+            Assert.Equal("nosniff", Assert.Single(notSet.Headers.GetValues("X-Content-Type-Options")));
+            var raw = await notSet.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("credentialVersion", raw);
+            Assert.DoesNotContain("credentialSlotId", raw);
+            Assert.DoesNotContain("secretName", raw);
+            using var doc = JsonDocument.Parse(raw);
+            Assert.Equal("not_set", doc.RootElement.GetProperty("state").GetString());
+            Assert.Equal(0L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+            Assert.Equal(1L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+        }
+        Assert.Equal(preflightsBefore, await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
+
+        // 2. enabled -> credentialRevision 1, then 2 after rotation.
+        using (var put1 = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Put,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 1L,
+                expectedCredentialRevision = 0L,
+                apiKey = "sk-status-v1",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, put1.StatusCode);
+        }
+        using (var enabled1 = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.OK, enabled1.StatusCode);
+            using var doc = JsonDocument.Parse(await enabled1.Content.ReadAsStringAsync());
+            Assert.Equal("enabled", doc.RootElement.GetProperty("state").GetString());
+            Assert.Equal(1L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+            Assert.Equal(2L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+        }
+
+        using (var put2 = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Put,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 2L,
+                expectedCredentialRevision = 1L,
+                apiKey = "sk-status-v2",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, put2.StatusCode);
+        }
+        using (var enabled2 = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.OK, enabled2.StatusCode);
+            using var doc = JsonDocument.Parse(await enabled2.Content.ReadAsStringAsync());
+            Assert.Equal("enabled", doc.RootElement.GetProperty("state").GetString());
+            Assert.Equal(2L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+            Assert.Equal(3L, doc.RootElement.GetProperty("providerRevision").GetInt64());
+        }
+
+        // 3. DisablePending claim with null Tenant returns state "pending" (not 403), then "disabled" after completion.
+        var opDisable = Guid.NewGuid();
+        using (var scope = broker.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ModelProviderCredentialStore>();
+            _ = await store.ClaimDisableAsync(
+                new ClaimModelProviderCredentialDisable(
+                    opDisable, null, null, ModelProviderCredentialScope.Project, project.ProjectId, providerId,
+                    projectSub, projectIssuer),
+                CancellationToken.None);
+        }
+        using (var pendingDisable = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.OK, pendingDisable.StatusCode);
+            using var doc = JsonDocument.Parse(await pendingDisable.Content.ReadAsStringAsync());
+            Assert.Equal("pending", doc.RootElement.GetProperty("state").GetString());
+            Assert.Equal(2L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+        }
+        using (var finishDisable = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Delete,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential?operationId={opDisable:D}",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.OK, finishDisable.StatusCode);
+        }
+        using (var disabled = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{providerId}/credential",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.OK, disabled.StatusCode);
+            using var doc = JsonDocument.Parse(await disabled.Content.ReadAsStringAsync());
+            Assert.Equal("disabled", doc.RootElement.GetProperty("state").GetString());
+            Assert.Equal(3L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+        }
+
+        // 4. Missing provider returns 404 without writing preflights.
+        var preflightsBefore404AndQuarantine = await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
+        using (var missing = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/missing-provider-id/credential",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+            Assert.True(missing.Headers.CacheControl?.NoStore);
+        }
+        Assert.Equal(preflightsBefore404AndQuarantine, await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
+
+        // 5. Quarantined write claim returns state "quarantined" and writes zero preflights on GET.
+        string quarantinedProviderId;
+        using (var createQ = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Post,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers",
+            projectToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedRevision = 0L,
+                name = "Quarantined Status Provider",
+                type = "openai",
+                base_url = "https://api.openai.com/v1",
+                model = "gpt-4o",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.OK, createQ.StatusCode);
+            using var doc = JsonDocument.Parse(await createQ.Content.ReadAsStringAsync());
+            quarantinedProviderId = doc.RootElement.GetProperty("id").GetString()!;
+        }
+        fakeVault.FailNextWriteAmbiguously = true;
+        using (var qPut = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Put,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{quarantinedProviderId}/credential",
+            projectToken,
+            new
+            {
+                operationId = Guid.NewGuid(),
+                expectedProviderRevision = 1L,
+                expectedCredentialRevision = 0L,
+                apiKey = "sk-quarantined-secret",
+            }))
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, qPut.StatusCode);
+        }
+        var preflightsBeforeQuarantinedGet = await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights");
+        using (var quarantinedGet = await SendCredentialJsonAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/byok-providers/{quarantinedProviderId}/credential",
+            projectToken,
+            null))
+        {
+            Assert.Equal(HttpStatusCode.OK, quarantinedGet.StatusCode);
+            Assert.True(quarantinedGet.Headers.CacheControl?.NoStore);
+            using var doc = JsonDocument.Parse(await quarantinedGet.Content.ReadAsStringAsync());
+            Assert.Equal("quarantined", doc.RootElement.GetProperty("state").GetString());
+            Assert.Equal(0L, doc.RootElement.GetProperty("credentialRevision").GetInt64());
+        }
+        Assert.Equal(preflightsBeforeQuarantinedGet, await CountRowsAsync(
+            projects.PrivilegedFixtureDataSource, "SELECT COUNT(*) FROM projects_config.model_provider_credential_preflights"));
+    }
+
     private static async Task<HttpResponseMessage> SendCredentialJsonAsync(
         HttpClient client,
         HttpMethod method,

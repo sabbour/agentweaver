@@ -78,6 +78,14 @@ internal static class ModelProviderCredentialEndpoints
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         bool? HasCredential = null);
 
+    internal sealed record CredentialStatusResponse(
+        string Scope,
+        string? ProjectId,
+        string ProviderId,
+        long ProviderRevision,
+        string State,
+        long CredentialRevision);
+
     internal static bool IsCredentialPath(PathString path)
     {
         var value = path.Value?.TrimEnd('/');
@@ -113,6 +121,19 @@ internal static class ModelProviderCredentialEndpoints
         {
             AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme,
         };
+
+        app.MapGet("/api/platform/byok-providers/{providerId}/credential", (
+                string providerId,
+                HttpContext context,
+                IdentityBrokerOptions brokerOptions,
+                ModelProviderCredentialStore store,
+                BrokerModelProviderCredentialPublicationV2Client publicationClient,
+                CancellationToken cancellationToken) =>
+            HandleReadCredentialStatusAsync(
+                context, ModelProviderBindingScope.Platform, null, providerId,
+                brokerOptions, store, publicationClient, cancellationToken))
+            .RequireAuthorization(auth)
+            .WithName("BrokerReadPlatformByokProviderCredential");
 
         app.MapPut("/api/platform/byok-providers/{providerId}/credential", (
                 string providerId,
@@ -155,6 +176,20 @@ internal static class ModelProviderCredentialEndpoints
                 brokerOptions, store, publicationClient, cancellationToken))
             .RequireAuthorization(auth)
             .WithName("BrokerDisablePlatformByokProviderCredential");
+
+        app.MapGet("/api/projects/{projectId}/byok-providers/{providerId}/credential", (
+                string projectId,
+                string providerId,
+                HttpContext context,
+                IdentityBrokerOptions brokerOptions,
+                ModelProviderCredentialStore store,
+                BrokerModelProviderCredentialPublicationV2Client publicationClient,
+                CancellationToken cancellationToken) =>
+            HandleReadCredentialStatusAsync(
+                context, ModelProviderBindingScope.Project, projectId, providerId,
+                brokerOptions, store, publicationClient, cancellationToken))
+            .RequireAuthorization(auth)
+            .WithName("BrokerReadProjectByokProviderCredential");
 
         app.MapPut("/api/projects/{projectId}/byok-providers/{providerId}/credential", (
                 string projectId,
@@ -202,6 +237,97 @@ internal static class ModelProviderCredentialEndpoints
             .WithName("BrokerDisableProjectByokProviderCredential");
 
         return app;
+    }
+
+    private static async Task<IResult> HandleReadCredentialStatusAsync(
+        HttpContext context,
+        ModelProviderBindingScope scope,
+        string? projectId,
+        string providerId,
+        IdentityBrokerOptions brokerOptions,
+        ModelProviderCredentialStore store,
+        BrokerModelProviderCredentialPublicationV2Client publicationClient,
+        CancellationToken cancellationToken)
+    {
+        SetNoStore(context);
+        if (!TryValidateCaller(context, brokerOptions, scope, projectId, out var caller, out var authError))
+            return authError!;
+
+        var hasHeaderlessBody =
+            context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true &&
+            await HasBodyAsync(context.Request.Body, cancellationToken).ConfigureAwait(false);
+        if (context.Request.Query.Count != 0 ||
+            context.Request.ContentLength is > 0 ||
+            context.Request.ContentType is not null ||
+            context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+            hasHeaderlessBody ||
+            !IsValidIdentifier(providerId, 128) ||
+            (scope == ModelProviderBindingScope.Project && !IsValidIdentifier(projectId, 32)))
+            return Error("credential_request_invalid", 400);
+
+        try
+        {
+            var statusCheck = await publicationClient.CheckStatusAsync(
+                new ModelProviderCredentialStatusCheckRequest(
+                    Guid.NewGuid(), scope, projectId, providerId, caller!.Issuer, caller.ActorId,
+                    caller.TenantSelector, caller.TenantClaim, caller.BoundProjectId),
+                cancellationToken).ConfigureAwait(false);
+
+            var credScope = scope == ModelProviderBindingScope.Platform
+                ? ModelProviderCredentialScope.Platform
+                : ModelProviderCredentialScope.Project;
+            var activeClaim = await store.ReadActiveWriteClaimByProviderAsync(
+                credScope, projectId, providerId, cancellationToken).ConfigureAwait(false);
+            if (activeClaim is not null &&
+                activeClaim.Tenant is not null &&
+                !StringComparer.Ordinal.Equals(activeClaim.Tenant, statusCheck.ResolvedTenant))
+                return Error("forbidden", 403);
+
+            var head = await store.ReadHeadByProviderAsync(
+                credScope, projectId, providerId, cancellationToken).ConfigureAwait(false);
+
+            var credentialRevision = head?.Revision ?? 0;
+            string state;
+            if (activeClaim is not null)
+            {
+                state = activeClaim.State == ModelProviderCredentialWriteClaimState.Quarantined
+                    ? "quarantined"
+                    : "pending";
+            }
+            else if (head is null)
+            {
+                state = "not_set";
+            }
+            else if (head.State == ModelProviderCredentialState.Disabled)
+            {
+                state = "disabled";
+            }
+            else
+            {
+                state = "enabled";
+            }
+
+            var responseScope = scope == ModelProviderBindingScope.Platform ? "platform" : "project";
+            return Results.Ok(new CredentialStatusResponse(
+                responseScope,
+                projectId,
+                providerId,
+                statusCheck.ProviderRevision,
+                state,
+                credentialRevision));
+        }
+        catch (ModelProviderCredentialException ex)
+        {
+            return MapStoreException(ex);
+        }
+        catch (BrokerCredentialPublicationV2Exception ex)
+        {
+            return MapPublicationException(ex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return Results.StatusCode(499);
+        }
     }
 
     private static async Task<IResult> HandleReadAsync(

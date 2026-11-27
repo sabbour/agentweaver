@@ -175,6 +175,16 @@ provider at its current revision returns `503 model_provider_draft_unavailable`.
 Owner responses use
 `Cache-Control: no-store`.
 
+The authenticated credential status routes
+(`GET /api/v1/platform/byok-providers/{providerId}/credential` and
+`GET /api/v1/projects/{projectId}/byok-providers/{providerId}/credential`,
+routed to Identity Broker) return `Cache-Control: no-store` and
+`X-Content-Type-Options: nosniff` with only `scope` (`platform` or `project`),
+`projectId` (string or `null`), `providerId`, `providerRevision`, `state`
+(`not_set`, `enabled`, `disabled`, `pending`, or `quarantined`), and
+`credentialRevision` (`0` when absent, `>= 1` when a slot exists). Status reads
+never return keys, vault secret names, or key versions.
+
 The authenticated credential routes (`PUT /api/v1/platform/byok-providers/{providerId}/credential`
 and `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}/credential`,
 routed to Identity Broker) accept `operationId`, `expectedProviderRevision`,
