@@ -73,7 +73,7 @@ internal static class ByokDraftCommands
         var commandOptions = command switch
         {
             "list" => [],
-            "show" => ["credential-status"],
+            "show" => ["credential-status", "operation-id"],
             "prices" => ["region", "search"],
             "save-prices" => ["source", "input"],
             "add" => SaveOptions,
@@ -90,6 +90,12 @@ internal static class ByokDraftCommands
         options.RequireOnly(commandOptions.Concat(targetOptions).ToArray());
 
         var credentialStatus = command == "show" && options.HasFlag("credential-status");
+        var rawOperationId = command == "show" ? options.Single("operation-id") : null;
+        if (credentialStatus && rawOperationId is not null)
+            throw new CliUsageException(Usage(scopeName, command));
+        Guid? lookupOperationId = rawOperationId is not null
+            ? RequiredOperationId(rawOperationId)
+            : null;
         var identity = CliConfiguration.ReadIdentity(
             ["projects.admin"],
             options: options,
@@ -103,7 +109,7 @@ internal static class ByokDraftCommands
             .Create(identity);
         var document = await gateway.DiscoverAsync(ct).ConfigureAwait(false);
         var operations = GatewayContract.Parse(document);
-        var contracts = BuildContracts(projectScope, projectId, command, args, credentialStatus);
+        var contracts = BuildContracts(projectScope, projectId, command, args, credentialStatus, lookupOperationId is not null);
         foreach (var contract in contracts)
             RequireContract(document, operations, contract, scopeName);
 
@@ -123,7 +129,7 @@ internal static class ByokDraftCommands
                 .ConfigureAwait(false);
         }
 
-        var invocation = BuildInvocation(command, projectScope, projectId, args, options, out var operationId);
+        var invocation = BuildInvocation(command, projectScope, projectId, args, options, out var operationId, lookupOperationId);
         var receiptOperation = contractForCommand(contracts, command);
         GatewayResponse response;
         try
@@ -142,13 +148,15 @@ internal static class ByokDraftCommands
         }
 
         EnsureSuccess(response, scopeName, command, operationId,
-            command == "show" ? args[2] : null, credentialStatus);
-        if (credentialStatus && response.Status != 200)
+            command == "show" ? args[2] : null, credentialStatus, lookupOperationId is not null);
+        if ((credentialStatus || lookupOperationId is not null) && response.Status != 200)
             throw UnexpectedResponse();
         var projected = command switch
         {
             "show" when credentialStatus => ProjectCredentialStatus(
                 response.Body, projectScope ? "project" : "platform", projectId, args[2]),
+            "show" when lookupOperationId is { } opId => ProjectOperationStatus(
+                response.Body, projectScope ? "project" : "platform", projectId, args[2], opId),
             "show" or "add" or "update" => ProjectProvider(
                 response.Body,
                 projectScope ? "project" : "platform",
@@ -185,8 +193,8 @@ internal static class ByokDraftCommands
             "recheck-key" => $"Usage: agentweaver {scope} byok recheck-key <providerId> --expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid>",
             "disable-key" => $"Usage: agentweaver {scope} byok disable-key <providerId> --expected-revision <providerRevision> --expected-credential-revision <credentialRevision> --operation-id <uuid>",
             "show" => scope == "project"
-                ? "Usage: agentweaver project byok show <providerId> --project-id <projectId> [--credential-status] [target options]"
-                : "Usage: agentweaver platform byok show <providerId> [--credential-status] [target options]",
+                ? "Usage: agentweaver project byok show <providerId> --project-id <projectId> [--credential-status | --operation-id <uuid>] [target options]"
+                : "Usage: agentweaver platform byok show <providerId> [--credential-status | --operation-id <uuid>] [target options]",
             "update" => $"Usage: agentweaver {scope} byok update <providerId> --expected-revision <revision> --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
             "add" => $"Usage: agentweaver {scope} byok add --name <name> --type <type> --base-url <url> --model <model> [metadata options]",
             _ => $"Usage: agentweaver {scope} byok {command} [target options]",
@@ -197,7 +205,8 @@ internal static class ByokDraftCommands
         string? projectId,
         string command,
         string[] args,
-        bool credentialStatus = false)
+        bool credentialStatus = false,
+        bool operationStatus = false)
     {
         var prefix = projectScope ? "Project" : "Platform";
         var path = projectScope ? ProjectPath : PlatformPath;
@@ -210,6 +219,11 @@ internal static class ByokDraftCommands
                 path + "/{providerId}/credential", null, null,
                 [..ProjectPathParameters(projectScope), "providerId"],
                 ["200:ModelProviderCredentialStatusResponse"], 16 * 1024)],
+            "show" when operationStatus => [Operation($"read{prefix}ByokProviderCredentialOperation", "GET",
+                path + "/{providerId}/credential/operations/{operationId}", null,
+                "ModelProviderCredentialOperationStatusResponse",
+                [..ProjectPathParameters(projectScope), "providerId", "operationId"],
+                ["200:ModelProviderCredentialOperationStatusResponse"], 16 * 1024)],
             "show" => [Operation($"read{prefix}ByokProviderDraft", "GET", path + "/{providerId}", null, null,
                 [..ProjectPathParameters(projectScope), "providerId"], ["200:ModelProviderDraft"], 32 * 1024)],
             "add" => [Operation($"create{prefix}ByokProviderDraft", "POST", path,
@@ -345,13 +359,22 @@ internal static class ByokDraftCommands
             throw ContractMismatch();
 
         var responseObject = operation.Document["responses"] as JsonObject;
+        var requireJsonOnlySuccessResponse = contract.OperationId is
+            "readPlatformByokProviderCredentialOperation" or "readProjectByokProviderCredentialOperation";
+        if (requireJsonOnlySuccessResponse &&
+            !operation.ResponseMediaTypes.SequenceEqual(["application/json"], StringComparer.Ordinal))
+            throw ContractMismatch();
         foreach (var expected in contract.Responses)
         {
             var separator = expected.IndexOf(':');
             var status = expected[..separator];
             var schema = expected[(separator + 1)..];
+            var content = responseObject?[status]?["content"] as JsonObject;
+            if (requireJsonOnlySuccessResponse &&
+                (content is null || content.Count != 1 || !content.ContainsKey("application/json")))
+                throw ContractMismatch();
             if (GatewayContract.String(
-                    responseObject?[status]?["content"]?["application/json"]?["schema"] as JsonObject
+                    content?["application/json"]?["schema"] as JsonObject
                         ?? new JsonObject(), "$ref") != "#/components/schemas/" + schema)
                 throw ContractMismatch();
         }
@@ -609,9 +632,12 @@ internal static class ByokDraftCommands
             case "ModelProviderCredentialOperationStatusResponse":
                 RequireType(properties, "operationId", "string", "uuid");
                 RequireType(properties, "scope", "string");
+                RequireEnum(properties, "scope", ["platform", "project"]);
                 RequireNullableType(properties, "projectId", "string");
                 RequireType(properties, "providerId", "string");
                 RequireType(properties, "status", "string");
+                RequireEnum(properties, "status",
+                    ["pending", "publication_pending", "published", "quarantined", "cancelled", "disable_pending", "disabled"]);
                 RequireNullableType(properties, "providerRevision", "integer");
                 RequireNullableType(properties, "hasCredential", "boolean");
                 break;
@@ -920,7 +946,8 @@ internal static class ByokDraftCommands
         string? projectId,
         string[] args,
         CliOptions options,
-        out Guid? operationId)
+        out Guid? operationId,
+        Guid? lookupOperationId = null)
     {
         operationId = null;
         var path = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -931,6 +958,8 @@ internal static class ByokDraftCommands
         {
             case "show":
                 path["providerId"] = args[2];
+                if (lookupOperationId is { } opId)
+                    path["operationId"] = opId.ToString("D");
                 return new GatewayInvocation(path);
             case "add":
             case "update":
@@ -1264,7 +1293,8 @@ internal static class ByokDraftCommands
         string command,
         Guid? operationId,
         string? expectedProviderId = null,
-        bool credentialStatus = false)
+        bool credentialStatus = false,
+        bool operationStatus = false)
     {
         if (response.Status is >= 200 and < 300)
             return;
@@ -1276,7 +1306,7 @@ internal static class ByokDraftCommands
         {
             if (code == "credential_write_quarantined")
                 throw new InvalidOperationException("BYOK_QUARANTINED");
-            if (command == "show" && !credentialStatus &&
+            if (command == "show" && !credentialStatus && !operationStatus &&
                 code == "model_provider_draft_metadata_requires_update" &&
                 response.Body is JsonObject repair &&
                 ValidProviderId(GatewayContract.String(repair, "id") ?? "") &&
@@ -1357,6 +1387,94 @@ internal static class ByokDraftCommands
             ["providerRevision"] = providerRevision,
             ["state"] = state,
             ["credentialRevision"] = credentialRevision,
+        };
+    }
+
+    private static readonly HashSet<string> AllowedOperationStatusProperties = new(StringComparer.Ordinal)
+    {
+        "operationId", "scope", "projectId", "providerId", "status", "providerRevision", "hasCredential",
+    };
+
+    private static JsonObject ProjectOperationStatus(
+        JsonNode? body,
+        string expectedScope,
+        string? expectedProjectId,
+        string expectedProviderId,
+        Guid expectedOperationId)
+    {
+        if (body is not JsonObject statusObj ||
+            statusObj.Any(property => !AllowedOperationStatusProperties.Contains(property.Key)))
+            throw UnexpectedResponse();
+
+        if (!Guid.TryParse(RequiredString(statusObj, "operationId"), out var operationId) ||
+            operationId == Guid.Empty ||
+            operationId != expectedOperationId)
+            throw UnexpectedResponse();
+
+        var scope = RequiredString(statusObj, "scope");
+        if (!string.Equals(scope, expectedScope, StringComparison.Ordinal))
+            throw UnexpectedResponse();
+
+        if (!statusObj.TryGetPropertyValue("projectId", out var projectIdNode))
+            throw UnexpectedResponse();
+        string? projectId;
+        if (expectedProjectId is null)
+        {
+            if (projectIdNode is not null)
+                throw UnexpectedResponse();
+            projectId = null;
+        }
+        else
+        {
+            projectId = RequiredString(statusObj, "projectId");
+            if (!string.Equals(projectId, expectedProjectId, StringComparison.Ordinal))
+                throw UnexpectedResponse();
+        }
+
+        var providerId = RequiredString(statusObj, "providerId");
+        if (!string.Equals(providerId, expectedProviderId, StringComparison.Ordinal))
+            throw UnexpectedResponse();
+
+        var status = RequiredString(statusObj, "status");
+        long? providerRevision = null;
+        if (statusObj.TryGetPropertyValue("providerRevision", out var revisionNode) && revisionNode is not null)
+        {
+            if (revisionNode is not JsonValue revisionValue ||
+                !revisionValue.TryGetValue<long>(out var revision) ||
+                revision <= 0)
+                throw UnexpectedResponse();
+            providerRevision = revision;
+        }
+
+        bool? hasCredential = null;
+        if (statusObj.TryGetPropertyValue("hasCredential", out var credentialNode) && credentialNode is not null)
+        {
+            if (credentialNode is not JsonValue credentialValue ||
+                !credentialValue.TryGetValue<bool>(out var credentialFlag))
+                throw UnexpectedResponse();
+            hasCredential = credentialFlag;
+        }
+
+        var valid = status switch
+        {
+            "published" => providerRevision is > 0 && hasCredential == true,
+            "disabled" => providerRevision is > 0 && hasCredential is null,
+            "pending" or "publication_pending" or "quarantined" or "cancelled" or "disable_pending" =>
+                providerRevision is null && hasCredential is null,
+            _ => false,
+        };
+        if (!valid)
+            throw UnexpectedResponse();
+
+        return new JsonObject
+        {
+            ["operationId"] = operationId.ToString("D"),
+            ["scope"] = scope,
+            ["projectId"] = projectId,
+            ["providerId"] = providerId,
+            ["status"] = status,
+            ["providerRevision"] = providerRevision,
+            ["hasCredential"] = hasCredential,
         };
     }
 
@@ -1724,8 +1842,9 @@ internal static class ByokDraftCommands
             ct).ConfigureAwait(false);
         if (existingStatus.Status == 200)
         {
-            var statusObj = existingStatus.Body as JsonObject ?? throw UnexpectedResponse();
-            var statusText = RequiredString(statusObj, "status");
+            var projected = ProjectOperationStatus(
+                existingStatus.Body, scopeName, projectId, providerId, operationId);
+            var statusText = projected["status"]!.GetValue<string>();
             await error.WriteLineAsync(
                 $"Operation {operationId:D} already exists with status '{statusText}'; no key was read or submitted.")
                 .ConfigureAwait(false);
@@ -1808,19 +1927,21 @@ internal static class ByokDraftCommands
                 $"read{prefix}ByokProviderCredentialOperation",
                 new GatewayInvocation(statusPathParams),
                 ct).ConfigureAwait(false);
-            if (recovery.Status == 200 && recovery.Body is JsonObject statusObj)
+            if (recovery.Status == 200)
             {
-                var status = RequiredString(statusObj, "status");
+                var projected = ProjectOperationStatus(
+                    recovery.Body, scopeName, projectId, providerId, operationId);
+                var status = projected["status"]!.GetValue<string>();
                 if (status == "published")
                 {
                     await WriteJsonAsync(output, new JsonObject
                     {
-                        ["operationId"] = operationId.ToString("D"),
+                        ["operationId"] = projected["operationId"]!.DeepClone(),
                         ["status"] = status,
-                        ["scope"] = scopeName,
-                        ["projectId"] = projectId,
-                        ["providerId"] = providerId,
-                        ["providerRevision"] = OptionalPositiveInt64(statusObj, "providerRevision"),
+                        ["scope"] = projected["scope"]!.DeepClone(),
+                        ["projectId"] = projected["projectId"]?.DeepClone(),
+                        ["providerId"] = projected["providerId"]!.DeepClone(),
+                        ["providerRevision"] = projected["providerRevision"]!.DeepClone(),
                     }).ConfigureAwait(false);
                     return 0;
                 }

@@ -1017,7 +1017,8 @@ public sealed partial class GatewayClient : IGatewayClient
             ["operationId"] = operationId,
         };
         var isByokCredentialStatusRead = operationId is
-            "readPlatformByokProviderCredential" or "readProjectByokProviderCredential";
+            "readPlatformByokProviderCredential" or "readProjectByokProviderCredential" or
+            "readPlatformByokProviderCredentialOperation" or "readProjectByokProviderCredentialOperation";
         var hidePolicyEvidence = isByokCredentialStatusRead || operationId is
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or

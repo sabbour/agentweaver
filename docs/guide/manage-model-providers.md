@@ -109,6 +109,19 @@ credential checks.
    `providerId`, `providerRevision`, `state` (`not_set`, `enabled`, `disabled`,
    `pending`, or `quarantined`), and `credentialRevision`.
 
+   Pass `--operation-id <uuid>` instead of `--credential-status` to read one
+   credential operation's status without resending key material:
+
+   ```powershell
+   agentweaver platform byok show $providerId --operation-id $operationId
+   ```
+
+   Use `agentweaver project byok show $providerId --project-id $projectId --operation-id $operationId`
+   for a project provider. The command returns `operationId`, `scope`,
+   `projectId`, `providerId`, `status` (`pending`, `publication_pending`,
+   `published`, `quarantined`, `cancelled`, `disable_pending`, or `disabled`),
+   `providerRevision`, and `hasCredential`, and exits `0` for any valid status.
+
 3. Enter the full metadata for the new revision. Copy optional values from
    `show` when you want to keep them. If you omit `--wire-api`,
    `--azure-api-version`, `--reasoning-effort`, or

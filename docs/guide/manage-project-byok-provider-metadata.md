@@ -111,10 +111,23 @@ starting a new update.
 
 ## Recover from an uncertain write
 
-If the write result is uncertain or the CLI cancels the write, repeat the same
-command with the same operation ID and fields. The API replays the original
-write. Use a new operation ID for a new write. Do not reuse an operation ID
-with changed fields.
+For a metadata write (`add` or `update`), if the write result is uncertain or
+the CLI cancels the write, repeat the same command with the same operation ID
+and fields. The API replays the original write. Use a new operation ID for a
+new write. Do not reuse an operation ID with changed fields.
+
+For a credential operation (`set-key`, `recheck-key`, or `disable-key`), if the
+result is uncertain, check the operation status without resending key material:
+
+```powershell
+agentweaver project byok show $providerId --project-id $projectId --operation-id $operationId
+```
+
+The command returns `operationId`, `scope`, `projectId`, `providerId`,
+`status` (`pending`, `publication_pending`, `published`, `quarantined`,
+`cancelled`, `disable_pending`, or `disabled`), `providerRevision`, and
+`hasCredential`, and exits `0` for any valid status. Do not combine
+`--operation-id` with `--credential-status`.
 
 ## Recheck availability for a saved credential
 
