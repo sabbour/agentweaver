@@ -574,6 +574,20 @@ export function PlatformPoliciesPage() {
           <p><strong>Policy ID:</strong> <code>{policy.detail.policyId}</code></p>
           <p><strong>Created:</strong> {createdAtLabel(policy.detail.createdAt)}</p>
           <p><strong>Content hash:</strong> <code>{policy.detail.contentSha256}</code></p>
+          {policy.scope === 'platform' && policy.authorized && policy.status === 'ready' && (
+            <div className="v1-actions">
+              <Button
+                appearance="secondary"
+                disabled={policy.savedRevisionDownloadLoading}
+                onClick={policy.downloadSavedRevision}
+              >
+                {policy.savedRevisionDownloadLoading ? 'Downloading…' : 'Download saved revision'}
+              </Button>
+            </div>
+          )}
+          {policy.savedRevisionDownloadError && (
+            <p role="alert">{policy.savedRevisionDownloadError}</p>
+          )}
           <h3>Manifest</h3>
           <pre className="v1-policy-source">{policy.detail.artifact.manifest}</pre>
           {policy.detail.artifact.files.map((file) => (

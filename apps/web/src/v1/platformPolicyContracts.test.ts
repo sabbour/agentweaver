@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildPlatformPolicySavedRevisionExportDocument,
   buildPlatformPolicyValidationArtifact,
   buildPlatformPolicyValidationRequestDocument,
   comparePlatformPolicyDraft,
   createPlatformPolicyTextBuffer,
   escapePlatformPolicyInvisibleCharacters,
+  PLATFORM_POLICY_MAX_HTTP_BYTES,
   parsePlatformPolicyRevisionPage,
   parsePlatformPolicyRevisionReadResult,
   parsePlatformPolicyValidationRequestFile,
@@ -501,5 +503,79 @@ describe('Platform Policy response contracts', () => {
         contentSha256: hash,
       },
     }))).toBeNull();
+  });
+
+  it('builds CLI-compatible saved revision export bytes and rejects altered or oversize payloads', async () => {
+    const manifest = '\uFEFFname: saved\r\nkind: policy\n';
+    const fileContent = 'allow: false\rline2\n';
+    const artifact = await buildPlatformPolicyValidationArtifact(
+      createPlatformPolicyTextBuffer(manifest),
+      [{ relativePath: 'rules/example.yaml', content: createPlatformPolicyTextBuffer(fileContent) }],
+    );
+    const readResult = parsePlatformPolicyRevisionReadResult({
+      scopeType: 'platform',
+      scopeId: 'default',
+      policyId: 'policy-1',
+      revision: 3,
+      contentSha256: artifact.contentSha256,
+      createdAt: '2026-01-02T03:04:05Z',
+      artifact,
+    });
+    expect(readResult).not.toBeNull();
+
+    const exportBytes = await buildPlatformPolicySavedRevisionExportDocument(readResult!);
+    const exportText = new TextDecoder().decode(exportBytes);
+    expect(exportText.endsWith('\n')).toBe(true);
+    expect(exportText.endsWith('\n\n')).toBe(false);
+    expect(exportText).not.toContain('\n  ');
+    const parsed = JSON.parse(exportText.slice(0, -1)) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual([
+      'artifact',
+      'contentSha256',
+      'createdAt',
+      'policyId',
+      'revision',
+      'scopeId',
+      'scopeType',
+    ]);
+    expect(parsed).toEqual({
+      scopeType: 'platform',
+      scopeId: 'default',
+      policyId: 'policy-1',
+      revision: 3,
+      contentSha256: artifact.contentSha256,
+      createdAt: '2026-01-02T03:04:05Z',
+      artifact,
+    });
+
+    await expect(buildPlatformPolicySavedRevisionExportDocument({
+      ...readResult!,
+      artifact: {
+        ...readResult!.artifact,
+        manifest: 'name: tampered\n',
+      },
+    })).rejects.toThrow('hash does not match');
+
+    // Oversize (> 1 MiB artifact) and > 5 MiB serialized output are both rejected.
+    await expect(buildPlatformPolicySavedRevisionExportDocument({
+      ...readResult!,
+      artifact: {
+        ...readResult!.artifact,
+        files: Array.from({ length: 5 }, (_, index) => ({
+          relativePath: `rules/large-${index}.rego`,
+          content: 'a'.repeat(250_000),
+        })),
+      },
+    })).rejects.toThrow('exceeds 1,048,576 bytes');
+
+    const longPolicyId = 'p'.repeat(1_100_000);
+    await expect(buildPlatformPolicySavedRevisionExportDocument({
+      ...readResult!,
+      policyId: longPolicyId,
+    })).resolves.toBeInstanceOf(Uint8Array);
+    await expect(buildPlatformPolicySavedRevisionExportDocument({
+      ...readResult!,
+      policyId: 'p'.repeat(PLATFORM_POLICY_MAX_HTTP_BYTES),
+    })).rejects.toThrow('exceeds 5,242,880 bytes');
   });
 });

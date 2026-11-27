@@ -25,9 +25,21 @@ enforcement.
    named by the saved snapshot.
 5. Select **View** beside a revision to read its manifest and files. Select
    **Load more** to read older revisions.
+6. To export the loaded revision without changing your local draft, select
+   **Download saved revision**.
 
 An empty history means you have read access and no Platform Policy is saved
 for that tenant.
+
+**Download saved revision** appears only in authorized, ready **Platform**
+scope when a revision is loaded. It rereads that exact revision from the
+Gateway, checks its content hash and metadata, and downloads
+`platform-policy-revision-<revision>.json` as compact UTF-8 JSON with a
+trailing newline up to 5 MiB. The file has the seven CLI export keys:
+`scopeType`, `scopeId`, `policyId`, `revision`, `contentSha256`, `createdAt`,
+and `artifact`. Your local draft stays unchanged, and no write request runs.
+If the read returns `403`, the page hides saved source. If a read or hash check
+fails, the page shows an export error separate from draft errors.
 
 ## Compare a Platform Policy draft with a saved revision
 

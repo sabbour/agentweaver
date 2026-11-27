@@ -19,6 +19,7 @@ import type {
 } from './AuthContext';
 import type { ProjectSummary } from './contracts';
 import {
+  buildPlatformPolicySavedRevisionExportDocument,
   buildPlatformPolicyValidationArtifact,
   buildPlatformPolicyValidationRequestDocument,
   createPlatformPolicyTextBuffer,
@@ -80,6 +81,8 @@ export interface PlatformPoliciesControllerValue {
   detail: PlatformPolicyRevisionReadResult | null;
   detailLoading: boolean;
   detailError: string | null;
+  savedRevisionDownloadLoading: boolean;
+  savedRevisionDownloadError: string | null;
   draftManifest: PlatformPolicyTextBuffer;
   draftFiles: PlatformPolicyDraftFile[];
   draftGeneration: number;
@@ -96,6 +99,7 @@ export interface PlatformPoliciesControllerValue {
   importDraft: (file: File) => Promise<void>;
   loadDraftFromSavedSource: () => void;
   downloadDraft: () => void;
+  downloadSavedRevision: () => void;
   validateDraft: () => void;
   loadMore: () => void;
 }
@@ -139,7 +143,8 @@ function verifyRevision(
       result.policyId !== selection.policyId ||
       result.revision !== selection.revision.revision ||
       result.contentSha256 !== selection.revision.contentSha256 ||
-      result.artifact.contentSha256 !== selection.revision.contentSha256)
+      result.artifact.contentSha256 !== selection.revision.contentSha256 ||
+      result.createdAt !== selection.revision.createdAt)
     throw new Error('The selected Platform Policy revision is unavailable.');
 }
 
@@ -171,9 +176,11 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const [history, setHistoryState] = useState<PlatformPolicyRevisionPage | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [detail, setDetail] = useState<PlatformPolicyRevisionReadResult | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detail, setDetailState] = useState<PlatformPolicyRevisionReadResult | null>(null);
+  const [detailLoading, setDetailLoadingState] = useState(false);
+  const [detailError, setDetailErrorState] = useState<string | null>(null);
+  const [savedRevisionDownloadLoading, setSavedRevisionDownloadLoading] = useState(false);
+  const [savedRevisionDownloadError, setSavedRevisionDownloadError] = useState<string | null>(null);
   const [draftManifest, setDraftManifestState] = useState(() => createPlatformPolicyTextBuffer(''));
   const [draftFiles, setDraftFiles] = useState<PlatformPolicyDraftFile[]>([]);
   const [draftGeneration, setDraftGeneration] = useState(0);
@@ -185,7 +192,11 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const validationGenerationRef = useRef(0);
   const importGenerationRef = useRef(0);
   const downloadGenerationRef = useRef(0);
+  const exportGenerationRef = useRef(0);
   const validationControllerRef = useRef<AbortController | null>(null);
+  const exportControllerRef = useRef<AbortController | null>(null);
+  const activeRunCheckControllerRef = useRef<AbortController | null>(null);
+  const runCheckWaitersRef = useRef<Set<() => void>>(new Set());
   const draftFileIdRef = useRef(0);
   const identityEpochRef = useRef(0);
   const currentRequestRef = useRef<AbortController | null>(null);
@@ -196,6 +207,9 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   const draftProjectRef = useRef<string | null>(null);
   const draftAuthSessionEpochRef = useRef<number | null>(null);
   const historyRef = useRef<PlatformPolicyRevisionPage | null>(null);
+  const detailRef = useRef<PlatformPolicyRevisionReadResult | null>(null);
+  const detailLoadingRef = useRef(false);
+  const detailErrorRef = useRef<string | null>(null);
   const tenantRef = useRef(tenantId);
   const scopeRef = useRef<PolicyScope>(scope);
   const projectRef = useRef(projectId);
@@ -217,16 +231,31 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     retryRead?: RetryRead,
   ) => Promise<void>) | null>(null);
 
+  const notifyRunCheckWaiters = useCallback(() => {
+    for (const notify of [...runCheckWaitersRef.current])
+      notify();
+  }, []);
+
   useLayoutEffect(() => {
     if (latestAuthRef.current !== auth || routePathRef.current !== location.pathname)
       downloadGenerationRef.current += 1;
+    if (routePathRef.current !== location.pathname) {
+      exportGenerationRef.current += 1;
+      exportControllerRef.current?.abort();
+      exportControllerRef.current = null;
+      notifyRunCheckWaiters();
+    }
     latestAuthRef.current = auth;
     routePathRef.current = location.pathname;
-  }, [auth, location.pathname]);
+  }, [auth, location.pathname, notifyRunCheckWaiters]);
 
   useEffect(() => () => {
     downloadGenerationRef.current += 1;
-  }, []);
+    exportGenerationRef.current += 1;
+    exportControllerRef.current?.abort();
+    exportControllerRef.current = null;
+    notifyRunCheckWaiters();
+  }, [notifyRunCheckWaiters]);
 
   const capturePolicyLinkFocus = useCallback(() => {
     const activeElement = document.activeElement;
@@ -252,10 +281,28 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     setHistoryState(value);
   }, []);
 
+  const setDetail = useCallback((value: PlatformPolicyRevisionReadResult | null) => {
+    detailRef.current = value;
+    setDetailState(value);
+  }, []);
+
+  const setDetailLoading = useCallback((value: boolean) => {
+    detailLoadingRef.current = value;
+    setDetailLoadingState(value);
+    if (!value) notifyRunCheckWaiters();
+  }, [notifyRunCheckWaiters]);
+
+  const setDetailError = useCallback((value: string | null) => {
+    detailErrorRef.current = value;
+    setDetailErrorState(value);
+    if (value !== null) notifyRunCheckWaiters();
+  }, [notifyRunCheckWaiters]);
+
   const setPageStatus = useCallback((value: PolicyPageStatus) => {
     statusRef.current = value;
     setStatus(value);
-  }, []);
+    if (value !== 'checking') notifyRunCheckWaiters();
+  }, [notifyRunCheckWaiters]);
 
   const bindDraftToCurrentIdentity = useCallback(() => {
     if (policyIdentityRef.current) {
@@ -302,6 +349,13 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     requestGenerationRef.current += 1;
     clearDraftValidation(preserveDraftError);
     invalidateDraftComparison();
+    setSavedRevisionDownloadError(null);
+    if (nextStatus !== 'checking') {
+      exportGenerationRef.current += 1;
+      exportControllerRef.current?.abort();
+      exportControllerRef.current = null;
+      setSavedRevisionDownloadLoading(false);
+    }
     if (!preserveDraft) {
       setDraftManifestState(createPlatformPolicyTextBuffer(''));
       setDraftFiles([]);
@@ -328,11 +382,16 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     setDetailLoading(false);
     setDetailError(null);
     setPageStatus(nextStatus);
+    notifyRunCheckWaiters();
   }, [
     capturePolicyLinkFocus,
     clearDraftValidation,
     invalidateDraftComparison,
+    notifyRunCheckWaiters,
     setAuthorized,
+    setDetail,
+    setDetailError,
+    setDetailLoading,
     setHistory,
     setPageStatus,
   ]);
@@ -729,6 +788,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     currentRequestRef.current?.abort();
     const controller = new AbortController();
     currentRequestRef.current = controller;
+    activeRunCheckControllerRef.current = controller;
     const identityEpoch = ++identityEpochRef.current;
     const requestGeneration = ++requestGenerationRef.current;
     clearDraftValidation(true, 'Platform Policy access changed. Validate the draft again when access is ready.');
@@ -831,10 +891,13 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
       if (retryRead?.kind === 'revision' && failure.status !== 'denied')
         setDetailError('The selected Platform Policy revision is unavailable. Try again.');
     } finally {
+      if (activeRunCheckControllerRef.current === controller)
+        activeRunCheckControllerRef.current = null;
       if (currentRequestRef.current === controller) {
         currentRequestRef.current = null;
         setDetailLoading(false);
       }
+      notifyRunCheckWaiters();
     }
   }, [
     establishPlatformPolicyAccess,
@@ -847,7 +910,11 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     clearDraftValidation,
     expectPolicyRefreshChange,
     isCurrentRecovery,
+    notifyRunCheckWaiters,
     setAuthorized,
+    setDetail,
+    setDetailError,
+    setDetailLoading,
     setHistory,
     setPageStatus,
     updateTenantId,
@@ -1161,6 +1228,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     const requestGeneration = ++requestGenerationRef.current;
     setDetail(null);
     setDetailError(null);
+    setSavedRevisionDownloadError(null);
     setDetailLoading(true);
     void (async () => {
       try {
@@ -1214,7 +1282,316 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     isCurrentRequest,
     readPlatformPolicyRevision,
     refreshPlatformPolicySession,
+    setDetail,
+    setDetailError,
+    setDetailLoading,
     setPageStatus,
+  ]);
+
+  const waitForActiveRunCheck = useCallback(async (
+    signal: AbortSignal,
+    isStillCurrent: () => boolean,
+  ): Promise<boolean> => {
+    const MAX_WAIT_MS = 30_000;
+    const deadline = Date.now() + MAX_WAIT_MS;
+    while (!signal.aborted &&
+        isStillCurrent() &&
+        (statusRef.current === 'checking' ||
+          detailLoadingRef.current ||
+          activeRunCheckControllerRef.current !== null)) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          signal.removeEventListener('abort', finish);
+          runCheckWaitersRef.current.delete(finish);
+          resolve();
+        };
+        const timer = window.setTimeout(finish, remaining);
+        signal.addEventListener('abort', finish, { once: true });
+        runCheckWaitersRef.current.add(finish);
+      });
+    }
+    return !signal.aborted &&
+      isStillCurrent() &&
+      statusRef.current === 'ready' &&
+      authorizedRef.current &&
+      detailErrorRef.current === null &&
+      detailRef.current !== null &&
+      detailRef.current.policyId === revisionSelectionRef.current?.policyId &&
+      detailRef.current.revision === revisionSelectionRef.current?.revision.revision &&
+      detailRef.current.contentSha256 === revisionSelectionRef.current?.revision.contentSha256;
+  }, []);
+
+  const downloadSavedRevision = useCallback(() => {
+    const identity = policyIdentityRef.current;
+    const selection = revisionSelectionRef.current;
+    const loadedDetail = detailRef.current;
+    const selectedTenant = tenantRef.current.trim();
+    let session = latestAuthRef.current.session;
+    const authSessionEpoch = latestAuthRef.current.authSessionEpoch;
+    const authorizationContext = latestAuthRef.current.authorizationContext;
+    if (scopeRef.current !== 'platform' ||
+        !authorizedRef.current ||
+        statusRef.current !== 'ready' ||
+        routePathRef.current !== '/policies' ||
+        !selectedTenant ||
+        !identity ||
+        !selection ||
+        !loadedDetail ||
+        loadedDetail.policyId !== selection.policyId ||
+        loadedDetail.revision !== selection.revision.revision ||
+        loadedDetail.contentSha256 !== selection.revision.contentSha256 ||
+        loadedDetail.createdAt !== selection.revision.createdAt)
+      return;
+
+    const previousAuthSessionGeneration = latestAuthRef.current.authSessionGeneration;
+    const previousUnboundSessionGeneration = latestAuthRef.current.unboundSessionGeneration;
+    let expectedAuthSessionGeneration = previousAuthSessionGeneration;
+    let expectedUnboundSessionGeneration = previousUnboundSessionGeneration;
+    let retriedGateway401 = false;
+    let sessionRefreshedInSameEpoch = false;
+    exportControllerRef.current?.abort();
+    const controller = new AbortController();
+    exportControllerRef.current = controller;
+    const exportGeneration = ++exportGenerationRef.current;
+    setSavedRevisionDownloadError(null);
+    setSavedRevisionDownloadLoading(true);
+
+    const isSameSelection = () =>
+      revisionSelectionRef.current !== null &&
+      revisionSelectionRef.current.policyId === selection.policyId &&
+      revisionSelectionRef.current.snapshotRevision === selection.snapshotRevision &&
+      revisionSelectionRef.current.revision.revision === selection.revision.revision &&
+      revisionSelectionRef.current.revision.contentSha256 === selection.revision.contentSha256 &&
+      revisionSelectionRef.current.revision.createdAt === selection.revision.createdAt;
+
+    const isPollingActive = () =>
+      statusRef.current === 'checking' ||
+      detailLoadingRef.current ||
+      activeRunCheckControllerRef.current !== null;
+
+    const isCurrentContext = (allowRecoveryGenerations = false) =>
+      exportGenerationRef.current === exportGeneration &&
+      exportControllerRef.current === controller &&
+      !controller.signal.aborted &&
+      routePathRef.current === '/policies' &&
+      scopeRef.current === 'platform' &&
+      tenantRef.current.trim() === selectedTenant &&
+      (allowRecoveryGenerations
+        ? (revisionSelectionRef.current === null || isSameSelection())
+        : isSameSelection()) &&
+      (allowRecoveryGenerations || sessionRefreshedInSameEpoch
+        ? (latestAuthRef.current.session !== null &&
+           latestAuthRef.current.session.binding === (session?.binding ?? null))
+        : latestAuthRef.current.session === session) &&
+      latestAuthRef.current.authSessionEpoch === authSessionEpoch &&
+      ((allowRecoveryGenerations || sessionRefreshedInSameEpoch) &&
+        latestAuthRef.current.authorizationContext === null
+        ? true
+        : (latestAuthRef.current.authorizationContext?.issuer === authorizationContext?.issuer &&
+           latestAuthRef.current.authorizationContext?.actorId === authorizationContext?.actorId &&
+           latestAuthRef.current.authorizationContext?.tenantId === authorizationContext?.tenantId &&
+           latestAuthRef.current.authorizationContext?.membershipRevision ===
+             authorizationContext?.membershipRevision)) &&
+      (allowRecoveryGenerations ||
+        ((latestAuthRef.current.authSessionGeneration === expectedAuthSessionGeneration ||
+          (sessionRefreshedInSameEpoch &&
+           latestAuthRef.current.authSessionGeneration === previousAuthSessionGeneration)) &&
+         (latestAuthRef.current.unboundSessionGeneration === expectedUnboundSessionGeneration ||
+          (sessionRefreshedInSameEpoch &&
+           latestAuthRef.current.unboundSessionGeneration === previousUnboundSessionGeneration))));
+
+    const syncRecoveredSession = (
+      nextAuthGeneration = latestAuthRef.current.authSessionGeneration,
+      nextUnboundGeneration = latestAuthRef.current.unboundSessionGeneration,
+    ) => {
+      const current = latestAuthRef.current;
+      if (current.authSessionEpoch !== authSessionEpoch ||
+          current.session === null ||
+          current.session.binding !== (session?.binding ?? null) ||
+          (current.authorizationContext !== null &&
+           (current.authorizationContext.issuer !== authorizationContext?.issuer ||
+            current.authorizationContext.actorId !== authorizationContext?.actorId ||
+            current.authorizationContext.tenantId !== authorizationContext?.tenantId ||
+            current.authorizationContext.membershipRevision !==
+              authorizationContext?.membershipRevision)))
+        return false;
+      if (nextAuthGeneration !== expectedAuthSessionGeneration ||
+          nextUnboundGeneration !== expectedUnboundSessionGeneration ||
+          current.session !== session)
+        sessionRefreshedInSameEpoch = true;
+      expectedAuthSessionGeneration = nextAuthGeneration;
+      expectedUnboundSessionGeneration = nextUnboundGeneration;
+      session = current.session;
+      return true;
+    };
+
+    const isReadyExport = () =>
+      isCurrentContext() &&
+      authorizedRef.current &&
+      statusRef.current === 'ready' &&
+      detailErrorRef.current === null &&
+      policyIdentityRef.current !== null &&
+      sameIdentity(policyIdentityRef.current, identity);
+
+    const isCurrentDenial = () =>
+      isCurrentContext() &&
+      (policyIdentityRef.current === null || sameIdentity(policyIdentityRef.current, identity));
+
+    const fixedExportError = 'The saved Platform Policy revision could not be downloaded. Try again.';
+
+    void (async () => {
+      let url: string | null = null;
+      try {
+        let result: PlatformPolicyRevisionReadResult | null = null;
+        let retriedLocalExpiry = false;
+
+        while (result === null) {
+          if (!isCurrentContext()) return;
+          try {
+            const readResult = await readPlatformPolicyRevision(
+              identity.tenantId,
+              selection.revision.revision,
+              controller.signal,
+            );
+            if (!isCurrentContext(isPollingActive())) return;
+            verifyRevision(readResult, selection);
+            result = readResult;
+          } catch (reason) {
+            if (reason instanceof GatewayError && reason.status === 403) {
+              if (isCurrentDenial())
+                clearPolicyState('denied');
+              return;
+            }
+            if (!isCurrentContext(isPollingActive())) return;
+
+            if (reason instanceof GatewayError &&
+                reason.status === 401 &&
+                reason.code === 'platform_policy_request_failed' &&
+                !retriedGateway401) {
+              retriedGateway401 = true;
+              clearPolicyState('checking', false, true);
+              const recoveryIdentityEpoch = identityEpochRef.current;
+              const recoveryRequestGeneration = requestGenerationRef.current;
+              const expectedRefresh = expectPolicyRefreshChange(identity.tenantId);
+              const refreshResult = await refreshPlatformPolicySession();
+              if (!isCurrentRecovery(
+                recoveryIdentityEpoch,
+                recoveryRequestGeneration,
+                identity.tenantId,
+                expectedRefresh,
+                refreshResult,
+              ) || !isCurrentContext(true) ||
+                  !syncRecoveredSession(
+                    refreshResult.authSessionGeneration,
+                    refreshResult.unboundSessionGeneration,
+                  ))
+                return;
+              if (!refreshResult.refreshed) {
+                setPageStatus('unavailable');
+                setSavedRevisionDownloadError(fixedExportError);
+                return;
+              }
+              await runCheckRef.current?.(
+                identity.tenantId,
+                identity,
+                1,
+                { kind: 'revision', selection },
+              );
+              if (!syncRecoveredSession() ||
+                  !isCurrentContext(true) ||
+                  !authorizedRef.current ||
+                  statusRef.current !== 'ready' ||
+                  detailErrorRef.current !== null ||
+                  policyIdentityRef.current === null ||
+                  !sameIdentity(policyIdentityRef.current, identity) ||
+                  !isSameSelection())
+                return;
+              continue;
+            }
+
+            if (reason instanceof GatewayError &&
+                reason.status === 401 &&
+                reason.code === 'policy_access_expired' &&
+                !retriedLocalExpiry) {
+              retriedLocalExpiry = true;
+              if (isPollingActive()) {
+                const restored = await waitForActiveRunCheck(
+                  controller.signal,
+                  () => isCurrentContext(true),
+                );
+                if (!restored || !syncRecoveredSession() || !isReadyExport()) return;
+                continue;
+              }
+              setSavedRevisionDownloadError(fixedExportError);
+              return;
+            }
+
+            if (statusRef.current === 'denied' ||
+                statusRef.current === 'unavailable' ||
+                statusRef.current === 'needsTenant' ||
+                detailErrorRef.current !== null)
+              return;
+            setSavedRevisionDownloadError(fixedExportError);
+            return;
+          }
+        }
+
+        const documentBytes = await buildPlatformPolicySavedRevisionExportDocument(result);
+        if (!isCurrentContext(isPollingActive())) return;
+
+        if (isPollingActive()) {
+          const restored = await waitForActiveRunCheck(
+            controller.signal,
+            () => isCurrentContext(true),
+          );
+          if (!restored || !syncRecoveredSession()) {
+            if (isCurrentContext() && statusRef.current === 'checking')
+              setSavedRevisionDownloadError(fixedExportError);
+            return;
+          }
+        }
+
+        if (!isReadyExport()) return;
+
+        const blobBytes = new Uint8Array(documentBytes.byteLength);
+        blobBytes.set(documentBytes);
+        const blob = new Blob([blobBytes.buffer], { type: 'application/json' });
+        url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `platform-policy-revision-${result.revision}.json`;
+        if (!isReadyExport()) return;
+        link.click();
+      } catch {
+        if (!isCurrentContext()) return;
+        if (statusRef.current === 'denied' ||
+            statusRef.current === 'unavailable' ||
+            statusRef.current === 'needsTenant' ||
+            detailErrorRef.current !== null)
+          return;
+        setSavedRevisionDownloadError(fixedExportError);
+      } finally {
+        if (url !== null) URL.revokeObjectURL(url);
+        if (exportControllerRef.current === controller) {
+          exportControllerRef.current = null;
+          setSavedRevisionDownloadLoading(false);
+        }
+      }
+    })();
+  }, [
+    clearPolicyState,
+    expectPolicyRefreshChange,
+    isCurrentRecovery,
+    readPlatformPolicyRevision,
+    refreshPlatformPolicySession,
+    setPageStatus,
+    waitForActiveRunCheck,
   ]);
 
   const loadMore = useCallback(() => {
@@ -1359,7 +1736,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
          expectedRefresh.actorId === auth.authorizationContext.actorId &&
          expectedRefresh.contextTenantId === auth.authorizationContext.tenantId));
     if (refreshNotification) {
-      expectedRefreshChangeRef.current = null;
+      if (auth.authorizationContext)
+        expectedRefreshChangeRef.current = null;
       return;
     }
     expectedRefreshChangeRef.current = null;
@@ -1405,12 +1783,16 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
   useEffect(() => {
     if (location.pathname === '/policies') return;
     downloadGenerationRef.current += 1;
+    exportGenerationRef.current += 1;
+    exportControllerRef.current?.abort();
+    exportControllerRef.current = null;
+    notifyRunCheckWaiters();
     revisionSelectionRef.current = null;
     identityEpochRef.current += 1;
     requestGenerationRef.current += 1;
     currentRequestRef.current?.abort();
     currentRequestRef.current = null;
-  }, [location.pathname]);
+  }, [location.pathname, notifyRunCheckWaiters]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -1476,6 +1858,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     detail,
     detailLoading,
     detailError,
+    savedRevisionDownloadLoading,
+    savedRevisionDownloadError,
     draftManifest,
     draftFiles,
     draftGeneration,
@@ -1492,6 +1876,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     importDraft,
     loadDraftFromSavedSource,
     downloadDraft,
+    downloadSavedRevision,
     validateDraft,
     loadMore,
   }), [
@@ -1501,6 +1886,8 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     detail,
     detailError,
     detailLoading,
+    savedRevisionDownloadError,
+    savedRevisionDownloadLoading,
     draftError,
     draftFiles,
     draftGeneration,
@@ -1520,6 +1907,7 @@ export function PlatformPoliciesControllerProvider({ children }: { children: Rea
     importDraft,
     loadDraftFromSavedSource,
     downloadDraft,
+    downloadSavedRevision,
     validateDraft,
     validation,
     validationLoading,

@@ -73,6 +73,16 @@ export interface PlatformPolicyRevisionReadResult {
   createdAt: string;
 }
 
+export interface PlatformPolicySavedRevisionExportDocument {
+  scopeType: 'platform';
+  scopeId: typeof PLATFORM_POLICY_SCOPE_ID;
+  policyId: string;
+  revision: number;
+  contentSha256: string;
+  createdAt: string;
+  artifact: PlatformPolicyArtifactRequest;
+}
+
 export type PlatformPolicyComparisonChange = 'added' | 'removed' | 'changed';
 
 export interface PlatformPolicyComparisonItem {
@@ -329,6 +339,58 @@ export async function buildPlatformPolicyValidationRequestDocument(
   return bytes;
 }
 
+export async function buildPlatformPolicySavedRevisionExportDocument(
+  result: PlatformPolicyRevisionReadResult,
+): Promise<Uint8Array> {
+  if (result.scopeType !== 'platform' ||
+      result.scopeId !== PLATFORM_POLICY_SCOPE_ID ||
+      !isText(result.policyId) ||
+      !isRevision(result.revision) ||
+      !isHash(result.contentSha256) ||
+      !isHash(result.artifact.contentSha256) ||
+      result.artifact.contentSha256 !== result.contentSha256 ||
+      !isTimestamp(result.createdAt))
+    throw new Error('The saved Platform Policy revision is unavailable.');
+
+  const manifest = createPlatformPolicyTextBuffer(result.artifact.manifest);
+  if (manifest.value.length === 0)
+    throw new Error('The saved Platform Policy revision is unavailable.');
+  const files = result.artifact.files.map((file) => ({
+    relativePath: file.relativePath,
+    content: createPlatformPolicyTextBuffer(file.content),
+  }));
+  const encoded = encodePlatformPolicyArtifact(manifest, files);
+  const sortedFiles = [...encoded.files].sort((left, right) =>
+    left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0);
+  const computedHash = await hashPlatformPolicyArtifact(
+    encoded.manifestBytes,
+    sortedFiles.map(({ pathBytes, bytes }) => ({ pathBytes, bytes })),
+  );
+  if (computedHash !== result.contentSha256 || computedHash !== result.artifact.contentSha256)
+    throw new Error('The saved Platform Policy revision hash does not match its artifact bytes.');
+
+  const exportDocument: PlatformPolicySavedRevisionExportDocument = {
+    scopeType: result.scopeType,
+    scopeId: result.scopeId,
+    policyId: result.policyId,
+    revision: result.revision,
+    contentSha256: result.contentSha256,
+    createdAt: result.createdAt,
+    artifact: {
+      manifestBytes: Array.from(encoded.manifestBytes),
+      files: encoded.files.map(({ relativePath, bytes }) => ({
+        relativePath,
+        bytes: Array.from(bytes),
+      })),
+      contentSha256: result.artifact.contentSha256,
+    },
+  };
+  const bytes = encodeUtf8(`${JSON.stringify(exportDocument)}\n`);
+  if (bytes.byteLength > PLATFORM_POLICY_MAX_HTTP_BYTES)
+    throw new Error('The saved Platform Policy revision export exceeds 5,242,880 bytes.');
+  return bytes;
+}
+
 function encodePlatformPolicyArtifact(
   manifest: PlatformPolicyTextBuffer,
   files: { relativePath: string; content: PlatformPolicyTextBuffer }[],
@@ -429,7 +491,7 @@ export function escapePlatformPolicyInvisibleCharacters(value: string): string {
   return output;
 }
 
-async function hashPlatformPolicyArtifact(
+export async function hashPlatformPolicyArtifact(
   manifestBytes: Uint8Array,
   files: { pathBytes: Uint8Array; bytes: Uint8Array }[],
 ): Promise<string> {
