@@ -209,3 +209,92 @@ public sealed class NativeAcsPolicyOutboxRecord
     public required string PayloadJson { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
+
+public enum NativeAcsProjectPolicyBaselineState
+{
+    Approved,
+    Pinned,
+    Consumed,
+    Revoked,
+}
+
+public sealed record NativeAcsProjectPolicyBaselineApprovalRequest(
+    string ProjectId,
+    NativeAcsArtifact Artifact,
+    string IdempotencyKey,
+    string Reason,
+    string CorrelationId);
+
+public sealed record NativeAcsProjectPolicyBaselineRevokeRequest(
+    string ProjectId,
+    Guid BaselineId,
+    string Reason,
+    string CorrelationId);
+
+public sealed record NativeAcsProjectPolicyBaselineReceipt(
+    Guid BaselineId,
+    Guid InstallationId,
+    string TenantId,
+    string ProjectId,
+    string PolicyId,
+    NativeAcsProjectPolicyBaselineState State,
+    string ContentSha256,
+    string ProfileId,
+    string ApproverIssuer,
+    string ApproverActorId,
+    DateTimeOffset ApprovedAt,
+    string? OperatorIssuer,
+    string? OperatorActorId,
+    string? PlatformPolicyId,
+    long? PlatformPolicyRevision,
+    string? PlatformContentSha256,
+    DateTimeOffset? PinnedAt,
+    string? RevokedByIssuer,
+    string? RevokedByActorId,
+    DateTimeOffset? RevokedAt,
+    bool Replayed);
+
+public sealed class NativeAcsProjectPolicyBaselineRecord
+{
+    public Guid BaselineId { get; set; }
+    public Guid InstallationId { get; set; }
+    public required string TenantId { get; set; }
+    public required string ProjectId { get; set; }
+    public required string PolicyId { get; set; }
+    public NativeAcsProjectPolicyBaselineState State { get; set; }
+    public required string ContentSha256 { get; set; }
+    public required string ArtifactJson { get; set; }
+    public required string ProfileId { get; set; }
+    public required string ApproverIssuer { get; set; }
+    public required string ApproverActorId { get; set; }
+    public Guid ApproverMembershipId { get; set; }
+    public long ApproverMembershipRevision { get; set; }
+    public Guid ApproverAssignmentId { get; set; }
+    public long ApproverAssignmentRevision { get; set; }
+    public required string ApprovalIdempotencyKey { get; set; }
+    public required string ApprovalRequestDigest { get; set; }
+    public required string ApprovalScopeDigest { get; set; }
+    public required string ApprovalReason { get; set; }
+    public required string ApprovalCorrelationId { get; set; }
+    public DateTimeOffset ApprovedAt { get; set; }
+    public string? OperatorIssuer { get; set; }
+    public string? OperatorActorId { get; set; }
+    public Guid? OperatorMembershipId { get; set; }
+    public long? OperatorMembershipRevision { get; set; }
+    public string? PinIdempotencyKey { get; set; }
+    public string? PinRequestDigest { get; set; }
+    public string? PinScopeDigest { get; set; }
+    public string? PlatformPolicyId { get; set; }
+    public long? PlatformPolicyRevision { get; set; }
+    public string? PlatformContentSha256 { get; set; }
+    public string? PinReason { get; set; }
+    public string? PinCorrelationId { get; set; }
+    public DateTimeOffset? PinnedAt { get; set; }
+    public string? RevokedByIssuer { get; set; }
+    public string? RevokedByActorId { get; set; }
+    public string? RevokedReason { get; set; }
+    public string? RevokedCorrelationId { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
+    public long? ConsumedRevision { get; set; }
+    public DateTimeOffset? ConsumedAt { get; set; }
+}

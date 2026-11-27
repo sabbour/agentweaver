@@ -27,6 +27,22 @@ public sealed record NativeAcsPolicyWriteBody
     public required string CorrelationId { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record NativeAcsProjectPolicyBaselineApprovalBody
+{
+    public required NativeAcsArtifact Artifact { get; init; }
+    public required string IdempotencyKey { get; init; }
+    public required string Reason { get; init; }
+    public required string CorrelationId { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record NativeAcsProjectPolicyBaselineRevokeBody
+{
+    public required string Reason { get; init; }
+    public required string CorrelationId { get; init; }
+}
+
 public sealed record NativeAcsPolicyValidationResponse(
     bool IsValid,
     ImmutableArray<NativeAcsDiagnostic> Diagnostics);
@@ -617,6 +633,160 @@ public static class NativeAcsPolicyEndpoints
                 return GovernanceSourceUnavailable();
             }
         }).WithName("ListProjectGovernanceDecisions");
+
+        projects.MapPost("/{projectId}/baseline-approvals", async (
+            string projectId,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            [FromServices] NativeAcsArtifactValidator? validator,
+            [FromServices] NativeAcsPolicyRequestGate requestGate,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                EnsureNoQuery(context, rejectEmptyQuery: true);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                caller.RequireHumanActor();
+                await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
+                    return RateLimited(context);
+                if (!context.Request.HasJsonContentType())
+                    return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+                if (context.Request.ContentLength > MaximumRequestBodyBytes)
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                var requestJson = await context.Request.ReadFromJsonAsync<JsonElement>(cancellationToken)
+                    .ConfigureAwait(false);
+                if (HasAmbiguousProperties(requestJson))
+                    return Results.BadRequest();
+                var request = requestJson.Deserialize<NativeAcsProjectPolicyBaselineApprovalBody>(ProjectValidationJsonOptions);
+                if (request?.Artifact is null)
+                    throw ProjectConfigException.Invalid(
+                        "native_acs_policy_invalid",
+                        "A complete native ACS policy artifact is required.");
+
+                var validationError = ValidateArtifact(
+                    validator, requestGate, request.Artifact, context, out _, projectScope: true);
+                if (validationError is not null)
+                    return validationError;
+
+                var receipt = await policyStore.CreateBaselineApprovalAsync(
+                    caller,
+                    new NativeAcsProjectPolicyBaselineApprovalRequest(
+                        projectId,
+                        request.Artifact,
+                        request.IdempotencyKey,
+                        request.Reason,
+                        request.CorrelationId),
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(receipt);
+            }
+            catch (ProjectConfigException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ToProblem(exception);
+            }
+            catch (BadHttpRequestException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.StatusCode(exception.StatusCode);
+            }
+            catch (JsonException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.BadRequest();
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+        })
+            .WithMetadata(new RequestSizeLimitAttribute(MaximumRequestBodyBytes))
+            .WithName("CreateProjectNativeAcsPolicyBaselineApproval");
+
+        projects.MapPost("/{projectId}/baseline-approvals/{baselineId:guid}/revoke", async (
+            string projectId,
+            Guid baselineId,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            [FromServices] NativeAcsPolicyRequestGate requestGate,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                EnsureNoQuery(context, rejectEmptyQuery: true);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                caller.RequireHumanActor();
+                await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
+                    return RateLimited(context);
+                if (!context.Request.HasJsonContentType())
+                    return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+                if (context.Request.ContentLength > 64 * 1024)
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                var requestJson = await context.Request.ReadFromJsonAsync<JsonElement>(cancellationToken)
+                    .ConfigureAwait(false);
+                if (HasAmbiguousProperties(requestJson))
+                    return Results.BadRequest();
+                var request = requestJson.Deserialize<NativeAcsProjectPolicyBaselineRevokeBody>(ProjectValidationJsonOptions);
+                if (request is null)
+                    throw ProjectConfigException.Invalid(
+                        "native_acs_policy_invalid",
+                        "A revocation reason and correlationId are required.");
+
+                var receipt = await policyStore.RevokeBaselineByAuthorAsync(
+                    caller,
+                    new NativeAcsProjectPolicyBaselineRevokeRequest(
+                        projectId,
+                        baselineId,
+                        request.Reason,
+                        request.CorrelationId),
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(receipt);
+            }
+            catch (ProjectConfigException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ToProblem(exception);
+            }
+            catch (BadHttpRequestException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.StatusCode(exception.StatusCode);
+            }
+            catch (JsonException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.BadRequest();
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+        })
+            .WithMetadata(new RequestSizeLimitAttribute(64 * 1024))
+            .WithName("RevokeProjectNativeAcsPolicyBaselineApproval");
 
         return app;
     }

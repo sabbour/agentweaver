@@ -300,6 +300,10 @@ public sealed class GatewayWorkspaceReadRegressionTests
             ("GET", "/api/v1/policies/projects/{projectId}/revisions/{revision}",
                 "readProjectNativeAcsPolicyRevision"),
             ("POST", "/api/v1/policies/projects/{projectId}/validate", "validateProjectNativeAcsPolicy"),
+            ("POST", "/api/v1/policies/projects/{projectId}/baseline-approvals",
+                "createProjectNativeAcsPolicyBaselineApproval"),
+            ("POST", "/api/v1/policies/projects/{projectId}/baseline-approvals/{baselineId:guid}/revoke",
+                "revokeProjectNativeAcsPolicyBaselineApproval"),
         };
 
         foreach (var (method, path, operationId) in routes)
@@ -311,11 +315,14 @@ public sealed class GatewayWorkspaceReadRegressionTests
             Assert.True(route.ForwardTenantSelector);
             Assert.True(route.ExcludeFromMcp);
             Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
-            Assert.Equal(5 * 1024 * 1024, route.MaximumResponseBytes);
+            var expectedMaxBytes = operationId == "revokeProjectNativeAcsPolicyBaselineApproval"
+                ? 64 * 1024
+                : 5 * 1024 * 1024;
+            Assert.Equal(expectedMaxBytes, route.MaximumResponseBytes);
             Assert.Equal(method != "GET", route.HasJsonBody);
             Assert.True(route.ForwardRequestHeaders.IsDefaultOrEmpty);
             Assert.Equal(
-                method == "GET" ? null : 5 * 1024 * 1024,
+                method == "GET" ? null : expectedMaxBytes,
                 route.MaximumRequestBodyBytes);
         }
         Assert.Equal(
@@ -332,6 +339,10 @@ public sealed class GatewayWorkspaceReadRegressionTests
             item.OperationId == "readProjectNativeAcsPolicyRevision").QueryParameters);
         Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
             item.OperationId == "validateProjectNativeAcsPolicy").QueryParameters);
+        Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "createProjectNativeAcsPolicyBaselineApproval").QueryParameters);
+        Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "revokeProjectNativeAcsPolicyBaselineApproval").QueryParameters);
     }
 
     [Fact]
@@ -498,6 +509,26 @@ public sealed class GatewayWorkspaceReadRegressionTests
         Assert.Equal("#/components/schemas/NativeAcsPolicyValidationResponse",
             validate.GetProperty("responses").GetProperty("200").GetProperty("content")
                 .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var baselineApprove = paths.GetProperty("/api/v1/policies/projects/{projectId}/baseline-approvals")
+            .GetProperty("post");
+        Assert.Equal("createProjectNativeAcsPolicyBaselineApproval",
+            baselineApprove.GetProperty("operationId").GetString());
+        Assert.True(baselineApprove.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").TryGetProperty("Cache-Control", out _));
+        Assert.Equal("#/components/schemas/Problem",
+            baselineApprove.GetProperty("responses").GetProperty("409")
+                .GetProperty("content").GetProperty("application/problem+json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        var baselineRevoke = paths.GetProperty("/api/v1/policies/projects/{projectId}/baseline-approvals/{baselineId}/revoke")
+            .GetProperty("post");
+        Assert.Equal("revokeProjectNativeAcsPolicyBaselineApproval",
+            baselineRevoke.GetProperty("operationId").GetString());
+        Assert.True(baselineRevoke.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").TryGetProperty("Cache-Control", out _));
+        Assert.Equal("#/components/schemas/Problem",
+            baselineRevoke.GetProperty("responses").GetProperty("409")
+                .GetProperty("content").GetProperty("application/problem+json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
         Assert.Contains(
             exact.GetProperty("responses").GetProperty("200").GetProperty("headers").EnumerateObject(),
             header => header.Name == "Cache-Control");

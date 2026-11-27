@@ -684,11 +684,14 @@
       "sourcePrefixes": [
         "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyRecords.cs",
         "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyStore.cs",
+        "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyStore.ProjectBaselines.cs",
         "services/projects-config/Agentweaver.Projects.Config/NativeAcsPolicyEndpoints.cs",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectPolicyBaselineCommand.cs",
         "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
         "services/gateway/Agentweaver.Gateway/GatewayOwnerClient.cs",
         "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.NativeAcsApi.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.ProjectPolicyBaseline.cs",
         "tests/Agentweaver.Projects.Config.Tests/NativeAcsPolicyHistoryRequestTests.cs",
         "tests/Agentweaver.Identity.Broker.Tests/GatewayWorkspaceReadRegressionTests.cs"
       ],

@@ -108,6 +108,10 @@ internal static partial class GatewayOpenApi
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
             ["validateProjectNativeAcsPolicy"] = C(
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
+            ["createProjectNativeAcsPolicyBaselineApproval"] = C(
+                "NativeAcsProjectPolicyBaselineApprovalRequest", "NativeAcsProjectPolicyBaselineReceipt", "200"),
+            ["revokeProjectNativeAcsPolicyBaselineApproval"] = C(
+                "NativeAcsProjectPolicyBaselineRevokeRequest", "NativeAcsProjectPolicyBaselineReceipt", "200"),
             ["writePlatformNativeAcsPolicy"] = C(
                 "NativeAcsPolicyWriteRequest", "NativeAcsPolicyPreparationResponse", "200"),
             ["listPlatformByokProviderDrafts"] = C(null, "ModelProviderDraftPage", "200"),
@@ -548,7 +552,9 @@ internal static partial class GatewayOpenApi
                         "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                         "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                         "listProjectGovernanceDecisions" or
-                        "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
+                        "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or
+                        "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
+                        "writePlatformNativeAcsPolicy" or
                         "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" or
                         "readProjectWorkflowGenerationJob" or "readProjectWorkflowGenerationResult" ||
                         route.OperationId is "getAuthorizationTargetContext" or
@@ -598,6 +604,7 @@ internal static partial class GatewayOpenApi
                                             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                                             "listProjectNativeAcsPolicyRevisions" or
                                             "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" or
+                                            "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
                                             "listProjectGovernanceDecisions" =>
                                                 "Project Policy responses are not cacheable.",
                                             "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" =>
@@ -909,7 +916,9 @@ else if (route.OperationId is
         else if (route.OperationId is "readPlatformNativeAcsPolicy" or "listPlatformNativeAcsPolicyRevisions" or
             "readPlatformNativeAcsPolicyRevision" or "listPlatformGovernanceDecisions" or
             "validatePlatformNativeAcsPolicy" or
-            "writePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "listProjectNativeAcsPolicies" or
+            "writePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or
+            "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
+            "listProjectNativeAcsPolicies" or
             "readProjectNativeAcsPolicy" or
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
             "listProjectGovernanceDecisions")
@@ -921,15 +930,18 @@ else if (route.OperationId is
                 "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                 "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                 "listProjectGovernanceDecisions";
-            responses["403"] = ProblemResponse(route.OperationId == "validateProjectNativeAcsPolicy"
+            responses["403"] = ProblemResponse(route.OperationId is "validateProjectNativeAcsPolicy" or
+                "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval"
                 ? "The caller lacks current Project Policy author authority."
                 : isProjectPolicyRead
                     ? "The caller lacks current Project Policy read authority."
                     : "The caller lacks current Platform administrator authority.");
             if (route.OperationId is "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
                 "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" or
+                "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
                 "listProjectGovernanceDecisions")
                 responses["404"] = ProblemResponse(route.OperationId is "validateProjectNativeAcsPolicy" or
+                    "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
                     "listProjectGovernanceDecisions"
                     ? "The Project does not exist in the selected tenant or is not visible to the caller."
                     : "No current or requested Policy revision exists.");
@@ -952,14 +964,18 @@ else if (route.OperationId is
             {
                 responses["413"] = ProblemResponse(
                     $"The request body exceeds the {route.MaximumRequestBodyBytes}-byte route limit.");
-                responses["422"] = ProblemResponse("The native ACS policy artifact is invalid.");
+                responses["415"] = ProblemResponse("The request Content-Type must be application/json.");
+                if (route.OperationId != "revokeProjectNativeAcsPolicyBaselineApproval")
+                    responses["422"] = ProblemResponse("The native ACS policy artifact is invalid.");
                 responses["429"] = ProblemResponse("The caller reached the policy validation limit.");
                 responses["503"] = ProblemResponse(
                     route.OperationId == "writePlatformNativeAcsPolicy"
                         ? "Policy head changes are disabled, validation is busy, or a validation dependency is unavailable."
                         : "Validation is busy or a validation dependency is unavailable.");
             }
-            if (route.OperationId == "writePlatformNativeAcsPolicy")
+            if (route.OperationId is "writePlatformNativeAcsPolicy" or
+                "createProjectNativeAcsPolicyBaselineApproval" or
+                "revokeProjectNativeAcsPolicyBaselineApproval")
                 responses["409"] = ProblemResponse(
                     "The expected revision is stale, a concurrent write conflicted, or the idempotency key conflicts.");
         }
@@ -2681,6 +2697,40 @@ else if (route.OperationId is
             ("manifestBytes", Arr(ByteValue())), ("files", Arr(Ref("NativeAcsArtifactFile"))),
             ("contentSha256", Str())),
         ["NativeAcsPolicyValidationRequest"] = StrictObj(["artifact"], ("artifact", Ref("NativeAcsArtifact"))),
+        ["NativeAcsProjectPolicyBaselineApprovalRequest"] = StrictObj(
+            ["artifact", "idempotencyKey", "reason", "correlationId"],
+            ("artifact", Ref("NativeAcsArtifact")),
+            ("idempotencyKey", Str()),
+            ("reason", Str()),
+            ("correlationId", Str())),
+        ["NativeAcsProjectPolicyBaselineRevokeRequest"] = StrictObj(
+            ["reason", "correlationId"],
+            ("reason", Str()),
+            ("correlationId", Str())),
+        ["NativeAcsProjectPolicyBaselineReceipt"] = Obj(
+            ["baselineId", "installationId", "tenantId", "projectId", "policyId", "state", "contentSha256",
+             "profileId", "approverIssuer", "approverActorId", "approvedAt", "replayed"],
+            ("baselineId", Str()),
+            ("installationId", Str()),
+            ("tenantId", Str()),
+            ("projectId", Str()),
+            ("policyId", Str()),
+            ("state", Str()),
+            ("contentSha256", Str()),
+            ("profileId", Str()),
+            ("approverIssuer", Str()),
+            ("approverActorId", Str()),
+            ("approvedAt", Str()),
+            ("operatorIssuer", NullableStr()),
+            ("operatorActorId", NullableStr()),
+            ("platformPolicyId", NullableStr()),
+            ("platformPolicyRevision", NullableInt()),
+            ("platformContentSha256", NullableStr()),
+            ("pinnedAt", NullableStr()),
+            ("revokedByIssuer", NullableStr()),
+            ("revokedByActorId", NullableStr()),
+            ("revokedAt", NullableStr()),
+            ("replayed", Bool())),
         ["NativeAcsPolicyWriteRequest"] = StrictObj(
             ["expectedRevision", "artifact", "idempotencyKey", "reason", "correlationId"],
             ("expectedRevision", NullableInt()), ("artifact", Ref("NativeAcsArtifact")),

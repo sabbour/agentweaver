@@ -465,6 +465,159 @@ public static class NativeAcsUnifiedPolicyProfile
         }
     }
 
+    public static bool IsProjectBaselineCompatibleWithPlatform(
+        NativeAcsArtifact platformArtifact,
+        NativeAcsArtifact projectArtifact,
+        out string? failureCode,
+        out string? failureMessage)
+    {
+        ArgumentNullException.ThrowIfNull(platformArtifact);
+        ArgumentNullException.ThrowIfNull(projectArtifact);
+
+        var platformInspection = Inspect(platformArtifact);
+        if (!platformInspection.IsValid)
+        {
+            failureCode = "native_acs_policy_incompatible";
+            failureMessage = "The current Platform Policy profile is not compatible with Project v3 baselines.";
+            return false;
+        }
+
+        var platformFiles = platformArtifact.Files.ToDictionary(file => file.RelativePath, StringComparer.Ordinal);
+        if (Matches(platformFiles[ToolPermissionsModulePath], LegacyToolPermissionsModuleBytes))
+        {
+            failureCode = "native_acs_policy_incompatible";
+            failureMessage = "Legacy Platform v2 tool-permissions rules differ from Project v3; upgrade Platform Policy to v2.1 or v3 first.";
+            return false;
+        }
+
+        var projectInspection = InspectProject(projectArtifact);
+        if (!projectInspection.IsValid ||
+            !projectArtifact.ManifestBytes.AsSpan().SequenceEqual(ManifestBytes))
+        {
+            failureCode = "native_acs_policy_invalid";
+            failureMessage = "The Project Policy baseline must be a valid 12-file v3 artifact.";
+            return false;
+        }
+
+        var projectFiles = projectArtifact.Files.ToDictionary(file => file.RelativePath, StringComparer.Ordinal);
+        string[] nonSkillsDataPaths =
+        [
+            NativeAcsComposableDomainsProfile.ActionsDataPath,
+            ModelUseDataPath,
+            GuardrailsDataPath,
+            ToolPermissionsDataPath,
+        ];
+
+        foreach (var path in nonSkillsDataPaths)
+        {
+            if (!TryAreJsonFilesStructurallyEquivalent(
+                    platformFiles[path].Bytes,
+                    projectFiles[path].Bytes))
+            {
+                failureCode = "native_acs_policy_incompatible";
+                failureMessage = $"The Project Policy baseline diverges from the Platform Policy in '{path}'.";
+                return false;
+            }
+        }
+
+        failureCode = null;
+        failureMessage = null;
+        return true;
+    }
+
+    private static bool TryAreJsonFilesStructurallyEquivalent(
+        ImmutableArray<byte> leftBytes,
+        ImmutableArray<byte> rightBytes)
+    {
+        try
+        {
+            var options = new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 64,
+            };
+            using var left = JsonDocument.Parse(leftBytes.ToArray(), options);
+            using var right = JsonDocument.Parse(rightBytes.ToArray(), options);
+            if (HasAnyDuplicateOrAmbiguousProperties(left.RootElement) ||
+                HasAnyDuplicateOrAmbiguousProperties(right.RootElement))
+                return false;
+            return AreJsonElementsStructurallyEquivalent(left.RootElement, right.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasAnyDuplicateOrAmbiguousProperties(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in element.EnumerateObject())
+                if (!names.Add(property.Name) || HasAnyDuplicateOrAmbiguousProperties(property.Value))
+                    return true;
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                if (HasAnyDuplicateOrAmbiguousProperties(item))
+                    return true;
+        }
+        return false;
+    }
+
+    private static bool AreJsonElementsStructurallyEquivalent(JsonElement left, JsonElement right)
+    {
+        if (left.ValueKind != right.ValueKind)
+            return false;
+
+        switch (left.ValueKind)
+        {
+            case JsonValueKind.Object:
+            {
+                var leftProps = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                foreach (var prop in left.EnumerateObject())
+                    leftProps[prop.Name] = prop.Value;
+
+                var rightCount = 0;
+                foreach (var prop in right.EnumerateObject())
+                {
+                    rightCount++;
+                    if (!leftProps.TryGetValue(prop.Name, out var leftValue) ||
+                        !AreJsonElementsStructurallyEquivalent(leftValue, prop.Value))
+                        return false;
+                }
+                return rightCount == leftProps.Count;
+            }
+            case JsonValueKind.Array:
+            {
+                var leftLen = left.GetArrayLength();
+                if (leftLen != right.GetArrayLength())
+                    return false;
+                for (var i = 0; i < leftLen; i++)
+                {
+                    if (!AreJsonElementsStructurallyEquivalent(left[i], right[i]))
+                        return false;
+                }
+                return true;
+            }
+            case JsonValueKind.String:
+                return string.Equals(left.GetString(), right.GetString(), StringComparison.Ordinal);
+            case JsonValueKind.Number:
+                if (left.TryGetDecimal(out var leftDec) && right.TryGetDecimal(out var rightDec))
+                    return leftDec == rightDec;
+                return string.Equals(left.GetRawText(), right.GetRawText(), StringComparison.Ordinal);
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+            case JsonValueKind.Null:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     internal static string GetPolicyId(NativeAcsDomainId domain) => domain switch
     {
         NativeAcsDomainId.Actions => NativeAcsComposableDomainsProfile.ActionsPolicyId,

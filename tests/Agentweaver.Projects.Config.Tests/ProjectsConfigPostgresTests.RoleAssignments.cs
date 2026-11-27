@@ -589,6 +589,10 @@ public sealed partial class ProjectsConfigPostgresTests
                 $"GRANT SELECT ON projects_config.installation_identity TO \"{roleName}\"");
             await OwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.native_acs_project_policy_baselines TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT UPDATE (state, revoked_by_issuer, revoked_by_actor_id, revoked_reason, revoked_correlation_id, revoked_at) ON projects_config.native_acs_project_policy_baselines TO \"{roleName}\"");
             await OwnerSqlAsync($"""
                 GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(
                     uuid, text, text, text, bigint, text, boolean) TO "{roleName}"

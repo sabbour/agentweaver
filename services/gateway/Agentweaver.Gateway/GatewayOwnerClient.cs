@@ -2647,7 +2647,10 @@ public sealed partial class GatewayOwnerClient(
         var isProjectPolicyRead = route.OperationId is
             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
-        var isProjectPolicyValidation = route.OperationId == "validateProjectNativeAcsPolicy";
+        var isProjectPolicyValidation = route.OperationId is
+            "validateProjectNativeAcsPolicy" or
+            "createProjectNativeAcsPolicyBaselineApproval" or
+            "revokeProjectNativeAcsPolicyBaselineApproval";
         var isSkillRefresh = route.OperationId is
             "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill";
         if (isSkillRefresh && context.Request.QueryString.HasValue)
@@ -2675,7 +2678,10 @@ public sealed partial class GatewayOwnerClient(
             var code = route.OperationId switch
             {
                 "listProjectNativeAcsPolicies" => "native_acs_policy_scope_list_request_invalid",
-                "readProjectNativeAcsPolicy" or "validateProjectNativeAcsPolicy" => "native_acs_policy_query_not_supported",
+                "readProjectNativeAcsPolicy" or
+                "validateProjectNativeAcsPolicy" or
+                "createProjectNativeAcsPolicyBaselineApproval" or
+                "revokeProjectNativeAcsPolicyBaselineApproval" => "native_acs_policy_query_not_supported",
                 "listProjectNativeAcsPolicyRevisions" => "native_acs_policy_history_request_invalid",
                 _ => "native_acs_policy_revision_request_invalid",
             };

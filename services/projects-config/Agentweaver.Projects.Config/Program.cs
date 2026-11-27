@@ -38,13 +38,38 @@ if (args.Contains(PlatformAdminInspectionCommand.Argument, StringComparer.Ordina
     !runFirstPlatformAdminInspection)
     throw new ArgumentException(
         "The --inspect-first-platform-admin command must be used by itself.", nameof(args));
+var runProjectPolicyBaseline = ProjectPolicyBaselineCommand.IsCommandAlone(args);
+if (args.Contains(ProjectPolicyBaselineCommand.Argument, StringComparer.Ordinal) &&
+    !runProjectPolicyBaseline)
+    throw new ArgumentException(
+        "The --project-policy-baseline command must be used by itself.", nameof(args));
 
 var builder = WebApplication.CreateBuilder(
     runMigrations || runSettleCredentialOperations || runPrivilegedProjectSetup ||
-        runFirstTenantAdminBootstrap || runFirstPlatformAdminBootstrap || runFirstPlatformAdminInspection ? [] : args);
+        runFirstTenantAdminBootstrap || runFirstPlatformAdminBootstrap || runFirstPlatformAdminInspection ||
+        runProjectPolicyBaseline ? [] : args);
 var requestContext = new HttpContextAccessor();
 builder.Services.AddSingleton<IHttpContextAccessor>(requestContext);
 ModelProviderCredentialPublicationEndpoints.SuppressLegacyRequestLogs(builder.Services, requestContext);
+if (runProjectPolicyBaseline)
+{
+    try
+    {
+        await ProjectPolicyBaselineCommand.RunAsync(builder.Configuration);
+    }
+    catch (ProjectConfigException exception)
+    {
+        await Console.Error.WriteLineAsync($"Project policy baseline failed ({exception.Code}).");
+        Environment.ExitCode = 1;
+    }
+    catch (Exception)
+    {
+        await Console.Error.WriteLineAsync("Project policy baseline failed; no credential or exception detail was written.");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (runPrivilegedProjectSetup)
 {
     // This one-shot path reports only a stable error code; token and exception details never reach console output.

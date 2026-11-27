@@ -13,7 +13,7 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Projects.Config;
 
-internal sealed class NativeAcsPolicyStore(
+internal sealed partial class NativeAcsPolicyStore(
     IDbContextFactory<ProjectsConfigDbContext> contextFactory,
     TimeProvider timeProvider,
     IDataProtectionProvider dataProtectionProvider,

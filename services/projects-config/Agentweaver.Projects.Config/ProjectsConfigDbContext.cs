@@ -65,6 +65,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
         Set<NativeAcsPolicyChangeAuditRecord>();
     public DbSet<NativeAcsPolicyOutboxRecord> NativeAcsPolicyOutbox =>
         Set<NativeAcsPolicyOutboxRecord>();
+    public DbSet<NativeAcsProjectPolicyBaselineRecord> NativeAcsProjectPolicyBaselines =>
+        Set<NativeAcsProjectPolicyBaselineRecord>();
     public DbSet<ProjectGovernanceDecisionStreamHeadRecord> GovernanceDecisionStreamHeads =>
         Set<ProjectGovernanceDecisionStreamHeadRecord>();
     public DbSet<ProjectGovernanceDecisionRecord> GovernanceDecisions =>
@@ -1477,6 +1479,92 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(item => item.PayloadJson).HasColumnName("payload").HasColumnType("jsonb");
             entity.Property(item => item.CreatedAt).HasColumnName("created_at");
             entity.HasIndex(item => item.CreatedAt);
+        });
+
+        modelBuilder.Entity<NativeAcsProjectPolicyBaselineRecord>(entity =>
+        {
+            entity.ToTable("native_acs_project_policy_baselines", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_native_acs_project_policy_baselines_installation",
+                    "installation_id <> '00000000-0000-0000-0000-000000000000'::uuid");
+                table.HasCheckConstraint(
+                    "ck_native_acs_project_policy_baselines_policy_id",
+                    "policy_id = 'canonical'");
+                table.HasCheckConstraint(
+                    "ck_native_acs_project_policy_baselines_state",
+                    "state IN ('Approved', 'Pinned', 'Consumed', 'Revoked')");
+                table.HasCheckConstraint(
+                    "ck_native_acs_project_policy_baselines_hashes",
+                    "content_sha256 ~ '^[0-9a-f]{64}$' AND approval_request_digest ~ '^[0-9a-f]{64}$' " +
+                    "AND approval_scope_digest ~ '^[0-9a-f]{64}$' " +
+                    "AND (pin_request_digest IS NULL OR pin_request_digest ~ '^[0-9a-f]{64}$') " +
+                    "AND (pin_scope_digest IS NULL OR pin_scope_digest ~ '^[0-9a-f]{64}$') " +
+                    "AND (platform_content_sha256 IS NULL OR platform_content_sha256 ~ '^[0-9a-f]{64}$')");
+                table.HasCheckConstraint(
+                    "ck_native_acs_project_policy_baselines_revisions",
+                    "approver_membership_revision > 0 AND approver_assignment_revision > 0 " +
+                    "AND (operator_membership_revision IS NULL OR operator_membership_revision > 0) " +
+                    "AND (platform_policy_revision IS NULL OR platform_policy_revision > 0) " +
+                    "AND (consumed_revision IS NULL OR consumed_revision > 0)");
+            });
+            entity.HasKey(b => b.BaselineId).HasName("pk_native_acs_project_policy_baselines");
+            entity.Property(b => b.BaselineId).HasColumnName("baseline_id");
+            entity.Property(b => b.InstallationId).HasColumnName("installation_id");
+            entity.Property(b => b.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
+            entity.Property(b => b.ProjectId).HasColumnName("project_id").HasMaxLength(32).IsRequired();
+            entity.Property(b => b.PolicyId).HasColumnName("policy_id").HasMaxLength(128).IsRequired();
+            entity.Property(b => b.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(b => b.ContentSha256).HasColumnName("content_sha256").HasMaxLength(64).IsRequired();
+            entity.Property(b => b.ArtifactJson).HasColumnName("artifact").HasColumnType("jsonb").IsRequired();
+            entity.Property(b => b.ProfileId).HasColumnName("profile_id").HasMaxLength(64).IsRequired();
+            entity.Property(b => b.ApproverIssuer).HasColumnName("approver_issuer").HasMaxLength(2048).IsRequired();
+            entity.Property(b => b.ApproverActorId).HasColumnName("approver_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(b => b.ApproverMembershipId).HasColumnName("approver_membership_id");
+            entity.Property(b => b.ApproverMembershipRevision).HasColumnName("approver_membership_revision");
+            entity.Property(b => b.ApproverAssignmentId).HasColumnName("approver_assignment_id");
+            entity.Property(b => b.ApproverAssignmentRevision).HasColumnName("approver_assignment_revision");
+            entity.Property(b => b.ApprovalIdempotencyKey).HasColumnName("approval_idempotency_key").HasMaxLength(128).IsRequired();
+            entity.Property(b => b.ApprovalRequestDigest).HasColumnName("approval_request_digest").HasMaxLength(64).IsRequired();
+            entity.Property(b => b.ApprovalScopeDigest).HasColumnName("approval_scope_digest").HasMaxLength(64).IsRequired();
+            entity.Property(b => b.ApprovalReason).HasColumnName("approval_reason").HasMaxLength(1024).IsRequired();
+            entity.Property(b => b.ApprovalCorrelationId).HasColumnName("approval_correlation_id").HasMaxLength(128).IsRequired();
+            entity.Property(b => b.ApprovedAt).HasColumnName("approved_at");
+            entity.Property(b => b.OperatorIssuer).HasColumnName("operator_issuer").HasMaxLength(2048);
+            entity.Property(b => b.OperatorActorId).HasColumnName("operator_actor_id").HasMaxLength(256);
+            entity.Property(b => b.OperatorMembershipId).HasColumnName("operator_membership_id");
+            entity.Property(b => b.OperatorMembershipRevision).HasColumnName("operator_membership_revision");
+            entity.Property(b => b.PinIdempotencyKey).HasColumnName("pin_idempotency_key").HasMaxLength(128);
+            entity.Property(b => b.PinRequestDigest).HasColumnName("pin_request_digest").HasMaxLength(64);
+            entity.Property(b => b.PinScopeDigest).HasColumnName("pin_scope_digest").HasMaxLength(64);
+            entity.Property(b => b.PlatformPolicyId).HasColumnName("platform_policy_id").HasMaxLength(128);
+            entity.Property(b => b.PlatformPolicyRevision).HasColumnName("platform_policy_revision");
+            entity.Property(b => b.PlatformContentSha256).HasColumnName("platform_content_sha256").HasMaxLength(64);
+            entity.Property(b => b.PinReason).HasColumnName("pin_reason").HasMaxLength(1024);
+            entity.Property(b => b.PinCorrelationId).HasColumnName("pin_correlation_id").HasMaxLength(128);
+            entity.Property(b => b.PinnedAt).HasColumnName("pinned_at");
+            entity.Property(b => b.RevokedByIssuer).HasColumnName("revoked_by_issuer").HasMaxLength(2048);
+            entity.Property(b => b.RevokedByActorId).HasColumnName("revoked_by_actor_id").HasMaxLength(256);
+            entity.Property(b => b.RevokedReason).HasColumnName("revoked_reason").HasMaxLength(1024);
+            entity.Property(b => b.RevokedCorrelationId).HasColumnName("revoked_correlation_id").HasMaxLength(128);
+            entity.Property(b => b.RevokedAt).HasColumnName("revoked_at");
+            entity.Property(b => b.ConsumedRevision).HasColumnName("consumed_revision");
+            entity.Property(b => b.ConsumedAt).HasColumnName("consumed_at");
+            entity.HasIndex(b => b.ProjectId)
+                .IsUnique()
+                .HasFilter("state IN ('Approved', 'Pinned')")
+                .HasDatabaseName("ux_native_acs_project_policy_baselines_active_project");
+            entity.HasIndex(b => b.ApprovalScopeDigest)
+                .IsUnique()
+                .HasDatabaseName("ux_native_acs_project_policy_baselines_approval_scope");
+            entity.HasIndex(b => b.PinScopeDigest)
+                .IsUnique()
+                .HasFilter("pin_scope_digest IS NOT NULL")
+                .HasDatabaseName("ux_native_acs_project_policy_baselines_pin_scope");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(b => b.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ProjectGovernanceDecisionStreamHeadRecord>(entity =>

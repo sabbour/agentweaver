@@ -3899,6 +3899,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 $"GRANT SELECT, INSERT, UPDATE ON projects_config.project_skill_admission_fence TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT ON projects_config.native_acs_policy_preparations TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.native_acs_project_policy_baselines TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT UPDATE (state, revoked_by_issuer, revoked_by_actor_id, revoked_reason, revoked_correlation_id, revoked_at) ON projects_config.native_acs_project_policy_baselines TO \"{roleName}\"");
 
             var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
             {

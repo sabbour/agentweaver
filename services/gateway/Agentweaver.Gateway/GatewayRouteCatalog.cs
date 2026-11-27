@@ -642,6 +642,18 @@ public static class GatewayRouteCatalog
             body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/policies/projects/{projectId}/baseline-approvals",
+            "/api/policies/projects/{projectId}/baseline-approvals",
+            "createProjectNativeAcsPolicyBaselineApproval", "Approve a starting Project Policy baseline",
+            body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/policies/projects/{projectId}/baseline-approvals/{baselineId:guid}/revoke",
+            "/api/policies/projects/{projectId}/baseline-approvals/{baselineId:guid}/revoke",
+            "revokeProjectNativeAcsPolicyBaselineApproval", "Revoke an unused Project Policy baseline",
+            body: true, maximumRequestBodyBytes: 64 * 1024,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: 64 * 1024, excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/policies/projects/{projectId}", "/api/policies/projects/{projectId}",
             "readProjectNativeAcsPolicy", "Read the current Project Policy source",
             forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
