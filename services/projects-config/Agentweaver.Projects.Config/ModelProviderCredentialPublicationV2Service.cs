@@ -90,6 +90,30 @@ internal sealed class ModelProviderCredentialPublicationV2Service(
         }, cancellationToken);
     }
 
+    internal Task<ModelProviderCredentialStatusCheckResponse> CheckStatusAsync(
+        ModelProviderCredentialStatusCheckRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!request.IsValid)
+            throw ModelProviderCredentialPublicationV2Exception.InvalidRequest();
+
+        return ExecuteWithRetryAsync(async () =>
+        {
+            var authority = await ResolveAndLockAuthorityAsync(
+                request.Issuer, request.ActorId, request.Scope, request.ProjectId,
+                request.TenantSelector, request.TenantClaim, cancellationToken).ConfigureAwait(false);
+            var head = await LockProviderHeadAsync(
+                request.ProviderId, request.Scope, request.ProjectId, forUpdate: false, cancellationToken)
+                .ConfigureAwait(false);
+            return new ModelProviderCredentialStatusCheckResponse(
+                request,
+                authority.Membership.TenantId,
+                head.CurrentRevision,
+                head.State.ToString());
+        }, cancellationToken);
+    }
+
     internal Task<ModelProviderCredentialPublicationPreflightResponse> PreflightAsync(
         ModelProviderCredentialPublicationPreflightRequest request,
         CancellationToken cancellationToken)

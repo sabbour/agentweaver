@@ -540,6 +540,11 @@ public static class GatewayRouteCatalog
         const long ModelProviderCredentialPutLimit = 16 * 1024;
         const long ModelProviderCredentialDeleteLimit = 8 * 1024;
         const long ModelProviderCredentialResponseLimit = 16 * 1024;
+        Add("GET", GatewayOwner.IdentityBroker, "/platform/byok-providers/{providerId}/credential",
+            "/api/platform/byok-providers/{providerId}/credential", "readPlatformByokProviderCredential",
+            "Read a platform BYOK provider credential status", forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
+            excludeFromMcp: true);
         Add("PUT", GatewayOwner.IdentityBroker, "/platform/byok-providers/{providerId}/credential",
             "/api/platform/byok-providers/{providerId}/credential", "setPlatformByokProviderCredential",
             "Set, rotate, or recover a platform BYOK provider credential", body: true,
@@ -560,6 +565,11 @@ public static class GatewayRouteCatalog
             ["operationId", "expectedProviderRevision", "expectedCredentialRevision", "cancel"],
             body: true, jsonBodyRequired: false,
             maximumRequestBodyBytes: ModelProviderCredentialDeleteLimit, forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
+            excludeFromMcp: true);
+        Add("GET", GatewayOwner.IdentityBroker, "/projects/{projectId}/byok-providers/{providerId}/credential",
+            "/api/projects/{projectId}/byok-providers/{providerId}/credential", "readProjectByokProviderCredential",
+            "Read a project BYOK provider credential status", forwardTenantSelector: true,
             exposedResponseHeaders: ["Cache-Control"], maximumResponseBytes: ModelProviderCredentialResponseLimit,
             excludeFromMcp: true);
         Add("PUT", GatewayOwner.IdentityBroker, "/projects/{projectId}/byok-providers/{providerId}/credential",

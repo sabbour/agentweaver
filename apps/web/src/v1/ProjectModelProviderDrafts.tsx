@@ -7,6 +7,7 @@ import type {
   AvailablePlatformProvider,
   ModelProviderCredentialOperationStatusResponse,
   ModelProviderCredentialResponse,
+  ModelProviderCredentialStatusResponse,
   ProjectModelProviderDraft,
   ProjectModelProviderDraftSaveRequest,
 } from './contracts';
@@ -163,6 +164,24 @@ function requireProjectCredentialOperationStatus(
   return response;
 }
 
+function requireProjectCredentialStatus(
+  response: ModelProviderCredentialStatusResponse,
+  projectId: string,
+  providerId: string,
+): ModelProviderCredentialStatusResponse {
+  if (response.scope !== 'project' ||
+      response.projectId !== projectId ||
+      response.providerId !== providerId ||
+      !Number.isSafeInteger(response.providerRevision) ||
+      response.providerRevision <= 0 ||
+      !Number.isSafeInteger(response.credentialRevision) ||
+      response.credentialRevision < 0 ||
+      !['not_set', 'enabled', 'disabled', 'pending', 'quarantined'].includes(response.state)) {
+    throw new Error('The service returned an invalid credential status.');
+  }
+  return response;
+}
+
 function isPreClaimCredentialRejection(reason: unknown): boolean {
   if (!(reason instanceof GatewayError)) return false;
   if (reason.status === 400 || reason.status === 413 || reason.status === 415) return true;
@@ -226,6 +245,9 @@ export function ProjectModelProviderDrafts({
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [credentialStatus, setCredentialStatus] = useState<ModelProviderCredentialStatusResponse | null>(null);
+  const [credentialStatusLoading, setCredentialStatusLoading] = useState(false);
+  const [credentialStatusError, setCredentialStatusError] = useState<unknown>(null);
   const [credentialBusy, setCredentialBusy] = useState(false);
   const [credentialError, setCredentialError] = useState<unknown>(null);
   const [credentialMessage, setCredentialMessage] = useState<string | null>(null);
@@ -352,6 +374,9 @@ export function ProjectModelProviderDrafts({
     setSavedMessage(null);
     setApiKeyInput('');
     setShowKey(false);
+    setCredentialStatus(null);
+    setCredentialStatusLoading(false);
+    setCredentialStatusError(null);
     setCredentialBusy(false);
     setCredentialError(null);
     setCredentialMessage(null);
@@ -709,7 +734,11 @@ export function ProjectModelProviderDrafts({
 
   const openProvider = useCallback(async (
     providerId: string,
-    options?: { preserveSavedMessage?: boolean; preserveCredentialMessage?: boolean },
+    options?: {
+      preserveSavedMessage?: boolean;
+      preserveCredentialMessage?: boolean;
+      preserveCredentialError?: boolean;
+    },
   ) => {
     const generation = ++detailGeneration.current;
     saveGeneration.current += 1;
@@ -727,31 +756,58 @@ export function ProjectModelProviderDrafts({
     setSaveConflict(false);
     setApiKeyInput('');
     setShowKey(false);
+    setCredentialStatus(null);
+    setCredentialStatusLoading(true);
+    setCredentialStatusError(null);
     setCredentialBusy(false);
-    setCredentialError(null);
+    if (!options?.preserveCredentialError) setCredentialError(null);
     setConfirmingOperationReset(false);
     if (!options?.preserveCredentialMessage) setCredentialMessage(null);
     if (!options?.preserveSavedMessage) setSavedMessage(null);
     try {
-      const provider = await apiCall(
-        (token, liveTenant) => {
-          if (!isSameScope(capturedScope) ||
-              (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId))
-            return Promise.reject(new StaleRequestError());
-          return gatewayClient.getProjectByokProviderDraft(
-            token, projectId, providerId, capturedScope.tenantId,
-          );
-        },
-        binding,
-      );
+      const [draftResult, statusResult] = await Promise.allSettled([
+        apiCall(
+          (token, liveTenant) => {
+            if (!isSameScope(capturedScope) ||
+                (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId))
+              return Promise.reject(new StaleRequestError());
+            return gatewayClient.getProjectByokProviderDraft(
+              token, projectId, providerId, capturedScope.tenantId,
+            );
+          },
+          binding,
+        ),
+        apiCall(
+          (token, liveTenant) => {
+            if (!isSameScope(capturedScope) ||
+                (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId))
+              return Promise.reject(new StaleRequestError());
+            return gatewayClient.getProjectByokProviderCredential(
+              token, projectId, providerId, capturedScope.tenantId,
+            );
+          },
+          binding,
+        ),
+      ]);
       if (!isSameScope(capturedScope) ||
           generation !== detailGeneration.current ||
           activeViewRef.current !== 'detail' ||
           activeProviderIdRef.current !== providerId)
         return;
-      const checked = requireProjectDraft(provider, projectId, providerId);
+      if (draftResult.status === 'rejected') {
+        throw draftResult.reason;
+      }
+      const checked = requireProjectDraft(draftResult.value, projectId, providerId);
       setSelectedProvider(checked);
       setProviders((current) => current.map((item) => item.id === providerId ? checked : item));
+      if (statusResult.status === 'fulfilled') {
+        setCredentialStatus(requireProjectCredentialStatus(statusResult.value, projectId, providerId));
+      } else if (!(statusResult.reason instanceof StaleRequestError)) {
+        if (!handleAccessFailure(statusResult.reason)) {
+          setCredentialStatus(null);
+          setCredentialStatusError(statusResult.reason);
+        }
+      }
     } catch (reason) {
       if (reason instanceof StaleRequestError) return;
       if (isSameScope(capturedScope) &&
@@ -761,8 +817,10 @@ export function ProjectModelProviderDrafts({
           !handleAccessFailure(reason))
         setDetailError(reason);
     } finally {
-      if (mountedRef.current && generation === detailGeneration.current)
+      if (mountedRef.current && generation === detailGeneration.current) {
         setDetailLoading(false);
+        setCredentialStatusLoading(false);
+      }
     }
   }, [apiCall, binding, handleAccessFailure, isSameScope, projectId]);
 
@@ -1042,6 +1100,7 @@ export function ProjectModelProviderDrafts({
     opKey: ProjectCredentialOperationKey,
     operationId: string,
     expectedProviderRevision: number,
+    expectedCredentialRevision: number,
     response: ModelProviderCredentialResponse,
     updateUi: boolean,
   ) => {
@@ -1068,6 +1127,7 @@ export function ProjectModelProviderDrafts({
       operationStore.set(opKey, {
         operationId,
         expectedProviderRevision,
+        expectedCredentialRevision,
         status: 'publication_pending',
       });
       if (mountedRef.current) setOperationRevision((revision) => revision + 1);
@@ -1078,6 +1138,7 @@ export function ProjectModelProviderDrafts({
       operationStore.set(opKey, {
         operationId,
         expectedProviderRevision,
+        expectedCredentialRevision,
         status: 'quarantined',
       });
       if (mountedRef.current) setOperationRevision((revision) => revision + 1);
@@ -1085,7 +1146,7 @@ export function ProjectModelProviderDrafts({
     }
   }, [openProvider, operationStore, savedMessage]);
 
-  const submitFirstKey = async (event: FormEvent) => {
+  const submitKey = async (event: FormEvent) => {
     event.preventDefault();
     const submittedApiKey = apiKeyInput;
     setApiKeyInput('');
@@ -1094,7 +1155,8 @@ export function ProjectModelProviderDrafts({
     setCredentialMessage(null);
     setConfirmingOperationReset(false);
 
-    if (!selectedProvider || selectedProvider.hasCredential || activeCredentialOp) return;
+    if (!selectedProvider || !credentialStatus || activeCredentialOp) return;
+    if (credentialStatus.state !== 'not_set' && credentialStatus.state !== 'enabled') return;
     if (!submittedApiKey.trim()) {
       setCredentialError(new Error('Enter an API key.'));
       return;
@@ -1110,7 +1172,8 @@ export function ProjectModelProviderDrafts({
     }
 
     const providerId = selectedProvider.id;
-    const expectedProviderRevision = selectedProvider.revision;
+    const expectedProviderRevision = credentialStatus.providerRevision;
+    const expectedCredentialRevision = credentialStatus.credentialRevision;
     const operationId = crypto.randomUUID();
     const capturedScope = currentScopeRef.current;
     const generation = ++credentialGeneration.current;
@@ -1135,7 +1198,7 @@ export function ProjectModelProviderDrafts({
             {
               operationId,
               expectedProviderRevision,
-              expectedCredentialRevision: 0,
+              expectedCredentialRevision,
               apiKey: submittedApiKey,
             },
             liveTenant,
@@ -1155,7 +1218,14 @@ export function ProjectModelProviderDrafts({
         generation === credentialGeneration.current &&
         activeViewRef.current === 'detail' &&
         activeProviderIdRef.current === providerId;
-      handleCredentialPutOutcome(opKey, operationId, expectedProviderRevision, checked, canUpdateUi);
+      handleCredentialPutOutcome(
+        opKey,
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        checked,
+        canUpdateUi,
+      );
     } catch (reason) {
       if (reason instanceof StaleRequestError) return;
       if (!dispatched) {
@@ -1176,8 +1246,9 @@ export function ProjectModelProviderDrafts({
           if (reason instanceof GatewayError && reason.status === 409 &&
               reason.code === 'credential_slot_conflict') {
             setCredentialError(new Error(
-              'This provider already has an existing or disabled credential slot and cannot accept a first key from this form.',
+              'The credential state changed. Refreshing credential status.',
             ));
+            void openProvider(providerId, { preserveCredentialError: true });
           } else {
             setCredentialError(reason);
           }
@@ -1194,6 +1265,7 @@ export function ProjectModelProviderDrafts({
         setStoredOperation(opKey, {
           operationId,
           expectedProviderRevision,
+          expectedCredentialRevision,
           status: 'publication_pending',
         });
         return;
@@ -1205,6 +1277,7 @@ export function ProjectModelProviderDrafts({
         setStoredOperation(opKey, {
           operationId,
           expectedProviderRevision,
+          expectedCredentialRevision,
           status: 'quarantined',
         });
         return;
@@ -1213,6 +1286,7 @@ export function ProjectModelProviderDrafts({
       setStoredOperation(opKey, {
         operationId,
         expectedProviderRevision,
+        expectedCredentialRevision,
         status: 'uncertain',
       });
       if (canUpdateUi)
@@ -1227,7 +1301,7 @@ export function ProjectModelProviderDrafts({
     if (!selectedProvider || !activeCredentialOp || !activeOperationKey) return;
     const opKey = activeOperationKey;
     const providerId = selectedProvider.id;
-    const { operationId, expectedProviderRevision } = activeCredentialOp;
+    const { operationId, expectedProviderRevision, expectedCredentialRevision = 0 } = activeCredentialOp;
     const capturedScope = currentScopeRef.current;
     const generation = ++credentialGeneration.current;
 
@@ -1294,6 +1368,7 @@ export function ProjectModelProviderDrafts({
       operationStore.set(opKey, {
         operationId,
         expectedProviderRevision,
+        expectedCredentialRevision,
         status: checked.status,
       });
       if (mountedRef.current) setOperationRevision((revision) => revision + 1);
@@ -1307,6 +1382,7 @@ export function ProjectModelProviderDrafts({
         operationStore.set(opKey, {
           operationId,
           expectedProviderRevision,
+          expectedCredentialRevision,
           status: 'pending',
         });
         if (mountedRef.current) setOperationRevision((revision) => revision + 1);
@@ -1329,7 +1405,7 @@ export function ProjectModelProviderDrafts({
       return;
     const opKey = activeOperationKey;
     const providerId = selectedProvider.id;
-    const { operationId, expectedProviderRevision } = activeCredentialOp;
+    const { operationId, expectedProviderRevision, expectedCredentialRevision = 0 } = activeCredentialOp;
     const capturedScope = currentScopeRef.current;
     const generation = ++credentialGeneration.current;
 
@@ -1354,7 +1430,7 @@ export function ProjectModelProviderDrafts({
             {
               operationId,
               expectedProviderRevision,
-              expectedCredentialRevision: 0,
+              expectedCredentialRevision,
               recheckExistingVersion: true,
             },
             liveTenant,
@@ -1374,7 +1450,14 @@ export function ProjectModelProviderDrafts({
         generation === credentialGeneration.current &&
         activeViewRef.current === 'detail' &&
         activeProviderIdRef.current === providerId;
-      handleCredentialPutOutcome(opKey, operationId, expectedProviderRevision, checked, canUpdateUi);
+      handleCredentialPutOutcome(
+        opKey,
+        operationId,
+        expectedProviderRevision,
+        expectedCredentialRevision,
+        checked,
+        canUpdateUi,
+      );
     } catch (reason) {
       if (reason instanceof StaleRequestError) return;
       if (!isSameConfirmedScope(capturedScope)) return;
@@ -1383,6 +1466,7 @@ export function ProjectModelProviderDrafts({
         operationStore.set(opKey, {
           operationId,
           expectedProviderRevision,
+          expectedCredentialRevision,
           status: 'publication_pending',
           stalePublicationConflict: true,
         });
@@ -1394,6 +1478,7 @@ export function ProjectModelProviderDrafts({
         operationStore.set(opKey, {
           operationId,
           expectedProviderRevision,
+          expectedCredentialRevision,
           status: 'publication_pending',
         });
         if (mountedRef.current) setOperationRevision((revision) => revision + 1);
@@ -1406,6 +1491,7 @@ export function ProjectModelProviderDrafts({
         operationStore.set(opKey, {
           operationId,
           expectedProviderRevision,
+          expectedCredentialRevision,
           status: 'quarantined',
         });
         if (mountedRef.current) setOperationRevision((revision) => revision + 1);
@@ -1434,31 +1520,54 @@ export function ProjectModelProviderDrafts({
     setCredentialError(null);
     setCredentialMessage(null);
     try {
-      const latest = await apiCall(
-        (token, liveTenant) => {
-          if (!isSameScope(capturedScope) ||
-              generation !== credentialGeneration.current ||
-              activeViewRef.current !== 'detail' ||
-              activeProviderIdRef.current !== providerId ||
-              (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId)) {
-            return Promise.reject(new StaleRequestError());
-          }
-          return gatewayClient.getProjectByokProviderDraft(
-            token,
-            projectId,
-            providerId,
-            capturedScope.tenantId,
-          );
-        },
-        binding,
-      );
+      const [latest, latestStatus] = await Promise.all([
+        apiCall(
+          (token, liveTenant) => {
+            if (!isSameScope(capturedScope) ||
+                generation !== credentialGeneration.current ||
+                activeViewRef.current !== 'detail' ||
+                activeProviderIdRef.current !== providerId ||
+                (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId)) {
+              return Promise.reject(new StaleRequestError());
+            }
+            return gatewayClient.getProjectByokProviderDraft(
+              token,
+              projectId,
+              providerId,
+              capturedScope.tenantId,
+            );
+          },
+          binding,
+        ),
+        apiCall(
+          (token, liveTenant) => {
+            if (!isSameScope(capturedScope) ||
+                generation !== credentialGeneration.current ||
+                activeViewRef.current !== 'detail' ||
+                activeProviderIdRef.current !== providerId ||
+                (capturedScope.tenantId !== null && liveTenant !== null && liveTenant !== capturedScope.tenantId)) {
+              return Promise.reject(new StaleRequestError());
+            }
+            return gatewayClient.getProjectByokProviderCredential(
+              token,
+              projectId,
+              providerId,
+              capturedScope.tenantId,
+            );
+          },
+          binding,
+        ),
+      ]);
       if (!isSameScope(capturedScope) ||
           generation !== credentialGeneration.current ||
           activeViewRef.current !== 'detail' ||
           activeProviderIdRef.current !== providerId)
         return;
       const checked = requireProjectDraft(latest, projectId, providerId);
+      const checkedStatus = requireProjectCredentialStatus(latestStatus, projectId, providerId);
       setSelectedProvider(checked);
+      setCredentialStatus(checkedStatus);
+      setCredentialStatusError(null);
       setProviders((current) => current.map((item) => item.id === providerId ? checked : item));
       deleteStoredOperation(opKey);
       setConfirmingOperationReset(false);
@@ -1645,9 +1754,21 @@ export function ProjectModelProviderDrafts({
                     <div>
                       <dt>Credential</dt>
                       <dd>
-                        <Badge appearance="tint" color={selectedProvider.hasCredential ? 'success' : 'subtle'}>
-                          {selectedProvider.hasCredential ? 'Key saved' : 'No key saved'}
-                        </Badge>
+                        {credentialStatusLoading ? (
+                          <Badge appearance="tint" color="subtle">Checking…</Badge>
+                        ) : credentialStatus?.state === 'enabled' ? (
+                          <Badge appearance="tint" color="success">Key saved</Badge>
+                        ) : credentialStatus?.state === 'disabled' ? (
+                          <Badge appearance="tint" color="danger">Disabled</Badge>
+                        ) : credentialStatus?.state === 'pending' ? (
+                          <Badge appearance="tint" color="warning">Pending</Badge>
+                        ) : credentialStatus?.state === 'quarantined' ? (
+                          <Badge appearance="tint" color="danger">Quarantined</Badge>
+                        ) : credentialStatus?.state === 'not_set' ? (
+                          <Badge appearance="tint" color="subtle">No key saved</Badge>
+                        ) : (
+                          <Badge appearance="tint" color="subtle">Status unavailable</Badge>
+                        )}
                       </dd>
                     </div>
                     <div><dt>Host request status</dt><dd>{hostRequestStatusLabel(selectedProvider.egress)}</dd></div>
@@ -1656,42 +1777,22 @@ export function ProjectModelProviderDrafts({
                   </dl>
                   {credentialMessage && <Text role="status">{credentialMessage}</Text>}
                   {credentialError != null && <ErrorNotice>{errorMessage(credentialError)}</ErrorNotice>}
-                  {!selectedProvider.hasCredential && !activeCredentialOp && (
-                    <form className="v1-form" onSubmit={(event) => void submitFirstKey(event)}>
-                      <Field label="Add API key" required>
-                        <div className="v1-actions">
-                          <Input
-                            type={showKey ? 'text' : 'password'}
-                            autoComplete="new-password"
-                            value={apiKeyInput}
-                            onChange={(_, data) => {
-                              setApiKeyInput(data.value);
-                              setCredentialError(null);
-                              setCredentialMessage(null);
-                            }}
-                            disabled={credentialBusy}
-                          />
-                          <Button
-                            type="button"
-                            onClick={() => setShowKey((current) => !current)}
-                            disabled={credentialBusy}
-                          >
-                            {showKey ? 'Hide key' : 'Show key'}
-                          </Button>
-                        </div>
-                      </Field>
+                  {credentialStatusLoading && <Loading label="Checking credential status…" />}
+                  {!credentialStatusLoading && credentialStatusError != null && (
+                    <div className="v1-stack">
+                      <ErrorNotice>{errorMessage(credentialStatusError)}</ErrorNotice>
                       <div className="v1-actions">
                         <Button
-                          appearance="primary"
-                          type="submit"
-                          disabled={credentialBusy || !apiKeyInput.trim()}
+                          type="button"
+                          onClick={() => void openProvider(selectedProvider.id)}
+                          disabled={credentialBusy}
                         >
-                          {credentialBusy ? 'Saving key…' : 'Save key'}
+                          Retry credential status
                         </Button>
                       </div>
-                    </form>
+                    </div>
                   )}
-                  {!selectedProvider.hasCredential && activeCredentialOp && (
+                  {!credentialStatusLoading && credentialStatusError == null && activeCredentialOp && (
                     <div className="v1-stack">
                       {activeCredentialOp.status === 'uncertain' && (
                         <Text role="status">
@@ -1786,6 +1887,64 @@ export function ProjectModelProviderDrafts({
                         </div>
                       )}
                     </div>
+                  )}
+                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                    credentialStatus?.state === 'disabled' && (
+                    <Text role="status">
+                      Credential disabled. Disabled credential slots cannot accept a new key.
+                    </Text>
+                  )}
+                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                    credentialStatus?.state === 'pending' && (
+                    <Text role="status">
+                      A credential update is already in progress. Refresh to check when it finishes.
+                    </Text>
+                  )}
+                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                    credentialStatus?.state === 'quarantined' && (
+                    <Text role="status">
+                      The last credential write was quarantined. Recover or cancel it via CLI before rotating the key.
+                    </Text>
+                  )}
+                  {!credentialStatusLoading && credentialStatusError == null && !activeCredentialOp &&
+                    credentialStatus && (credentialStatus.state === 'not_set' || credentialStatus.state === 'enabled') && (
+                    <form className="v1-form" onSubmit={(event) => void submitKey(event)}>
+                      <Field
+                        label={credentialStatus.state === 'enabled' ? 'Rotate API key' : 'Add API key'}
+                        required
+                      >
+                        <div className="v1-actions">
+                          <Input
+                            type={showKey ? 'text' : 'password'}
+                            autoComplete="new-password"
+                            placeholder={credentialStatus.state === 'enabled' ? 'Enter a new API key to rotate' : undefined}
+                            value={apiKeyInput}
+                            onChange={(_, data) => {
+                              setApiKeyInput(data.value);
+                              setCredentialError(null);
+                              setCredentialMessage(null);
+                            }}
+                            disabled={credentialBusy}
+                          />
+                          <Button
+                            type="button"
+                            onClick={() => setShowKey((current) => !current)}
+                            disabled={credentialBusy}
+                          >
+                            {showKey ? 'Hide key' : 'Show key'}
+                          </Button>
+                        </div>
+                      </Field>
+                      <div className="v1-actions">
+                        <Button
+                          appearance="primary"
+                          type="submit"
+                          disabled={credentialBusy || !apiKeyInput.trim()}
+                        >
+                          {credentialBusy ? 'Saving key…' : 'Save key'}
+                        </Button>
+                      </div>
+                    </form>
                   )}
                 </>
               )}

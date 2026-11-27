@@ -301,6 +301,22 @@ export interface ModelProviderCredentialRequest {
   recheckExistingVersion?: boolean;
 }
 
+export type ModelProviderCredentialStatus =
+  | 'not_set'
+  | 'enabled'
+  | 'disabled'
+  | 'pending'
+  | 'quarantined';
+
+export interface ModelProviderCredentialStatusResponse {
+  scope: 'platform' | 'project';
+  projectId: string | null;
+  providerId: string;
+  providerRevision: number;
+  state: ModelProviderCredentialStatus;
+  credentialRevision: number;
+}
+
 export interface ModelProviderCredentialResponse {
   operationId: string;
   status: 'published' | 'quarantined' | 'publication_pending' | 'cancelled' | 'disabled';

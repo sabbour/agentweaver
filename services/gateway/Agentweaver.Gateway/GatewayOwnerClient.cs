@@ -68,6 +68,11 @@ public sealed partial class GatewayOwnerClient(
             "createPlatformByokProviderDraft" or "updatePlatformByokProviderDraft" or
             "listProjectByokProviderDrafts" or "readProjectByokProviderDraft" or
             "createProjectByokProviderDraft" or "updateProjectByokProviderDraft";
+    private static bool IsModelProviderCredentialRoute(GatewayRoute route) =>
+        route.OperationId is "readPlatformByokProviderCredential" or "setPlatformByokProviderCredential" or
+            "readPlatformByokProviderCredentialOperation" or "disablePlatformByokProviderCredential" or
+            "readProjectByokProviderCredential" or "setProjectByokProviderCredential" or
+            "readProjectByokProviderCredentialOperation" or "disableProjectByokProviderCredential";
     private static bool IsRunSelectionRoute(GatewayRoute route) =>
         route.Owner == GatewayOwner.Projects &&
         route.OperationId is "acceptRunSelection" or "getRunSelection";
@@ -103,8 +108,12 @@ public sealed partial class GatewayOwnerClient(
                 IsRateCardWriteRoute(route) ||
                 IsCredentialPutRoute(route) ||
                 IsModelProviderDraftRoute(route) ||
+                IsModelProviderCredentialRoute(route) ||
                 IsRunSelectionRoute(route))
+            {
                 context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.XContentTypeOptions = "nosniff";
+            }
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(
                 cancellationToken,

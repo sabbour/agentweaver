@@ -59,8 +59,10 @@ project Owner or PlatformAdmin. Every operation requires `api.read` and
 | `GET /api/v1/projects/{projectId}/byok-providers/{providerId}` | Projects `GET /api/projects/{projectId}/byok-providers/{providerId}` | `readProjectByokProviderDraft` |
 | `POST /api/v1/projects/{projectId}/byok-providers` | Projects `POST /api/projects/{projectId}/byok-providers` | `createProjectByokProviderDraft` |
 | `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}` | Projects `PUT /api/projects/{projectId}/byok-providers/{providerId}` | `updateProjectByokProviderDraft` |
+| `GET /api/v1/platform/byok-providers/{providerId}/credential` | Identity Broker `GET /api/platform/byok-providers/{providerId}/credential` | `readPlatformByokProviderCredential` |
 | `PUT /api/v1/platform/byok-providers/{providerId}/credential` | Identity Broker `PUT /api/platform/byok-providers/{providerId}/credential` | `setPlatformByokProviderCredential` |
 | `DELETE /api/v1/platform/byok-providers/{providerId}/credential` | Identity Broker `DELETE /api/platform/byok-providers/{providerId}/credential` | `disablePlatformByokProviderCredential` |
+| `GET /api/v1/projects/{projectId}/byok-providers/{providerId}/credential` | Identity Broker `GET /api/projects/{projectId}/byok-providers/{providerId}/credential` | `readProjectByokProviderCredential` |
 | `PUT /api/v1/projects/{projectId}/byok-providers/{providerId}/credential` | Identity Broker `PUT /api/projects/{projectId}/byok-providers/{providerId}/credential` | `setProjectByokProviderCredential` |
 | `DELETE /api/v1/projects/{projectId}/byok-providers/{providerId}/credential` | Identity Broker `DELETE /api/projects/{projectId}/byok-providers/{providerId}/credential` | `disableProjectByokProviderCredential` |
 | `PUT /api/v1/platform/model-pricing/rate-cards/{id}/{version}` | Events `PUT /api/platform/model-pricing/rate-cards/{id}/{version}` | `savePlatformManualRuntimeRateCard` |
@@ -77,7 +79,7 @@ verifies the linked rate card against Events during key publication. Activation 
 `Available` platform provider with stored credential and pricing evidence.
 Deactivation requires `expectedSettingsRevision`.
 
-Credential `PUT` routes are write-only and store raw API keys in the dedicated
+Credential `GET` status routes return only `scope`, `projectId`, `providerId`, `providerRevision`, `state` (`not_set`, `enabled`, `disabled`, `pending`, or `quarantined`), and `credentialRevision` with `Cache-Control: no-store`. Credential `PUT` routes are write-only and store raw API keys in the dedicated
 BYOK Key Vault (`byok-<scope>-<providerId>`). Responses and logs never include
 the key, key hashes, or vault secret names. Each `PUT` accepts `operationId`,
 `expectedProviderRevision`, `expectedCredentialRevision`, and one mode: `apiKey`

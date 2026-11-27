@@ -89,6 +89,17 @@ internal static class ModelProviderCredentialPublicationV2Endpoints
                 cancellationToken))
             .WithName("ReadBrokerModelProviderCredentialOperationV2");
 
+        group.MapPost("/status-check", (
+                HttpContext context,
+                ModelProviderCredentialPublicationV2Service service,
+                CancellationToken cancellationToken) =>
+            HandleAsync<ModelProviderCredentialStatusCheckRequest, ModelProviderCredentialStatusCheckResponse>(
+                context,
+                req => req.IsValid && MatchesToken(context.User, req.OperationId, req.Scope, req.ProjectId, req.ProviderId, req.ActorId, req.Issuer),
+                req => service.CheckStatusAsync(req, cancellationToken),
+                cancellationToken))
+            .WithName("CheckBrokerModelProviderCredentialStatusV2");
+
         return app;
     }
 
