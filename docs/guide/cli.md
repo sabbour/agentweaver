@@ -819,7 +819,7 @@ grant either role.
 ```text
 agentweaver auth login --scope projects.admin --project-id <projectId>
 agentweaver project byok list --project-id <projectId> [other target options]
-agentweaver project byok show <providerId> --project-id <projectId> [other target options]
+agentweaver project byok show <providerId> --project-id <projectId> [--credential-status] [other target options]
 agentweaver project byok add --project-id <projectId> --name <name> --type <openai|azure|anthropic>
     --base-url <https-url> --model <deployment> [metadata options] [--operation-id <guid>]
     [--rate-card-id <id> --rate-card-version <version>]
@@ -846,9 +846,13 @@ removed or changed role is denied.
 `list` reads every cursor page. Its JSON output contains the page switch
 metadata and one `providers` array.
 Use the stable `providerId` field from `list` or `add` with `show` and
-`update`; the provider name is display text and can change. `add` creates a
-Draft. `update` writes a complete metadata revision and requires the current
-`--expected-revision`. The metadata options and write recovery rules match
+`update`; the provider name is display text and can change. Pass
+`--credential-status` to `project byok show` to read the saved credential
+state (`not_set`, `enabled`, `disabled`, `pending`, or `quarantined`) and both
+revision numbers (`providerRevision` and `credentialRevision`) without
+returning key bytes. `add` creates a Draft. `update` writes a complete metadata
+revision and requires the current `--expected-revision`. The metadata options
+and write recovery rules match
 [platform BYOK](#manage-platform-byok-provider-drafts).
 
 `prices` searches Azure Retail meter candidates through the authenticated

@@ -1020,7 +1020,8 @@ public sealed partial class GatewayClient : IGatewayClient
             "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
             "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or
             "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or "writePlatformNativeAcsPolicy" or
-            "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions";
+            "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions" or
+            "readProjectByokProviderCredential";
         if (hidePolicyEvidence)
             evidence["responseBody"] = "[REDACTED]";
 
@@ -1141,6 +1142,12 @@ public sealed partial class GatewayClient : IGatewayClient
                 // Keep the response usable by its caller; only the separate evidence copy is redacted.
                 if (contentType is "application/json" or "application/problem+json")
                 {
+                    if (operationId == "readProjectByokProviderCredential" &&
+                        (int)response.StatusCode == 200 &&
+                        HasDuplicateTopLevelKeys(bytes))
+                    {
+                        throw new InvalidDataException("The Gateway response contained duplicate JSON fields.");
+                    }
                     responseBody = ParseJson(bytes);
                     if (recordEvidence && !hidePolicyEvidence)
                         evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
@@ -1177,16 +1184,18 @@ public sealed partial class GatewayClient : IGatewayClient
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            evidence["error"] = operationId is "validateProjectNativeAcsPolicy" or "listProjectGovernanceDecisions"
+            evidence["error"] = operationId is "validateProjectNativeAcsPolicy" or
+                "listProjectGovernanceDecisions" or "readProjectByokProviderCredential"
                 ? "[REDACTED]"
                 : RedactText(exception.Message);
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 throw;
-            throw new GatewayTransportException(
-                exception is OperationCanceledException && !ct.IsCancellationRequested
-                    ? "The Gateway request timed out."
-                    : RedactText(exception.Message),
-                exception);
+            var transportMessage = exception is OperationCanceledException && !ct.IsCancellationRequested
+                ? "The Gateway request timed out."
+                : operationId == "readProjectByokProviderCredential"
+                    ? "The Gateway request failed."
+                    : RedactText(exception.Message);
+            throw new GatewayTransportException(transportMessage, exception);
         }
         finally
         {
@@ -1472,6 +1481,29 @@ public sealed partial class GatewayClient : IGatewayClient
                normalized.Contains("kubeconfig", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("storagestate", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("signedurl", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasDuplicateTopLevelKeys(byte[] bytes)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = 32 });
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.PropertyName && reader.CurrentDepth == 1)
+                {
+                    var name = reader.GetString();
+                    if (name is not null && !keys.Add(name))
+                        return true;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        return false;
     }
 
     private static JsonNode? ParseJson(byte[] bytes)
