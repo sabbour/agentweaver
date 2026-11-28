@@ -1371,7 +1371,11 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(2, items.Count);
         Assert.Equal(stateBeforeFirstPage, await CapturePolicyTableStateAsync());
         var expectedRevisions = await db.NativeAcsPolicyRevisions.AsNoTracking()
-            .Where(item => item.PolicyId == policyId && item.Revision <= snapshot)
+            .Where(item =>
+                item.ScopeType == NativeAcsPolicyScopeType.Platform &&
+                item.ScopeId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.PolicyId == policyId &&
+                item.Revision <= snapshot)
             .OrderByDescending(item => item.Revision)
             .Select(item => item.Revision)
             .ToArrayAsync();

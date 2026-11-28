@@ -546,6 +546,19 @@ public sealed partial class ProjectsConfigService
         string projectId,
         CancellationToken cancellationToken)
     {
+        var grants = NativeAcsPolicyStore.EnsureWriteAuthorized(
+            caller, NativeAcsPolicyScopeType.Project, projectId);
+        _ = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureCurrentProjectWriteGrantAsync(caller, projectId, grants, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal async Task EnsureFirstProjectPolicyWriteAuthorAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(caller);
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
@@ -556,6 +569,16 @@ public sealed partial class ProjectsConfigService
             throw ProjectConfigException.NotFound();
         var grants = NativeAcsPolicyStore.EnsureWriteAuthorized(
             caller, NativeAcsPolicyScopeType.Project, projectId);
+        await EnsureCurrentProjectWriteGrantAsync(caller, projectId, grants, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task EnsureCurrentProjectWriteGrantAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        IReadOnlyList<ProjectAuthorizationGrant> grants,
+        CancellationToken cancellationToken)
+    {
         var ids = grants.Select(grant => grant.AssignmentId).ToArray();
         var current = await (
                 from assignment in db.RoleAssignments.AsNoTracking()
