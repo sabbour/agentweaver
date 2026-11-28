@@ -177,6 +177,7 @@ test('Projects column updates use exact grants', () => {
     'projects_config.model_provider_credential_preflights',
     'projects_config.model_provider_host_requests',
     'projects_config.native_acs_policy_heads',
+    'projects_config.native_acs_project_policy_baselines',
     'projects_config.project_governance_decision_stream_heads',
   ]);
 });
@@ -559,8 +560,19 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 158);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 159);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
+  const projectPolicyBaselines = projectsConfig.tables.find(table =>
+    table.table === 'native_acs_project_policy_baselines');
+  assert.deepEqual(projectPolicyBaselines.privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(projectPolicyBaselines.updateColumns, [
+    'state',
+    'revoked_by_issuer',
+    'revoked_by_actor_id',
+    'revoked_reason',
+    'revoked_correlation_id',
+    'revoked_at',
+  ]);
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'installation_identity').privileges, ['SELECT']);
   const reservation = projectsConfig.tables.find(table => table.table === 'model_provider_reference_reservations');
   assert.match(reservation.mutationDenialGuards.find(guard =>
@@ -595,8 +607,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [24, 8, 4, 4, 26]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 66);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [26, 8, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 68);
   assert.deepEqual(
     orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
     { signature: 'guard_terminal_cleanup_recovery()', execute: false });

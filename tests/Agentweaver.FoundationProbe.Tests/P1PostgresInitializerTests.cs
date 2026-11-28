@@ -1078,6 +1078,30 @@ public sealed class P1PostgresInitializerTests
         throw new DirectoryNotFoundException("The P1 PostgreSQL source plan was not found above the test output directory.");
     }
 
+    private static MutationDenialGuardPlan[] ProjectPolicyBaselineGuards() =>
+    [
+        new("native_acs_project_policy_baselines_insert_guard",
+            "guard_native_acs_project_policy_baseline_insert()", 7,
+            "new native ACS project policy baselines must start Approved with no pin, revoke, or consume state", "55000",
+            typeof(InitializerChecks)
+                .GetField("ProjectPolicyBaselineInsertFunctionSource",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .GetRawConstantValue() as string),
+        new("native_acs_project_policy_baselines_transition_guard",
+            "guard_native_acs_project_policy_baseline_transition()", 19,
+            "invalid native ACS project policy baseline state transition", "55000",
+            typeof(InitializerChecks)
+                .GetField("ProjectPolicyBaselineTransitionFunctionSource",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .GetRawConstantValue() as string),
+        new("native_acs_project_policy_baselines_no_delete",
+            "reject_immutable_record_mutation()", 11,
+            "records in %.% are immutable", "55000"),
+        new("native_acs_project_policy_baselines_no_truncate",
+            "reject_immutable_record_mutation()", 34,
+            "records in %.% are immutable", "55000"),
+    ];
+
     private static MutationDenialGuardPlan[] GovernanceDecisionHeadGuards() =>
     [
         new("project_governance_decision_head_initialize",
@@ -1112,6 +1136,15 @@ public sealed class P1PostgresInitializerTests
                 new TablePlan("native_acs_policy_heads", ["SELECT", "INSERT"], null, false, null)
                 {
                     UpdateColumns = ["current_revision", "updated_at"],
+                },
+                new TablePlan("native_acs_project_policy_baselines", ["SELECT", "INSERT"], null, true, null,
+                    ProjectPolicyBaselineGuards())
+                {
+                    UpdateColumns =
+                    [
+                        "state", "revoked_by_issuer", "revoked_by_actor_id",
+                        "revoked_reason", "revoked_correlation_id", "revoked_at",
+                    ],
                 },
                 new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
                     GovernanceDecisionHeadGuards())
@@ -1322,6 +1355,15 @@ public sealed class P1PostgresInitializerTests
                 AppendOnlyTable("native_acs_policy_idempotency"),
                 AppendOnlyTable("native_acs_policy_change_audit"),
                 AppendOnlyTable("native_acs_policy_outbox"),
+                new TablePlan("native_acs_project_policy_baselines", ["SELECT", "INSERT"], null, true, null,
+                    ProjectPolicyBaselineGuards())
+                {
+                    UpdateColumns =
+                    [
+                        "state", "revoked_by_issuer", "revoked_by_actor_id",
+                        "revoked_reason", "revoked_correlation_id", "revoked_at",
+                    ],
+                },
                 new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
                     GovernanceDecisionHeadGuards()) with
                 {
@@ -1381,6 +1423,8 @@ public sealed class P1PostgresInitializerTests
                 new("require_native_acs_policy_head_advance()", false),
                 new("require_governance_decision_head_initialize()", false),
                 new("require_governance_decision_head_advance()", false),
+                new("guard_native_acs_project_policy_baseline_insert()", false),
+                new("guard_native_acs_project_policy_baseline_transition()", false),
                 new("reject_governance_decision_head_removal()", false),
                 new("require_governance_checkpoint_anchor()", false),
                 new("stamp_governance_decision_transaction_id()", false),
