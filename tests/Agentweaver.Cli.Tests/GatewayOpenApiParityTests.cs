@@ -512,6 +512,61 @@ public sealed class GatewayOpenApiParityTests
                 effectiveAuthority = Array.Empty<object>(),
             });
         });
+        gatewayApp.MapGet("/api/v1/policies/platform/decisions", (HttpContext ctx) =>
+        {
+            requestTrace.Add("gateway:decisions:platform");
+            if (ctx.Request.Headers.TryGetValue("X-Agentweaver-Project-Authorization", out var projAuth))
+                observedProjectAuthHeaders.Add(projAuth.ToString());
+            if (ctx.Request.Headers.Authorization.ToString() != $"Bearer {accessToken}" ||
+                ctx.Request.Headers["X-Agentweaver-Tenant"].ToString() != tenantId)
+                return Results.Unauthorized();
+            if (ctx.Request.Query["resourceType"] != "platform_policy" ||
+                ctx.Request.Query["resourceId"] != "canonical")
+                return Results.BadRequest(new { code = "governance_decision_history_request_invalid" });
+
+            string hash1 = new('c', 64);
+            string hash2 = new('d', 64);
+            return Results.Json(new
+            {
+                scopeType = "platform",
+                scopeId = "default",
+                resourceType = "platform_policy",
+                resourceId = "canonical",
+                items = new object[]
+                {
+                    new
+                    {
+                        decisionId = "00000000-0000-0000-0000-000000000010",
+                        sequence = 10L,
+                        previousHash = hash1,
+                        recordHash = hash2,
+                        recordedAt = "2026-11-27T00:00:00Z",
+                        decision = new
+                        {
+                            decisionType = "platform_policy_preparation",
+                            outcome = "allow",
+                            approvalState = "notRequired",
+                            policyRevision = (long?)4,
+                            policyArtifactSha256 = hash1,
+                            selectedRule = "platform.allow",
+                            interventionPoint = (string?)null,
+                            requestId = (string?)null,
+                            actionId = (string?)null,
+                            runId = (string?)null,
+                            agentId = (string?)null,
+                            roleId = (string?)null,
+                            ownerReceiptId = "prep-10",
+                            ownerReceiptPosition = (long?)1,
+                            compilerGeneration = (string?)null,
+                            applicationGeneration = (string?)null,
+                            correlationId = "corr-10",
+                            decidedAt = "2026-11-27T00:00:00Z",
+                        },
+                    },
+                },
+                nextBeforeSequence = (long?)null,
+            });
+        });
         gatewayApp.MapGet("/api/v1/policies/projects/{projectId}/decisions", (HttpContext ctx, string projectId) =>
         {
             requestTrace.Add($"gateway:decisions:{projectId}");
@@ -664,7 +719,7 @@ public sealed class GatewayOpenApiParityTests
         vault.Set(authIdentity.Account, initialRefresh);
         try
         {
-            async Task<(int ExitCode, string Stdout, string Stderr)> RunApphostAsync(params string[] extraArgs)
+            async Task<(int ExitCode, string Stdout, string Stderr)> RunApphostCommandAsync(params string[] allArgs)
             {
                 using Process process = new()
                 {
@@ -676,18 +731,13 @@ public sealed class GatewayOpenApiParityTests
                     },
                 };
                 process.StartInfo.Environment["SSL_CERT_FILE"] = caFile;
-                foreach (string arg in new[]
-                {
-                    "policy", "decisions",
-                    "--scope", "project",
-                    "--resource-type", "skill",
-                    "--resource-id", skillId,
+                foreach (string arg in allArgs.Concat([
                     "--gateway-url", gatewayAddress,
                     "--broker-issuer", brokerAddress + "/",
                     "--client-id", "agentweaver-cli",
                     "--api-audience", "agentweaver",
                     "--tenant-id", tenantId,
-                }.Concat(extraArgs))
+                ]))
                     process.StartInfo.ArgumentList.Add(arg);
 
                 Assert.True(process.Start());
@@ -696,6 +746,16 @@ public sealed class GatewayOpenApiParityTests
                 await process.WaitForExitAsync();
                 return (process.ExitCode, await stdout, await stderr);
             }
+
+            Task<(int ExitCode, string Stdout, string Stderr)> RunApphostAsync(params string[] extraArgs) =>
+                RunApphostCommandAsync(
+                    [
+                        "policy", "decisions",
+                        "--scope", "project",
+                        "--resource-type", "skill",
+                        "--resource-id", skillId,
+                        .. extraArgs,
+                    ]);
 
             var page1 = await RunApphostAsync("--project-id", allowedProject, "--page-size", "2");
             Assert.True(page1.ExitCode == 0, $"Exit={page1.ExitCode} Trace=[{string.Join(",", requestTrace)}] Stderr={page1.Stderr} Stdout={page1.Stdout}");
@@ -712,6 +772,35 @@ public sealed class GatewayOpenApiParityTests
             var json2 = JsonNode.Parse(page2.Stdout)!.AsObject();
             Assert.Single(json2["items"]!.AsArray());
             Assert.Null(json2["nextBeforeSequence"]);
+
+            var platformExportPath = Path.Combine(tempDir, "platform-decisions.json");
+            var platformExport = await RunApphostCommandAsync(
+                "policy", "decisions", "--scope", "platform", "--page-size", "1", "--output", platformExportPath);
+            Assert.Equal(0, platformExport.ExitCode);
+            Assert.Empty(platformExport.Stdout);
+            Assert.Empty(platformExport.Stderr);
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(platformExportPath));
+            var platformJson = JsonNode.Parse(await File.ReadAllTextAsync(platformExportPath))!.AsObject();
+            Assert.Equal("platform", platformJson["scopeType"]!.GetValue<string>());
+            Assert.Single(platformJson["items"]!.AsArray());
+
+            var projectExportPath = Path.Combine(tempDir, "project-decisions-p1.json");
+            var projectExport = await RunApphostAsync(
+                "--project-id", allowedProject, "--page-size", "2", "--output", projectExportPath);
+            Assert.Equal(0, projectExport.ExitCode);
+            Assert.Empty(projectExport.Stdout);
+            Assert.Empty(projectExport.Stderr);
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(projectExportPath));
+            Assert.Equal(page1.Stdout, await File.ReadAllTextAsync(projectExportPath));
+
+            var deniedExportPath = Path.Combine(tempDir, "denied-decisions.json");
+            var deniedExport = await RunApphostAsync(
+                "--project-id", deniedProject, "--page-size", "2", "--output", deniedExportPath);
+            Assert.Equal(1, deniedExport.ExitCode);
+            Assert.Empty(deniedExport.Stdout);
+            Assert.Contains("HTTP 403", deniedExport.Stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("fixture-canary-secret", deniedExport.Stderr, StringComparison.Ordinal);
+            Assert.False(File.Exists(deniedExportPath));
 
             var denied = await RunApphostAsync("--project-id", deniedProject, "--page-size", "2");
             Assert.Equal(1, denied.ExitCode);

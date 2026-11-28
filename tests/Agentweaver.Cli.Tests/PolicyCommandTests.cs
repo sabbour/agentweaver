@@ -2361,9 +2361,12 @@ public sealed class PolicyCommandTests
         var error = new StringWriter();
         var exitCode = await CliApplication.RunAsync(["--help"], new CliRuntimeOptions { Output = output, Error = error });
         Assert.Equal(0, exitCode);
-        Assert.Contains("agentweaver policy decisions --scope platform", output.ToString(), StringComparison.Ordinal);
         Assert.Contains(
-            "agentweaver policy decisions --scope project --project-id <id> --resource-type skill --resource-id <skill-id>",
+            "agentweaver policy decisions --scope platform [--policy-id <id>] [--page-size <1-100>] [--before-sequence <sequence>] [--output <new-file>]",
+            output.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "agentweaver policy decisions --scope project --project-id <id> --resource-type skill --resource-id <skill-id> [--page-size <1-100>] [--before-sequence <sequence>] [--output <new-file>]",
             output.ToString(),
             StringComparison.Ordinal);
     }
@@ -2726,6 +2729,489 @@ public sealed class PolicyCommandTests
         Assert.Empty(fixture.Output.ToString());
     }
 
+    [Theory]
+    [InlineData("platform", false)]
+    [InlineData("platform", true)]
+    [InlineData("project", false)]
+    [InlineData("project", true)]
+    public async Task DecisionExportMatchesStdoutBytesRedactsAndPreservesLargeCursorSilently(string scope, bool empty)
+    {
+        const long largeCursor = 9_007_199_254_740_993L;
+        var resourceId = scope == "project" ? "Skill.Alpha/v1" : "canonical";
+        var resourceType = scope == "project" ? "skill" : "platform_policy";
+        var scopeId = scope == "project" ? ProjectId : "default";
+        var body = empty
+            ? DecisionHistoryBody(resourceId, null, [], scopeType: scope, scopeId: scopeId, resourceType: resourceType)
+            : DecisionHistoryBody(
+                resourceId,
+                largeCursor,
+                [
+                    DecisionHistoryItemJson(
+                        sequence: 9_007_199_254_740_994L,
+                        decisionType: scope == "project" ? "skill.trust.evidence.v1" : "platform_policy_preparation",
+                        outcome: "allow",
+                        approvalState: "approved",
+                        policyRevision: 4,
+                        includeSensitive: true),
+                    DecisionHistoryItemJson(
+                        sequence: largeCursor,
+                        decisionType: scope == "project" ? "skill.trust.evidence.v1" : "platform_policy_preparation",
+                        outcome: "pending",
+                        approvalState: "pending",
+                        policyRevision: null,
+                        includeSensitive: true),
+                ],
+                scopeType: scope,
+                scopeId: scopeId,
+                resourceType: resourceType);
+
+        var stdoutFixture = new Fixture { UseGatewayContract = true, Body = body };
+        string[] baseArgs = scope == "project"
+            ? ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", resourceId, "--page-size", "2"]
+            : ["decisions", "--scope", "platform", "--page-size", "2"];
+        Assert.Equal(0, await stdoutFixture.Run(baseArgs));
+        var expectedBytes = Encoding.UTF8.GetBytes(stdoutFixture.Output.ToString());
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"aw-decision-export-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(tempDir, "nested", "decisions-export.json");
+        try
+        {
+            var fileFixture = new Fixture { UseGatewayContract = true, Body = body };
+            Assert.Equal(0, await fileFixture.Run([.. baseArgs, "--output", outputPath]));
+            Assert.Empty(fileFixture.Output.ToString());
+            Assert.Empty(fileFixture.Error.ToString());
+            Assert.True(File.Exists(outputPath));
+
+            var actualBytes = await File.ReadAllBytesAsync(outputPath);
+            Assert.Equal(expectedBytes, actualBytes);
+            // UTF-8 without BOM
+            Assert.False(actualBytes.Length >= 3 && actualBytes[0] == 0xEF && actualBytes[1] == 0xBB && actualBytes[2] == 0xBF);
+
+            var fileText = Encoding.UTF8.GetString(actualBytes);
+            foreach (var forbidden in new[]
+            {
+                "brokerIssuer", "brokerSubject", "humanEntraOid", "tenantId",
+                "effectiveRoleRevisions", "assignmentId", Canary, "https://sensitive.example/",
+            })
+            {
+                Assert.DoesNotContain(forbidden, fileText, StringComparison.Ordinal);
+            }
+
+            if (!empty)
+                Assert.Contains($"\"nextBeforeSequence\": {largeCursor}", fileText, StringComparison.Ordinal);
+
+            Assert.DoesNotContain(outputPath, fileFixture.PolicyQuery ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("decisions-export.json", fileFixture.Client!.Calls.Last().ToJsonString(), StringComparison.Ordinal);
+            if (OperatingSystem.IsLinux())
+            {
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(outputPath));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("platform", false)]
+    [InlineData("platform", true)]
+    [InlineData("project", false)]
+    [InlineData("project", true)]
+    public async Task DecisionDispatchExceptionRedactsEvidenceForBothScopesWithAndWithoutOutput(string scope, bool withOutput)
+    {
+        const string unredactedCanary = "unredacted-dispatch-canary-42";
+        var tempDir = Path.Combine(Path.GetTempPath(), $"aw-decision-dispatch-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(tempDir, "decisions.json");
+        try
+        {
+            var fixture = new Fixture
+            {
+                UseGatewayContract = true,
+                PolicyException = new HttpRequestException($"upstream failure {unredactedCanary}"),
+            };
+            string[] args = scope == "project"
+                ? ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1"]
+                : ["decisions", "--scope", "platform"];
+            if (withOutput)
+                args = [.. args, "--output", outputPath];
+
+            Assert.Equal(1, await fixture.Run(args));
+            Assert.Empty(fixture.Output.ToString());
+            Assert.DoesNotContain(unredactedCanary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["error"]!.GetValue<string>());
+            Assert.False(File.Exists(outputPath));
+            Assert.False(Directory.Exists(tempDir));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("platform", HttpStatusCode.Forbidden, "native_acs_forbidden", "denied (HTTP 403)")]
+    [InlineData("project", HttpStatusCode.NotFound, "project_not_found", "HTTP 404")]
+    [InlineData("platform", HttpStatusCode.OK, "malformed", "invalid policy response")]
+    [InlineData("project", HttpStatusCode.OK, "malformed", "invalid policy response")]
+    public async Task DecisionExportFailureOrMalformedRowCreatesNoFileAndNoStdout(
+        string scope, HttpStatusCode status, string mode, string expectedError)
+    {
+        var body = mode == "malformed"
+            ? DecisionHistoryBody(
+                scope == "project" ? "skill-1" : "canonical",
+                null,
+                [
+                    DecisionHistoryItemJson(10),
+                    DecisionHistoryItemJson(11), // out of order on later row
+                ],
+                scopeType: scope,
+                scopeId: scope == "project" ? ProjectId : "default",
+                resourceType: scope == "project" ? "skill" : "platform_policy")
+            : $$"""{"code":"{{mode}}","detail":"{{Canary}}"}""";
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"aw-decision-fail-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(tempDir, "nested", "decisions.json");
+        try
+        {
+            var fixture = new Fixture
+            {
+                UseGatewayContract = true,
+                Status = status,
+                MediaType = status == HttpStatusCode.OK ? "application/json" : "application/problem+json",
+                Body = body,
+            };
+            string[] args = scope == "project"
+                ? ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--output", outputPath]
+                : ["decisions", "--scope", "platform", "--output", outputPath];
+
+            Assert.Equal(1, await fixture.Run(args));
+            Assert.Empty(fixture.Output.ToString());
+            Assert.Contains(expectedError, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, fixture.Error.ToString(), StringComparison.Ordinal);
+            Assert.Equal("[REDACTED]", fixture.Client!.Calls.Last()["responseBody"]!.GetValue<string>());
+            Assert.False(File.Exists(outputPath));
+            Assert.False(Directory.Exists(tempDir));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("blank")]
+    [InlineData("missing-value")]
+    [InlineData("repeated")]
+    public async Task DecisionExportRejectsInvalidOutputFlagSyntaxBeforeDiscovery(string mode)
+    {
+        var fixture = new Fixture();
+        string[] args = mode switch
+        {
+            "empty" => ["decisions", "--scope", "platform", "--output", ""],
+            "blank" => ["decisions", "--scope", "platform", "--output", "   "],
+            "missing-value" => ["decisions", "--scope", "platform", "--output"],
+            _ => ["decisions", "--scope", "platform", "--output", "a.json", "--output", "b.json"],
+        };
+
+        Assert.Equal(1, await fixture.Run(args));
+        Assert.Equal(0, fixture.RequestCount);
+        Assert.Empty(fixture.Output.ToString());
+        if (mode is "empty" or "blank")
+            Assert.Equal("Choose a valid policy decision export file path." + Environment.NewLine, fixture.Error.ToString());
+    }
+
+    [Theory]
+    [InlineData("report.json:notes")]
+    [InlineData(@"C:\reports\report.json:notes")]
+    [InlineData("C:report.json:notes")]
+    [InlineData("report.json::$DATA")]
+    [InlineData("report.json:")]
+    [InlineData(@"\\.\NUL")]
+    [InlineData(@"\\.\C:\report.json")]
+    [InlineData(@"\\?\C:\report.json")]
+    [InlineData(@"\\?\UNC\server\share\report.json")]
+    [InlineData(@"\??\C:\report.json")]
+    [InlineData("//./NUL")]
+    [InlineData("//?/C:/report.json")]
+    [InlineData("/??/C:/report.json")]
+    [InlineData(@"\/./report.json")]
+    [InlineData("NUL")]
+    [InlineData("NUL.json")]
+    [InlineData(@"subdir\cOn.json")]
+    [InlineData("subdir/cOn.json")]
+    [InlineData("CONOUT$")]
+    [InlineData("COM1.log")]
+    [InlineData("LPT\u00B2.json")]
+    [InlineData("AUX .json")]
+    [InlineData("report?.json")]
+    [InlineData(@"folder|name\output.json")]
+    [InlineData("folder<name>/output*.json")]
+    public async Task DecisionExportRejectsUnsafeWindowsPathsBeforeDiscovery(string badPath)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        foreach (var scope in new[] { "platform", "project" })
+        {
+            var fixture = new Fixture();
+            string[] args = scope == "project"
+                ? ["decisions", "--scope", "project", "--project-id", ProjectId, "--resource-type", "skill", "--resource-id", "skill-1", "--output", badPath]
+                : ["decisions", "--scope", "platform", "--output", badPath];
+
+            Assert.Equal(1, await fixture.Run(args));
+            Assert.Equal(0, fixture.RequestCount);
+            Assert.Empty(fixture.Output.ToString());
+            Assert.Equal("Choose a valid policy decision export file path." + Environment.NewLine, fixture.Error.ToString());
+        }
+    }
+
+    [Fact]
+    public async Task DecisionExportAcceptsWindowsNearMatchesNormalDriveAndLexicalUnc()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var unc = PolicyCommands.NormalizeDecisionOutputPath(@"\\nonexistent-server.invalid\share\report.json");
+        Assert.Equal(@"\\nonexistent-server.invalid\share\report.json", unc);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"aw-win-paths-{Guid.NewGuid():N}");
+        try
+        {
+            foreach (var fileName in new[] { "NULL.json", "COM10.json" })
+            {
+                var target = Path.Combine(tempDir, fileName);
+                var fixture = new Fixture
+                {
+                    UseGatewayContract = true,
+                    Body = DecisionHistoryBody("canonical", null, []),
+                };
+                Assert.Equal(0, await fixture.Run("decisions", "--scope", "platform", "--output", target));
+                Assert.Empty(fixture.Output.ToString());
+                Assert.Empty(fixture.Error.ToString());
+                Assert.True(File.Exists(target));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DecisionExportOnUnixAllowsColonsBackslashesAndReservedWindowsNames()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), $"aw-unix-paths-{Guid.NewGuid():N}")).FullName;
+        try
+        {
+            foreach (var name in new[] { "NUL.json", @"report:1\file.json" })
+            {
+                var target = Path.Combine(tempDir, name);
+                var fixture = new Fixture
+                {
+                    UseGatewayContract = true,
+                    Body = DecisionHistoryBody("canonical", null, []),
+                };
+                Assert.Equal(0, await fixture.Run("decisions", "--scope", "platform", "--output", target));
+                Assert.Empty(fixture.Output.ToString());
+                Assert.Empty(fixture.Error.ToString());
+                Assert.True(File.Exists(target));
+            }
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DecisionExportRefusesExistingFileDirectoryLateCollisionAndSymlinks()
+    {
+        var tempDir = Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), $"aw-decision-collision-{Guid.NewGuid():N}")).FullName;
+        try
+        {
+            var existingFile = Path.Combine(tempDir, "existing.json");
+            await File.WriteAllTextAsync(existingFile, "keep-me");
+            var preflightFileFixture = new Fixture();
+            Assert.Equal(1, await preflightFileFixture.Run("decisions", "--scope", "platform", "--output", existingFile));
+            Assert.Equal(0, preflightFileFixture.RequestCount);
+            Assert.Empty(preflightFileFixture.Output.ToString());
+            Assert.Equal("The policy decision export output file already exists." + Environment.NewLine, preflightFileFixture.Error.ToString());
+            Assert.Equal("keep-me", await File.ReadAllTextAsync(existingFile));
+
+            var existingDir = Directory.CreateDirectory(Path.Combine(tempDir, "existing-dir")).FullName;
+            var preflightDirFixture = new Fixture();
+            Assert.Equal(1, await preflightDirFixture.Run("decisions", "--scope", "platform", "--output", existingDir));
+            Assert.Equal(0, preflightDirFixture.RequestCount);
+            Assert.Empty(preflightDirFixture.Output.ToString());
+            Assert.Equal("The policy decision export output file already exists." + Environment.NewLine, preflightDirFixture.Error.ToString());
+            Assert.True(Directory.Exists(existingDir));
+
+            var lateCollisionPath = Path.Combine(tempDir, "late-collision.json");
+            var lateFixture = new Fixture
+            {
+                UseGatewayContract = true,
+                Body = DecisionHistoryBody("canonical", null, []),
+                OnPolicyRequest = () => File.WriteAllText(lateCollisionPath, "created-during-request"),
+            };
+            Assert.Equal(1, await lateFixture.Run("decisions", "--scope", "platform", "--output", lateCollisionPath));
+            Assert.Empty(lateFixture.Output.ToString());
+            Assert.Equal("The policy decision export file could not be created." + Environment.NewLine, lateFixture.Error.ToString());
+            Assert.Equal("created-during-request", await File.ReadAllTextAsync(lateCollisionPath));
+
+            // Symlink checks (live symlink to sentinel, and dangling symlink)
+            var sentinelPath = Path.Combine(tempDir, "sentinel.json");
+            await File.WriteAllTextAsync(sentinelPath, "sentinel-content");
+            var liveLinkPath = Path.Combine(tempDir, "live-link.json");
+            var danglingTarget = Path.Combine(tempDir, "missing-target.json");
+            var danglingLinkPath = Path.Combine(tempDir, "dangling-link.json");
+            bool symlinksCreated;
+            try
+            {
+                File.CreateSymbolicLink(liveLinkPath, sentinelPath);
+                File.CreateSymbolicLink(danglingLinkPath, danglingTarget);
+                symlinksCreated = true;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                symlinksCreated = false;
+            }
+
+            if (symlinksCreated)
+            {
+                var liveLinkFixture = new Fixture
+                {
+                    UseGatewayContract = true,
+                    Body = DecisionHistoryBody("canonical", null, []),
+                };
+                Assert.Equal(1, await liveLinkFixture.Run("decisions", "--scope", "platform", "--output", liveLinkPath));
+                Assert.Empty(liveLinkFixture.Output.ToString());
+                Assert.Equal("sentinel-content", await File.ReadAllTextAsync(sentinelPath));
+                Assert.True(new FileInfo(liveLinkPath).LinkTarget is not null);
+
+                var danglingFixture = new Fixture
+                {
+                    UseGatewayContract = true,
+                    Body = DecisionHistoryBody("canonical", null, []),
+                };
+                Assert.Equal(1, await danglingFixture.Run("decisions", "--scope", "platform", "--output", danglingLinkPath));
+                Assert.Empty(danglingFixture.Output.ToString());
+                Assert.False(File.Exists(danglingTarget));
+                Assert.True(new FileInfo(danglingLinkPath).LinkTarget is not null);
+            }
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("cancel-before")]
+    [InlineData("fail-after-create")]
+    [InlineData("cancel-after-create")]
+    [InlineData("fail-on-close")]
+    [InlineData("fail-on-close-after-cancel")]
+    public async Task DecisionExportHandlesCancellationAndPostCreationFailuresWithoutDeletingDestination(string mode)
+    {
+        var tempDir = Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), $"aw-decision-faults-{Guid.NewGuid():N}")).FullName;
+        var outputPath = Path.Combine(tempDir, "fault-output.json");
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            var fixture = new Fixture
+            {
+                UseGatewayContract = true,
+                Body = DecisionHistoryBody("canonical", null, []),
+            };
+
+            switch (mode)
+            {
+                case "cancel-before":
+                    fixture.DecisionExportStageHook = stage =>
+                    {
+                        if (stage == "before-create")
+                            cts.Cancel();
+                    };
+                    break;
+                case "fail-after-create":
+                    fixture.DecisionExportStageHook = stage =>
+                    {
+                        if (stage == "created")
+                            throw new IOException("simulated write failure");
+                    };
+                    break;
+                case "cancel-after-create":
+                    fixture.DecisionExportStageHook = stage =>
+                    {
+                        if (stage == "created")
+                            cts.Cancel();
+                    };
+                    break;
+                case "fail-on-close":
+                    fixture.DecisionExportStageHook = stage =>
+                    {
+                        if (stage == "closing")
+                            throw new IOException("simulated close failure");
+                    };
+                    break;
+                case "fail-on-close-after-cancel":
+                    fixture.DecisionExportStageHook = stage =>
+                    {
+                        if (stage == "created")
+                            cts.Cancel();
+                        if (stage == "closing")
+                            throw new IOException("simulated close failure after cancel");
+                    };
+                    break;
+            }
+
+            var exitCode = await fixture.RunWithCancellation(
+                cts.Token, "decisions", "--scope", "platform", "--output", outputPath);
+
+            Assert.Empty(fixture.Output.ToString());
+            if (mode == "cancel-before")
+            {
+                Assert.Equal(130, exitCode);
+                Assert.Equal("Operation cancelled." + Environment.NewLine, fixture.Error.ToString());
+                Assert.False(File.Exists(outputPath));
+            }
+            else if (mode is "cancel-after-create" or "fail-on-close-after-cancel")
+            {
+                Assert.Equal(130, exitCode);
+                Assert.Equal(
+                    "Policy decision export cancelled. Treat the output file as incomplete. Retry with a new file name." + Environment.NewLine,
+                    fixture.Error.ToString());
+                Assert.True(File.Exists(outputPath));
+            }
+            else
+            {
+                Assert.Equal(1, exitCode);
+                Assert.Equal(
+                    "The policy decision export did not finish. Treat the output file as incomplete. Retry with a new file name." + Environment.NewLine,
+                    fixture.Error.ToString());
+                Assert.True(File.Exists(outputPath));
+            }
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static string DecisionHistoryBody(
         string resourceId,
         long? nextBeforeSequence,
@@ -2790,6 +3276,8 @@ public sealed class PolicyCommandTests
         public GatewayClient? Client;
         public Func<int, string, CancellationToken, Task<HttpResponseMessage>>? ApplyResponse;
         public Action<string>? BeforePolicyApply;
+        public Action? OnPolicyRequest;
+        public Action<string>? DecisionExportStageHook;
         public string PolicyApplyStateDirectory = Path.Combine(
             AppContext.BaseDirectory, $"policy-apply-state-{Guid.NewGuid():N}");
         public bool UnsafePolicyApplyRequestBound;
@@ -2828,6 +3316,7 @@ public sealed class PolicyCommandTests
             new CliRuntimeOptions(GatewayClientFactory: this, Authentication: Authentication, Output: Output, Error: Error)
             {
                 PolicyApplyStateDirectory = this.PolicyApplyStateDirectory,
+                DecisionExportStageHook = this.DecisionExportStageHook,
             },
             ct);
 
@@ -2858,6 +3347,7 @@ public sealed class PolicyCommandTests
                     : null;
             if (PolicyException is not null)
                 throw PolicyException;
+            OnPolicyRequest?.Invoke();
             if (path == "/api/v1/policies/platform" && request.Method == HttpMethod.Put)
             {
                 BeforePolicyApply?.Invoke(PolicyBody!);

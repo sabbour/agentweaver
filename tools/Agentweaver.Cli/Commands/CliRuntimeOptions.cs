@@ -13,4 +13,5 @@ public sealed record CliRuntimeOptions(
     internal Stream? StandardInput { get; init; }
     internal bool? StandardInputRedirected { get; init; }
     internal string? PolicyApplyStateDirectory { get; init; }
+    internal Action<string>? DecisionExportStageHook { get; init; }
 }

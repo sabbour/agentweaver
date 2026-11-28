@@ -23,7 +23,7 @@ internal static class PolicyCommands
     private static readonly JsonSerializerOptions OutputJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     internal static async Task<int> RunAsync(
-        string[] args, CliRuntimeOptions runtime, HttpClient httpClient, TextWriter output, CancellationToken ct)
+        string[] args, CliRuntimeOptions runtime, HttpClient httpClient, TextWriter output, TextWriter error, CancellationToken ct)
     {
         if (args.Length == 0 || args[0] is not ("list" or "show" or "export" or "history" or "decisions" or "validate" or "apply"))
             throw new CliUsageException("Choose `list`, `show`, `export`, `history`, `decisions`, `validate`, or `apply`.");
@@ -41,8 +41,8 @@ internal static class PolicyCommands
             "export" => new[] { "scope", "revision", "output" },
             "history" => new[] { "scope", "page-size", "cursor" },
             "decisions" => projectScope
-                ? new[] { "scope", "resource-type", "resource-id", "page-size", "before-sequence" }
-                : new[] { "scope", "policy-id", "page-size", "before-sequence" },
+                ? new[] { "scope", "resource-type", "resource-id", "page-size", "before-sequence", "output" }
+                : new[] { "scope", "policy-id", "page-size", "before-sequence", "output" },
             "validate" => new[] { "scope", "input" },
             _ => new[] { "scope", "input", "expected-revision", "reason" },
         };
@@ -67,6 +67,8 @@ internal static class PolicyCommands
                 ? PolicyIdArgument(options.Single("policy-id"))
                 : null;
         var outputPath = command == "export" ? OutputFilePath(options.Single("output")) : null;
+        var decisionOutputOption = command == "decisions" ? options.Single("output") : null;
+        var decisionOutputPath = decisionOutputOption is not null ? DecisionOutputFilePath(decisionOutputOption) : null;
         var inputPath = command is "validate" or "apply"
             ? InputFilePath(options.Single("input"), command)
             : null;
@@ -309,6 +311,16 @@ internal static class PolicyCommands
             result = ExportSummary(result, outputPath!);
         }
 
+        if (command == "decisions" && decisionOutputPath is not null)
+        {
+            return await WriteNewDecisionFileAsync(
+                decisionOutputPath,
+                Encoding.UTF8.GetBytes(result.ToJsonString(OutputJson) + Environment.NewLine),
+                error,
+                runtime.DecisionExportStageHook,
+                ct).ConfigureAwait(false);
+        }
+
         await output.WriteLineAsync(result.ToJsonString(OutputJson)).ConfigureAwait(false);
         if (applyJournal is not null)
             PolicyApplyJournal.Complete(applyJournal.Path);
@@ -452,6 +464,98 @@ internal static class PolicyCommands
         if (File.Exists(path) || Directory.Exists(path))
             throw new CliUsageException("The policy export output file already exists.");
         return path;
+    }
+
+    internal static string DecisionOutputFilePath(string? value)
+    {
+        var fullPath = NormalizeDecisionOutputPath(value);
+        if (File.Exists(fullPath) || Directory.Exists(fullPath))
+            throw new CliUsageException("The policy decision export output file already exists.");
+        return fullPath;
+    }
+
+    internal static string NormalizeDecisionOutputPath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new CliUsageException("Choose a valid policy decision export file path.");
+        if (OperatingSystem.IsWindows())
+        {
+            var normalizedInput = value.Replace('/', '\\');
+            if (HasInvalidWindowsDecisionPath(normalizedInput))
+                throw new CliUsageException("Choose a valid policy decision export file path.");
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(value);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new CliUsageException("Choose a valid policy decision export file path.");
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            var normalizedFull = fullPath.Replace('/', '\\');
+            if (HasInvalidWindowsDecisionPath(normalizedFull))
+                throw new CliUsageException("Choose a valid policy decision export file path.");
+            return fullPath;
+        }
+
+        if (string.IsNullOrEmpty(Path.GetFileName(fullPath)))
+            throw new CliUsageException("Choose a valid policy decision export file path.");
+        return fullPath;
+    }
+
+    private static bool HasInvalidWindowsDecisionPath(string normalized)
+    {
+        if (normalized.StartsWith(@"\\.\", StringComparison.Ordinal) ||
+            normalized.StartsWith(@"\\?\", StringComparison.Ordinal) ||
+            normalized.StartsWith(@"\??\", StringComparison.Ordinal) ||
+            normalized is @"\\." or @"\\?" or @"\??")
+            return true;
+
+        for (var i = 0; i < normalized.Length; i++)
+        {
+            if (normalized[i] == ':' && !(i == 1 && char.IsAsciiLetter(normalized[0])))
+                return true;
+        }
+
+        var withoutDrive = normalized.Length >= 2 && char.IsAsciiLetter(normalized[0]) && normalized[1] == ':'
+            ? normalized[2..]
+            : normalized;
+        var lastSep = withoutDrive.LastIndexOf('\\');
+        var finalComponent = lastSep >= 0 ? withoutDrive[(lastSep + 1)..] : withoutDrive;
+        if (finalComponent.Length == 0)
+            return true;
+
+        foreach (var segment in withoutDrive.Split('\\', StringSplitOptions.RemoveEmptyEntries))
+        {
+            foreach (var c in segment)
+            {
+                if (c < 0x20 || c is '"' or '<' or '>' or '|' or '?' or '*')
+                    return true;
+            }
+        }
+
+        var dotIndex = finalComponent.IndexOf('.');
+        var stem = (dotIndex >= 0 ? finalComponent[..dotIndex] : finalComponent).TrimEnd(' ');
+        if (stem.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("NUL", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("CONIN$", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("CONOUT$", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (stem.Length == 4 &&
+            (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
+             stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
+            stem[3] is (>= '1' and <= '9') or '\u00B9' or '\u00B2' or '\u00B3')
+            return true;
+
+        return false;
     }
 
     private static JsonObject ProjectShow(
@@ -755,6 +859,85 @@ internal static class PolicyCommands
             File.Delete(path);
             throw;
         }
+    }
+
+    private static async Task<int> WriteNewDecisionFileAsync(
+        string path,
+        byte[] bytes,
+        TextWriter error,
+        Action<string>? stageHook,
+        CancellationToken ct)
+    {
+        stageHook?.Invoke("before-create");
+        ct.ThrowIfCancellationRequested();
+        FileStream stream;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+            ct.ThrowIfCancellationRequested();
+            var fileOptions = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous | FileOptions.WriteThrough,
+            };
+            if (!OperatingSystem.IsWindows())
+                fileOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            stream = new FileStream(path, fileOptions);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            throw new PolicyFailureException("The policy decision export file could not be created.");
+        }
+
+        var cancelledAfterCreate = false;
+        Exception? writeOrFlushError = null;
+        try
+        {
+            stageHook?.Invoke("created");
+            await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+            await stream.FlushAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            cancelledAfterCreate = true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            writeOrFlushError = exception;
+        }
+
+        Exception? closeError = null;
+        try
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+            stageHook?.Invoke("closing");
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            closeError = exception;
+        }
+
+        if (cancelledAfterCreate)
+        {
+            await error.WriteLineAsync(
+                "Policy decision export cancelled. Treat the output file as incomplete. Retry with a new file name.")
+                .ConfigureAwait(false);
+            return 130;
+        }
+
+        if (writeOrFlushError is not null || closeError is not null)
+        {
+            throw new PolicyFailureException(
+                "The policy decision export did not finish. Treat the output file as incomplete. Retry with a new file name.");
+        }
+
+        return 0;
     }
 
     private static JsonObject ProjectList(JsonNode? body, int pageSize)

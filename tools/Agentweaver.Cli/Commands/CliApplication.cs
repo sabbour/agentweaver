@@ -94,7 +94,7 @@ public static class CliApplication
                 var actualRuntime = runtime ?? new CliRuntimeOptions();
                 using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
                 return await PolicyCommands.RunAsync(
-                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, ct).ConfigureAwait(false);
+                    args[1..], actualRuntime, actualRuntime.HttpClient ?? ownedClient!, output, error, ct).ConfigureAwait(false);
             }
             if (args[0] == "run")
             {
@@ -588,8 +588,8 @@ public static class CliApplication
           agentweaver policy validate --scope project --project-id <id> --input <export-file> [target options]
           agentweaver policy apply --scope platform --input <export-file> --expected-revision <revision|none> --reason <text> [target options]
           agentweaver policy history --scope platform [--page-size <1-100>] [--cursor <token>] [target options]
-          agentweaver policy decisions --scope platform [--policy-id <id>] [--page-size <1-100>] [--before-sequence <sequence>] [target options]
-          agentweaver policy decisions --scope project --project-id <id> --resource-type skill --resource-id <skill-id> [--page-size <1-100>] [--before-sequence <sequence>] [target options]
+          agentweaver policy decisions --scope platform [--policy-id <id>] [--page-size <1-100>] [--before-sequence <sequence>] [--output <new-file>] [target options]
+          agentweaver policy decisions --scope project --project-id <id> --resource-type skill --resource-id <skill-id> [--page-size <1-100>] [--before-sequence <sequence>] [--output <new-file>] [target options]
           agentweaver run egress <runId> [--limit <1-100>] [--cursor <cursor>]
               [--scope projects.admin] [target options without project/run binding]
           agentweaver platform egress provider-requests list [--limit <1-100>] [--cursor <cursor>]
