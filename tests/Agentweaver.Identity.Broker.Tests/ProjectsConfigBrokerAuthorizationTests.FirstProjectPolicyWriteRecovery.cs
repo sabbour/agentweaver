@@ -44,6 +44,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         if (string.IsNullOrWhiteSpace(opaPath) || !File.Exists(opaPath))
             return;
 
+        var previousAcsOpaPath = Environment.GetEnvironmentVariable("ACS_OPA_PATH");
+        Environment.SetEnvironmentVariable("ACS_OPA_PATH", opaPath);
+        try
+        {
+            await RunFirstProjectPolicyWriteRecoveryCoreAsync(opaPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ACS_OPA_PATH", previousAcsOpaPath);
+        }
+    }
+
+    private async Task RunFirstProjectPolicyWriteRecoveryCoreAsync(string opaPath)
+    {
+
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath,
             _signingCertificate.Password,

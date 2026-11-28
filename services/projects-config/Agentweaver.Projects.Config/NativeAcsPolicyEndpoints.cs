@@ -477,7 +477,7 @@ public static class NativeAcsPolicyEndpoints
                 EnsureNoQuery(context, rejectEmptyQuery: true);
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
-                await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                await projectsService.EnsureFirstProjectPolicyWriteAuthorAsync(caller, projectId, cancellationToken)
                     .ConfigureAwait(false);
                 if (!context.Request.HasJsonContentType())
                     return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
@@ -509,14 +509,14 @@ public static class NativeAcsPolicyEndpoints
                     caller, writeRequest, cancellationToken).ConfigureAwait(false);
                 if (replay is not null)
                 {
-                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    await projectsService.EnsureFirstProjectPolicyWriteAuthorAsync(caller, projectId, cancellationToken)
                         .ConfigureAwait(false);
                     return Results.Ok(replay);
                 }
 
                 if (!configuration.GetValue<bool>(ProjectHeadWritesEnabledSetting))
                 {
-                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    await projectsService.EnsureFirstProjectPolicyWriteAuthorAsync(caller, projectId, cancellationToken)
                         .ConfigureAwait(false);
                     return Results.Problem(
                         title: "native_acs_policy_writes_unavailable",
@@ -530,7 +530,7 @@ public static class NativeAcsPolicyEndpoints
 
                 if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
                 {
-                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    await projectsService.EnsureFirstProjectPolicyWriteAuthorAsync(caller, projectId, cancellationToken)
                         .ConfigureAwait(false);
                     return RateLimited(context);
                 }
@@ -542,7 +542,7 @@ public static class NativeAcsPolicyEndpoints
                 cancellationToken.ThrowIfCancellationRequested();
                 if (validationError is not null)
                 {
-                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    await projectsService.EnsureFirstProjectPolicyWriteAuthorAsync(caller, projectId, cancellationToken)
                         .ConfigureAwait(false);
                     return validationError;
                 }
