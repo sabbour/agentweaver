@@ -1215,7 +1215,7 @@ public sealed partial class GatewayClient : IGatewayClient
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
             evidence["error"] = isByokCredentialStatusRead || isByokCancel || operationId is "validateProjectNativeAcsPolicy" or
-                "listProjectGovernanceDecisions" or "listPlatformEgressDestinations"
+                "listPlatformGovernanceDecisions" or "listProjectGovernanceDecisions" or "listPlatformEgressDestinations"
                 ? "[REDACTED]"
                 : RedactText(exception.Message);
             if (exception is OperationCanceledException && ct.IsCancellationRequested)

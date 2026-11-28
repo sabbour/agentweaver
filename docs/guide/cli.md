@@ -334,6 +334,7 @@ To read Platform Policy governance decision history, use `decisions`:
 ```powershell
 agentweaver policy decisions --scope platform --page-size 20
 agentweaver policy decisions --scope platform --policy-id canonical --page-size 20 --before-sequence SEQUENCE
+agentweaver policy decisions --scope platform --output .\platform-decisions.json
 ```
 
 `--policy-id` defaults to `canonical`. `--page-size` defaults to 20 and ranges
@@ -343,6 +344,18 @@ identity, `nextBeforeSequence`, and allowlisted decision fields, including
 `pending` outcomes and `null` `policyRevision` values, while omitting identity
 and role-assignment metadata. Decision history records past governance events;
 it does not show that a policy revision is active or enforced.
+
+Pass `--output <new-file>` to write the same JSON page to a new file encoded as
+UTF-8 without a byte order mark. When `--output` succeeds, the command exits
+with code 0 and prints nothing to standard output or standard error. To export
+an older page, pass the returned `nextBeforeSequence` digits unchanged as
+`--before-sequence` with a different `--output` file path. The CLI does not
+overwrite an existing file or follow a final symbolic link. On Unix, new files
+start with owner-only read and write permissions (`0600`). On Windows, new
+files inherit the destination directory access control list (ACL); choose a
+directory with a private ACL for reports you want to keep private. If a write,
+flush, close, or cancellation occurs after file creation, the CLI leaves the
+file in place; treat that file as incomplete and retry with a new file name.
 
 ### Read Project Policy sources
 
@@ -387,6 +400,7 @@ To read recorded governance decisions for one Skill in a Project, use `decisions
 ```powershell
 agentweaver policy decisions --scope project --project-id PROJECT_ID --resource-type skill --resource-id SKILL_ID --page-size 20
 agentweaver policy decisions --scope project --project-id PROJECT_ID --resource-type skill --resource-id SKILL_ID --page-size 20 --before-sequence SEQUENCE
+agentweaver policy decisions --scope project --project-id PROJECT_ID --resource-type skill --resource-id SKILL_ID --output .\skill-decisions.json
 ```
 
 Replace `PROJECT_ID` with the 32-character Project ID. Replace `SKILL_ID` with
@@ -394,7 +408,10 @@ the exact Skill ID (1 to 256 characters, case-sensitive, with no leading or
 trailing whitespace). `--page-size` defaults to 20 and accepts 1 to 100. Pass
 the returned `nextBeforeSequence` integer digits unchanged as
 `--before-sequence` to read older records; do not round integers larger than
-53 bits through floating-point JSON parsers.
+53 bits through floating-point JSON parsers. Pass `--output <new-file>` to save
+the JSON page to a new file with silent success, owner-only Unix permissions,
+and the same Windows ACL and incomplete-file recovery rules as Platform
+decision export.
 
 The output includes the stream identity, `items`, and `nextBeforeSequence`.
 An empty stream or a read with `--before-sequence 1` returns an empty `items`

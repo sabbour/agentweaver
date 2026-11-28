@@ -461,8 +461,26 @@ dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.
 
 The CLI tests use a local Gateway fixture and check unbound identity, exact
 query encoding, 64-bit sequence paging, `pending` and `null` fields, scope
-option rejection, and evidence redaction. The Gateway and Projects tests use a
-local owner handler and disposable PostgreSQL.
+option rejection, `--output` new-file export safety and Windows path guards,
+and evidence redaction. The Gateway and Projects tests use a local owner handler
+and disposable PostgreSQL.
+
+To run the published `linux-x64` native apphost fixture test on Linux, publish
+the CLI first, start a D-Bus session with an unlocked Secret Service keyring,
+and set `AGENTWEAVER_TEST_SECRET_SERVICE=1`:
+
+```bash
+dotnet publish tools/Agentweaver.Cli/Agentweaver.Cli.csproj --configuration Release --runtime linux-x64
+AGENTWEAVER_TEST_SECRET_SERVICE=1 \
+AGENTWEAVER_TEST_PUBLISHED_APPHOST="$PWD/tools/Agentweaver.Cli/bin/Release/net10.0/linux-x64/publish/agentweaver" \
+dotnet test tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj --configuration Release --filter "FullyQualifiedName~GatewayOpenApiParityTests.PublishedLinuxApphostReadsProjectSkillDecisionsOverHttpsWithBrokerAndSecretService"
+```
+
+This test runs the published executable against a local HTTPS Gateway and
+Identity Broker fixture with isolated credentials. It checks Platform and
+Project `--output` decision export, owner-only `0600` Unix permissions, silent
+success, pagination, and denied-project error handling. It is a local fixture
+check, separate from live API acceptance.
 
 ## Test the native ACS profile
 
