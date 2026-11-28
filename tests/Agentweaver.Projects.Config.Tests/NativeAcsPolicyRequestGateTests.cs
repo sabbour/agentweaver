@@ -70,6 +70,7 @@ public sealed class NativeAcsPolicyRequestGateTests
             (Name: "ValidatePlatformNativeAcsPolicy", Method: "POST"),
             (Name: "ValidateProjectNativeAcsPolicy", Method: "POST"),
             (Name: "WritePlatformNativeAcsPolicy", Method: "PUT"),
+            (Name: "WriteProjectNativeAcsPolicy", Method: "PUT"),
         };
 
         Assert.Equal(expected, routes);

@@ -2649,6 +2649,7 @@ public sealed partial class GatewayOwnerClient(
             "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision";
         var isProjectPolicyValidation = route.OperationId is
             "validateProjectNativeAcsPolicy" or
+            "writeProjectNativeAcsPolicy" or
             "createProjectNativeAcsPolicyBaselineApproval" or
             "revokeProjectNativeAcsPolicyBaselineApproval";
         var isSkillRefresh = route.OperationId is
@@ -2680,6 +2681,7 @@ public sealed partial class GatewayOwnerClient(
                 "listProjectNativeAcsPolicies" => "native_acs_policy_scope_list_request_invalid",
                 "readProjectNativeAcsPolicy" or
                 "validateProjectNativeAcsPolicy" or
+                "writeProjectNativeAcsPolicy" or
                 "createProjectNativeAcsPolicyBaselineApproval" or
                 "revokeProjectNativeAcsPolicyBaselineApproval" => "native_acs_policy_query_not_supported",
                 "listProjectNativeAcsPolicyRevisions" => "native_acs_policy_history_request_invalid",

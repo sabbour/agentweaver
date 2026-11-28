@@ -53,11 +53,13 @@ public static class NativeAcsPolicyEndpoints
     private static readonly JsonSerializerOptions ProjectValidationJsonOptions = new(JsonSerializerDefaults.Web)
     {
         AllowDuplicateProperties = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
     // Used only when the scope has no head yet. An existing head keeps its own stable ID.
     private const string NewPolicyId = "canonical";
     // Head-advancing writes stay off until every included domain has a proven enforcer and profile check.
     internal const string HeadWritesEnabledSetting = "NativeAcsPolicy:HeadWritesEnabled";
+    internal const string ProjectHeadWritesEnabledSetting = "NativeAcsPolicy:ProjectHeadWritesEnabled";
 
     public static IEndpointRouteBuilder MapNativeAcsPolicyEndpoints(this IEndpointRouteBuilder app)
     {
@@ -457,6 +459,129 @@ public static class NativeAcsPolicyEndpoints
         })
             .WithMetadata(new RequestSizeLimitAttribute(MaximumRequestBodyBytes))
             .WithName("ValidateProjectNativeAcsPolicy");
+
+        projects.MapPut("/{projectId}", async (
+            string projectId,
+            HttpContext context,
+            [FromServices] ProjectsConfigService projectsService,
+            [FromServices] NativeAcsPolicyStore policyStore,
+            [FromServices] ProjectAuthorizationOwner authorizationOwner,
+            [FromServices] NativeAcsArtifactValidator? validator,
+            [FromServices] NativeAcsPolicyRequestGate requestGate,
+            [FromServices] IConfiguration configuration,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                EnsureNoQuery(context, rejectEmptyQuery: true);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!context.Request.HasJsonContentType())
+                    return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+                if (context.Request.ContentLength > MaximumRequestBodyBytes)
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                var requestJson = await context.Request.ReadFromJsonAsync<JsonElement>(cancellationToken)
+                    .ConfigureAwait(false);
+                if (requestJson.ValueKind != JsonValueKind.Object || HasAmbiguousProperties(requestJson))
+                    return Results.BadRequest();
+                var request = requestJson.Deserialize<NativeAcsPolicyWriteBody>(ProjectValidationJsonOptions);
+                if (request?.Artifact is null)
+                    throw ProjectConfigException.Invalid(
+                        "native_acs_policy_invalid",
+                        "A complete native ACS policy artifact is required.");
+
+                var writeRequest = new NativeAcsPolicyWriteRequest(
+                    NativeAcsPolicyScopeType.Project,
+                    projectId,
+                    NewPolicyId,
+                    request.ExpectedRevision,
+                    request.Artifact,
+                    request.IdempotencyKey,
+                    request.Reason,
+                    request.CorrelationId);
+                NativeAcsPolicyStore.ValidateFirstProjectWriteMetadata(writeRequest);
+                NativeAcsPolicyStore.ValidateFirstProjectWriteArtifactBoundsAndHash(writeRequest.Artifact);
+
+                var replay = await policyStore.FindFirstProjectWriteReplayAsync(
+                    caller, writeRequest, cancellationToken).ConfigureAwait(false);
+                if (replay is not null)
+                {
+                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(replay);
+                }
+
+                if (!configuration.GetValue<bool>(ProjectHeadWritesEnabledSetting))
+                {
+                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Problem(
+                        title: "native_acs_policy_writes_unavailable",
+                        detail: "Project policy head writes are not available on this deployment.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable,
+                        extensions: new Dictionary<string, object?>
+                        {
+                            ["code"] = "native_acs_policy_writes_unavailable",
+                        });
+                }
+
+                if (!requestGate.TryAcquireCallerRequest(caller.Issuer, caller.ActorId))
+                {
+                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                        .ConfigureAwait(false);
+                    return RateLimited(context);
+                }
+
+                NativeAcsPolicyStore.ValidateFirstProjectWriteCandidateProfile(request.Artifact);
+                cancellationToken.ThrowIfCancellationRequested();
+                var validationError = ValidateArtifact(
+                    validator, requestGate, request.Artifact, context, out _, projectScope: true);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (validationError is not null)
+                {
+                    await projectsService.EnsureProjectPolicyAuthorAsync(caller, projectId, cancellationToken)
+                        .ConfigureAwait(false);
+                    return validationError;
+                }
+
+                var receipt = await policyStore.WriteFirstProjectPolicyAsync(
+                    caller,
+                    writeRequest,
+                    () => configuration.GetValue<bool>(ProjectHeadWritesEnabledSetting),
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(receipt);
+            }
+            catch (ProjectConfigException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ToProblem(exception);
+            }
+            catch (BadHttpRequestException exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.StatusCode(exception.StatusCode);
+            }
+            catch (JsonException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Results.BadRequest();
+            }
+            catch (NpgsqlException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+            catch (InvalidOperationException exception) when (IsSourceUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SourceUnavailable("Project");
+            }
+        })
+            .WithMetadata(new RequestSizeLimitAttribute(MaximumRequestBodyBytes))
+            .WithName("WriteProjectNativeAcsPolicy");
 
         projects.MapGet("/{projectId}", async (
             string projectId,

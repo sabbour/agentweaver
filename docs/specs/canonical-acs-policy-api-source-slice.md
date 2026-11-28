@@ -282,8 +282,11 @@ need. Run all required diagram checks.
 
 - Confirm per-caller and concurrency limits against the supported Projects &
   Config replica and CPU limits during exact-image acceptance.
-- Add project Policy routes only with enforced narrow-only checks. In
-  particular, do not let a project API edit the platform egress baseline.
+- Add project Policy routes only with enforced narrow-only checks: the
+  first-write route (`PUT /api/policies/projects/{projectId}`) creates
+  Skills-only revision 1 from a pinned baseline and stays gated behind
+  `NativeAcsPolicy:ProjectHeadWritesEnabled` (default `false`). Do not let a
+  project API edit the platform egress baseline.
 - Add preview, history, rollback, v4 source migration, and consumer cutover in
   later reviewed slices. Preview needs a separate design for simulated context,
   verified identity inputs, and oracle limits. Keep ACS inactive until the

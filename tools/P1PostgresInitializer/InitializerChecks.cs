@@ -217,7 +217,7 @@ internal static class InitializerChecks
                 END IF;
                 RETURN NEW;
             ELSIF OLD.state = 'Pinned' AND NEW.state = 'Consumed' THEN
-                IF NEW.consumed_revision IS NULL OR NEW.consumed_at IS NULL
+                IF NEW.consumed_revision IS DISTINCT FROM 1 OR NEW.consumed_at IS NULL
                     OR NEW.operator_issuer IS DISTINCT FROM OLD.operator_issuer
                     OR NEW.operator_actor_id IS DISTINCT FROM OLD.operator_actor_id
                     OR NEW.operator_membership_id IS DISTINCT FROM OLD.operator_membership_id
@@ -235,7 +235,20 @@ internal static class InitializerChecks
                     OR NEW.revoked_by_actor_id IS DISTINCT FROM OLD.revoked_by_actor_id
                     OR NEW.revoked_reason IS DISTINCT FROM OLD.revoked_reason
                     OR NEW.revoked_correlation_id IS DISTINCT FROM OLD.revoked_correlation_id
-                    OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+                    OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM projects_config.native_acs_policy_heads AS head
+                        JOIN projects_config.native_acs_policy_revisions AS revision
+                          ON revision.scope_type = head.scope_type
+                         AND revision.scope_id = head.scope_id
+                         AND revision.policy_id = head.policy_id
+                         AND revision.revision = head.current_revision
+                        WHERE head.scope_type = 'Project'
+                          AND head.scope_id = OLD.project_id
+                          AND head.policy_id = 'canonical'
+                          AND head.current_revision = 1
+                          AND revision.revision = 1) THEN
                     RAISE EXCEPTION 'invalid native ACS project policy baseline consume transition'
                         USING ERRCODE = '55000';
                 END IF;
@@ -703,11 +716,7 @@ internal static class InitializerChecks
                 "lease_expires_at", "environment_destination_id", "delivered_at", "failure_code",
                 "last_attempt_at", "updated_at",
             ];
-            string[] projectPolicyBaselineUpdateColumns =
-            [
-                "state", "revoked_by_issuer", "revoked_by_actor_id",
-                "revoked_reason", "revoked_correlation_id", "revoked_at",
-            ];
+            string[] projectPolicyBaselineUpdateColumns = ProjectPolicyBaselineUpdateColumns;
             var preflightTable = service.Service == "projects-config" &&
                 service.Schema == "projects_config" && table.Table == "model_provider_credential_preflights";
             var hostRequestTable = service.Service == "projects-config" &&
@@ -799,6 +808,7 @@ internal static class InitializerChecks
     [
         "state", "revoked_by_issuer", "revoked_by_actor_id",
         "revoked_reason", "revoked_correlation_id", "revoked_at",
+        "consumed_revision", "consumed_at",
     ];
 
     internal static void AssertColumnUpdatePlan(ServicePlan[] services)

@@ -300,6 +300,7 @@ public sealed class GatewayWorkspaceReadRegressionTests
             ("GET", "/api/v1/policies/projects/{projectId}/revisions/{revision}",
                 "readProjectNativeAcsPolicyRevision"),
             ("POST", "/api/v1/policies/projects/{projectId}/validate", "validateProjectNativeAcsPolicy"),
+            ("PUT", "/api/v1/policies/projects/{projectId}", "writeProjectNativeAcsPolicy"),
             ("POST", "/api/v1/policies/projects/{projectId}/baseline-approvals",
                 "createProjectNativeAcsPolicyBaselineApproval"),
             ("POST", "/api/v1/policies/projects/{projectId}/baseline-approvals/{baselineId:guid}/revoke",
@@ -339,6 +340,10 @@ public sealed class GatewayWorkspaceReadRegressionTests
             item.OperationId == "readProjectNativeAcsPolicyRevision").QueryParameters);
         Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
             item.OperationId == "validateProjectNativeAcsPolicy").QueryParameters);
+        var writeRoute = Assert.Single(GatewayRouteCatalog.Routes, item =>
+            item.OperationId == "writeProjectNativeAcsPolicy");
+        Assert.Empty(writeRoute.QueryParameters);
+        Assert.Contains("Retry-After", writeRoute.ExposedResponseHeaders);
         Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
             item.OperationId == "createProjectNativeAcsPolicyBaselineApproval").QueryParameters);
         Assert.Empty(Assert.Single(GatewayRouteCatalog.Routes, item =>
@@ -426,7 +431,10 @@ public sealed class GatewayWorkspaceReadRegressionTests
         Task<HttpResponseMessage> RespondAsync(GatewayOwner owner, HttpRequestMessage request, CancellationToken _)
         {
             Assert.Equal(GatewayOwner.Projects, owner);
-            Assert.Equal("/api/policies/projects/project-one/validate", request.RequestUri!.PathAndQuery);
+            var expectedPath = request.Method == HttpMethod.Put
+                ? "/api/policies/projects/project-one"
+                : "/api/policies/projects/project-one/validate";
+            Assert.Equal(expectedPath, request.RequestUri!.PathAndQuery);
             Assert.Equal("tenant-a", request.Headers.GetValues("X-Agentweaver-Tenant").Single());
             Assert.False(request.Headers.Contains("Idempotency-Key"));
             calls++;
@@ -463,6 +471,23 @@ public sealed class GatewayWorkspaceReadRegressionTests
         using var denied = await gateway.Client.SendAsync(query);
         Assert.Equal(HttpStatusCode.BadRequest, denied.StatusCode);
         Assert.Equal(1, calls);
+
+        using var putRequest = CreateRequest(bearer, "/api/v1/policies/projects/project-one");
+        putRequest.Method = HttpMethod.Put;
+        putRequest.Headers.Remove("X-Agentweaver-Tenant");
+        putRequest.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+        putRequest.Content = new StringContent("{\"expectedRevision\":null,\"artifact\":{}}", Encoding.UTF8, "application/json");
+        using var putResponse = await gateway.Client.SendAsync(putRequest);
+        Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
+        Assert.True(putResponse.Headers.CacheControl?.NoStore);
+        Assert.Equal(2, calls);
+
+        using var putQuery = CreateRequest(bearer, "/api/v1/policies/projects/project-one?scope=platform");
+        putQuery.Method = HttpMethod.Put;
+        putQuery.Content = new StringContent("{\"expectedRevision\":null,\"artifact\":{}}", Encoding.UTF8, "application/json");
+        using var putDenied = await gateway.Client.SendAsync(putQuery);
+        Assert.Equal(HttpStatusCode.BadRequest, putDenied.StatusCode);
+        Assert.Equal(2, calls);
     }
 
     [Fact]
@@ -523,6 +548,27 @@ public sealed class GatewayWorkspaceReadRegressionTests
             .GetProperty("post");
         Assert.Equal("revokeProjectNativeAcsPolicyBaselineApproval",
             baselineRevoke.GetProperty("operationId").GetString());
+
+        var writeProject = paths.GetProperty("/api/v1/policies/projects/{projectId}").GetProperty("put");
+        Assert.Equal("writeProjectNativeAcsPolicy", writeProject.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/NativeAcsPolicyWriteRequest",
+            writeProject.GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal("#/components/schemas/NativeAcsPolicyWriteReceipt",
+            writeProject.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.True(writeProject.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").TryGetProperty("Cache-Control", out _));
+        Assert.Equal("#/components/schemas/Problem",
+            writeProject.GetProperty("responses").GetProperty("409")
+                .GetProperty("content").GetProperty("application/problem+json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        var writeSchema = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty("NativeAcsPolicyWriteRequest");
+        Assert.Contains("expectedRevision", writeSchema.GetProperty("required").EnumerateArray().Select(e => e.GetString()));
+        var expectedRevTypes = writeSchema.GetProperty("properties").GetProperty("expectedRevision")
+            .GetProperty("anyOf").EnumerateArray().Select(e => e.GetProperty("type").GetString()).ToArray();
+        Assert.Equal(new[] { "integer", "null" }, expectedRevTypes);
         Assert.True(baselineRevoke.GetProperty("responses").GetProperty("200")
             .GetProperty("headers").TryGetProperty("Cache-Control", out _));
         Assert.Equal("#/components/schemas/Problem",

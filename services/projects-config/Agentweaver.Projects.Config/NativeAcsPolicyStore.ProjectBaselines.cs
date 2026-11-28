@@ -851,4 +851,535 @@ internal sealed partial class NativeAcsPolicyStore
         mapped = null!;
         return false;
     }
+
+    internal async Task<NativeAcsPolicyWriteReceipt?> FindFirstProjectWriteReplayAsync(
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateFirstProjectWriteMetadata(request);
+        ValidateFirstProjectWriteArtifactBoundsAndHash(request.Artifact);
+        var roleGrants = EnsureWriteAuthorized(caller, request);
+        var scopeDigest = ScopeDigest(caller, request);
+        var requestDigest = RequestDigest(request);
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        var ct = deadline.Token;
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
+            .ConfigureAwait(false);
+        try
+        {
+            await SetBaselineTimeoutsAsync(db, ct).ConfigureAwait(false);
+            _ = await LockAndCheckAuthorityAsync(db, caller, request, roleGrants, ct).ConfigureAwait(false);
+            var receipt = await FindReceiptAsync(db, caller, request, scopeDigest, requestDigest, ct)
+                .ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return receipt;
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw CreateFirstWriteTimeoutException();
+        }
+        catch (Exception ex) when (MapFirstWritePersistenceException(ex, out var mapped))
+        {
+            throw mapped;
+        }
+    }
+
+    internal async Task<NativeAcsPolicyWriteReceipt> WriteFirstProjectPolicyAsync(
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request,
+        Func<bool> isWritesEnabled,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(isWritesEnabled);
+        ValidateFirstProjectWriteMetadata(request);
+        ValidateFirstProjectWriteArtifactBoundsAndHash(request.Artifact);
+        if (request.ScopeType != NativeAcsPolicyScopeType.Project ||
+            !Guid.TryParseExact(request.ScopeId, "N", out _) ||
+            !string.Equals(request.PolicyId, BaselinePolicyId, StringComparison.Ordinal))
+            throw ProjectConfigException.Invalid("native_acs_policy_invalid", "The Project Policy write scope is invalid.");
+        ValidateFirstProjectWriteCandidateProfile(request.Artifact);
+
+        var roleGrants = EnsureWriteAuthorized(caller, request);
+        var scopeDigest = ScopeDigest(caller, request);
+        var requestDigest = RequestDigest(request);
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        var ct = deadline.Token;
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
+            .ConfigureAwait(false);
+        try
+        {
+            await SetBaselineTimeoutsAsync(db, ct).ConfigureAwait(false);
+
+            // 1. Lock the admission fence exclusively first to preserve the global lock order.
+            var skillAdmissionFence = await db.SkillAdmissionFences
+                .FromSqlRaw("""
+                    SELECT id, state, generation, cutover_generation, release_inventory_revision,
+                           platform_skills_policy_sha256, updated_at
+                    FROM projects_config.project_skill_admission_fence
+                    WHERE id = 1
+                    FOR UPDATE
+                    """)
+                .SingleOrDefaultAsync(ct)
+                .ConfigureAwait(false)
+                ?? throw CreateFirstWriteUnavailableException("The Skill admission fence is unavailable.");
+
+            // 2. Lock and recheck tenant-qualified current authority.
+            var authorizingGrant = await LockAndCheckAuthorityAsync(
+                db, caller, request, roleGrants, ct).ConfigureAwait(false);
+
+            // 3. Recheck durable receipt in a fresh statement after the fence wait.
+            var replay = await FindReceiptAsync(db, caller, request, scopeDigest, requestDigest, ct)
+                .ConfigureAwait(false);
+            if (replay is not null)
+            {
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+                return replay;
+            }
+
+            if (skillAdmissionFence.State is not (ProjectSkillAdmissionFenceState.Open or ProjectSkillAdmissionFenceState.Active))
+                throw CreateFirstWriteUnavailableException("The Skill admission fence is not ready.");
+
+            if (!isWritesEnabled())
+                throw CreateProjectHeadWritesDisabledException();
+
+            // 4. Take the Project advisory lock, then lock Platform head (FOR SHARE) before Project head (FOR UPDATE).
+            await AcquireProjectPolicyAdvisoryLockAsync(db, request.ScopeId, ct).ConfigureAwait(false);
+
+            string platformPolicyId;
+            long platformRevision;
+            NativeAcsArtifact platformArtifact;
+            try
+            {
+                (platformPolicyId, platformRevision, platformArtifact) =
+                    await LockAndReadPlatformPolicyArtifactAsync(db, ct).ConfigureAwait(false);
+            }
+            catch (ProjectConfigException ex) when (ex.Code == "native_acs_policy_corrupt")
+            {
+                throw CreateFirstWriteUnavailableException("The Platform Policy source is unavailable.");
+            }
+            if (!NativeAcsUnifiedPolicyProfile.Inspect(platformArtifact).IsValid)
+                throw CreateFirstWriteUnavailableException("The Platform Policy source is unavailable.");
+
+            var existingProjectRevision = await LockProjectHeadForUpdateAsync(db, request.ScopeId, ct)
+                .ConfigureAwait(false);
+            if (existingProjectRevision is not null || request.ExpectedRevision is not null)
+                throw ProjectConfigException.Conflict("The native ACS policy head has changed.");
+
+            // 5. Lock the sole Pinned baseline for this installation, tenant, project, and canonical policy.
+            var installationId = await ReadCurrentInstallationIdAsync(db, ct).ConfigureAwait(false);
+            var baseline = await LockPinnedBaselineForProjectAsync(db, request.ScopeId, ct)
+                .ConfigureAwait(false);
+            if (baseline is null ||
+                baseline.InstallationId != installationId ||
+                baseline.TenantId != caller.TenantId ||
+                baseline.PolicyId != BaselinePolicyId ||
+                baseline.ProfileId != NativeAcsUnifiedPolicyProfile.ProfileId ||
+                string.IsNullOrWhiteSpace(baseline.PlatformPolicyId) ||
+                baseline.PlatformPolicyRevision is null ||
+                string.IsNullOrWhiteSpace(baseline.PlatformContentSha256))
+                throw CreateFirstWriteUnavailableException(
+                    "No usable pinned Project Policy baseline is available for this project.");
+
+            NativeAcsArtifact pinnedArtifact;
+            try
+            {
+                pinnedArtifact = JsonSerializer.Deserialize<NativeAcsArtifact>(baseline.ArtifactJson, JsonOptions)
+                    ?? throw CreateFirstWriteUnavailableException("The pinned Project Policy baseline is unavailable.");
+            }
+            catch (JsonException)
+            {
+                throw CreateFirstWriteUnavailableException("The pinned Project Policy baseline is unavailable.");
+            }
+            if (!string.Equals(
+                    NativeAcsArtifactValidator.ComputeContentSha256(pinnedArtifact),
+                    baseline.ContentSha256,
+                    StringComparison.Ordinal) ||
+                !NativeAcsUnifiedPolicyProfile.InspectProject(pinnedArtifact).IsValid ||
+                pinnedArtifact.Files.Length != 12 ||
+                !pinnedArtifact.Files.Any(file => string.Equals(
+                    file.RelativePath, SkillAdmissionService.SkillsPolicyDataPath, StringComparison.Ordinal)))
+                throw CreateFirstWriteUnavailableException("The pinned Project Policy baseline is unavailable.");
+
+            if (!string.Equals(platformPolicyId, baseline.PlatformPolicyId, StringComparison.Ordinal) ||
+                platformRevision != baseline.PlatformPolicyRevision.Value ||
+                !string.Equals(platformArtifact.ContentSha256, baseline.PlatformContentSha256, StringComparison.Ordinal))
+                throw ProjectConfigException.Conflict(
+                    "The Platform Policy has changed since the Project Policy baseline was pinned. Revoke the unused pin, obtain fresh approval, and pin again.");
+
+            if (!platformArtifact.Files.Any(file => string.Equals(
+                    file.RelativePath, SkillAdmissionService.SkillsPolicyDataPath, StringComparison.Ordinal)))
+                throw CreateFirstWriteUnavailableException(
+                    "The current Platform Policy profile does not include explicit Skills policy data.");
+
+            // 6. Enforce exact Skills-only delta against the pinned Project baseline.
+            EnsureSkillsOnlyDeltaFromBaseline(pinnedArtifact, request.Artifact);
+
+            // 7. Write revision 1, files, head, receipt, audit, outbox, and increment fence generation.
+            const long revision = 1;
+            var now = timeProvider.GetUtcNow();
+            var auditId = Guid.NewGuid();
+            var outboxId = Guid.NewGuid();
+            var receipt = new NativeAcsPolicyWriteReceipt(
+                NativeAcsPolicyScopeType.Project,
+                request.ScopeId,
+                BaselinePolicyId,
+                revision,
+                request.Artifact.ContentSha256,
+                auditId,
+                outboxId,
+                Replayed: false);
+
+            db.NativeAcsPolicyRevisions.Add(new NativeAcsPolicyRevisionRecord
+            {
+                ScopeType = NativeAcsPolicyScopeType.Project,
+                ScopeId = request.ScopeId,
+                PolicyId = BaselinePolicyId,
+                Revision = revision,
+                ContentSha256 = request.Artifact.ContentSha256,
+                ManifestBytes = request.Artifact.ManifestBytes.ToArray(),
+                CreatedByIssuer = caller.Issuer,
+                CreatedByActorId = caller.ActorId,
+                MembershipId = caller.MembershipId,
+                MembershipRevision = caller.MembershipRevision,
+                RoleAssignmentId = authorizingGrant.AssignmentId,
+                RoleAssignmentRevision = authorizingGrant.Revision,
+                Reason = request.Reason,
+                CorrelationId = request.CorrelationId,
+                CreatedAt = now,
+            });
+            foreach (var file in request.Artifact.Files)
+            {
+                db.NativeAcsPolicyArtifactFiles.Add(new NativeAcsPolicyArtifactFileRecord
+                {
+                    ScopeType = NativeAcsPolicyScopeType.Project,
+                    ScopeId = request.ScopeId,
+                    PolicyId = BaselinePolicyId,
+                    Revision = revision,
+                    RelativePath = file.RelativePath,
+                    Bytes = file.Bytes.ToArray(),
+                });
+            }
+            db.NativeAcsPolicyHeads.Add(new NativeAcsPolicyHeadRecord
+            {
+                ScopeType = NativeAcsPolicyScopeType.Project,
+                ScopeId = request.ScopeId,
+                PolicyId = BaselinePolicyId,
+                CurrentRevision = revision,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.NativeAcsPolicyIdempotency.Add(new NativeAcsPolicyIdempotencyRecord
+            {
+                ScopeDigest = scopeDigest,
+                ScopeType = NativeAcsPolicyScopeType.Project,
+                ScopeId = request.ScopeId,
+                PolicyId = BaselinePolicyId,
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                IdempotencyKey = request.IdempotencyKey,
+                RequestDigest = requestDigest,
+                ReceiptJson = JsonSerializer.Serialize(receipt, JsonOptions),
+                CreatedAt = now,
+            });
+            db.NativeAcsPolicyChangeAudit.Add(new NativeAcsPolicyChangeAuditRecord
+            {
+                AuditId = auditId,
+                ScopeType = NativeAcsPolicyScopeType.Project,
+                ScopeId = request.ScopeId,
+                PolicyId = BaselinePolicyId,
+                Revision = revision,
+                PreviousRevision = null,
+                ChangeType = "created",
+                ActorIssuer = caller.Issuer,
+                ActorId = caller.ActorId,
+                MembershipId = caller.MembershipId,
+                MembershipRevision = caller.MembershipRevision,
+                RoleAssignmentId = authorizingGrant.AssignmentId,
+                RoleAssignmentRevision = authorizingGrant.Revision,
+                PreviousContentSha256 = null,
+                ContentSha256 = request.Artifact.ContentSha256,
+                Reason = request.Reason,
+                CorrelationId = request.CorrelationId,
+                CreatedAt = now,
+            });
+            skillAdmissionFence.Generation = checked(skillAdmissionFence.Generation + 1);
+            db.NativeAcsPolicyOutbox.Add(new NativeAcsPolicyOutboxRecord
+            {
+                OutboxId = outboxId,
+                EventType = PolicyRevisionEventType,
+                PayloadJson = JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1,
+                    scopeType = NativeAcsPolicyScopeType.Project.ToString(),
+                    scopeId = request.ScopeId,
+                    policyId = BaselinePolicyId,
+                    revision,
+                    request.Artifact.ContentSha256,
+                    actorIssuer = caller.Issuer,
+                    actorId = caller.ActorId,
+                    createdAt = now,
+                }, JsonOptions),
+                CreatedAt = now,
+            });
+
+            // 8. Save head/revision before CAS consuming Pinned -> Consumed, then recheck grant and switch.
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            var consumed = await TryConsumePinnedBaselineAsync(
+                db, baseline.BaselineId, installationId, caller.TenantId, request.ScopeId,
+                baseline.ContentSha256, now, ct).ConfigureAwait(false);
+            if (!consumed)
+                throw ProjectConfigException.Conflict("The pinned Project Policy baseline could not be consumed.");
+
+            var rechecked = await LockAndCheckAuthorityAsync(
+                db, caller, request, roleGrants, ct).ConfigureAwait(false);
+            if (rechecked.AssignmentId != authorizingGrant.AssignmentId ||
+                rechecked.Revision != authorizingGrant.Revision)
+                throw ProjectConfigException.Forbidden();
+            if (!isWritesEnabled())
+                throw CreateProjectHeadWritesDisabledException();
+
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return receipt;
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw CreateFirstWriteTimeoutException();
+        }
+        catch (Exception ex) when (MapFirstWritePersistenceException(ex, out var mapped))
+        {
+            throw mapped;
+        }
+    }
+
+    internal static void ValidateFirstProjectWriteMetadata(NativeAcsPolicyWriteRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.ScopeType != NativeAcsPolicyScopeType.Project ||
+            string.IsNullOrWhiteSpace(request.ScopeId) ||
+            request.ScopeId.Length > 256 ||
+            !IsIdentifier(request.PolicyId, 128) ||
+            request.ExpectedRevision is <= 0 ||
+            !IsIdentifier(request.IdempotencyKey, 128) ||
+            string.IsNullOrWhiteSpace(request.Reason) ||
+            request.Reason.Length > 512 ||
+            !IsIdentifier(request.CorrelationId, 128) ||
+            request.Artifact is null)
+            throw ProjectConfigException.Invalid(
+                "native_acs_policy_invalid",
+                "The native ACS policy write request is invalid.");
+    }
+
+    internal static void ValidateFirstProjectWriteArtifactBoundsAndHash(NativeAcsArtifact artifact)
+    {
+        if (artifact.ManifestBytes.IsDefaultOrEmpty ||
+            artifact.ManifestBytes.Length > MaximumPolicySourceManifestBytes ||
+            artifact.Files.IsDefault ||
+            artifact.Files.Length > MaximumPolicySourceFiles ||
+            artifact.Files.Any(file =>
+                file is null ||
+                string.IsNullOrWhiteSpace(file.RelativePath) ||
+                file.RelativePath.Length > 256 ||
+                file.Bytes.IsDefaultOrEmpty ||
+                file.Bytes.Length > MaximumPolicySourceFileBytes) ||
+            artifact.Files.Select(file => file.RelativePath).Distinct(StringComparer.Ordinal).Count() !=
+                artifact.Files.Length ||
+            artifact.ManifestBytes.Length + artifact.Files.Sum(file => (long)file.Bytes.Length) >
+                MaximumPolicySourceArtifactBytes)
+            throw CreateFirstWriteArtifactInvalidException("The native ACS policy artifact is invalid.");
+
+        string contentHash;
+        try
+        {
+            contentHash = NativeAcsArtifactHash.Compute(artifact);
+        }
+        catch (ArgumentException)
+        {
+            throw CreateFirstWriteArtifactInvalidException("The native ACS policy artifact is invalid.");
+        }
+        if (!string.Equals(artifact.ContentSha256, contentHash, StringComparison.Ordinal))
+            throw CreateFirstWriteArtifactInvalidException("The native ACS policy artifact is invalid.");
+    }
+
+    internal static void ValidateFirstProjectWriteCandidateProfile(NativeAcsArtifact artifact)
+    {
+        var inspection = NativeAcsUnifiedPolicyProfile.InspectProject(artifact);
+        if (!inspection.IsValid)
+            throw CreateFirstWriteArtifactInvalidException(
+                inspection.Diagnostics.FirstOrDefault()?.Message ?? "The Project Policy candidate must be a valid 12-file v3 artifact.");
+        if (artifact.Files.Length != 12 ||
+            !artifact.Files.Any(file => string.Equals(
+                file.RelativePath, SkillAdmissionService.SkillsPolicyDataPath, StringComparison.Ordinal)))
+            throw CreateFirstWriteArtifactInvalidException(
+                "The Project Policy candidate must be a valid 12-file v3 artifact with explicit Skills policy data.");
+    }
+
+    private static void EnsureSkillsOnlyDeltaFromBaseline(
+        NativeAcsArtifact pinnedArtifact,
+        NativeAcsArtifact candidateArtifact)
+    {
+        if (!candidateArtifact.ManifestBytes.AsSpan().SequenceEqual(pinnedArtifact.ManifestBytes.AsSpan()))
+            throw CreateFirstWriteArtifactInvalidException(
+                "The Project Policy candidate manifest must match the pinned baseline.");
+
+        var pinnedFiles = pinnedArtifact.Files.ToDictionary(file => file.RelativePath, StringComparer.Ordinal);
+        var candidateFiles = candidateArtifact.Files.ToDictionary(file => file.RelativePath, StringComparer.Ordinal);
+        if (pinnedFiles.Count != candidateFiles.Count ||
+            !pinnedFiles.Keys.All(candidateFiles.ContainsKey))
+            throw CreateFirstWriteArtifactInvalidException(
+                "The Project Policy candidate files must match the pinned baseline file set.");
+
+        foreach (var (path, pinnedFile) in pinnedFiles)
+        {
+            if (string.Equals(path, SkillAdmissionService.SkillsPolicyDataPath, StringComparison.Ordinal))
+                continue;
+            if (!candidateFiles[path].Bytes.AsSpan().SequenceEqual(pinnedFile.Bytes.AsSpan()))
+                throw CreateFirstWriteArtifactInvalidException(
+                    $"The Project Policy candidate may only change '{SkillAdmissionService.SkillsPolicyDataPath}' relative to the pinned baseline.");
+        }
+    }
+
+    private static async Task<long?> LockProjectHeadForUpdateAsync(
+        ProjectsConfigDbContext db,
+        string projectId,
+        CancellationToken ct)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT current_revision
+            FROM projects_config.native_acs_policy_heads
+            WHERE scope_type = 'Project' AND scope_id = @project_id
+            FOR UPDATE
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("project_id", projectId);
+        var result = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return result is long revision ? revision : null;
+    }
+
+    private static Task<NativeAcsProjectPolicyBaselineRecord?> LockPinnedBaselineForProjectAsync(
+        ProjectsConfigDbContext db,
+        string projectId,
+        CancellationToken ct) =>
+        db.NativeAcsProjectPolicyBaselines
+            .FromSqlInterpolated($"""
+                SELECT *
+                FROM projects_config.native_acs_project_policy_baselines
+                WHERE project_id = {projectId} AND state = 'Pinned'
+                FOR UPDATE
+                """)
+            .SingleOrDefaultAsync(ct);
+
+    private static async Task<bool> TryConsumePinnedBaselineAsync(
+        ProjectsConfigDbContext db,
+        Guid baselineId,
+        Guid installationId,
+        string tenantId,
+        string projectId,
+        string contentSha256,
+        DateTimeOffset consumedAt,
+        CancellationToken ct)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE projects_config.native_acs_project_policy_baselines
+            SET state = 'Consumed',
+                consumed_revision = 1,
+                consumed_at = @consumed_at
+            WHERE baseline_id = @baseline_id
+              AND installation_id = @installation_id
+              AND tenant_id = @tenant_id
+              AND project_id = @project_id
+              AND policy_id = 'canonical'
+              AND content_sha256 = @content_sha256
+              AND state = 'Pinned'
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("consumed_at", consumedAt);
+        command.Parameters.AddWithValue("baseline_id", baselineId);
+        command.Parameters.AddWithValue("installation_id", installationId);
+        command.Parameters.AddWithValue("tenant_id", tenantId);
+        command.Parameters.AddWithValue("project_id", projectId);
+        command.Parameters.AddWithValue("content_sha256", contentSha256);
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
+    }
+
+    private static ProjectConfigException CreateFirstWriteArtifactInvalidException(string message) =>
+        new(
+            "native_acs_policy_invalid",
+            message,
+            StatusCodes.Status422UnprocessableEntity);
+
+    private static ProjectConfigException CreateProjectHeadWritesDisabledException() =>
+        new(
+            "native_acs_policy_writes_unavailable",
+            "Project policy head writes are not available on this deployment.",
+            StatusCodes.Status503ServiceUnavailable);
+
+    private static ProjectConfigException CreateFirstWriteUnavailableException(string message) =>
+        new(
+            "native_acs_policy_source_unavailable",
+            message,
+            StatusCodes.Status503ServiceUnavailable);
+
+    private static ProjectConfigException CreateFirstWriteTimeoutException() =>
+        new(
+            "native_acs_policy_source_unavailable",
+            "The Project Policy write timed out; retry shortly.",
+            StatusCodes.Status503ServiceUnavailable);
+
+    private static bool MapFirstWritePersistenceException(Exception ex, out ProjectConfigException mapped)
+    {
+        if (ex is DbUpdateConcurrencyException)
+        {
+            mapped = ProjectConfigException.Conflict("The native ACS policy head changed during the write.");
+            return true;
+        }
+        var pg = ex as PostgresException
+            ?? ex.InnerException as PostgresException
+            ?? (ex as InvalidOperationException)?.InnerException?.InnerException as PostgresException;
+        if (pg is not null)
+        {
+            if (pg.SqlState is PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.DeadlockDetected)
+            {
+                mapped = ProjectConfigException.Conflict("The native ACS policy write conflicted with a concurrent update.");
+                return true;
+            }
+            if (pg.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                mapped = ProjectConfigException.Conflict("The native ACS policy write conflicted with another request.");
+                return true;
+            }
+            if (pg.SqlState is PostgresErrorCodes.LockNotAvailable or PostgresErrorCodes.QueryCanceled)
+            {
+                mapped = new ProjectConfigException(
+                    "native_acs_policy_source_unavailable",
+                    "The Project Policy store is busy; retry shortly.",
+                    StatusCodes.Status503ServiceUnavailable);
+                return true;
+            }
+        }
+        mapped = null!;
+        return false;
+    }
 }
