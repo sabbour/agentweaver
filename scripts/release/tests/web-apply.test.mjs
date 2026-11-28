@@ -6,7 +6,7 @@ import test from 'node:test';
 import { applyPlan } from '../apply.mjs';
 import { diffChanges, validateChangesets } from '../changesets.mjs';
 import { createPlan } from '../plan.mjs';
-import { preparationFiles } from '../preparation.mjs';
+import { preparationFiles, verifyPreparation } from '../preparation.mjs';
 
 const component = {
   id: 'Agentweaver.Web',
@@ -102,6 +102,28 @@ test('preparation preserves the file and read error when an npm mirror cannot be
     if (file === 'apps/web/package-lock.json') throw new Error('simulated lockfile I/O failure');
     return readFileSync(path.join(root, file), 'utf8');
   }), /release preparation: apps\/web\/package\.json: cannot read npm version mirrors: simulated lockfile I\/O failure/);
+});
+
+test('preparation returns updated npm mirrors and a changelog entry for the planned version', (t) => {
+  const root = initRepo(t);
+  const plan = planFor(root);
+  const prepared = preparationFiles(readFileSync(manifestPath(root), 'utf8'), plan,
+    '2026-10-08T00:00:00.000Z', (file) => readFileSync(path.join(root, file), 'utf8'));
+  const version = plan.components[0].toVersion;
+  const packageJson = JSON.parse(prepared.files.get('apps/web/package.json'));
+  const packageLock = JSON.parse(prepared.files.get('apps/web/package-lock.json'));
+
+  assert.equal(packageJson.version, version);
+  assert.equal(packageLock.version, version);
+  assert.equal(packageLock.packages[''].version, version);
+  assert.equal(JSON.parse(prepared.manifestText).components[0].version, version);
+  assert.ok(prepared.files.get('releases/CHANGELOG.md').includes(
+    `## 2026-10-08T00:00:00.000Z — source \`${plan.sourceSha}\`\n\n- \`Agentweaver.Web\`: 0.1.0 -> ${version} (minor)`));
+});
+
+test('preparation rejects a missing source-bound receipt before reading Git state', () => {
+  assert.throws(() => verifyPreparation(process.cwd(), null),
+    /release preparation: malformed source-bound receipt/);
 });
 
 test('rollback restores package.json and package-lock.json when the lockfile rename fails', (t) => {
