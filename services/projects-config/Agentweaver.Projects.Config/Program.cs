@@ -20,6 +20,9 @@ if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
 var runSettleCredentialOperations = args.Length == 1 && args[0] == "--settle-credential-operations";
 if (args.Contains("--settle-credential-operations", StringComparer.Ordinal) && !runSettleCredentialOperations)
     throw new ArgumentException("The --settle-credential-operations command must be used by itself.", nameof(args));
+var runVerifyPairA = args.Length == 1 && args[0] == "--verify-projects-config-pair-a";
+if (args.Contains("--verify-projects-config-pair-a", StringComparer.Ordinal) && !runVerifyPairA)
+    throw new ArgumentException("The --verify-projects-config-pair-a command must be used by itself.", nameof(args));
 var runPrivilegedProjectSetup = args.Length == 1 && args[0] == "--privileged-project-setup";
 if (args.Contains("--privileged-project-setup", StringComparer.Ordinal) && !runPrivilegedProjectSetup)
     throw new ArgumentException(
@@ -45,7 +48,7 @@ if (args.Contains(ProjectPolicyBaselineCommand.Argument, StringComparer.Ordinal)
         "The --project-policy-baseline command must be used by itself.", nameof(args));
 
 var builder = WebApplication.CreateBuilder(
-    runMigrations || runSettleCredentialOperations || runPrivilegedProjectSetup ||
+    runMigrations || runSettleCredentialOperations || runVerifyPairA || runPrivilegedProjectSetup ||
         runFirstTenantAdminBootstrap || runFirstPlatformAdminBootstrap || runFirstPlatformAdminInspection ||
         runProjectPolicyBaseline ? [] : args);
 var requestContext = new HttpContextAccessor();
@@ -181,6 +184,22 @@ if (runSettleCredentialOperations)
         ProjectsConfigPostgresDataSource.CreateMigrationDataSource(builder.Configuration);
     await ProjectsConfigMigrator.SettleCredentialOperationsAsync(migrationDataSource);
     await Console.Out.WriteLineAsync("PROJECTS_CONFIG_CREDENTIAL_OPERATIONS_SETTLED");
+    return;
+}
+
+if (runVerifyPairA)
+{
+    await using var migrationDataSource =
+        ProjectsConfigPostgresDataSource.CreateMigrationDataSource(builder.Configuration);
+    var result = await ProjectsConfigMigrator.CheckExactPairAAsync(migrationDataSource);
+    if (result.IsExactPairA)
+    {
+        await Console.Out.WriteLineAsync("PROJECTS_CONFIG_EXACT_PAIR_A");
+        return;
+    }
+
+    await Console.Error.WriteLineAsync($"PROJECTS_CONFIG_PAIR_A_NOT_PROVEN:{result.Reason}");
+    Environment.ExitCode = 1;
     return;
 }
 

@@ -328,10 +328,29 @@ test('deploy CLI parsers and deploy-from-commit rollback guard handle --provider
   const sourceTree = 'b'.repeat(40);
   const digests = Object.fromEntries(IMAGE_REPOSITORIES.map((repo, i) =>
     [repo, `sha256:${(i + 1).toString(16).padStart(64, '0')}`]));
-  const exec = (name, args) => {
+  let activeLeaseHolder;
+  const exec = (name, args, options = {}) => {
     if (name === 'git' && args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
     if (name === 'git' && args[0] === 'merge-base') return { status: 0, stdout: '', stderr: '' };
     if (name === 'git' && args[0] === 'rev-parse') return { status: 0, stdout: `${sourceTree}\n`, stderr: '' };
+    if (name === 'git' && args[0] === 'cat-file' && args[1] === '-e') return { status: 0, stdout: '', stderr: '' };
+    if (name === 'git' && args[0] === 'show') {
+      if (args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json')) {
+        return {
+          status: 0,
+          stdout: readFileSync(path.join(repoRoot, 'scripts', 'azure', 'lib', 'p1-postgres-plan.json'), 'utf8'),
+          stderr: '',
+        };
+      }
+      return {
+        status: 0,
+        stdout: readFileSync(
+          path.join(repoRoot, 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Program.cs'),
+          'utf8',
+        ),
+        stderr: '',
+      };
+    }
     if (name === 'git' && args[0] === 'worktree' && args[1] === 'add') {
       mkdirSync(worktreePath);
       return { status: 0, stdout: '', stderr: '' };
@@ -350,6 +369,33 @@ test('deploy CLI parsers and deploy-from-commit rollback guard handle --provider
     }
     if (name === 'kubectl' && args[0] === 'config' && args[1] === 'view') {
       return { status: 0, stdout: 'https://agentweaver-aks.hcp.eastus2euap.azmk8s.io:443', stderr: '' };
+    }
+    if (name === 'kubectl' && args[0] === 'get' && args[1] === 'lease') {
+      if (activeLeaseHolder) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            metadata: { uid: 'lease-uid-1', resourceVersion: '1' },
+            spec: { holderIdentity: activeLeaseHolder },
+          }),
+          stderr: '',
+        };
+      }
+      return { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases.coordination.k8s.io "p1-db-maintenance-lock" not found' };
+    }
+    if (name === 'kubectl' && args[0] === 'create' && args.includes('--filename')) {
+      const doc = JSON.parse(options.input ?? '{}');
+      if (doc.kind === 'Lease') {
+        activeLeaseHolder = doc.spec?.holderIdentity;
+        return { status: 0, stdout: 'lease created', stderr: '' };
+      }
+    }
+    if (name === 'kubectl' && args[0] === 'get' && (args[1] === 'jobs' || args[1] === 'pods')) {
+      return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
+    }
+    if (name === 'kubectl' && args[0] === 'delete' && args[1] === '--raw') {
+      activeLeaseHolder = undefined;
+      return { status: 0, stdout: 'lease deleted', stderr: '' };
     }
     if (name === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       if (args[2] === 'events-and-sessions-runtime-config') {
@@ -375,6 +421,7 @@ test('deploy CLI parsers and deploy-from-commit rollback guard handle --provider
         worktreePath,
         exec,
         verifyImage: async () => ({ sourceSha, sourceTree }),
+        deleteMaintenanceLease: async () => {},
         deployKustomize: async () => {},
         deployModule: {
           DEPLOY_KUSTOMIZE_REGISTRY_OPTION: true,

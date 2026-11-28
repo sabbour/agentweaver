@@ -12,6 +12,7 @@ import {
   assertTargetContext,
   BYOK_SMOKE_LOOP,
   deleteContainerNetworkLog,
+  deleteKubernetesResourceWithPreconditions,
   deployKustomize as realDeployKustomize,
   ENVIRONMENT_RBAC_REQUIREMENTS,
   verifyImageCapability,
@@ -32,7 +33,11 @@ import { applyTargetValues, targetValuePairs } from '../target-values.mjs';
 import { run } from '../../azure/lib/exec.mjs';
 
 const deployKustomize = (options, overrides = {}) =>
-  realDeployKustomize(options, { verifyImageCapability: async () => {}, ...overrides });
+  realDeployKustomize(options, {
+    verifyImageCapability: async () => {},
+    deleteMaintenanceLease: overrides.deleteMaintenanceLease ?? overrides.exec?.deleteMaintenanceLease ?? (async () => {}),
+    ...overrides,
+  });
 import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
 import { classify } from '../../ci/v1-changes.mjs';
 
@@ -629,6 +634,56 @@ function fakeExec(calls, {
         stderr: '',
       };
     }
+    if (args[0] === 'get' && args[1] === 'lease' && args[2] === 'p1-db-maintenance-lock') {
+      if (live.maintenanceLease) {
+        if (args.includes('--output=jsonpath={.spec.holderIdentity}')) {
+          return { status: 0, stdout: live.maintenanceLease.spec?.holderIdentity ?? '', stderr: '' };
+        }
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            ...live.maintenanceLease,
+            metadata: {
+              uid: 'lease-uid-1',
+              resourceVersion: '1',
+              ...live.maintenanceLease.metadata,
+            },
+          }),
+          stderr: '',
+        };
+      }
+      return { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases.coordination.k8s.io "p1-db-maintenance-lock" not found' };
+    }
+    if (args[0] === 'create' && args.includes('--filename') && options?.input?.trimStart().startsWith('{')) {
+      const parsed = JSON.parse(options.input);
+      if (parsed.kind === 'Lease' && parsed.metadata?.name === 'p1-db-maintenance-lock') {
+        live.maintenanceLease = {
+          ...parsed,
+          metadata: { uid: 'lease-uid-1', resourceVersion: '1', ...parsed.metadata },
+        };
+        return { status: 0, stdout: 'lease.coordination.k8s.io/p1-db-maintenance-lock created', stderr: '' };
+      }
+    }
+    if (args[0] === 'delete' && args[1] === '--raw' &&
+        args[2] === '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock') {
+      if (!args.includes('--filename') || args[args.indexOf('--filename') + 1] !== '-' ||
+          !args.includes('--context')) {
+        return { status: 1, stdout: '', stderr: `unexpected raw delete ${args.join(' ')}` };
+      }
+      const body = JSON.parse(options.input ?? '{}');
+      if (body.apiVersion !== 'v1' || body.kind !== 'DeleteOptions' ||
+          !live.maintenanceLease ||
+          body.preconditions?.uid !== live.maintenanceLease.metadata?.uid ||
+          body.preconditions?.resourceVersion !== live.maintenanceLease.metadata?.resourceVersion) {
+        return { status: 1, stdout: '', stderr: 'Conflict: UID or resourceVersion mismatch' };
+      }
+      live.maintenanceLease = undefined;
+      return { status: 0, stdout: 'lease.coordination.k8s.io/p1-db-maintenance-lock deleted', stderr: '' };
+    }
+    if (args[0] === 'get' && (args[1] === 'jobs' || args[1] === 'pods') &&
+        args.some(a => a.includes('agentweaver.io/db-maintenance-run='))) {
+      return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
+    }
     if (args[0] === 'get' && args[1] === 'configmap') {
       const name = args[2];
       if (name === 'identity-broker-migration-config' &&
@@ -1013,12 +1068,37 @@ function fakeExec(calls, {
     }
     assert.fail(`unexpected AgentHost registry request: ${value}`);
   };
+  exec.deleteMaintenanceLease = async ({ apiPath, uid, resourceVersion }) => {
+    const expectedPath = '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock';
+    if (apiPath !== expectedPath) throw new Error(`unexpected apiPath ${apiPath}`);
+    if (!live.maintenanceLease ||
+        uid !== live.maintenanceLease.metadata?.uid ||
+        resourceVersion !== live.maintenanceLease.metadata?.resourceVersion) {
+      throw new Error('Conflict: UID or resourceVersion mismatch');
+    }
+    live.maintenanceLease = undefined;
+  };
   return exec;
+}
+
+function isMaintenanceLeaseCall(call) {
+  if (call.command !== 'kubectl') return false;
+  if (call.args[0] === 'create' && call.options?.input?.trimStart().startsWith('{')) {
+    try {
+      const doc = JSON.parse(call.options.input);
+      if (doc.kind === 'Lease' && doc.metadata?.name === 'p1-db-maintenance-lock') return true;
+    } catch {
+      return false;
+    }
+  }
+  return call.args[0] === 'delete' && call.args[1] === '--raw' &&
+    call.args[2] === '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock';
 }
 
 function kubernetesWriteCalls(calls) {
   const writes = new Set(['create', 'delete', 'apply', 'scale', 'annotate', 'patch', 'replace']);
-  return calls.filter(call => call.command === 'kubectl' && writes.has(call.args[0]));
+  return calls.filter(call =>
+    call.command === 'kubectl' && writes.has(call.args[0]) && !isMaintenanceLeaseCall(call));
 }
 
 function isSmokeCall(call) {
@@ -2252,7 +2332,7 @@ test('Broker preflight accepts an exact order-independent match and omits the im
     assert.ok(brokerRead >= 0 && brokerRead < firstWrite);
     assert.equal(appliedResources.some(resource =>
       resource.kind === 'ConfigMap' && resource.metadata.name === brokerRuntimeConfigName), false);
-    assert.equal(calls.some(call => call.command === 'kubectl' &&
+    assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['create', 'delete'].includes(call.args[0]) &&
       (call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName ||
         call.args[0] === 'create' && parse(call.options.input).kind === 'ConfigMap' &&
@@ -2448,7 +2528,7 @@ test('Kustomize accepts the exact rendered Broker ConfigMap before its first wri
     assert.deepEqual(brokerRuntimeConfig.data, sourceMap.data);
     const preflight = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'get' && call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName);
-    const firstWrite = calls.findIndex(call => call.command === 'kubectl' &&
+    const firstWrite = calls.findIndex(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['create', 'delete', 'apply', 'scale', 'annotate', 'patch', 'replace'].includes(call.args[0]));
     assert.ok(preflight >= 0);
     assert.ok(firstWrite > preflight);
@@ -2973,7 +3053,8 @@ test('deployment creates existing migration Jobs directly before one namespaced 
 
     const render = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'kustomize' && call.args[1].endsWith(path.join('deploy', 'k8s')));
-    const firstJob = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create');
+    const firstJob = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job');
     const brokerJobWait = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'wait' &&
       call.args.includes(`job/${createdJobs[0].metadata.name}`));
     const apply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
@@ -3032,7 +3113,7 @@ test('a Projects Config migration ServiceAccount without a client ID prevents ev
       deployKustomize({ imageTag: `sha-${'e'.repeat(40)}` }, { root: directory, exec, log() {} }),
       /ServiceAccount\/projects-config-migration does not name the approved migration identity/,
     );
-    assert.equal(calls.some(call => call.command === 'kubectl' &&
+    assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['create', 'apply', 'rollout'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -3250,7 +3331,7 @@ test('partial deployment rejects an omitted tagged AgentHost image before Kubern
       exec: fakeExec(calls, { liveImageRefs: { 'agentweaver-agenthost': existingTag } }),
       log() {},
     }), /no valid immutable Environment__Sandbox__AgentSandbox__ContainerImage reference matching the resolved digest/);
-    assert.equal(calls.some(call => call.command === 'kubectl' &&
+    assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -3273,7 +3354,7 @@ test('omitted AgentHost facts that are missing or conflict fail before Kubernete
       await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
         root: directory, exec: fakeExec(calls, { liveAgentHostSettings }), log() {},
       }), expected);
-      assert.equal(calls.some(call => call.command === 'kubectl' &&
+      assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
         ['annotate', 'create', 'delete', 'apply', 'scale'].includes(call.args[0])), false);
     }
 
@@ -3299,7 +3380,7 @@ test('omitted AgentHost facts that are missing or conflict fail before Kubernete
         deployments: { environment }, configMaps: {} } }),
       log() {},
     }), /conflicting image references for agentweaver-agenthost/);
-    assert.equal(calls.some(call => call.command === 'kubectl' &&
+    assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['annotate', 'create', 'delete', 'apply', 'scale'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -3380,6 +3461,7 @@ test('Broker update quiesces identity-broker and projects-config, settles creden
       deployKustomize({ imageManifest: manifestPath }, {
         root: directory,
         exec: execWithDeployments,
+        deleteMaintenanceLease: baseExec.deleteMaintenanceLease,
         sleep: async () => {},
         verifyImageCapability: async ({ capability }) => {
           if (capability === 'projects-config-settlement') {
@@ -3419,8 +3501,8 @@ test('Broker update quiesces identity-broker and projects-config, settles creden
       return execWithDeployments(command, args, options);
     };
     await deployKustomize({ imageManifest: manifestPath }, {
-      root: directory, exec: rerunExec, sleep: async () => {},
-      verifyImageCapability: async () => {}, log() {},
+      root: directory, exec: rerunExec, deleteMaintenanceLease: baseExec.deleteMaintenanceLease,
+      sleep: async () => {}, verifyImageCapability: async () => {}, log() {},
     });
     const scaleProjectsBeforeSettle = calls.findIndex((call, index) => index < calls.length &&
       call.command === 'kubectl' && call.args[0] === 'scale' &&
@@ -3608,7 +3690,7 @@ test('active installer guards both runtime maps, activates Environment, and reco
       call.args[1] === 'pods' && call.args.includes('--selector'));
     const deletions = calls.map((call, index) => ({ call, index }))
       .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'delete' &&
-        call.args[1] === '--raw');
+        call.args[1] === '--raw' && !isMaintenanceLeaseCall(call));
     const creations = calls.map((call, index) => ({ call, index }))
       .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'create' &&
         ['agenthost-runtime-v1', 'environment-runtime-config']
@@ -3647,7 +3729,7 @@ test('active installer guards both runtime maps, activates Environment, and reco
     await deployKustomize({ imageManifest: manifestPath }, options);
     const retry = calls.slice(beforeRetry);
     assert.equal(retry.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
-      call.args[1] === '--raw'), false);
+      call.args[1] === '--raw' && !isMaintenanceLeaseCall(call)), false);
     assert.equal(retry.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
       parse(call.options.input).kind === 'ConfigMap'), false);
     assert.deepEqual(retry.filter(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
@@ -3676,7 +3758,7 @@ test('partial deployment fails before writes when an omitted live image is unava
     await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
       root: directory, exec: fakeExec(calls, { liveImageRefs, distinctDigests: true }), log() {},
     }), /Could not find the currently deployed image for agentweaver-agenthost/);
-    assert.equal(calls.some(call => call.command === 'kubectl' &&
+    assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['create', 'apply', 'rollout'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -3787,7 +3869,7 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     const retryFirstWrite = retryCalls.findIndex(call => kubernetesWriteCalls([call]).length > 0);
     assert.ok(retryBrokerRead >= 0 && retryBrokerRead < retryFirstWrite);
     assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
-      !isSmokeCall(call)), false);
+      !isSmokeCall(call) && !isMaintenanceLeaseCall(call)), false);
     assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
       parse(call.options.input).kind === 'ConfigMap'), false);
     assert.deepEqual(retryCalls.filter(call => call.command === 'kubectl' && call.args[0] === 'scale')
@@ -3865,7 +3947,7 @@ test('retained completed Projects migration Pod does not block ConfigMap activat
     assert.ok(logs.includes(`Migration Job ${migrationJob.metadata.name} completed.`));
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'logs' && !isSmokeCall(call)), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
-      ['job', 'pod'].includes(call.args[1]) && !isSmokeCall(call)), false);
+      call.args[1] === 'pod' && !isSmokeCall(call)), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -3906,7 +3988,8 @@ test('selected Projects workload Pods block activation until removed', async () 
 
       const podPolls = calls.map((call, index) => ({ call, index }))
         .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'get' &&
-          call.args[1] === 'pods' && call.args.includes('--selector'));
+          call.args[1] === 'pods' && call.args.includes('--selector') &&
+          !call.args.some(a => a.includes('agentweaver.io/db-maintenance-run=')));
       const mapDelete = calls.findIndex(call => call.command === 'kubectl' &&
         call.args[0] === 'delete' && call.args[1] === 'configmap' &&
         call.args[2] === 'projects-config-runtime-config');
@@ -3921,7 +4004,7 @@ test('selected Projects workload Pods block activation until removed', async () 
       JSON.stringify({ polls: podPolls.map(item => item.index), mapDelete, mapCreate, apply }));
       assert.deepEqual(clock.sleeps, [5_000, 70_000]);
       assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
-        ['job', 'pod'].includes(call.args[1])), false);
+        call.args[1] === 'pod'), false);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -3949,7 +4032,8 @@ test('remaining Projects workload Pod preserves the stop timeout and recovery', 
     }), /Timed out waiting for deployment\/projects-config Pods to terminate/);
 
     const podPolls = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'get' &&
-      call.args[1] === 'pods' && call.args.includes('--selector'));
+      call.args[1] === 'pods' && call.args.includes('--selector') &&
+      !call.args.some(a => a.includes('agentweaver.io/db-maintenance-run=')));
     assert.equal(podPolls.length, 61);
     assert.deepEqual(clock.sleeps, Array(60).fill(5_000));
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
@@ -4043,7 +4127,8 @@ test('Projects migration Pod exemption requires its full identity and no runtime
       });
 
       const podPolls = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'get' &&
-        call.args[1] === 'pods' && call.args.includes('--selector'));
+        call.args[1] === 'pods' && call.args.includes('--selector') &&
+        !call.args.some(a => a.includes('agentweaver.io/db-maintenance-run=')));
       const mapDelete = calls.findIndex(call => call.command === 'kubectl' &&
         call.args[0] === 'delete' && call.args[1] === 'configmap' &&
         call.args[2] === 'projects-config-runtime-config');
@@ -4072,7 +4157,7 @@ test('immutable runtime ConfigMap update checks delete permission before migrati
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
       call.args[1] === 'can-i' && call.args[2] === 'delete' &&
       call.args[3] === 'configmap/projects-config-runtime-config'), true);
-    assert.equal(calls.some(call => call.command === 'kubectl' &&
+    assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['annotate', 'create', 'delete', 'apply', 'scale'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -4149,7 +4234,7 @@ test('runtime ConfigMap and Environment activation permission failures stop befo
         exec: fakeExec(calls, { ...settings, denyRuntimePermission: permission }),
         log() {},
       }), expected);
-      assert.equal(calls.some(call => call.command === 'kubectl' &&
+      assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
         ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false,
       `${permission} denial must precede writes`);
     }
@@ -4175,7 +4260,7 @@ test('required Secret metadata failures stop before workload effects', async () 
       await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
         root: directory, exec: fakeExec(calls, settings), log() {},
       }), expected);
-      assert.equal(calls.some(call => call.command === 'kubectl' &&
+      assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
         ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
       const secretReads = calls.filter(call => call.command === 'kubectl' &&
         call.args[0] === 'get' && call.args[1] === 'secret');
@@ -4207,7 +4292,7 @@ test('a preserved provider Secret reference is checked before workload effects',
       }),
       log() {},
     }), /Secret\/github-repo-app-oauth is missing/);
-    assert.equal(calls.some(call => call.command === 'kubectl' &&
+    assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -4241,7 +4326,7 @@ test('effective Environment RBAC failures stop before workload effects', async (
       await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
         root: directory, exec: fakeExec(calls, settings), log() {},
       }), expected);
-      assert.equal(calls.some(call => call.command === 'kubectl' &&
+      assert.equal(calls.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
         ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
     }
   } finally {
@@ -4696,6 +4781,8 @@ test('collector deletion sends UID and resourceVersion preconditions through kub
     'http://127.0.0.1:32123/apis/acn.azure.com/v1alpha1/containernetworklogs/agentweaver-agenthost-egress');
   assert.equal(requests[1].options.method, 'DELETE');
   assert.deepEqual(JSON.parse(requests[1].options.body), {
+    apiVersion: 'v1',
+    kind: 'DeleteOptions',
     preconditions: { uid: 'collector-uid', resourceVersion: '17' },
   });
   assert.equal(proxy.signalCode, 'SIGTERM');
@@ -4748,7 +4835,7 @@ test('deploy:kustomize blocks environment-migration on existing Environment depl
         log() {},
       }),
       /Existing Environment installations cannot run environment-migration through deploy:kustomize.*db:maintenance -- --execute --deploy-apps/);
-    assert.equal(callsFullRelease.some(call => call.command === 'kubectl' &&
+    assert.equal(callsFullRelease.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['scale', 'annotate', 'create', 'patch', 'delete', 'apply'].includes(call.args[0])), false);
 
     const callsExisting = [];
@@ -4759,7 +4846,7 @@ test('deploy:kustomize blocks environment-migration on existing Environment depl
         log() {},
       }),
       /Existing Environment installations cannot run environment-migration through deploy:kustomize.*db:maintenance -- --execute --deploy-apps/);
-    assert.equal(callsExisting.some(call => call.command === 'kubectl' &&
+    assert.equal(callsExisting.some(call => call.command === 'kubectl' && !isMaintenanceLeaseCall(call) &&
       ['scale', 'annotate', 'create', 'patch', 'delete', 'apply'].includes(call.args[0])), false);
 
     const callsPods = [];
@@ -4818,6 +4905,934 @@ test('deploy:kustomize blocks environment-migration on existing Environment depl
     assert.equal(brokerMigrationCompleted, true);
     assert.equal(callsRace.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
       call.options?.input?.includes('environment-migration-')), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: deployKustomize acquires Lease first, scales down incompatible projects-config, persists Pending then Required, and restores replicas', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+    const calls = [];
+    const baseExec = fakeExec(calls, {
+      liveImageRefs: { 'agentweaver.projects.config': 'sha-0000000000000000000000000000000000000000' },
+    });
+    const exec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'Deployment',
+            metadata: { name: 'projects-config', namespace: 'agentweaver' },
+            spec: {
+              replicas: 2,
+              template: { spec: { containers: [{ image: `${REGISTRY}/agentweaver.projects.config@sha256:${'2'.repeat(64)}` }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      return baseExec(cmd, args, opts);
+    };
+    const verifyImageCapability = async ({ image, capability }) => {
+      if (capability === 'projects-config-consume-guard' && image.includes('2'.repeat(64))) {
+        throw new Error('pre-20261128012056 image');
+      }
+    };
+    const deletedLeases = [];
+    await realDeployKustomize({ imageManifest: manifestPath }, {
+      root: directory,
+      exec,
+      sleep: async () => {},
+      verifyImageCapability,
+      deleteMaintenanceLease: async opts => {
+        deletedLeases.push(opts);
+        return baseExec.deleteMaintenanceLease(opts);
+      },
+      log() {},
+    });
+
+    const leaseCreateIdx = calls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.trimStart().startsWith('{') && JSON.parse(c.options.input).kind === 'Lease');
+    const stateReadIdx = calls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'get' &&
+      c.args[1] === 'configmap' && c.args[2] === 'p1-db-maintenance-state');
+    const scaleDownIdx = calls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'scale' &&
+      c.args[1] === 'deployment/projects-config' && c.args.includes('--replicas=0'));
+    const pendingCreateIdx = calls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.includes('projectsConfig.consumeGuardPending'));
+    const jobCreateIdx = calls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.includes('projects-config-migration') && !c.options?.input?.includes('p1-db-maintenance-state'));
+    const requiredCreateIdx = calls.findLastIndex(c => c.command === 'kubectl' &&
+      (c.args[0] === 'create' || c.args[0] === 'patch') &&
+      (c.options?.input?.includes('projectsConfig.consumeGuardRequired') ||
+        c.args.join(' ').includes('projectsConfig.consumeGuardRequired')));
+    const jobDeleteIdx = calls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'delete' &&
+      c.args[1] === 'job' && c.args[2]?.startsWith('projects-config-migration-'));
+    assert.ok(leaseCreateIdx >= 0 && leaseCreateIdx < stateReadIdx);
+    assert.ok(leaseCreateIdx < scaleDownIdx);
+    assert.ok(pendingCreateIdx >= 0 && pendingCreateIdx < jobCreateIdx);
+    assert.ok(jobCreateIdx >= 0 && requiredCreateIdx > jobCreateIdx && jobDeleteIdx > requiredCreateIdx &&
+      deletedLeases.length === 1,
+    JSON.stringify({ leaseCreateIdx, stateReadIdx, scaleDownIdx, pendingCreateIdx, jobCreateIdx, requiredCreateIdx, jobDeleteIdx, deletedLeases }));
+
+    const applied = parse(calls.find(c => c.command === 'kubectl' && c.args[0] === 'apply').options.input);
+    const pcApplied = applied.items.find(r => r.kind === 'Deployment' && r.metadata.name === 'projects-config');
+    assert.equal(pcApplied.spec.replicas, 2);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: deployKustomize reuses heldMaintenanceRunId without nested Lease and retains owned Lease if Pods are unsettled', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+
+    // 1. Reuse heldMaintenanceRunId without creating or deleting Lease.
+    const reuseCalls = [];
+    const reuseExec = fakeExec(reuseCalls);
+    const reuseWrappedExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'lease' && args[2] === 'p1-db-maintenance-lock') {
+        return { status: 0, stdout: JSON.stringify({ spec: { holderIdentity: 'outer-run-123' } }), stderr: '' };
+      }
+      return reuseExec(cmd, args, opts);
+    };
+    await realDeployKustomize({ imageManifest: manifestPath }, {
+      root: directory,
+      exec: reuseWrappedExec,
+      sleep: async () => {},
+      verifyImageCapability: async () => {},
+      heldMaintenanceRunId: 'outer-run-123',
+      log() {},
+    });
+    assert.equal(reuseCalls.some(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.trimStart().startsWith('{') && JSON.parse(c.options.input).kind === 'Lease'), false);
+    assert.equal(reuseCalls.some(c => c.command === 'kubectl' && c.args[0] === 'delete' &&
+      c.args[1] === '--raw' && c.args[2]?.includes('/leases/p1-db-maintenance-lock')), false);
+
+    // 2. Retain owned Lease if active Pod remains for the run.
+    const retainCalls = [];
+    const baseRetainExec = fakeExec(retainCalls);
+    const retainExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'pods' &&
+          args.some(a => a.includes('agentweaver.io/db-maintenance-run='))) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ kind: 'List', items: [{ metadata: { name: 'stuck-pod' }, status: { phase: 'Running' } }] }),
+          stderr: '',
+        };
+      }
+      return baseRetainExec(cmd, args, opts);
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: retainExec,
+        deleteMaintenanceLease: baseRetainExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability: async () => {},
+        log() {},
+      }),
+      /Could not clean up migration Job .* retain p1-db-maintenance-lock/);
+    assert.equal(retainCalls.some(c => c.command === 'kubectl' && c.args[0] === 'delete' &&
+      c.args[1] === '--raw' && c.args[2]?.includes('/leases/p1-db-maintenance-lock')), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: unrelated Gateway-only deploy neither acquires Lease nor runs Project Config compatibility check, while projects-config path retains both', async () => {
+  const directory = scratch();
+  try {
+    const partialManifestPath = path.join(directory, 'gateway-only.manifest.json');
+    writeFileSync(partialManifestPath, JSON.stringify({
+      images: { 'agentweaver.gateway': selectedTag },
+    }));
+    const gwCalls = [];
+    const baseGwExec = fakeExec(gwCalls);
+    const gwExec = (cmd, args, opts) => {
+      if (cmd === 'docker' && args[0] === 'buildx' && args[1] === 'imagetools' &&
+          args.some(a => a.includes('2'.repeat(64)))) {
+        return { status: 0, stdout: `sha256:${'2'.repeat(64)}\n`, stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'configmap' && args[2] === 'p1-db-maintenance-state') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ data: { 'projectsConfig.consumeGuardRequired': 'true' } }),
+          stderr: '',
+        };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'Deployment',
+            metadata: { name: 'projects-config', namespace: 'agentweaver' },
+            spec: {
+              replicas: 2,
+              template: { spec: { containers: [{ image: `${REGISTRY}/agentweaver.projects.config@sha256:${'2'.repeat(64)}` }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      return baseGwExec(cmd, args, opts);
+    };
+    let compatCheckedForGateway = false;
+    await realDeployKustomize({ imageManifest: partialManifestPath }, {
+      root: directory,
+      exec: gwExec,
+      sleep: async () => {},
+      verifyImageCapability: async ({ capability }) => {
+        if (capability === 'projects-config-consume-guard') {
+          compatCheckedForGateway = true;
+          throw new Error('pre-20261128012056 image');
+        }
+      },
+      log() {},
+    });
+    assert.equal(compatCheckedForGateway, false, 'Gateway-only deploy must not run Project Config compatibility check');
+    assert.equal(gwCalls.some(c => c.command === 'kubectl' && c.args[1] === 'lease'), false);
+    assert.equal(gwCalls.some(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.trimStart().startsWith('{') && JSON.parse(c.options.input).kind === 'Lease'), false);
+
+    // Projects & Config migration path acquires Lease before live reads and enforces compatibility.
+    const pcManifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(pcManifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+    const pcCalls = [];
+    const basePcExec = fakeExec(pcCalls);
+    const pcExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'configmap' && args[2] === 'p1-db-maintenance-state') {
+        pcCalls.push({ command: cmd, args, options: opts });
+        return {
+          status: 0,
+          stdout: JSON.stringify({ data: { 'projectsConfig.consumeGuardRequired': 'true' } }),
+          stderr: '',
+        };
+      }
+      return basePcExec(cmd, args, opts);
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: pcManifestPath }, {
+        root: directory,
+        exec: pcExec,
+        deleteMaintenanceLease: basePcExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability: async ({ capability }) => {
+          if (capability === 'projects-config-consume-guard') throw new Error('pre-20261128012056 image');
+        },
+        log() {},
+      }),
+      /pre-20261128012056 image/);
+
+    const leaseCreateIdx = pcCalls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.trimStart().startsWith('{') && JSON.parse(c.options.input).kind === 'Lease');
+    const stateReadIdx = pcCalls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'get' &&
+      c.args[1] === 'configmap' && c.args[2] === 'p1-db-maintenance-state');
+    const leasedDeploymentReadIdx = pcCalls.findLastIndex(c => c.command === 'kubectl' &&
+      c.args[0] === 'get' && c.args[1] === 'deployment' && c.args[2] === 'projects-config');
+    assert.ok(leaseCreateIdx >= 0 && leaseCreateIdx < stateReadIdx);
+    assert.ok(leaseCreateIdx < leasedDeploymentReadIdx);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: activateRuntimeConfig keeps projects-config at 0 during cutover even if apply fails, and migration Job carries run label', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+    const calls = [];
+    const baseExec = fakeExec(calls);
+    const exec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'Deployment',
+            metadata: { name: 'projects-config', namespace: 'agentweaver' },
+            spec: {
+              replicas: 2,
+              selector: { matchLabels: { 'app.kubernetes.io/name': 'projects-config' } },
+              template: { spec: { containers: [{ image: `${REGISTRY}/agentweaver.projects.config@sha256:${'2'.repeat(64)}` }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'configmap' &&
+          args[2] === 'projects-config-runtime-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            ...runtimeConfig,
+            data: { ...runtimeConfig.data, 'appsettings.json': '{"old":true}' },
+          }),
+          stderr: '',
+        };
+      }
+      if (cmd === 'kubectl' && args[0] === 'apply') {
+        return { status: 1, stdout: '', stderr: 'simulated apply failure' };
+      }
+      return baseExec(cmd, args, opts);
+    };
+    const verifyImageCapability = async ({ image, capability }) => {
+      if (capability === 'projects-config-consume-guard' && image.includes('2'.repeat(64))) {
+        throw new Error('pre-20261128012056 image');
+      }
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec,
+        deleteMaintenanceLease: baseExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability,
+        log() {},
+      }),
+      /Workload apply failed/);
+
+    const scaleUpCalls = calls.filter(c => c.command === 'kubectl' && c.args[0] === 'scale' &&
+      c.args[1] === 'deployment/projects-config' && !c.args.includes('--replicas=0'));
+    assert.equal(scaleUpCalls.length, 0, 'old projects-config must stay at 0 when apply fails');
+
+    const jobCreate = calls.find(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.includes('projects-config-migration-') && !c.options?.input?.includes('p1-db-maintenance-state'));
+    const jobDoc = parse(jobCreate.options.input);
+    const runLabel = jobDoc.metadata.labels['agentweaver.io/db-maintenance-run'];
+    assert.match(runLabel, /^[a-f0-9]{12}$/);
+    assert.equal(jobDoc.spec.template.metadata.labels['agentweaver.io/db-maintenance-run'], runLabel);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: wait failure settles Job, runs real Pair A verifier without override, and retains Lease when Pod stays active', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+
+    // 1. Active Pod after wait failure -> deletes Job and retains Lease.
+    const activeCalls = [];
+    const baseActiveExec = fakeExec(activeCalls);
+    const activeExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'wait' && args.some(a => a.startsWith('job/projects-config-migration-'))) {
+        return { status: 1, stdout: '', stderr: 'job wait failed' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'pods' &&
+          args.some(a => a.includes('agentweaver.io/db-maintenance-run='))) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ kind: 'List', items: [{ metadata: { name: 'stuck-mig-pod' }, status: { phase: 'Running' } }] }),
+          stderr: '',
+        };
+      }
+      return baseActiveExec(cmd, args, opts);
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: activeExec,
+        deleteMaintenanceLease: baseActiveExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability: async () => {},
+        log() {},
+      }),
+      /projects-config-migration-.* failed/);
+    assert.ok(activeCalls.some(c => c.command === 'kubectl' && c.args[0] === 'delete' && c.args[1] === 'job'));
+    assert.equal(activeCalls.some(c => c.command === 'kubectl' && c.args[0] === 'delete' && c.args[1] === 'lease'), false);
+
+    // 2. Settled wait failure -> runs real --verify-projects-config-pair-a Job and clears Pending on PROJECTS_CONFIG_EXACT_PAIR_A.
+    const settledCalls = [];
+    const baseSettledExec = fakeExec(settledCalls);
+    const settledExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'wait' && args.some(a => a.startsWith('job/projects-config-migration-'))) {
+        return { status: 1, stdout: '', stderr: 'job wait failed' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'logs' && args.some(a => a.startsWith('job/projects-config-paira-'))) {
+        return { status: 0, stdout: 'PROJECTS_CONFIG_EXACT_PAIR_A\n', stderr: '' };
+      }
+      return baseSettledExec(cmd, args, opts);
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: settledExec,
+        deleteMaintenanceLease: baseSettledExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability: async () => {},
+        log() {},
+      }),
+      /projects-config-migration-.* failed/);
+    const pairAJobCreate = settledCalls.find(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.includes('--verify-projects-config-pair-a'));
+    assert.ok(pairAJobCreate, 'real Pair A verifier Job must be created on settled migration failure');
+    assert.ok(settledCalls.some(c => c.command === 'kubectl' &&
+      (c.args[0] === 'create' || c.args[0] === 'patch') &&
+      ((c.options?.input ?? '').includes('consumeGuardPending":null') ||
+        c.args.join(' ').includes('consumeGuardPending":null'))));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: deleteKubernetesResourceWithPreconditions sends DeleteOptions body through kubectl proxy and rejects HTTP 409', async () => {
+  const requests = [];
+  let proxyArgs;
+  const makeFakeProxy = () => {
+    const p = new EventEmitter();
+    p.exitCode = null;
+    p.signalCode = null;
+    p.kill = () => {
+      p.exitCode = 0;
+      p.emit('close');
+    };
+    return p;
+  };
+  await deleteKubernetesResourceWithPreconditions({
+    context: 'selected-context',
+    root,
+    apiPath: '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock',
+    uid: 'lease-uid-1',
+    resourceVersion: '42',
+    resourceLabel: 'p1-db-maintenance-lock',
+  }, {
+    availableLoopbackPort: async () => 54321,
+    spawn: (_cmd, args) => {
+      proxyArgs = args;
+      return makeFakeProxy();
+    },
+    fetch: async (url, init = {}) => {
+      requests.push({ url, init });
+      return new Response('{}', { status: 200 });
+    },
+  });
+  assert.deepEqual(proxyArgs, ['proxy', '--port=54321', '--address=127.0.0.1', '--context', 'selected-context']);
+  const deleteReq = requests.find(r => r.init.method === 'DELETE');
+  assert.ok(deleteReq);
+  assert.equal(deleteReq.url,
+    'http://127.0.0.1:54321/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock');
+  assert.deepEqual(JSON.parse(deleteReq.init.body), {
+    apiVersion: 'v1',
+    kind: 'DeleteOptions',
+    preconditions: { uid: 'lease-uid-1', resourceVersion: '42' },
+  });
+
+  await assert.rejects(
+    deleteKubernetesResourceWithPreconditions({
+      baseArgs: ['--kubeconfig', 'p0-kubeconfig'],
+      root,
+      apiPath: '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock',
+      uid: 'lease-uid-1',
+      resourceVersion: '42',
+      resourceLabel: 'p1-db-maintenance-lock',
+    }, {
+      availableLoopbackPort: async () => 54322,
+      spawn: (_cmd, args) => {
+        proxyArgs = args;
+        return makeFakeProxy();
+      },
+      fetch: async (_url, init = {}) => new Response('{}', { status: init.method === 'DELETE' ? 409 : 200 }),
+    }),
+    /HTTP 409/);
+  assert.deepEqual(proxyArgs, ['proxy', '--port=54322', '--address=127.0.0.1', '--kubeconfig', 'p0-kubeconfig']);
+});
+
+test('v9: deployKustomize Lease release proves UID and resourceVersion preconditions', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+    for (const mismatch of ['uid', 'resourceVersion']) {
+      const calls = [];
+      const baseExec = fakeExec(calls);
+      await assert.rejects(
+        realDeployKustomize({ imageManifest: manifestPath }, {
+          root: directory,
+          exec: baseExec,
+          deleteMaintenanceLease: async ({ apiPath, uid, resourceVersion }) => {
+            assert.equal(apiPath, '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock');
+            assert.ok(uid && resourceVersion);
+            throw new Error(`Conflict: ${mismatch} mismatch`);
+          },
+          sleep: async () => {},
+          verifyImageCapability: async () => {},
+          log() {},
+        }),
+        /Could not release p1-db-maintenance-lock/);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: deployKustomize recovers scaled-down projects-config when consumeGuardPending write fails only if Pair A is proven', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+    for (const pairAProven of [true, false]) {
+      const calls = [];
+      const baseExec = fakeExec(calls);
+      const exec = (cmd, args, opts) => {
+        if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              kind: 'Deployment',
+              metadata: { name: 'projects-config', namespace: 'agentweaver' },
+              spec: {
+                replicas: 2,
+                selector: { matchLabels: { 'app.kubernetes.io/name': 'projects-config' } },
+                template: { spec: { containers: [{ image: `${REGISTRY}/agentweaver.projects.config@sha256:${'2'.repeat(64)}` }] } },
+              },
+            }),
+            stderr: '',
+          };
+        }
+        if (cmd === 'kubectl' && args[0] === 'create' &&
+            (opts?.input ?? '').includes('projectsConfig.consumeGuardPending')) {
+          return { status: 1, stdout: '', stderr: 'simulated pending write failure' };
+        }
+        return baseExec(cmd, args, opts);
+      };
+      const verifyImageCapability = async ({ image, capability }) => {
+        if (capability === 'projects-config-consume-guard' && image.includes('2'.repeat(64))) {
+          throw new Error('pre-20261128012056 image');
+        }
+      };
+      await assert.rejects(
+        realDeployKustomize({ imageManifest: manifestPath }, {
+          root: directory,
+          exec,
+          deleteMaintenanceLease: baseExec.deleteMaintenanceLease,
+          sleep: async () => {},
+          verifyImageCapability,
+          verifyExactPairA: async () => pairAProven,
+          log() {},
+        }),
+        /simulated pending write failure/);
+      const restored = calls.some(c =>
+        c.command === 'kubectl' && c.args[0] === 'scale' &&
+        c.args[1] === 'deployment/projects-config' && c.args.includes('--replicas=2'));
+      assert.equal(restored, pairAProven);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: deployKustomize interrupted retry at zero replicas reads saved annotation and restores replicas', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+    const calls = [];
+    const baseExec = fakeExec(calls);
+    const exec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'Deployment',
+            metadata: {
+              name: 'projects-config',
+              namespace: 'agentweaver',
+              annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+            },
+            spec: {
+              replicas: 0,
+              selector: { matchLabels: { 'app.kubernetes.io/name': 'projects-config' } },
+              template: { spec: { containers: [{ image: `${REGISTRY}/agentweaver.projects.config@sha256:${'2'.repeat(64)}` }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (cmd === 'kubectl' && args[0] === 'wait' && args.some(a => a.startsWith('job/projects-config-migration-'))) {
+        return { status: 1, stdout: '', stderr: 'job wait failed' };
+      }
+      return baseExec(cmd, args, opts);
+    };
+    const verifyImageCapability = async ({ image, capability }) => {
+      if (capability === 'projects-config-consume-guard' && image.includes('2'.repeat(64))) {
+        throw new Error('pre-20261128012056 image');
+      }
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec,
+        deleteMaintenanceLease: baseExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability,
+        verifyExactPairA: async () => true,
+        log() {},
+      }),
+      /projects-config-migration-.* failed/);
+    assert.ok(calls.some(c =>
+      c.command === 'kubectl' && c.args[0] === 'scale' &&
+      c.args[1] === 'deployment/projects-config' && c.args.includes('--replicas=2')));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: deployKustomize propagates retain-Lease to heldMaintenanceRunId owner and clears inherited consumeGuardPending on Pair A recovery', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+
+    // 1. Propagate onRetainLease when heldMaintenanceRunId is set and Job cleanup fails.
+    const retainCalls = [];
+    const baseRetainExec = fakeExec(retainCalls);
+    const retainExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'lease' && args[2] === 'p1-db-maintenance-lock') {
+        return { status: 0, stdout: JSON.stringify({ spec: { holderIdentity: 'outer-run-123' } }), stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'delete' && args[1] === 'job') {
+        return { status: 1, stdout: '', stderr: 'delete job failed' };
+      }
+      return baseRetainExec(cmd, args, opts);
+    };
+    let retainedNotified = false;
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: retainExec,
+        heldMaintenanceRunId: 'outer-run-123',
+        onRetainLease: () => { retainedNotified = true; },
+        sleep: async () => {},
+        verifyImageCapability: async () => {},
+        log() {},
+      }),
+      /Could not clean up migration Job/);
+    assert.equal(retainedNotified, true);
+
+    // 2. Clear inherited consumeGuardPending on Pair A recovery even when this run's Pending patch fails.
+    const recoverCalls = [];
+    const baseRecoverExec = fakeExec(recoverCalls);
+    const recoverExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'configmap' && args[2] === 'p1-db-maintenance-state') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ data: { 'projectsConfig.consumeGuardPending': 'true' } }),
+          stderr: '',
+        };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'Deployment',
+            metadata: {
+              name: 'projects-config',
+              namespace: 'agentweaver',
+              annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+            },
+            spec: {
+              replicas: 0,
+              selector: { matchLabels: { 'app.kubernetes.io/name': 'projects-config' } },
+              template: { spec: { containers: [{ image: `${REGISTRY}/agentweaver.projects.config@sha256:${'2'.repeat(64)}` }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (cmd === 'kubectl' && args[0] === 'patch' && args[1] === 'configmap' && args[2] === 'p1-db-maintenance-state' &&
+          args.join(' ').includes('"projectsConfig.consumeGuardPending":"true"')) {
+        return { status: 1, stdout: '', stderr: 'simulated pending write failure' };
+      }
+      return baseRecoverExec(cmd, args, opts);
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: recoverExec,
+        deleteMaintenanceLease: baseRecoverExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability: async ({ image, capability }) => {
+          if (capability === 'projects-config-consume-guard' && image.includes('2'.repeat(64))) {
+            throw new Error('pre-20261128012056 image');
+          }
+        },
+        verifyExactPairA: async () => true,
+        log() {},
+      }),
+      /simulated pending write failure/);
+    const clearIdx = recoverCalls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'patch' &&
+      c.args[2] === 'p1-db-maintenance-state' && c.args.join(' ').includes('"projectsConfig.consumeGuardPending":null'));
+    const restoreIdx = recoverCalls.findIndex(c => c.command === 'kubectl' && c.args[0] === 'scale' &&
+      c.args[1] === 'deployment/projects-config' && c.args.includes('--replicas=2'));
+    assert.ok(clearIdx >= 0 && clearIdx < restoreIdx, JSON.stringify({ clearIdx, restoreIdx }));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: deployKustomize cleans up Job on consumeGuardRequired failure and retains Lease on Pair A delete failure or restore timeout', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+
+    // 1. consumeGuardRequired write failure still deletes completed migration Job.
+    const reqFailCalls = [];
+    const baseReqExec = fakeExec(reqFailCalls);
+    const reqFailExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && (args[0] === 'create' || args[0] === 'patch') &&
+          ((opts?.input ?? '').includes('consumeGuardRequired') || args.join(' ').includes('consumeGuardRequired'))) {
+        return { status: 1, stdout: '', stderr: 'simulated required write failure' };
+      }
+      return baseReqExec(cmd, args, opts);
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: reqFailExec,
+        deleteMaintenanceLease: baseReqExec.deleteMaintenanceLease,
+        sleep: async () => {},
+        verifyImageCapability: async () => {},
+        log() {},
+      }),
+      /simulated required write failure/);
+    assert.ok(reqFailCalls.some(c => c.command === 'kubectl' && c.args[0] === 'delete' &&
+      c.args[1] === 'job' && c.args[2]?.startsWith('projects-config-migration-')));
+
+    // 2. Pair A verifier Job delete failure retains Lease and notifies outer owner.
+    const pairAFailCalls = [];
+    const basePairAExec = fakeExec(pairAFailCalls);
+    const pairAFailExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'lease' && args[2] === 'p1-db-maintenance-lock') {
+        return { status: 0, stdout: JSON.stringify({ spec: { holderIdentity: 'outer-run-123' } }), stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'wait' && args.some(a => a.startsWith('job/projects-config-migration-'))) {
+        return { status: 1, stdout: '', stderr: 'job wait failed' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'logs' && args.some(a => a.startsWith('job/projects-config-paira-'))) {
+        return { status: 0, stdout: 'PROJECTS_CONFIG_EXACT_PAIR_A\n', stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'delete' && args[1] === 'job' && args[2]?.startsWith('projects-config-paira-')) {
+        return { status: 1, stdout: '', stderr: 'delete paira job failed' };
+      }
+      return basePairAExec(cmd, args, opts);
+    };
+    let pairARetained = false;
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: pairAFailExec,
+        heldMaintenanceRunId: 'outer-run-123',
+        onRetainLease: () => { pairARetained = true; },
+        sleep: async () => {},
+        verifyImageCapability: async () => {},
+        log() {},
+      }),
+      /Could not clean up Pair A verification Job/);
+    assert.equal(pairARetained, true);
+
+    // 3. Replica restore readiness timeout retains Lease and notifies outer owner.
+    const rolloutCalls = [];
+    const baseRolloutExec = fakeExec(rolloutCalls);
+    const rolloutExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'lease' && args[2] === 'p1-db-maintenance-lock') {
+        return { status: 0, stdout: JSON.stringify({ spec: { holderIdentity: 'outer-run-123' } }), stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'Deployment',
+            metadata: {
+              name: 'projects-config',
+              namespace: 'agentweaver',
+              annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+            },
+            spec: {
+              replicas: 0,
+              selector: { matchLabels: { 'app.kubernetes.io/name': 'projects-config' } },
+              template: { spec: { containers: [{ image: `${REGISTRY}/agentweaver.projects.config@sha256:${'2'.repeat(64)}` }] } },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (cmd === 'kubectl' && args[0] === 'wait' && args.some(a => a.startsWith('job/projects-config-migration-'))) {
+        return { status: 1, stdout: '', stderr: 'job wait failed' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'rollout' && args[1] === 'status') {
+        return { status: 1, stdout: '', stderr: 'timed out waiting for rollout' };
+      }
+      return baseRolloutExec(cmd, args, opts);
+    };
+    let rolloutRetained = false;
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: rolloutExec,
+        heldMaintenanceRunId: 'outer-run-123',
+        onRetainLease: () => { rolloutRetained = true; },
+        sleep: async () => {},
+        verifyImageCapability: async ({ image, capability }) => {
+          if (capability === 'projects-config-consume-guard' && image.includes('2'.repeat(64))) {
+            throw new Error('pre-20261128012056 image');
+          }
+        },
+        verifyExactPairA: async () => true,
+        log() {},
+      }),
+      /Deployment projects-config did not become ready after Pair A recovery/);
+    assert.equal(rolloutRetained, true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('v9: incompatible image rejects before collector reconciliation and lost wait on active Broker Job retains Lease', async () => {
+  const directory = scratch();
+  try {
+    const manifestPath = path.join(directory, 'projects-config.manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      images: { 'agentweaver.projects.config': selectedTag },
+    }));
+
+    // 1. Rejected incompatible image leaves existing ContainerNetworkLog collector untouched.
+    const collectorCalls = [];
+    const baseCollectorExec = fakeExec(collectorCalls);
+    const existingCollector = {
+      apiVersion: 'acn.azure.com/v1alpha1',
+      kind: 'ContainerNetworkLog',
+      metadata: {
+        name: 'agentweaver-agenthost-egress',
+        uid: 'col-uid-1',
+        resourceVersion: '7',
+        labels: { 'agentweaver.dev/managed-by': 'agentweaver' },
+      },
+    };
+    const collectorExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'api-resources') {
+        return { status: 0, stdout: 'containernetworklogs.acn.azure.com\n', stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'containernetworklogs.acn.azure.com') {
+        return { status: 0, stdout: JSON.stringify(existingCollector), stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'configmap' && args[2] === 'p1-db-maintenance-state') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ data: { 'projectsConfig.consumeGuardRequired': 'true' } }),
+          stderr: '',
+        };
+      }
+      return baseCollectorExec(cmd, args, opts);
+    };
+    let collectorDeleted = false;
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: manifestPath, agentHostEgressAudit: 'off' }, {
+        root: directory,
+        exec: collectorExec,
+        deleteMaintenanceLease: baseCollectorExec.deleteMaintenanceLease,
+        deleteCollector: async () => { collectorDeleted = true; },
+        sleep: async () => {},
+        verifyImageCapability: async ({ capability }) => {
+          if (capability === 'projects-config-consume-guard') throw new Error('incompatible image');
+        },
+        log() {},
+      }),
+      /incompatible image/);
+    assert.equal(collectorDeleted, false, 'existing collector must remain untouched on rejected image');
+    assert.equal(collectorCalls.some(c => c.command === 'kubectl' &&
+      c.args[1] === 'containernetworklogs.acn.azure.com'), false);
+
+    // 2. Identity Broker-only deploy does not acquire Project Policy Lease or invoke Project Config compatibility guard.
+    const brokerManifestPath = path.join(directory, 'broker.manifest.json');
+    writeFileSync(brokerManifestPath, JSON.stringify({
+      images: { 'agentweaver.identity.broker': selectedTag },
+    }));
+    const brokerOnlyCalls = [];
+    const baseBrokerOnlyExec = fakeExec(brokerOnlyCalls);
+    let brokerOnlyCompatChecked = false;
+    await realDeployKustomize({ imageManifest: brokerManifestPath }, {
+      root: directory,
+      exec: baseBrokerOnlyExec,
+      sleep: async () => {},
+      verifyImageCapability: async ({ capability }) => {
+        if (capability === 'projects-config-consume-guard') {
+          brokerOnlyCompatChecked = true;
+          throw new Error('must not run on Identity Broker-only deploy');
+        }
+      },
+      log() {},
+    });
+    assert.equal(brokerOnlyCompatChecked, false);
+    assert.equal(brokerOnlyCalls.some(c => c.command === 'kubectl' && c.args[1] === 'lease'), false);
+    assert.equal(brokerOnlyCalls.some(c => c.command === 'kubectl' && c.args[0] === 'create' &&
+      c.options?.input?.trimStart().startsWith('{') && JSON.parse(c.options.input).kind === 'Lease'), false);
+
+    // 3. Lost wait on an active Identity Broker migration Job under heldMaintenanceRunId retains Lease.
+    const brokerCalls = [];
+    const baseBrokerExec = fakeExec(brokerCalls);
+    let brokerLeaseDeleted = false;
+    let brokerRetained = false;
+    const brokerExec = (cmd, args, opts) => {
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'lease' && args[2] === 'p1-db-maintenance-lock') {
+        return { status: 0, stdout: JSON.stringify({ spec: { holderIdentity: 'outer-run-123' } }), stderr: '' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'wait' && args.some(a => a.startsWith('job/identity-broker-migration-'))) {
+        return { status: 1, stdout: '', stderr: 'lost connection during wait' };
+      }
+      if (cmd === 'kubectl' && args[0] === 'get' && args[1] === 'jobs' &&
+          args.some(a => a.includes('agentweaver.io/db-maintenance-run='))) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'List',
+            items: [{ metadata: { name: 'identity-broker-migration-active' }, status: { active: 1 } }],
+          }),
+          stderr: '',
+        };
+      }
+      return baseBrokerExec(cmd, args, opts);
+    };
+    await assert.rejects(
+      realDeployKustomize({ imageManifest: brokerManifestPath }, {
+        root: directory,
+        exec: brokerExec,
+        heldMaintenanceRunId: 'outer-run-123',
+        onRetainLease: () => { brokerRetained = true; },
+        deleteMaintenanceLease: async () => { brokerLeaseDeleted = true; },
+        sleep: async () => {},
+        verifyImageCapability: async () => {},
+        log() {},
+      }),
+      /Migration Job identity-broker-migration-.* failed/);
+    assert.equal(brokerRetained, true);
+    assert.equal(brokerLeaseDeleted, false, 'Lease must be retained while Identity Broker migration Job is still active');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

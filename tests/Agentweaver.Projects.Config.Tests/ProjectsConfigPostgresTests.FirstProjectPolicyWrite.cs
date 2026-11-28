@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -1443,4 +1445,124 @@ public sealed partial class ProjectsConfigPostgresTests
                 });
             })
             .StartAsync();
+
+    private sealed class BlockingTransactionInterceptor(TaskCompletionSource entered) : DbTransactionInterceptor
+    {
+        public override async ValueTask<InterceptionResult<System.Data.Common.DbTransaction>> TransactionStartingAsync(
+            System.Data.Common.DbConnection connection,
+            TransactionStartingEventData eventData,
+            InterceptionResult<System.Data.Common.DbTransaction> result,
+            CancellationToken cancellationToken = default)
+        {
+            entered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return result;
+        }
+    }
+
+    private sealed class ControllableTimeProvider : TimeProvider
+    {
+        private sealed class TimerNode(TimerCallback callback, object? state) : ITimer
+        {
+            public bool Fired;
+            public bool Disposed;
+            public void Fire()
+            {
+                if (Disposed || Fired) return;
+                Fired = true;
+                callback(state);
+            }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+            public void Dispose() => Disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+
+        private readonly List<TimerNode> _timers = [];
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var node = new TimerNode(callback, state);
+            lock (_timers) _timers.Add(node);
+            return node;
+        }
+        public void FireAll()
+        {
+            TimerNode[] snapshot;
+            lock (_timers) snapshot = [.. _timers];
+            foreach (var timer in snapshot) timer.Fire();
+        }
+    }
+
+    private sealed class InterceptorDbContextFactory(
+        DbContextOptions<ProjectsConfigDbContext> options) : IDbContextFactory<ProjectsConfigDbContext>
+    {
+        public ProjectsConfigDbContext CreateDbContext() => new(options);
+    }
+
+    [Fact]
+    public async Task FirstProjectPolicyTransactionCreationTimeoutMapsTo503AndCallerCancellationPropagates()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(fixture.DataSource)
+            .AddInterceptors(new BlockingTransactionInterceptor(entered))
+            .Options;
+        var timeProvider = new ControllableTimeProvider();
+        var store = new NativeAcsPolicyStore(
+            new InterceptorDbContextFactory(options),
+            timeProvider,
+            new EphemeralDataProtectionProvider());
+
+        var projectId = Guid.NewGuid().ToString("N");
+        var caller = new ProjectAuthorizationContext(
+            "https://issuer.test", "actor-1", "tenant-timeout", Guid.NewGuid(), 1,
+            [new ProjectAuthorizationGrant(Guid.NewGuid(), ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner, 1)],
+            ImmutableHashSet.Create("api.read", "projects.admin"),
+            null, null, null);
+        var artifact = NativeAcsUnifiedPolicyProfile.CreateProjectArtifact(
+            """{"allowed_action_ids":["tool.read"]}""",
+            """{"rules":[]}""",
+            """{"required_checks":[],"blocked_findings":[]}""",
+            null,
+            """{"schemaVersion":1,"minimumScore":800,"requireCompletedEvidence":true}""");
+        var req = new NativeAcsPolicyWriteRequest(
+            NativeAcsPolicyScopeType.Project, caller.Grants[0].ResourceId, "canonical", null,
+            artifact, "timeout-key-1", "Timeout check", "corr-timeout-1");
+
+        var replayTask = store.FindFirstProjectWriteReplayAsync(caller, req, CancellationToken.None);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        timeProvider.FireAll();
+        var replayEx = await Assert.ThrowsAsync<ProjectConfigException>(() => replayTask);
+        Assert.Equal(503, replayEx.StatusCode);
+
+        entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writeOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(fixture.DataSource)
+            .AddInterceptors(new BlockingTransactionInterceptor(entered))
+            .Options;
+        var writeTime = new ControllableTimeProvider();
+        var writeStore = new NativeAcsPolicyStore(
+            new InterceptorDbContextFactory(writeOptions),
+            writeTime,
+            new EphemeralDataProtectionProvider());
+        var writeTask = writeStore.WriteFirstProjectPolicyAsync(caller, req, () => true, CancellationToken.None);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        writeTime.FireAll();
+        var writeEx = await Assert.ThrowsAsync<ProjectConfigException>(() => writeTask);
+        Assert.Equal(503, writeEx.StatusCode);
+
+        using var callerCts = new CancellationTokenSource();
+        entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(fixture.DataSource)
+            .AddInterceptors(new BlockingTransactionInterceptor(entered))
+            .Options;
+        var cancelStore = new NativeAcsPolicyStore(
+            new InterceptorDbContextFactory(cancelOptions),
+            TimeProvider.System,
+            new EphemeralDataProtectionProvider());
+        var cancelTask = cancelStore.WriteFirstProjectPolicyAsync(caller, req, () => true, callerCts.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await callerCts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelTask);
+    }
 }

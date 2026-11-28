@@ -866,15 +866,15 @@ internal sealed partial class NativeAcsPolicyStore
         var requestDigest = RequestDigest(request);
 
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        using var internalDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), timeProvider);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, internalDeadline.Token);
         var ct = deadline.Token;
 
-        await using var transaction = await db.Database
-            .BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
-            .ConfigureAwait(false);
         try
         {
+            await using var transaction = await db.Database
+                .BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
+                .ConfigureAwait(false);
             await SetBaselineTimeoutsAsync(db, ct).ConfigureAwait(false);
             _ = await LockAndCheckAuthorityAsync(db, caller, request, roleGrants, ct).ConfigureAwait(false);
             var receipt = await FindReceiptAsync(db, caller, request, scopeDigest, requestDigest, ct)
@@ -882,7 +882,7 @@ internal sealed partial class NativeAcsPolicyStore
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return receipt;
         }
-        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (internalDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             throw CreateFirstWriteTimeoutException();
         }
@@ -914,15 +914,15 @@ internal sealed partial class NativeAcsPolicyStore
         var requestDigest = RequestDigest(request);
 
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        using var internalDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15), timeProvider);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, internalDeadline.Token);
         var ct = deadline.Token;
 
-        await using var transaction = await db.Database
-            .BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
-            .ConfigureAwait(false);
         try
         {
+            await using var transaction = await db.Database
+                .BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
+                .ConfigureAwait(false);
             await SetBaselineTimeoutsAsync(db, ct).ConfigureAwait(false);
 
             // 1. Lock the admission fence exclusively first to preserve the global lock order.
@@ -1156,7 +1156,7 @@ internal sealed partial class NativeAcsPolicyStore
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return receipt;
         }
-        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (internalDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             throw CreateFirstWriteTimeoutException();
         }

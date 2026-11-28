@@ -160,7 +160,9 @@ export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
 export const DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION = true;
 export const DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION = true;
 export const DEPLOY_KUSTOMIZE_TARGET_OPTION = true;
+export const DEPLOY_KUSTOMIZE_CONTEXT_OPTION = true;
 export const DEPLOY_KUSTOMIZE_AUDIT_OPTION = true;
+export const DEPLOY_KUSTOMIZE_PROJECTS_CONFIG_CONSUME_GUARD = true;
 
 function fail(message) {
   throw new Error(`Kustomize deployment: ${message}`);
@@ -602,17 +604,23 @@ async function availableLoopbackPort() {
   return port;
 }
 
-export async function deleteContainerNetworkLog({ context, root, uid, resourceVersion }, overrides = {}) {
+export async function deleteKubernetesResourceWithPreconditions(
+  { context, baseArgs = [], root, apiPath, uid, resourceVersion, resourceLabel = 'resource' },
+  overrides = {},
+) {
   const port = await (overrides.availableLoopbackPort ?? availableLoopbackPort)();
-  const proxy = (overrides.spawn ?? spawn)('kubectl',
-    ['proxy', `--port=${port}`, '--address=127.0.0.1', '--context', context], {
+  const proxyArgs = [
+    'proxy', `--port=${port}`, '--address=127.0.0.1',
+    ...(context ? ['--context', context] : []),
+    ...baseArgs,
+  ];
+  const proxy = (overrides.spawn ?? spawn)('kubectl', proxyArgs, {
     cwd: root, stdio: 'ignore', windowsHide: true,
   });
   const request = overrides.fetch ?? fetch;
   let spawnError;
   proxy.once('error', error => { spawnError = error; });
   const baseUrl = `http://127.0.0.1:${port}`;
-  const apiPath = `/apis/acn.azure.com/v1alpha1/containernetworklogs/${EGRESS_AUDIT_COLLECTOR}`;
 
   try {
     let ready = false;
@@ -635,11 +643,15 @@ export async function deleteContainerNetworkLog({ context, root, uid, resourceVe
     const response = await request(`${baseUrl}${apiPath}`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ preconditions: { uid, resourceVersion } }),
+      body: JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'DeleteOptions',
+        preconditions: { uid, resourceVersion },
+      }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
-      throw new Error(`Kubernetes rejected the version-guarded collector delete (HTTP ${response.status}).`);
+      throw new Error(`Kubernetes rejected the version-guarded ${resourceLabel} delete (HTTP ${response.status}).`);
     }
   } finally {
     if (proxy.exitCode === null && proxy.signalCode === null) {
@@ -648,6 +660,17 @@ export async function deleteContainerNetworkLog({ context, root, uid, resourceVe
       await closed;
     }
   }
+}
+
+export async function deleteContainerNetworkLog({ context, root, uid, resourceVersion }, overrides = {}) {
+  return deleteKubernetesResourceWithPreconditions({
+    context,
+    root,
+    apiPath: `/apis/acn.azure.com/v1alpha1/containernetworklogs/${EGRESS_AUDIT_COLLECTOR}`,
+    uid,
+    resourceVersion,
+    resourceLabel: 'collector',
+  }, overrides);
 }
 
 function agentHostEgressCollector(auditMode) {
@@ -1300,7 +1323,8 @@ async function waitForDeploymentPodsToStop(
   }
 }
 
-async function activateRuntimeConfig(exec, context, root, runtimeConfig, deployment, sleep, log, now) {
+async function activateRuntimeConfig(exec, context, root, runtimeConfig, deployment, sleep, log, now,
+  { restoreReplicas = true } = {}) {
   const replicas = deploymentReplicas(deployment);
   const selector = deploymentSelector(deployment);
   const marker = deployment.metadata?.annotations?.[PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION];
@@ -1330,16 +1354,18 @@ async function activateRuntimeConfig(exec, context, root, runtimeConfig, deploym
       log(`Recreated immutable ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}.`);
     }
 
-    kubectl(exec, context, ['scale', 'deployment/projects-config', `--replicas=${replicas}`], root,
-      'Could not restore deployment/projects-config replicas after ConfigMap replacement');
+    if (restoreReplicas) {
+      kubectl(exec, context, ['scale', 'deployment/projects-config', `--replicas=${replicas}`], root,
+        'Could not restore deployment/projects-config replicas after ConfigMap replacement');
+    }
     return replicas;
   } catch (error) {
     let recoveryFailure;
     try {
-      if (readExistingRuntimeConfigMap(exec, context, root)) {
+      if (restoreReplicas && readExistingRuntimeConfigMap(exec, context, root)) {
         kubectl(exec, context, ['scale', 'deployment/projects-config', `--replicas=${replicas}`], root,
           'Could not restore deployment/projects-config after ConfigMap replacement failed');
-      } else {
+      } else if (!readExistingRuntimeConfigMap(exec, context, root)) {
         recoveryFailure = 'The ConfigMap is absent; deployment/projects-config remains stopped. Rerun the deploy command to recover.';
       }
     } catch (restoreError) {
@@ -1939,7 +1965,7 @@ export function assertTargetContext(exec, context, root, resourceGroup = 'agentw
   }
 }
 
-function migrationJobs(root, exec, context, digests, registries, selectedRepositories, resourceGroup, pairs) {
+function migrationJobs(root, exec, context, digests, registries, selectedRepositories, resourceGroup, pairs, runId) {
   const selected = new Set(selectedRepositories);
   const jobs = [];
   let brokerMigrationResources;
@@ -2020,13 +2046,15 @@ function migrationJobs(root, exec, context, digests, registries, selectedReposit
     jobs.push(buildProjectsConfigMigrationJob(
       root, exec, context, digests, registries, resourceGroup, pairs,
       `projects-config-migration-${randomUUID().slice(0, 8)}`,
+      undefined,
+      runId,
     ));
   }
   return { jobs, brokerMigrationResources };
 }
 
-function buildProjectsConfigMigrationJob(
-  root, exec, context, digests, registries, resourceGroup, pairs, name, commandOverride,
+export function buildProjectsConfigMigrationJob(
+  root, exec, context, digests, registries, resourceGroup, pairs, name, commandOverride, runId, imageOverride,
 ) {
   const projectsConfig = parse(applyTargetValues(readFileSync(path.join(root, 'deploy', 'k8s', 'migrations',
     'projects-config', 'job.yaml'), 'utf8'), pairs));
@@ -2040,15 +2068,30 @@ function buildProjectsConfigMigrationJob(
     fail('ServiceAccount/projects-config-migration does not name the approved migration identity.');
   }
   const job = prepareJob(projectsConfig, {
-    image: migrationImage(digests, 'agentweaver.projects.config', registries),
+    image: imageOverride ?? migrationImage(digests, 'agentweaver.projects.config', registries),
     name,
   });
+  if (typeof runId === 'string' && runId.length > 0) {
+    job.metadata.labels = { ...(job.metadata.labels ?? {}), [MAINTENANCE_RUN_LABEL]: runId };
+    job.spec.template.metadata = {
+      ...(job.spec.template.metadata ?? {}),
+      labels: { ...(job.spec.template.metadata?.labels ?? {}), [MAINTENANCE_RUN_LABEL]: runId },
+    };
+  }
   const container = job.spec.template.spec.containers[0];
   if (commandOverride) container.command = commandOverride;
   const setting = container.env
     .find(entry => entry.name === 'ProjectsConfig__Migration__WorkloadIdentity__ClientId');
   if (!setting) fail('Projects Config migration Job has no workload identity client ID setting.');
   setting.value = clientId;
+  const connectionSetting = container.env
+    .find(entry => entry.name === 'ConnectionStrings__ProjectsConfigMigration');
+  if (!connectionSetting?.value) {
+    fail('Projects Config migration Job has no PostgreSQL migration connection string.');
+  }
+  if (job.spec.template.metadata?.labels?.['azure.workload.identity/use'] !== 'true') {
+    fail('Projects Config migration Job has no azure.workload.identity/use label.');
+  }
   return job;
 }
 
@@ -2058,6 +2101,43 @@ function buildProjectsConfigSettlementJob(root, exec, context, digests, registri
     `projects-config-credential-settlement-${randomUUID().slice(0, 8)}`,
     ['dotnet', 'Agentweaver.Projects.Config.dll', '--settle-credential-operations'],
   );
+}
+
+const CONSUME_GUARD_MIGRATION =
+  'services/projects-config/Agentweaver.Projects.Config/Migrations/20261128012056_AddNativeAcsProjectPolicyBaselineConsumeGuard.cs';
+const POSTGRES_PLAN_SOURCE = 'scripts/azure/lib/p1-postgres-plan.json';
+const PROJECTS_CONFIG_PROGRAM_SOURCE = 'services/projects-config/Agentweaver.Projects.Config/Program.cs';
+
+export function sourceSupportsConsumeGuard(exec, root, sourceSha, sourceTree) {
+  if (!/^[0-9a-f]{40}$/.test(sourceSha ?? '')) return false;
+  if (sourceTree !== undefined) {
+    const treeCheck = exec('git', ['rev-parse', '--verify', `${sourceSha}^{tree}`], { check: false, cwd: root });
+    if (treeCheck.status !== 0 || treeCheck.stdout.trim() !== sourceTree) return false;
+  }
+  const hasMigration = exec('git', ['cat-file', '-e', `${sourceSha}:${CONSUME_GUARD_MIGRATION}`],
+    { check: false, cwd: root }).status === 0;
+  if (!hasMigration) return false;
+  const planRes = exec('git', ['show', `${sourceSha}:${POSTGRES_PLAN_SOURCE}`], { check: false, cwd: root });
+  if (planRes.status !== 0) return false;
+  try {
+    const plan = JSON.parse(planRes.stdout);
+    const service = plan?.services?.find(s => s?.schema === 'projects_config');
+    const table = service?.tables?.find(t => t?.table === 'native_acs_project_policy_baselines');
+    return Array.isArray(table?.updateColumns) && table.updateColumns.includes('consumed_revision');
+  } catch {
+    return false;
+  }
+}
+
+export function sourceSupportsPairAVerifier(exec, root, sourceSha, sourceTree) {
+  if (!/^[0-9a-f]{40}$/.test(sourceSha ?? '')) return false;
+  if (sourceTree !== undefined) {
+    const treeCheck = exec('git', ['rev-parse', '--verify', `${sourceSha}^{tree}`], { check: false, cwd: root });
+    if (treeCheck.status !== 0 || treeCheck.stdout.trim() !== sourceTree) return false;
+  }
+  const programRes = exec('git', ['show', `${sourceSha}:${PROJECTS_CONFIG_PROGRAM_SOURCE}`],
+    { check: false, cwd: root });
+  return programRes.status === 0 && programRes.stdout.includes('--verify-projects-config-pair-a');
 }
 
 export async function verifyImageCapability({
@@ -2091,6 +2171,16 @@ export async function verifyImageCapability({
     if (shown.status !== 0 || !shown.stdout.includes('--settle-credential-operations')) {
       fail(`Projects & Config image ${image} (${sourceSha}) does not support --settle-credential-operations; ` +
         'co-deploy a capable agentweaver.projects.config image.');
+    }
+    return;
+  } else if (capability === 'projects-config-consume-guard') {
+    if (!sourceSupportsConsumeGuard(exec, root, sourceSha, sourceTree)) {
+      fail(`Projects & Config image ${image} (${sourceSha}) lacks AddNativeAcsProjectPolicyBaselineConsumeGuard.`);
+    }
+    return;
+  } else if (capability === 'projects-config-pair-a-verifier') {
+    if (!sourceSupportsPairAVerifier(exec, root, sourceSha, sourceTree)) {
+      fail(`Projects & Config image ${image} (${sourceSha}) lacks --verify-projects-config-pair-a.`);
     }
     return;
   }
@@ -2158,6 +2248,313 @@ function persistBrokerDisableFenceRequired(exec, context, root) {
         }),
       });
   }
+}
+
+const MAINTENANCE_LEASE_NAME = 'p1-db-maintenance-lock';
+const MAINTENANCE_RUN_LABEL = 'agentweaver.io/db-maintenance-run';
+
+function persistMaintenanceStateEntries(exec, context, root, entries) {
+  const existing = readMaintenanceStateData(exec, context, root);
+  if (existing !== undefined) {
+    kubectl(exec, context, [
+      'patch', 'configmap', 'p1-db-maintenance-state', '--type=merge',
+      '-p', JSON.stringify({ data: entries }),
+    ], root, 'Could not update p1-db-maintenance-state');
+  } else {
+    const nonNull = Object.fromEntries(Object.entries(entries).filter(([, v]) => v !== null));
+    if (Object.keys(nonNull).length === 0) return;
+    kubectl(exec, context, ['create', '--filename', '-'], root,
+      'Could not create ConfigMap/p1-db-maintenance-state', {
+        input: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'ConfigMap',
+          metadata: { name: 'p1-db-maintenance-state', namespace: NAMESPACE },
+          data: nonNull,
+        }),
+      });
+  }
+}
+
+function acquireOrVerifyMaintenanceLease(exec, context, root, heldMaintenanceRunId, now) {
+  if (typeof heldMaintenanceRunId === 'string' && heldMaintenanceRunId.length > 0) {
+    const leaseRead = exec('kubectl', [
+      'get', 'lease', MAINTENANCE_LEASE_NAME, '--namespace', NAMESPACE, '--context', context, '--output=json',
+    ], { check: false, cwd: root });
+    if (leaseRead.status !== 0) {
+      fail(`Expected held database maintenance Lease ${MAINTENANCE_LEASE_NAME} for run ${heldMaintenanceRunId}.`);
+    }
+    const lease = JSON.parse(leaseRead.stdout || '{}');
+    if (lease.spec?.holderIdentity !== heldMaintenanceRunId) {
+      fail(`Database maintenance Lease ${MAINTENANCE_LEASE_NAME} is held by ${lease.spec?.holderIdentity ?? 'unknown'}, not ${heldMaintenanceRunId}.`);
+    }
+    return { runId: heldMaintenanceRunId, ownsLease: false };
+  }
+  const existing = exec('kubectl', [
+    'get', 'lease', MAINTENANCE_LEASE_NAME, '--namespace', NAMESPACE, '--context', context, '--output=json',
+  ], { check: false, cwd: root });
+  if (existing.status === 0) {
+    const lease = JSON.parse(existing.stdout || '{}');
+    fail(`Database maintenance lock is held by ${lease.spec?.holderIdentity ?? 'an unknown run'}.`);
+  }
+  if (!/NotFound/i.test(existing.stderr ?? '')) {
+    fail(`Could not inspect ${MAINTENANCE_LEASE_NAME}: ${redact(existing.stderr ?? '')}`);
+  }
+  const runId = randomUUID().replaceAll('-', '').slice(0, 12);
+  kubectl(exec, context, ['create', '--filename', '-'], root,
+    `Could not acquire ${MAINTENANCE_LEASE_NAME}`, {
+      input: JSON.stringify({
+        apiVersion: 'coordination.k8s.io/v1',
+        kind: 'Lease',
+        metadata: {
+          name: MAINTENANCE_LEASE_NAME,
+          namespace: NAMESPACE,
+          labels: { [MAINTENANCE_RUN_LABEL]: runId },
+        },
+        spec: {
+          holderIdentity: runId,
+          acquireTime: new Date(now()).toISOString().replace(/\.\d+Z$/, '.000000Z'),
+        },
+      }),
+    });
+  return { runId, ownsLease: true };
+}
+
+const HISTORICAL_MIGRATION_JOB_NAME =
+  /^(?:identity-broker-migration|environment-migration|orchestrator-migration|events-and-sessions-migration|projects-config-migration|projects-config-credential-settlement)-/;
+
+export function isMaintenanceRunSettled(
+  exec,
+  { context, baseArgs = [], root, runId, checkUnlabeledMigrationJobs = false },
+) {
+  const contextArgs = context ? ['--context', context] : [];
+  const jobsRes = exec('kubectl', [
+    ...baseArgs, 'get', 'jobs', ...contextArgs, '--namespace', NAMESPACE,
+    '--selector', `${MAINTENANCE_RUN_LABEL}=${runId}`, '--output=json',
+  ], { check: false, cwd: root });
+  if (jobsRes.status !== 0) return false;
+  const jobs = JSON.parse(jobsRes.stdout || '{}').items ?? [];
+  if (jobs.some(j => !(j.status?.conditions ?? []).some(c =>
+    (c.type === 'Complete' || c.type === 'Failed') && c.status === 'True'))) {
+    return false;
+  }
+  const podsRes = exec('kubectl', [
+    ...baseArgs, 'get', 'pods', ...contextArgs, '--namespace', NAMESPACE,
+    '--selector', `${MAINTENANCE_RUN_LABEL}=${runId}`, '--output=json',
+  ], { check: false, cwd: root });
+  if (podsRes.status !== 0) return false;
+  const pods = JSON.parse(podsRes.stdout || '{}').items ?? [];
+  if (pods.some(p => !['Succeeded', 'Failed'].includes(p.status?.phase))) {
+    return false;
+  }
+  if (!checkUnlabeledMigrationJobs) return true;
+  const allJobsRes = exec('kubectl', [
+    ...baseArgs, 'get', 'jobs', ...contextArgs, '--namespace', NAMESPACE, '--output=json',
+  ], { check: false, cwd: root });
+  if (allJobsRes.status !== 0) return false;
+  const allJobs = (JSON.parse(allJobsRes.stdout || '{}').items ?? []).filter(j =>
+    HISTORICAL_MIGRATION_JOB_NAME.test(j.metadata?.name ?? '') ||
+    Boolean(j.metadata?.labels?.['agentweaver.io/migration']));
+  if (allJobs.some(j => !(j.status?.conditions ?? []).some(c =>
+    (c.type === 'Complete' || c.type === 'Failed') && c.status === 'True'))) {
+    return false;
+  }
+  const allPodsRes = exec('kubectl', [
+    ...baseArgs, 'get', 'pods', ...contextArgs, '--namespace', NAMESPACE, '--output=json',
+  ], { check: false, cwd: root });
+  if (allPodsRes.status !== 0) return false;
+  const allPods = (JSON.parse(allPodsRes.stdout || '{}').items ?? []).filter(p =>
+    HISTORICAL_MIGRATION_JOB_NAME.test(p.metadata?.labels?.['job-name'] ?? '') ||
+    Boolean(p.metadata?.labels?.['agentweaver.io/migration']));
+  return !allPods.some(p => !['Succeeded', 'Failed'].includes(p.status?.phase));
+}
+
+function isProjectsConfigMaintenanceSettled(exec, context, root, runId) {
+  return isMaintenanceRunSettled(exec, { context, root, runId });
+}
+
+async function releaseMaintenanceLease(exec, context, root, runId, deleteLease = deleteKubernetesResourceWithPreconditions) {
+  if (!isProjectsConfigMaintenanceSettled(exec, context, root, runId)) {
+    fail(`Cannot release ${MAINTENANCE_LEASE_NAME} for ${runId} while its Job or Pods remain active or unknown; ` +
+      `settle them and run npm run db:maintenance:projects-config -- --release-lock ${runId}.`);
+  }
+  const leaseRes = exec('kubectl', [
+    'get', 'lease', MAINTENANCE_LEASE_NAME, '--namespace', NAMESPACE, '--context', context, '--output=json',
+  ], { check: false, cwd: root });
+  if (leaseRes.status !== 0) {
+    fail(`Could not inspect ${MAINTENANCE_LEASE_NAME} before release.`);
+  }
+  const lease = JSON.parse(leaseRes.stdout || '{}');
+  const uid = lease.metadata?.uid;
+  const resourceVersion = lease.metadata?.resourceVersion;
+  if (lease.spec?.holderIdentity !== runId || !uid || !resourceVersion) {
+    fail(`${MAINTENANCE_LEASE_NAME} changed holder or metadata before release (${lease.spec?.holderIdentity ?? 'unknown'}).`);
+  }
+  const apiPath = `/apis/coordination.k8s.io/v1/namespaces/${encodeURIComponent(NAMESPACE)}/leases/${encodeURIComponent(MAINTENANCE_LEASE_NAME)}`;
+  try {
+    await deleteLease({
+      context,
+      root,
+      apiPath,
+      uid,
+      resourceVersion,
+      resourceLabel: MAINTENANCE_LEASE_NAME,
+    });
+  } catch (error) {
+    fail(`Could not release ${MAINTENANCE_LEASE_NAME}: ${redact(error.message)}`);
+  }
+}
+
+async function runProjectsConfigPairAVerifierJob(
+  exec, context, root, digests, registries, resourceGroup, pairs, runId,
+  verifyCapability, verifierImage, onRetainLease = () => {},
+) {
+  let candidateImage = verifierImage;
+  if (!candidateImage) {
+    const existing = readExistingDeployment(exec, context, root, 'projects-config');
+    const liveImage = existing?.spec?.template?.spec?.containers?.[0]?.image;
+    if (typeof liveImage === 'string' && liveImage.length > 0) {
+      try {
+        await verifyCapability({ image: liveImage, capability: 'projects-config-pair-a-verifier', root, exec });
+        candidateImage = liveImage;
+      } catch {
+        candidateImage = undefined;
+      }
+    }
+  }
+  if (!candidateImage) {
+    const projectsImage = imageName(registries.get('agentweaver.projects.config'), 'agentweaver.projects.config') +
+      `@${digests.get('agentweaver.projects.config')}`;
+    try {
+      await verifyCapability({ image: projectsImage, capability: 'projects-config-pair-a-verifier', root, exec });
+      candidateImage = projectsImage;
+    } catch {
+      candidateImage = undefined;
+    }
+  }
+  if (!candidateImage) return false;
+  const jobName = `projects-config-paira-${runId}`;
+  const job = buildProjectsConfigMigrationJob(
+    root, exec, context, digests, registries, resourceGroup, pairs,
+    jobName,
+    ['dotnet', 'Agentweaver.Projects.Config.dll', '--verify-projects-config-pair-a'],
+    runId,
+    candidateImage,
+  );
+  delete job.spec.template.spec.containers[0].args;
+  let passed = false;
+  let verifierError;
+  try {
+    kubectl(exec, context, ['create', '--filename', '-'], root,
+      'Could not create Pair A verification Job', { input: stringify(job) });
+    const waitRes = exec('kubectl', [
+      'wait', '--for=condition=complete', `job/${jobName}`,
+      '--namespace', NAMESPACE, '--context', context, '--timeout=120s',
+    ], { check: false, cwd: root });
+    if (waitRes.status === 0) {
+      const logsRes = exec('kubectl', [
+        'logs', `job/${jobName}`, '--namespace', NAMESPACE, '--context', context, '--tail=10',
+      ], { check: false, cwd: root });
+      passed = logsRes.status === 0 && logsRes.stdout.includes('PROJECTS_CONFIG_EXACT_PAIR_A');
+    }
+  } catch (error) {
+    verifierError = error;
+  } finally {
+    const deleted = exec('kubectl', [
+      'delete', 'job', jobName, '--namespace', NAMESPACE, '--context', context,
+      '--cascade=foreground', '--ignore-not-found', '--wait=true', '--timeout=120s',
+    ], { check: false, cwd: root });
+    if (deleted.status !== 0 || !isProjectsConfigMaintenanceSettled(exec, context, root, runId)) {
+      onRetainLease();
+      const cleanupError = new Error(
+        `Kustomize deployment: Could not clean up Pair A verification Job ${jobName}; ` +
+        `retain ${MAINTENANCE_LEASE_NAME} and run npm run db:maintenance:projects-config -- --release-lock ${runId}.`,
+      );
+      cleanupError.retainMaintenanceLease = true;
+      throw verifierError
+        ? new AggregateError([verifierError, cleanupError], `${verifierError.message}; ${cleanupError.message}`)
+        : cleanupError;
+    }
+  }
+  if (verifierError) throw verifierError;
+  return passed;
+}
+
+async function assertProjectsConfigConsumeGuard(
+  exec, context, root, digests, registries, resourceGroup, pairs, runId,
+  verifyCapability, verifyExactPairA, verifierImage, onRetainLease,
+) {
+  const data = readMaintenanceStateData(exec, context, root);
+  const projectsImage = imageName(registries.get('agentweaver.projects.config'), 'agentweaver.projects.config') +
+    `@${digests.get('agentweaver.projects.config')}`;
+  const pending = data?.['projectsConfig.consumeGuardPending'] === 'true';
+  const required = data?.['projectsConfig.consumeGuardRequired'] === 'true';
+  if (pending || required) {
+    await verifyCapability({ image: projectsImage, capability: 'projects-config-consume-guard', root, exec });
+    return true;
+  }
+  try {
+    await verifyCapability({ image: projectsImage, capability: 'projects-config-consume-guard', root, exec });
+    return true;
+  } catch (error) {
+    const exactPairA = typeof verifyExactPairA === 'function'
+      ? Boolean(await verifyExactPairA({ exec, context, root, projectsImage }))
+      : await runProjectsConfigPairAVerifierJob(
+        exec, context, root, digests, registries, resourceGroup, pairs, runId,
+        verifyCapability, verifierImage, onRetainLease,
+      );
+    if (exactPairA) return false;
+    fail(`Projects & Config consume-guard rollback check blocked ${projectsImage}: ` +
+      `p1-db-maintenance-state lacks consumeGuard markers and exact Pair A could not be verified (${redact(error.message)}).`);
+  }
+}
+
+async function quiesceProjectsConfigConsumeCutover(
+  exec, context, root, sleep, log, verifyCapability, onScaledDown = () => {},
+) {
+  const existing = readExistingDeployment(exec, context, root, 'projects-config');
+  if (!existing) return undefined;
+  const liveImage = existing.spec?.template?.spec?.containers?.[0]?.image;
+  if (typeof liveImage === 'string' && liveImage.length > 0) {
+    try {
+      await verifyCapability({ image: liveImage, capability: 'projects-config-consume-guard', root, exec });
+      return undefined;
+    } catch {
+      // Fall through to scale down incompatible deployment/projects-config before migration.
+    }
+  }
+  const pods = JSON.parse(kubectl(exec, context, [
+    'get', 'pods', '-l', 'app.kubernetes.io/name=projects-config', '-o', 'json',
+  ], root, 'Could not inspect Projects & Config pods before consume-guard cutover').stdout || '{}');
+  const activePods = (pods.items ?? []).filter(pod => !isRetainedProjectsConfigMigrationPod(pod));
+  const marker = existing.metadata?.annotations?.[PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION];
+  const savedReplicas = typeof marker === 'string' && /^(0|[1-9]\d*)$/.test(marker)
+    ? Number(marker)
+    : undefined;
+  const replicas = Number.isInteger(existing.spec?.replicas) ? existing.spec.replicas : 1;
+  if (replicas <= 0 && activePods.length === 0) {
+    return savedReplicas;
+  }
+  const priorReplicas = savedReplicas ?? replicas;
+  if (savedReplicas === undefined) {
+    kubectl(exec, context, [
+      'annotate', 'deployment/projects-config',
+      `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}=${priorReplicas}`, '--overwrite',
+    ], root, 'Could not save deployment/projects-config replicas before consume-guard migration');
+  }
+  kubectl(exec, context, ['scale', 'deployment/projects-config', '--replicas=0'], root,
+    'Could not scale down deployment/projects-config before consume-guard migration');
+  onScaledDown(priorReplicas);
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const remaining = JSON.parse(kubectl(exec, context, [
+      'get', 'pods', '-l', 'app.kubernetes.io/name=projects-config', '-o', 'json',
+    ], root, 'Could not check Projects & Config pod shutdown').stdout || '{}');
+    if (!(remaining.items ?? []).some(pod => !isRetainedProjectsConfigMigrationPod(pod))) {
+      log(`Scaled deployment/projects-config from ${priorReplicas} to 0 before consume-guard migration.`);
+      return priorReplicas;
+    }
+    await sleep(5_000);
+  }
+  fail('Timed out waiting for deployment/projects-config pods to stop before consume-guard migration.');
 }
 
 async function assertBrokerRollbackGuard(exec, context, root, digests, registries, verifyCapability) {
@@ -2273,7 +2670,7 @@ export async function deployKustomize(options, overrides = {}) {
     digests.set(repository, resolveImageDigest(exec, root, repository, reference, selectedRegistry));
   }
 
-  const context = must(exec, 'kubectl', ['config', 'current-context'], { cwd: root },
+  const context = overrides.context ?? must(exec, 'kubectl', ['config', 'current-context'], { cwd: root },
     'Could not read the selected kubectl context').stdout.trim();
   if (!context) fail('No kubectl context is selected.');
   const resourceGroup = options.resourceGroup ?? 'agentweaver';
@@ -2285,38 +2682,46 @@ export async function deployKustomize(options, overrides = {}) {
   verifyAuthorization(exec, context, root,
     [...requestedImages.keys()].some(repository => MIGRATION_IMAGES.has(repository)));
   verifyEnvironmentRuntimeAuthorization(exec, context, root);
-  const missingRepositories = IMAGE_REPOSITORIES.filter(repository => !digests.has(repository));
-  let liveAgentHostSettings;
-  let agentHostTuple;
-  if (missingRepositories.length) {
-    const current = currentImageReferences(exec, context, root, missingRepositories);
-    for (const [repository, { reference, registry }] of current.references) {
-      registries.set(repository, registry);
-      digests.set(repository, resolveImageDigest(exec, root, repository, reference, registry));
-    }
-    if (!requestedImages.has('agentweaver-agenthost')) {
-      liveAgentHostSettings = current.agentHostSettings;
-      agentHostTuple = liveAgentHostTuple(liveAgentHostSettings,
-        digests.get('agentweaver-agenthost'), registries.get('agentweaver-agenthost'));
-    }
-  }
-  if (requestedImages.has('agentweaver-agenthost')) {
-    const measured = await measureAgentHostRegistryImage(
-      `${imageName(registries.get('agentweaver-agenthost'), 'agentweaver-agenthost')}@` +
-        digests.get('agentweaver-agenthost'),
-      fetchImpl, undefined, overrides.registryOptions);
-    agentHostTuple = {
-      digest: measured.digest,
-      platform: measured.platform,
-      compressedPullBytes: measured.compressedPullBytes,
-      image: measured.image,
-    };
-    digests.set('agentweaver-agenthost', measured.digest);
-  }
-
-  const kustomizationPath = path.join(root, 'deploy', 'k8s', 'kustomization.yaml');
-  const originalKustomization = readFileSync(kustomizationPath, 'utf8');
+  const needsProjectsConfigMigrationGuard =
+    requestedImages.has('agentweaver.projects.config') ||
+    Boolean(overrides.heldMaintenanceRunId);
+  const leaseState = needsProjectsConfigMigrationGuard
+    ? acquireOrVerifyMaintenanceLease(exec, context, root, overrides.heldMaintenanceRunId, now)
+    : undefined;
+  let retainLeaseOnExit = false;
   try {
+    const missingRepositories = IMAGE_REPOSITORIES.filter(repository => !digests.has(repository));
+    let liveAgentHostSettings;
+    let agentHostTuple;
+    if (missingRepositories.length) {
+      const current = currentImageReferences(exec, context, root, missingRepositories);
+      for (const [repository, { reference, registry }] of current.references) {
+        registries.set(repository, registry);
+        digests.set(repository, resolveImageDigest(exec, root, repository, reference, registry));
+      }
+      if (!requestedImages.has('agentweaver-agenthost')) {
+        liveAgentHostSettings = current.agentHostSettings;
+        agentHostTuple = liveAgentHostTuple(liveAgentHostSettings,
+          digests.get('agentweaver-agenthost'), registries.get('agentweaver-agenthost'));
+      }
+    }
+    if (requestedImages.has('agentweaver-agenthost')) {
+      const measured = await measureAgentHostRegistryImage(
+        `${imageName(registries.get('agentweaver-agenthost'), 'agentweaver-agenthost')}@` +
+          digests.get('agentweaver-agenthost'),
+        fetchImpl, undefined, overrides.registryOptions);
+      agentHostTuple = {
+        digest: measured.digest,
+        platform: measured.platform,
+        compressedPullBytes: measured.compressedPullBytes,
+        image: measured.image,
+      };
+      digests.set('agentweaver-agenthost', measured.digest);
+    }
+
+    const kustomizationPath = path.join(root, 'deploy', 'k8s', 'kustomization.yaml');
+    const originalKustomization = readFileSync(kustomizationPath, 'utf8');
+    try {
     const kustomization = parse(originalKustomization);
     applyImageDigests(kustomization, digests, registries);
     writeFileSync(kustomizationPath, stringify(kustomization));
@@ -2474,10 +2879,6 @@ export async function deployKustomize(options, overrides = {}) {
       items: resources.filter(resource => resource.kind !== 'Namespace' &&
         resource !== brokerRuntimeConfig && resource !== brokerDeployment),
     };
-    const { jobs, brokerMigrationResources } = migrationJobs(
-      root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs,
-    );
-
     const assertEnvironmentOutageCutoverReady = () => {
       if (!requestedImages.has('agentweaver.environment')) return;
       const existingEnvironment = readExistingDeployment(exec, context, root, 'environment');
@@ -2494,6 +2895,63 @@ export async function deployKustomize(options, overrides = {}) {
     };
     assertEnvironmentOutageCutoverReady();
 
+    const { jobs, brokerMigrationResources } = migrationJobs(
+      root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs, leaseState?.runId,
+    );
+    if (leaseState?.runId) {
+      for (const job of jobs) {
+        job.metadata.labels = { ...(job.metadata.labels ?? {}), [MAINTENANCE_RUN_LABEL]: leaseState.runId };
+        job.spec.template.metadata = {
+          ...(job.spec.template.metadata ?? {}),
+          labels: { ...(job.spec.template.metadata?.labels ?? {}), [MAINTENANCE_RUN_LABEL]: leaseState.runId },
+        };
+      }
+    }
+
+    const verifyCapability = overrides.verifyImageCapability ?? verifyImageCapability;
+    let targetSupportsConsumeGuard = false;
+    let consumeCutoverPriorReplicas;
+    let liveProjectsConfigCompatible = true;
+    let inheritedConsumeGuardPending = false;
+    if (needsProjectsConfigMigrationGuard) {
+      const liveProjectsConfigImage = projectsConfigDeployment?.spec?.template?.spec?.containers?.[0]?.image;
+      if (projectsConfigDeployment && typeof liveProjectsConfigImage === 'string' &&
+          liveProjectsConfigImage.length > 0) {
+        try {
+          await verifyCapability({
+            image: liveProjectsConfigImage,
+            capability: 'projects-config-consume-guard',
+            root,
+            exec,
+          });
+        } catch {
+          liveProjectsConfigCompatible = false;
+        }
+      } else if (projectsConfigDeployment) {
+        liveProjectsConfigCompatible = false;
+      }
+    }
+    await assertBrokerRollbackGuard(exec, context, root, digests, registries, verifyCapability);
+    if (needsProjectsConfigMigrationGuard) {
+      const initialMaintenanceState = readMaintenanceStateData(exec, context, root);
+      inheritedConsumeGuardPending = initialMaintenanceState?.['projectsConfig.consumeGuardPending'] === 'true';
+      targetSupportsConsumeGuard = await assertProjectsConfigConsumeGuard(
+        exec, context, root, digests, registries, resourceGroup, pairs, leaseState.runId,
+        verifyCapability, overrides.verifyExactPairA, overrides.verifierImage,
+        () => {
+          retainLeaseOnExit = true;
+          overrides.onRetainLease?.();
+        });
+    }
+    if (providerRateCard) {
+      const projectsImage = imageName(registries.get('agentweaver.projects.config'), 'agentweaver.projects.config') +
+        `@${digests.get('agentweaver.projects.config')}`;
+      const eventsImage = imageName(registries.get('agentweaver.eventsandsessions'), 'agentweaver.eventsandsessions') +
+        `@${digests.get('agentweaver.eventsandsessions')}`;
+      await verifyCapability({ image: projectsImage, capability: 'projects-config-rate-card', root, exec });
+      await verifyCapability({ image: eventsImage, capability: 'events-and-sessions-rate-card', root, exec });
+    }
+
     await reconcileAgentHostEgressCollector(exec, context, root, auditMode, log, overrides.deleteCollector);
     if (brokerMigrationResources) {
       ensureBrokerMigrationResources(brokerMigrationResources, exec, context, root, log);
@@ -2508,16 +2966,6 @@ export async function deployKustomize(options, overrides = {}) {
         cwd: root, input: stringify(prerequisites.createStorageClass),
       }, `Could not create StorageClass/${prerequisites.storageClassName}`);
       log(`Created StorageClass/${prerequisites.storageClassName}.`);
-    }
-    const verifyCapability = overrides.verifyImageCapability ?? verifyImageCapability;
-    await assertBrokerRollbackGuard(exec, context, root, digests, registries, verifyCapability);
-    if (providerRateCard) {
-      const projectsImage = imageName(registries.get('agentweaver.projects.config'), 'agentweaver.projects.config') +
-        `@${digests.get('agentweaver.projects.config')}`;
-      const eventsImage = imageName(registries.get('agentweaver.eventsandsessions'), 'agentweaver.eventsandsessions') +
-        `@${digests.get('agentweaver.eventsandsessions')}`;
-      await verifyCapability({ image: projectsImage, capability: 'projects-config-rate-card', root, exec });
-      await verifyCapability({ image: eventsImage, capability: 'events-and-sessions-rate-card', root, exec });
     }
     let cutoverAnnotated = [];
     if (requestedImages.has('agentweaver.identity.broker')) {
@@ -2555,70 +3003,187 @@ export async function deployKustomize(options, overrides = {}) {
       if (job.metadata?.name?.startsWith('environment-migration-')) {
         assertEnvironmentOutageCutoverReady();
       }
-      runMigrationJob(job, exec, context, root, log);
+      const isProjectsMigration = job.metadata?.name?.startsWith('projects-config-migration-');
+      let consumePendingPersisted = false;
+      let jobStarted = false;
+      try {
+        if (isProjectsMigration && targetSupportsConsumeGuard) {
+          consumeCutoverPriorReplicas = await quiesceProjectsConfigConsumeCutover(
+            exec, context, root,
+            overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
+            log, verifyCapability,
+            prior => { consumeCutoverPriorReplicas = prior; },
+          );
+          if (consumeCutoverPriorReplicas !== undefined) {
+            const pcDeployment = workloads.items.find(resource =>
+              resource.kind === 'Deployment' && resource.metadata?.name === 'projects-config');
+            if (pcDeployment?.spec) pcDeployment.spec.replicas = consumeCutoverPriorReplicas;
+          }
+          persistMaintenanceStateEntries(exec, context, root, { 'projectsConfig.consumeGuardPending': 'true' });
+          consumePendingPersisted = true;
+        }
+        jobStarted = true;
+        runMigrationJob(job, exec, context, root, log);
+      } catch (jobError) {
+        if (leaseState?.runId) {
+          const jobName = job.metadata.name;
+          let settled = true;
+          if (jobStarted) {
+            const deleted = exec('kubectl', [
+              'delete', 'job', jobName, '--namespace', NAMESPACE, '--context', context,
+              '--cascade=foreground', '--ignore-not-found', '--wait=true', '--timeout=120s',
+            ], { check: false, cwd: root });
+            settled = deleted.status === 0 &&
+              isProjectsConfigMaintenanceSettled(exec, context, root, leaseState.runId);
+          } else {
+            settled = isProjectsConfigMaintenanceSettled(exec, context, root, leaseState.runId);
+          }
+          if (!settled) {
+            retainLeaseOnExit = true;
+            overrides.onRetainLease?.();
+            if (jobError && typeof jobError === 'object') jobError.retainMaintenanceLease = true;
+            throw jobError;
+          }
+        }
+        if (isProjectsMigration) {
+          if (consumePendingPersisted || inheritedConsumeGuardPending || consumeCutoverPriorReplicas !== undefined) {
+            const exactPairA = typeof overrides.verifyExactPairA === 'function'
+              ? Boolean(await overrides.verifyExactPairA({ exec, context, root }))
+              : await runProjectsConfigPairAVerifierJob(
+                exec, context, root, digests, registries, resourceGroup, pairs, leaseState.runId,
+                verifyCapability, overrides.verifierImage,
+                () => {
+                  retainLeaseOnExit = true;
+                  overrides.onRetainLease?.();
+                },
+              );
+            if (exactPairA) {
+              if (consumePendingPersisted || inheritedConsumeGuardPending) {
+                persistMaintenanceStateEntries(exec, context, root, { 'projectsConfig.consumeGuardPending': null });
+              }
+              if (consumeCutoverPriorReplicas !== undefined) {
+                try {
+                  kubectl(exec, context, [
+                    'scale', 'deployment/projects-config', `--replicas=${consumeCutoverPriorReplicas}`,
+                  ], root, 'Could not restore deployment/projects-config after Pair A verification');
+                  kubectl(exec, context, ['rollout', 'status', 'deployment/projects-config', '--timeout=5m'], root,
+                    'Deployment projects-config did not become ready after Pair A recovery');
+                  kubectl(exec, context, [
+                    'annotate', 'deployment/projects-config', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
+                  ], root, 'Could not clear the Projects & Config recovery marker after Pair A verification');
+                } catch (restoreError) {
+                  retainLeaseOnExit = true;
+                  overrides.onRetainLease?.();
+                  if (restoreError && typeof restoreError === 'object') {
+                    restoreError.retainMaintenanceLease = true;
+                  }
+                  throw restoreError;
+                }
+              }
+            }
+          }
+        }
+        throw jobError;
+      }
+      if (isProjectsMigration) {
+        const jobName = job.metadata.name;
+        let requiredError;
+        try {
+          if (targetSupportsConsumeGuard) {
+            persistMaintenanceStateEntries(exec, context, root, { 'projectsConfig.consumeGuardRequired': 'true' });
+          }
+        } catch (error) {
+          requiredError = error;
+        }
+        const deleted = exec('kubectl', [
+          'delete', 'job', jobName, '--namespace', NAMESPACE, '--context', context,
+          '--cascade=foreground', '--ignore-not-found', '--wait=true', '--timeout=120s',
+        ], { check: false, cwd: root });
+        if (deleted.status !== 0 || !isProjectsConfigMaintenanceSettled(exec, context, root, leaseState.runId)) {
+          retainLeaseOnExit = true;
+          overrides.onRetainLease?.();
+          const cleanupError = new Error(
+            `Kustomize deployment: Could not clean up migration Job ${jobName}; ` +
+            `retain ${MAINTENANCE_LEASE_NAME} and run npm run db:maintenance:projects-config -- --release-lock ${leaseState.runId}.`,
+          );
+          cleanupError.retainMaintenanceLease = true;
+          throw requiredError
+            ? new AggregateError([requiredError, cleanupError], `${requiredError.message}; ${cleanupError.message}`)
+            : cleanupError;
+        }
+        if (requiredError) throw requiredError;
+      }
     }
     log('Database migrations completed.');
 
-    if (activateEnvironment) {
-      await activateEnvironmentRuntimeConfigs(exec, context, root, desiredRuntimeMaps, replacements,
-        missingRuntimeMaps, environmentDeployment,
-        overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
-        log, mapRun);
-    } else {
-      replaceImmutableRuntimeConfigMaps(replacements, NAMESPACE, { root, run: mapRun, fail });
-    }
-    if (activateProjectsConfig) {
-      await activateRuntimeConfig(exec, context, root, runtimeConfig, projectsConfigDeployment,
-        overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
-        log, now);
-    } else if (replaceRuntimeConfig) {
-      kubectl(exec, context, ['delete', 'configmap', PROJECTS_CONFIG_RUNTIME_CONFIG], root,
-        `Could not delete ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}`);
-      kubectl(exec, context, ['create', '--filename', '-'], root,
-        `Could not create ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}`, { input: stringify(runtimeConfig) });
-    }
+      if (activateEnvironment) {
+        await activateEnvironmentRuntimeConfigs(exec, context, root, desiredRuntimeMaps, replacements,
+          missingRuntimeMaps, environmentDeployment,
+          overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
+          log, mapRun);
+      } else {
+        replaceImmutableRuntimeConfigMaps(replacements, NAMESPACE, { root, run: mapRun, fail });
+      }
+      if (activateProjectsConfig) {
+        const restoreDuringConfigMapActivation = consumeCutoverPriorReplicas === undefined &&
+          !(projectsConfigDeployment?.spec?.replicas === 0 && !liveProjectsConfigCompatible);
+        await activateRuntimeConfig(exec, context, root, runtimeConfig, projectsConfigDeployment,
+          overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
+          log, now, { restoreReplicas: restoreDuringConfigMapActivation });
+      } else if (replaceRuntimeConfig) {
+        kubectl(exec, context, ['delete', 'configmap', PROJECTS_CONFIG_RUNTIME_CONFIG], root,
+          `Could not delete ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}`);
+        kubectl(exec, context, ['create', '--filename', '-'], root,
+          `Could not create ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}`, { input: stringify(runtimeConfig) });
+      }
 
-    kubectl(exec, context, ['apply', '--filename', '-'], root, 'Workload apply failed',
-      { input: stringify(workloads) });
-    if (providerSetup) {
-      const patch = [
-        { op: 'test', path: '/metadata/uid', value: providerSetup.deploymentUid },
-        { op: 'test', path: '/metadata/resourceVersion', value: providerSetup.deploymentResourceVersion },
-        { op: 'replace', path: '/spec', value: brokerDeployment.spec },
-      ];
-      kubectl(exec, context, ['patch', 'deployment/identity-broker', '--type=json',
-        '--patch', JSON.stringify(patch)], root, 'Identity Broker Deployment update failed');
-    } else {
-      kubectl(exec, context, ['create', '--filename', '-'], root,
-        'Could not create deployment/identity-broker', { input: stringify(brokerDeployment) });
-    }
-    log(`Applied Kustomize workloads to ${context}/${NAMESPACE}.`);
+      kubectl(exec, context, ['apply', '--filename', '-'], root, 'Workload apply failed',
+        { input: stringify(workloads) });
+      if (providerSetup) {
+        const patch = [
+          { op: 'test', path: '/metadata/uid', value: providerSetup.deploymentUid },
+          { op: 'test', path: '/metadata/resourceVersion', value: providerSetup.deploymentResourceVersion },
+          { op: 'replace', path: '/spec', value: brokerDeployment.spec },
+        ];
+        kubectl(exec, context, ['patch', 'deployment/identity-broker', '--type=json',
+          '--patch', JSON.stringify(patch)], root, 'Identity Broker Deployment update failed');
+      } else {
+        kubectl(exec, context, ['create', '--filename', '-'], root,
+          'Could not create deployment/identity-broker', { input: stringify(brokerDeployment) });
+      }
+      log(`Applied Kustomize workloads to ${context}/${NAMESPACE}.`);
 
-    for (const name of deployments) {
-      kubectl(exec, context, ['rollout', 'status', `deployment/${name}`, '--timeout=5m'], root,
-        `Deployment ${name} did not become ready`);
-      log(`Deployment ${name} is ready.`);
+      for (const name of deployments) {
+        kubectl(exec, context, ['rollout', 'status', `deployment/${name}`, '--timeout=5m'], root,
+          `Deployment ${name} did not become ready`);
+        log(`Deployment ${name} is ready.`);
+      }
+      if (activateProjectsConfig || cutoverAnnotated.includes('projects-config') ||
+          consumeCutoverPriorReplicas !== undefined) {
+        kubectl(exec, context, [
+          'annotate', 'deployment/projects-config', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
+        ], root, 'Could not clear the Projects & Config ConfigMap recovery marker');
+      }
+      if (cutoverAnnotated.includes('identity-broker')) {
+        kubectl(exec, context, [
+          'annotate', 'deployment/identity-broker', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
+        ], root, 'Could not clear the Identity Broker cutover recovery marker');
+      }
+      if (activateEnvironment) {
+        kubectl(exec, context, [
+          'annotate', 'deployment/environment', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
+        ], root, 'Could not clear the Environment AgentHost ConfigMap recovery marker');
+      }
+      await runInstallSmokeCheck(exec, context, root, prerequisites, agentHostTuple.image, probeUrls, auditMode,
+        overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))), log);
+      return { context, namespace: NAMESPACE, deployments, images: Object.fromEntries(digests) };
+    } finally {
+      writeFileSync(kustomizationPath, originalKustomization);
     }
-    if (activateProjectsConfig || cutoverAnnotated.includes('projects-config')) {
-      kubectl(exec, context, [
-        'annotate', 'deployment/projects-config', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
-      ], root, 'Could not clear the Projects & Config ConfigMap recovery marker');
-    }
-    if (cutoverAnnotated.includes('identity-broker')) {
-      kubectl(exec, context, [
-        'annotate', 'deployment/identity-broker', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
-      ], root, 'Could not clear the Identity Broker cutover recovery marker');
-    }
-    if (activateEnvironment) {
-      kubectl(exec, context, [
-        'annotate', 'deployment/environment', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
-      ], root, 'Could not clear the Environment AgentHost ConfigMap recovery marker');
-    }
-    await runInstallSmokeCheck(exec, context, root, prerequisites, agentHostTuple.image, probeUrls, auditMode,
-      overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))), log);
-    return { context, namespace: NAMESPACE, deployments, images: Object.fromEntries(digests) };
   } finally {
-    writeFileSync(kustomizationPath, originalKustomization);
+    if (leaseState?.ownsLease && !retainLeaseOnExit) {
+      await releaseMaintenanceLease(exec, context, root, leaseState.runId, overrides.deleteMaintenanceLease);
+    }
   }
 }
 

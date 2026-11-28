@@ -550,6 +550,49 @@ states, matching membership and role-assignment audit rows, and only a count
 of other active PlatformAdmins. Do not retry if an assignment is missing its
 matching audit evidence or the inspection result is incomplete or ambiguous.
 
+### Projects & Config baseline consume-guard cutover and recovery
+
+`db:maintenance:projects-config`, `deploy:kustomize`, and `azure:deploy-from-commit`
+share `Lease/p1-db-maintenance-lock` in namespace `agentweaver` and acquire it
+before reading `ConfigMap/p1-db-maintenance-state`, checking schema state, or
+scaling `deployment/projects-config`.
+
+- **Pre-migration scale-down and markers:** When the live `deployment/projects-config`
+  image predates `20261128012056_AddNativeAcsProjectPolicyBaselineConsumeGuard`,
+  the runner saves its replica count, scales `deployment/projects-config` to `0`,
+  persists `projectsConfig.consumeGuardPending = 'true'` in
+  `p1-db-maintenance-state` before creating the migration Job, and persists
+  `projectsConfig.consumeGuardRequired = 'true'` after the Job succeeds.
+- **Standalone follow-up rollout:** After migrating an older live image,
+  `db:maintenance:projects-config` leaves `deployment/projects-config` at `0`
+  replicas so the old image cannot restart against the updated trigger and
+  grants. Roll out the compatible `agentweaver.projects.config` image on
+  existing installations using either:
+  - `npm run deploy:kustomize -- --image-manifest <projects-config-manifest.json> --resource-group <name> --execute` (where `<projects-config-manifest.json>` pins `{"images":{"agentweaver.projects.config":"sha256:<digest>"}}`)
+  - `npm run azure:deploy-from-commit -- <40-char-commit-sha> --projects-config-only --resource-group <name> --execute`
+- **Failed-before-commit recovery:** If the migration Job fails before committing,
+  the runner settles the `<run-id>` Job and Pods first. Only when no `<run-id>`
+  Job or Pod remains active, it runs the read-only Pair A check (`--verify-projects-config-pair-a`,
+  which acquires session-level `pg_advisory_lock` for `agentweaver.projects_config.migrate`
+  before `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`; pass `--verifier-image <ref>`
+  when `--image` predates `20261128012056` and no live verifier-capable image is deployed).
+  When exact Pair A is proven, it clears `projectsConfig.consumeGuardPending` and
+  restores `deployment/projects-config` replicas; otherwise it keeps the marker and
+  leaves `deployment/projects-config` at `0`.
+- **Lease retention and `--release-lock`:** If Job or Pod cleanup fails or
+  leaves an unsettled run, the runner retains `Lease/p1-db-maintenance-lock`.
+  Inspect `kubectl -n agentweaver get lease p1-db-maintenance-lock -o json` for
+  `spec.holderIdentity`, delete the `<run-id>` Job and Secret, verify no active
+  `<run-id>` Pod remains, and run
+  `npm run db:maintenance:projects-config -- --release-lock <run-id>` (which
+  deletes the Lease using UID and resourceVersion preconditions and requires
+  `list jobs` permission).
+- **Entry-point boundary:** These Lease, scale-down, and rollback gates apply
+  inside `db:maintenance:projects-config`, `deploy:kustomize`, and
+  `azure:deploy-from-commit`. Direct `kubectl` edits or older scripts invoked
+  outside those three entry points bypass these gates; use the guarded entry
+  points for all deployments, rollbacks, and migrations.
+
 `npm run platform:runtime-defaults` signs in through the browser helper with
 `P1_SETUP_SCOPES`, reads `/api/v1/platform/runtime-defaults`, and compares it
 with the reviewed `deploy/k8s/runtime-configs/platform-runtime-defaults.json`.

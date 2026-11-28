@@ -320,4 +320,335 @@ public static class ProjectsConfigMigrator
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>Result of checking whether the database matches the exact pre-20261128012056 Pair A contract.</summary>
+    public sealed record ExactPairACheckResult(bool IsExactPairA, string Reason);
+
+    private const string PairABaselineTransitionGuardSource = """
+        BEGIN
+            IF NEW.baseline_id IS DISTINCT FROM OLD.baseline_id
+                OR NEW.installation_id IS DISTINCT FROM OLD.installation_id
+                OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+                OR NEW.project_id IS DISTINCT FROM OLD.project_id
+                OR NEW.policy_id IS DISTINCT FROM OLD.policy_id
+                OR NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256
+                OR NEW.artifact IS DISTINCT FROM OLD.artifact
+                OR NEW.profile_id IS DISTINCT FROM OLD.profile_id
+                OR NEW.approver_issuer IS DISTINCT FROM OLD.approver_issuer
+                OR NEW.approver_actor_id IS DISTINCT FROM OLD.approver_actor_id
+                OR NEW.approver_membership_id IS DISTINCT FROM OLD.approver_membership_id
+                OR NEW.approver_membership_revision IS DISTINCT FROM OLD.approver_membership_revision
+                OR NEW.approver_assignment_id IS DISTINCT FROM OLD.approver_assignment_id
+                OR NEW.approver_assignment_revision IS DISTINCT FROM OLD.approver_assignment_revision
+                OR NEW.approval_idempotency_key IS DISTINCT FROM OLD.approval_idempotency_key
+                OR NEW.approval_request_digest IS DISTINCT FROM OLD.approval_request_digest
+                OR NEW.approval_scope_digest IS DISTINCT FROM OLD.approval_scope_digest
+                OR NEW.approval_reason IS DISTINCT FROM OLD.approval_reason
+                OR NEW.approval_correlation_id IS DISTINCT FROM OLD.approval_correlation_id
+                OR NEW.approved_at IS DISTINCT FROM OLD.approved_at THEN
+                RAISE EXCEPTION 'native ACS project policy baseline approval fields are immutable'
+                    USING ERRCODE = '55000';
+            END IF;
+
+            IF OLD.state = 'Approved' AND NEW.state = 'Pinned' THEN
+                IF NEW.operator_issuer IS NULL OR NEW.operator_actor_id IS NULL
+                    OR NEW.operator_membership_id IS NULL OR NEW.operator_membership_revision IS NULL
+                    OR NEW.pin_idempotency_key IS NULL OR NEW.pin_request_digest IS NULL
+                    OR NEW.pin_scope_digest IS NULL OR NEW.platform_policy_id IS NULL
+                    OR NEW.platform_policy_revision IS NULL OR NEW.platform_content_sha256 IS NULL
+                    OR NEW.pin_reason IS NULL OR NEW.pin_correlation_id IS NULL
+                    OR NEW.pinned_at IS NULL
+                    OR NEW.revoked_by_issuer IS DISTINCT FROM OLD.revoked_by_issuer
+                    OR NEW.revoked_by_actor_id IS DISTINCT FROM OLD.revoked_by_actor_id
+                    OR NEW.revoked_reason IS DISTINCT FROM OLD.revoked_reason
+                    OR NEW.revoked_correlation_id IS DISTINCT FROM OLD.revoked_correlation_id
+                    OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at
+                    OR NEW.consumed_revision IS DISTINCT FROM OLD.consumed_revision
+                    OR NEW.consumed_at IS DISTINCT FROM OLD.consumed_at THEN
+                    RAISE EXCEPTION 'invalid native ACS project policy baseline pin transition'
+                        USING ERRCODE = '55000';
+                END IF;
+                RETURN NEW;
+            ELSIF OLD.state IN ('Approved', 'Pinned') AND NEW.state = 'Revoked' THEN
+                IF NEW.revoked_by_issuer IS NULL OR NEW.revoked_by_actor_id IS NULL
+                    OR NEW.revoked_reason IS NULL OR NEW.revoked_correlation_id IS NULL
+                    OR NEW.revoked_at IS NULL
+                    OR NEW.operator_issuer IS DISTINCT FROM OLD.operator_issuer
+                    OR NEW.operator_actor_id IS DISTINCT FROM OLD.operator_actor_id
+                    OR NEW.operator_membership_id IS DISTINCT FROM OLD.operator_membership_id
+                    OR NEW.operator_membership_revision IS DISTINCT FROM OLD.operator_membership_revision
+                    OR NEW.pin_idempotency_key IS DISTINCT FROM OLD.pin_idempotency_key
+                    OR NEW.pin_request_digest IS DISTINCT FROM OLD.pin_request_digest
+                    OR NEW.pin_scope_digest IS DISTINCT FROM OLD.pin_scope_digest
+                    OR NEW.platform_policy_id IS DISTINCT FROM OLD.platform_policy_id
+                    OR NEW.platform_policy_revision IS DISTINCT FROM OLD.platform_policy_revision
+                    OR NEW.platform_content_sha256 IS DISTINCT FROM OLD.platform_content_sha256
+                    OR NEW.pin_reason IS DISTINCT FROM OLD.pin_reason
+                    OR NEW.pin_correlation_id IS DISTINCT FROM OLD.pin_correlation_id
+                    OR NEW.pinned_at IS DISTINCT FROM OLD.pinned_at
+                    OR NEW.consumed_revision IS DISTINCT FROM OLD.consumed_revision
+                    OR NEW.consumed_at IS DISTINCT FROM OLD.consumed_at THEN
+                    RAISE EXCEPTION 'invalid native ACS project policy baseline revoke transition'
+                        USING ERRCODE = '55000';
+                END IF;
+                RETURN NEW;
+            ELSIF OLD.state = 'Pinned' AND NEW.state = 'Consumed' THEN
+                IF NEW.consumed_revision IS NULL OR NEW.consumed_at IS NULL
+                    OR NEW.operator_issuer IS DISTINCT FROM OLD.operator_issuer
+                    OR NEW.operator_actor_id IS DISTINCT FROM OLD.operator_actor_id
+                    OR NEW.operator_membership_id IS DISTINCT FROM OLD.operator_membership_id
+                    OR NEW.operator_membership_revision IS DISTINCT FROM OLD.operator_membership_revision
+                    OR NEW.pin_idempotency_key IS DISTINCT FROM OLD.pin_idempotency_key
+                    OR NEW.pin_request_digest IS DISTINCT FROM OLD.pin_request_digest
+                    OR NEW.pin_scope_digest IS DISTINCT FROM OLD.pin_scope_digest
+                    OR NEW.platform_policy_id IS DISTINCT FROM OLD.platform_policy_id
+                    OR NEW.platform_policy_revision IS DISTINCT FROM OLD.platform_policy_revision
+                    OR NEW.platform_content_sha256 IS DISTINCT FROM OLD.platform_content_sha256
+                    OR NEW.pin_reason IS DISTINCT FROM OLD.pin_reason
+                    OR NEW.pin_correlation_id IS DISTINCT FROM OLD.pin_correlation_id
+                    OR NEW.pinned_at IS DISTINCT FROM OLD.pinned_at
+                    OR NEW.revoked_by_issuer IS DISTINCT FROM OLD.revoked_by_issuer
+                    OR NEW.revoked_by_actor_id IS DISTINCT FROM OLD.revoked_by_actor_id
+                    OR NEW.revoked_reason IS DISTINCT FROM OLD.revoked_reason
+                    OR NEW.revoked_correlation_id IS DISTINCT FROM OLD.revoked_correlation_id
+                    OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+                    RAISE EXCEPTION 'invalid native ACS project policy baseline consume transition'
+                        USING ERRCODE = '55000';
+                END IF;
+                RETURN NEW;
+            ELSE
+                RAISE EXCEPTION 'invalid native ACS project policy baseline state transition'
+                    USING ERRCODE = '55000';
+            END IF;
+        END;
+        """;
+
+    /// <summary>
+    /// Verifies in one advisory-locked read-only snapshot whether the database matches the exact Pair A
+    /// schema, runtime grants, and baseline transition trigger before 20261128012056.
+    /// </summary>
+    public static async Task<ExactPairACheckResult> CheckExactPairAAsync(
+        NpgsqlDataSource dataSource,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using (var advisoryLock = new NpgsqlCommand(
+            "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtext(@lock_name))",
+            connection))
+        {
+            advisoryLock.Parameters.AddWithValue("lock_name", LockName);
+            await advisoryLock.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var transaction = await connection.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+            await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY", connection, transaction))
+                await readOnly.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            await using var checkCmd = new NpgsqlCommand("""
+                SELECT
+                    pg_catalog.to_regnamespace('projects_config') IS NOT NULL AS has_schema,
+                    pg_catalog.to_regclass('"projects_config"."__ef_migrations_history"') IS NOT NULL AS has_history,
+                    pg_catalog.to_regclass('"projects_config"."native_acs_project_policy_baselines"') IS NOT NULL AS has_baselines
+                """, connection, transaction);
+
+            bool hasSchema, hasHistory, hasBaselines;
+            await using (var reader = await checkCmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    return new ExactPairACheckResult(false, "could_not_read_catalog");
+                hasSchema = reader.GetBoolean(0);
+                hasHistory = reader.GetBoolean(1);
+                hasBaselines = reader.GetBoolean(2);
+            }
+
+            if (!hasSchema || !hasHistory || !hasBaselines)
+                return new ExactPairACheckResult(false, "missing_schema_or_baselines_table");
+
+            await using var stateCmd = new NpgsqlCommand("""
+                SELECT
+                    EXISTS (
+                        SELECT 1 FROM projects_config.__ef_migrations_history
+                        WHERE "MigrationId" = '20261127215608_AddNativeAcsProjectPolicyBaselines'
+                    ) AS has_pair_a_migration,
+                    EXISTS (
+                        SELECT 1 FROM projects_config.__ef_migrations_history
+                        WHERE "MigrationId" = '20261128012056_AddNativeAcsProjectPolicyBaselineConsumeGuard'
+                    ) AS has_consume_guard_migration,
+                    EXISTS (
+                        SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'agentweaver-id-projects-config'
+                    ) AS has_runtime_role,
+                    (
+                        has_schema_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config',
+                            'USAGE')
+                        AND has_table_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'SELECT')
+                        AND has_table_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'INSERT')
+                        AND NOT has_table_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'UPDATE')
+                        AND NOT has_table_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'DELETE')
+                        AND NOT has_table_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'TRUNCATE')
+                        AND has_column_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'state',
+                            'UPDATE')
+                        AND has_column_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'revoked_by_issuer',
+                            'UPDATE')
+                        AND has_column_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'revoked_by_actor_id',
+                            'UPDATE')
+                        AND has_column_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'revoked_reason',
+                            'UPDATE')
+                        AND has_column_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'revoked_correlation_id',
+                            'UPDATE')
+                        AND has_column_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'revoked_at',
+                            'UPDATE')
+                        AND has_column_privilege(
+                            'agentweaver-id-projects-config',
+                            'projects_config.native_acs_project_policy_baselines',
+                            'consumed_at',
+                            'UPDATE')
+                    ) AS has_exact_pair_a_grants,
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.pg_attribute a
+                        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+                        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = 'projects_config'
+                          AND c.relname = 'native_acs_project_policy_baselines'
+                          AND a.attnum > 0
+                          AND NOT a.attisdropped
+                          AND a.attname NOT IN (
+                              'state',
+                              'revoked_by_issuer',
+                              'revoked_by_actor_id',
+                              'revoked_reason',
+                              'revoked_correlation_id',
+                              'revoked_at',
+                              'consumed_at')
+                          AND has_column_privilege(
+                              'agentweaver-id-projects-config',
+                              'projects_config.native_acs_project_policy_baselines',
+                              a.attname,
+                              'UPDATE')
+                    ) AS no_extra_update_grants,
+                    (
+                        SELECT pg_catalog.pg_get_triggerdef(t.oid, true)
+                        FROM pg_catalog.pg_trigger t
+                        JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                        JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+                        JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+                        WHERE n.nspname = 'projects_config'
+                          AND c.relname = 'native_acs_project_policy_baselines'
+                          AND t.tgname = 'native_acs_project_policy_baselines_transition_guard'
+                          AND t.tgtype = 19
+                          AND t.tgenabled = 'O'
+                          AND NOT t.tgisinternal
+                          AND t.tgnargs = 0
+                          AND t.tgattr = ''::int2vector
+                          AND t.tgqual IS NULL
+                          AND pn.nspname = 'projects_config'
+                          AND p.proname = 'guard_native_acs_project_policy_baseline_transition'
+                        LIMIT 1
+                    ) AS trigger_def,
+                    (
+                        SELECT p.prosrc
+                        FROM pg_catalog.pg_trigger t
+                        JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                        JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+                        JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+                        WHERE n.nspname = 'projects_config'
+                          AND c.relname = 'native_acs_project_policy_baselines'
+                          AND t.tgname = 'native_acs_project_policy_baselines_transition_guard'
+                          AND t.tgtype = 19
+                          AND t.tgenabled = 'O'
+                          AND NOT t.tgisinternal
+                          AND t.tgnargs = 0
+                          AND t.tgattr = ''::int2vector
+                          AND t.tgqual IS NULL
+                          AND pn.nspname = 'projects_config'
+                          AND p.proname = 'guard_native_acs_project_policy_baseline_transition'
+                        LIMIT 1
+                    ) AS trigger_source
+                """, connection, transaction);
+
+            await using var stateReader = await stateCmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await stateReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                return new ExactPairACheckResult(false, "could_not_read_pair_a_state");
+
+            var hasPairAMigration = stateReader.GetBoolean(0);
+            var hasConsumeGuardMigration = stateReader.GetBoolean(1);
+            var hasRuntimeRole = stateReader.GetBoolean(2);
+            var hasExactPairAGrants = stateReader.GetBoolean(3);
+            var noExtraUpdateGrants = stateReader.GetBoolean(4);
+            var triggerDef = stateReader.IsDBNull(5) ? null : stateReader.GetString(5);
+            var triggerSource = stateReader.IsDBNull(6) ? null : stateReader.GetString(6);
+
+            await stateReader.DisposeAsync().ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+            if (!hasPairAMigration)
+                return new ExactPairACheckResult(false, "pair_a_migration_missing");
+            if (hasConsumeGuardMigration)
+                return new ExactPairACheckResult(false, "consume_guard_migration_present");
+            if (!hasRuntimeRole || !hasExactPairAGrants || !noExtraUpdateGrants)
+                return new ExactPairACheckResult(false, "runtime_grants_mismatch_pair_a");
+            const string expectedTriggerDef =
+                "CREATE TRIGGER native_acs_project_policy_baselines_transition_guard " +
+                "BEFORE UPDATE ON projects_config.native_acs_project_policy_baselines " +
+                "FOR EACH ROW EXECUTE FUNCTION projects_config.guard_native_acs_project_policy_baseline_transition()";
+            if (!string.Equals(triggerDef, expectedTriggerDef, StringComparison.Ordinal) ||
+                triggerSource is null ||
+                ProjectsConfigRuntimeGrantPlan.NormalizeGuardSource(triggerSource) !=
+                ProjectsConfigRuntimeGrantPlan.NormalizeGuardSource(PairABaselineTransitionGuardSource))
+            {
+                return new ExactPairACheckResult(false, "transition_trigger_mismatch_pair_a");
+            }
+
+            return new ExactPairACheckResult(true, "exact_pair_a");
+        }
+        finally
+        {
+            await using var unlock = new NpgsqlCommand(
+                "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtext(@lock_name))",
+                connection);
+            unlock.Parameters.AddWithValue("lock_name", LockName);
+            await unlock.ExecuteNonQueryAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+    }
 }
