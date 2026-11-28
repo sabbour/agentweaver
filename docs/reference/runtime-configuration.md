@@ -764,6 +764,17 @@ idempotent replay, or run `"revoke"` (or call
 `POST /api/v1/policies/projects/{projectId}/baseline-approvals/{baselineId}/revoke`)
 before submitting a fresh human approval.
 
+`NativeAcsPolicy:ProjectHeadWritesEnabled` defaults to `false`. When `false`,
+new `PUT /api/policies/projects/{projectId}` requests return `503`
+`native_acs_policy_writes_unavailable`, while exact retries with the same
+`idempotencyKey` and request body continue to return their saved receipt. When
+`true`, the route creates Skills-only revision 1 for a headless Project by
+consuming its pinned baseline (`expectedRevision: null`). If Platform Policy
+advances after pinning (`409`), revoke the unused pin, obtain fresh human
+approval, and re-pin before writing. After revision 1 is committed, recover
+stale accepted runs with
+[Same-revision Skill recovery](../architecture/skill-marketplace.md#same-revision-skill-recovery).
+
 The path invocation ID is a Projects setup correlation key; this endpoint does
 not validate it against Orchestrator invocation/checkpoint authority. The setup
 receipt proves only the local Projects transaction. It is not

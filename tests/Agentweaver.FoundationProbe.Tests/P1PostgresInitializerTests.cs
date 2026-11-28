@@ -1144,6 +1144,7 @@ public sealed class P1PostgresInitializerTests
                     [
                         "state", "revoked_by_issuer", "revoked_by_actor_id",
                         "revoked_reason", "revoked_correlation_id", "revoked_at",
+                        "consumed_revision", "consumed_at",
                     ],
                 },
                 new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,
@@ -1362,6 +1363,7 @@ public sealed class P1PostgresInitializerTests
                     [
                         "state", "revoked_by_issuer", "revoked_by_actor_id",
                         "revoked_reason", "revoked_correlation_id", "revoked_at",
+                        "consumed_revision", "consumed_at",
                     ],
                 },
                 new TablePlan("project_governance_decision_stream_heads", ["SELECT", "INSERT"], null, true, null,

@@ -572,6 +572,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     'revoked_reason',
     'revoked_correlation_id',
     'revoked_at',
+    'consumed_revision',
+    'consumed_at',
   ]);
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'installation_identity').privileges, ['SELECT']);
   const reservation = projectsConfig.tables.find(table => table.table === 'model_provider_reference_reservations');
@@ -700,7 +702,13 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     const duplicates = functions.filter((name, position) => functions.indexOf(name) !== position);
     assert.deepEqual(duplicates,
       owner.startsWith('projects-config/')
-        ? ['check_model_provider_pair()', 'check_model_provider_pair()', 'check_model_provider_pair()', 'check_model_provider_pair()', 'require_skill_admission_writer()', 'require_skill_admission_writer()']
+        ? [
+            'check_model_provider_pair()', 'check_model_provider_pair()',
+            'check_model_provider_pair()', 'check_model_provider_pair()',
+            'require_skill_admission_writer()', 'require_skill_admission_writer()',
+            'guard_native_acs_project_policy_baseline_transition()',
+            'guard_native_acs_project_policy_baseline_transition()',
+          ]
         : owner.startsWith('orchestrator/')
           ? ['close_workflow_generation_jobs_on_cancel()']
           : []);

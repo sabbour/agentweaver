@@ -546,10 +546,16 @@ public sealed partial class ProjectsConfigService
         string projectId,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireUnboundRequest();
+        var project = await FindProjectAsync(caller, projectId, ProjectAccess.Read, cancellationToken)
+            .ConfigureAwait(false);
+        if (project.State != ProjectLifecycleState.Active)
+            throw ProjectConfigException.NotFound();
         var grants = NativeAcsPolicyStore.EnsureWriteAuthorized(
             caller, NativeAcsPolicyScopeType.Project, projectId);
-        _ = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
-            .ConfigureAwait(false);
         var ids = grants.Select(grant => grant.AssignmentId).ToArray();
         var current = await (
                 from assignment in db.RoleAssignments.AsNoTracking()

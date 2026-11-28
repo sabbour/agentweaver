@@ -108,6 +108,8 @@ internal static partial class GatewayOpenApi
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
             ["validateProjectNativeAcsPolicy"] = C(
                 "NativeAcsPolicyValidationRequest", "NativeAcsPolicyValidationResponse", "200"),
+            ["writeProjectNativeAcsPolicy"] = C(
+                "NativeAcsPolicyWriteRequest", "NativeAcsPolicyWriteReceipt", "200"),
             ["createProjectNativeAcsPolicyBaselineApproval"] = C(
                 "NativeAcsProjectPolicyBaselineApprovalRequest", "NativeAcsProjectPolicyBaselineReceipt", "200"),
             ["revokeProjectNativeAcsPolicyBaselineApproval"] = C(
@@ -553,6 +555,7 @@ internal static partial class GatewayOpenApi
                         "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                         "listProjectGovernanceDecisions" or
                         "validatePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or
+                        "writeProjectNativeAcsPolicy" or
                         "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
                         "writePlatformNativeAcsPolicy" or
                         "readAcceptedRunSkillRefreshInputs" or "refreshAcceptedRunSkill" or
@@ -604,6 +607,7 @@ internal static partial class GatewayOpenApi
                                             "listProjectNativeAcsPolicies" or "readProjectNativeAcsPolicy" or
                                             "listProjectNativeAcsPolicyRevisions" or
                                             "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" or
+                                            "writeProjectNativeAcsPolicy" or
                                             "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
                                             "listProjectGovernanceDecisions" =>
                                                 "Project Policy responses are not cacheable.",
@@ -917,6 +921,7 @@ else if (route.OperationId is
             "readPlatformNativeAcsPolicyRevision" or "listPlatformGovernanceDecisions" or
             "validatePlatformNativeAcsPolicy" or
             "writePlatformNativeAcsPolicy" or "validateProjectNativeAcsPolicy" or
+            "writeProjectNativeAcsPolicy" or
             "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
             "listProjectNativeAcsPolicies" or
             "readProjectNativeAcsPolicy" or
@@ -931,6 +936,7 @@ else if (route.OperationId is
                 "listProjectNativeAcsPolicyRevisions" or "readProjectNativeAcsPolicyRevision" or
                 "listProjectGovernanceDecisions";
             responses["403"] = ProblemResponse(route.OperationId is "validateProjectNativeAcsPolicy" or
+                "writeProjectNativeAcsPolicy" or
                 "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval"
                 ? "The caller lacks current Project Policy author authority."
                 : isProjectPolicyRead
@@ -938,9 +944,11 @@ else if (route.OperationId is
                     : "The caller lacks current Platform administrator authority.");
             if (route.OperationId is "readPlatformNativeAcsPolicy" or "readPlatformNativeAcsPolicyRevision" or
                 "readProjectNativeAcsPolicy" or "readProjectNativeAcsPolicyRevision" or "validateProjectNativeAcsPolicy" or
+                "writeProjectNativeAcsPolicy" or
                 "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
                 "listProjectGovernanceDecisions")
                 responses["404"] = ProblemResponse(route.OperationId is "validateProjectNativeAcsPolicy" or
+                    "writeProjectNativeAcsPolicy" or
                     "createProjectNativeAcsPolicyBaselineApproval" or "revokeProjectNativeAcsPolicyBaselineApproval" or
                     "listProjectGovernanceDecisions"
                     ? "The Project does not exist in the selected tenant or is not visible to the caller."
@@ -969,11 +977,12 @@ else if (route.OperationId is
                     responses["422"] = ProblemResponse("The native ACS policy artifact is invalid.");
                 responses["429"] = ProblemResponse("The caller reached the policy validation limit.");
                 responses["503"] = ProblemResponse(
-                    route.OperationId == "writePlatformNativeAcsPolicy"
+                    route.OperationId is "writePlatformNativeAcsPolicy" or "writeProjectNativeAcsPolicy"
                         ? "Policy head changes are disabled, validation is busy, or a validation dependency is unavailable."
                         : "Validation is busy or a validation dependency is unavailable.");
             }
             if (route.OperationId is "writePlatformNativeAcsPolicy" or
+                "writeProjectNativeAcsPolicy" or
                 "createProjectNativeAcsPolicyBaselineApproval" or
                 "revokeProjectNativeAcsPolicyBaselineApproval")
                 responses["409"] = ProblemResponse(
@@ -1220,6 +1229,15 @@ else if (route.OperationId is
                 "current Owner or TenantAdmin authority for the Project. Validates the exact submitted " +
                 "native artifact without reading or changing Policy state. Project artifacts omit Platform " +
                 "network data. Validation does not approve or activate the artifact.";
+        }
+        else if (route.OperationId == "writeProjectNativeAcsPolicy")
+        {
+            description +=
+                " Requires an unbound identity with api.read, projects.admin, current membership, and " +
+                "current Owner or TenantAdmin authority for the Project. Creates Skills-only revision 1 " +
+                "when no Project Policy head exists by consuming a pinned Project Policy baseline. " +
+                "expectedRevision must be null for a new write. Non-Skills files and manifest must match " +
+                "the pinned baseline. The response is no-store.";
         }
         else if (route.OperationId == "listProjectNativeAcsPolicyRevisions")
         {
