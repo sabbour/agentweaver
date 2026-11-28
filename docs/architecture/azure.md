@@ -221,7 +221,7 @@ skipped, 13 Events versions, and 17 Environment versions. Roll out compatible
 Events & Sessions runtime and migration catalog versions together. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`b813597f3f32ffb36ca6c8e9beee2e92acd6a36c1209cfd396881527156c4acb`.
+`84780c786483f4bd705e24b84a189c3a352c899d1602801684b7d4a66acd118c`.
 It contains 151 tables, 14 row-lock columns, and 63 exact function signatures.
 The Projects & Config plan grants `SELECT, INSERT` and column-scoped
 `UPDATE (sequence, fence_generation, head_hash, updated_at)` on

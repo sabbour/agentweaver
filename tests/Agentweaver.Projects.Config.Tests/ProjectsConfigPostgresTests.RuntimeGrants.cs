@@ -41,6 +41,28 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task MigrationRejectsDisabledOrDroppedProjectPolicyBaselineInsertGuard()
+    {
+        await using var connection = await fixture.MigrationDataSource.OpenConnectionAsync();
+        await ProjectsConfigRuntimeGrantPlan.VerifyRuntimeGrantsAsync(connection, CancellationToken.None);
+        foreach (var mutation in new[]
+        {
+            "ALTER TABLE projects_config.native_acs_project_policy_baselines DISABLE TRIGGER native_acs_project_policy_baselines_insert_guard",
+            "DROP TRIGGER native_acs_project_policy_baselines_insert_guard ON projects_config.native_acs_project_policy_baselines",
+        })
+        {
+            await using var transaction = await connection.BeginTransactionAsync();
+            await using (var command = new NpgsqlCommand(mutation, connection, transaction))
+                await command.ExecuteNonQueryAsync();
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, transaction, CancellationToken.None));
+            Assert.Contains("mutation", error.Message, StringComparison.OrdinalIgnoreCase);
+            await transaction.RollbackAsync();
+        }
+        await ProjectsConfigRuntimeGrantPlan.VerifyRuntimeGrantsAsync(connection, CancellationToken.None);
+    }
+
+    [Fact]
     public async Task MigrationAppliesTheReviewedRuntimeGrantsAndKeepsOwnerOnlyObjectsPrivate()
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();

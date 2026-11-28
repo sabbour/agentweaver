@@ -222,6 +222,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
                 if (source is null || NormalizeGuardSource(source) != NormalizeGuardSource(Plan.Value.InstallationGuardSource))
                     throw new InvalidOperationException("The provider installation guard differs from the reviewed plan.");
             }
+            await VerifyProjectPolicyBaselineGuardsAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
             await using var command = new NpgsqlCommand("""
                 WITH RECURSIVE owner AS (
                     SELECT oid, nspowner FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config'
@@ -737,8 +738,87 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             functions.Any(function => !FunctionSignaturePattern().IsMatch(function.Signature)))
             throw new InvalidOperationException("The reviewed Projects & Config grant plan contains an invalid object or privilege.");
 
+        var baselineTable = service.GetProperty("tables").EnumerateArray().Single(table =>
+            table.GetProperty("table").GetString() == "native_acs_project_policy_baselines");
+        var baselineInsertGuard = baselineTable.GetProperty("mutationDenialGuards").EnumerateArray()
+            .Single(guard => guard.GetProperty("trigger").GetString() == "native_acs_project_policy_baselines_insert_guard");
+        var baselineInsertGuardSource = RequiredString(baselineInsertGuard, "functionSource");
+        var baselineTransitionGuard = baselineTable.GetProperty("mutationDenialGuards").EnumerateArray()
+            .Single(guard => guard.GetProperty("trigger").GetString() == "native_acs_project_policy_baselines_transition_guard");
+        var baselineTransitionGuardSource = RequiredString(baselineTransitionGuard, "functionSource");
+
         return new ServicePlan("projects_config", "agentweaver-id-projects-config", tables,
-            ownerOnlyTables, ownerOnlySequences, functions, installationGuardSource);
+            ownerOnlyTables, ownerOnlySequences, functions, installationGuardSource,
+            baselineInsertGuardSource, baselineTransitionGuardSource);
+    }
+
+    private static async Task VerifyProjectPolicyBaselineGuardsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using (var countCmd = new NpgsqlCommand("""
+            SELECT count(*)
+            FROM pg_catalog.pg_trigger t
+            JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'projects_config'
+              AND c.relname = 'native_acs_project_policy_baselines'
+              AND NOT t.tgisinternal
+            """, connection, transaction))
+        {
+            var count = Convert.ToInt64(await countCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+            if (count != 4)
+                throw new InvalidOperationException("The project policy baseline mutation guards differ from the reviewed plan.");
+        }
+
+        (string Trigger, int TriggerType, string Function, string? ExpectedSource)[] expected =
+        [
+            ("native_acs_project_policy_baselines_insert_guard", 7,
+                "guard_native_acs_project_policy_baseline_insert", Plan.Value.BaselineInsertGuardSource),
+            ("native_acs_project_policy_baselines_transition_guard", 19,
+                "guard_native_acs_project_policy_baseline_transition", Plan.Value.BaselineTransitionGuardSource),
+            ("native_acs_project_policy_baselines_no_delete", 11,
+                "reject_immutable_record_mutation", null),
+            ("native_acs_project_policy_baselines_no_truncate", 34,
+                "reject_immutable_record_mutation", null),
+        ];
+
+        foreach (var (trigger, triggerType, function, expectedSource) in expected)
+        {
+            await using var cmd = new NpgsqlCommand("""
+                SELECT p.prosrc
+                FROM pg_catalog.pg_trigger t
+                JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+                JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
+                WHERE n.nspname = 'projects_config'
+                  AND c.relname = 'native_acs_project_policy_baselines'
+                  AND t.tgname = @trigger
+                  AND t.tgtype = @trigger_type
+                  AND t.tgenabled = 'O'
+                  AND NOT t.tgisinternal
+                  AND t.tgnargs = 0
+                  AND t.tgattr = ''::int2vector
+                  AND t.tgqual IS NULL
+                  AND pn.nspname = 'projects_config'
+                  AND p.proname = @function
+                  AND p.pronargs = 0
+                  AND p.prokind = 'f'
+                  AND p.prorettype = 'pg_catalog.trigger'::regtype
+                  AND p.proowner = n.nspowner
+                  AND NOT p.prosecdef
+                """, connection, transaction);
+            cmd.Parameters.AddWithValue("trigger", trigger);
+            cmd.Parameters.AddWithValue("trigger_type", triggerType);
+            cmd.Parameters.AddWithValue("function", function);
+            var source = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+            if (source is null ||
+                (expectedSource is not null && NormalizeGuardSource(source) != NormalizeGuardSource(expectedSource)))
+                throw new InvalidOperationException(
+                    $"The project policy baseline mutation guard '{trigger}' differs from the reviewed plan.");
+        }
     }
 
     private static string RequiredString(JsonElement element, string property) =>
@@ -768,5 +848,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         string[] OwnerOnlyTables,
         string[] OwnerOnlySequences,
         FunctionPlan[] Functions,
-        string InstallationGuardSource);
+        string InstallationGuardSource,
+        string BaselineInsertGuardSource,
+        string BaselineTransitionGuardSource);
 }

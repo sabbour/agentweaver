@@ -120,6 +120,132 @@ internal static class InitializerChecks
         END;
         """;
     private const string GovernanceDecisionHeadTable = "project_governance_decision_stream_heads";
+    private const string ProjectPolicyBaselineInsertFunctionSource = """
+        BEGIN
+            IF NEW.state <> 'Approved'
+                OR NEW.operator_issuer IS NOT NULL
+                OR NEW.operator_actor_id IS NOT NULL
+                OR NEW.operator_membership_id IS NOT NULL
+                OR NEW.operator_membership_revision IS NOT NULL
+                OR NEW.pin_idempotency_key IS NOT NULL
+                OR NEW.pin_request_digest IS NOT NULL
+                OR NEW.pin_scope_digest IS NOT NULL
+                OR NEW.platform_policy_id IS NOT NULL
+                OR NEW.platform_policy_revision IS NOT NULL
+                OR NEW.platform_content_sha256 IS NOT NULL
+                OR NEW.pin_reason IS NOT NULL
+                OR NEW.pin_correlation_id IS NOT NULL
+                OR NEW.pinned_at IS NOT NULL
+                OR NEW.revoked_by_issuer IS NOT NULL
+                OR NEW.revoked_by_actor_id IS NOT NULL
+                OR NEW.revoked_reason IS NOT NULL
+                OR NEW.revoked_correlation_id IS NOT NULL
+                OR NEW.revoked_at IS NOT NULL
+                OR NEW.consumed_revision IS NOT NULL
+                OR NEW.consumed_at IS NOT NULL THEN
+                RAISE EXCEPTION 'new native ACS project policy baselines must start Approved with no pin, revoke, or consume state'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        """;
+    private const string ProjectPolicyBaselineTransitionFunctionSource = """
+        BEGIN
+            IF NEW.baseline_id IS DISTINCT FROM OLD.baseline_id
+                OR NEW.installation_id IS DISTINCT FROM OLD.installation_id
+                OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+                OR NEW.project_id IS DISTINCT FROM OLD.project_id
+                OR NEW.policy_id IS DISTINCT FROM OLD.policy_id
+                OR NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256
+                OR NEW.artifact IS DISTINCT FROM OLD.artifact
+                OR NEW.profile_id IS DISTINCT FROM OLD.profile_id
+                OR NEW.approver_issuer IS DISTINCT FROM OLD.approver_issuer
+                OR NEW.approver_actor_id IS DISTINCT FROM OLD.approver_actor_id
+                OR NEW.approver_membership_id IS DISTINCT FROM OLD.approver_membership_id
+                OR NEW.approver_membership_revision IS DISTINCT FROM OLD.approver_membership_revision
+                OR NEW.approver_assignment_id IS DISTINCT FROM OLD.approver_assignment_id
+                OR NEW.approver_assignment_revision IS DISTINCT FROM OLD.approver_assignment_revision
+                OR NEW.approval_idempotency_key IS DISTINCT FROM OLD.approval_idempotency_key
+                OR NEW.approval_request_digest IS DISTINCT FROM OLD.approval_request_digest
+                OR NEW.approval_scope_digest IS DISTINCT FROM OLD.approval_scope_digest
+                OR NEW.approval_reason IS DISTINCT FROM OLD.approval_reason
+                OR NEW.approval_correlation_id IS DISTINCT FROM OLD.approval_correlation_id
+                OR NEW.approved_at IS DISTINCT FROM OLD.approved_at THEN
+                RAISE EXCEPTION 'native ACS project policy baseline approval fields are immutable'
+                    USING ERRCODE = '55000';
+            END IF;
+            IF OLD.state = 'Approved' AND NEW.state = 'Pinned' THEN
+                IF NEW.operator_issuer IS NULL OR NEW.operator_actor_id IS NULL
+                    OR NEW.operator_membership_id IS NULL OR NEW.operator_membership_revision IS NULL
+                    OR NEW.pin_idempotency_key IS NULL OR NEW.pin_request_digest IS NULL
+                    OR NEW.pin_scope_digest IS NULL OR NEW.platform_policy_id IS NULL
+                    OR NEW.platform_policy_revision IS NULL OR NEW.platform_content_sha256 IS NULL
+                    OR NEW.pin_reason IS NULL OR NEW.pin_correlation_id IS NULL
+                    OR NEW.pinned_at IS NULL
+                    OR NEW.revoked_by_issuer IS DISTINCT FROM OLD.revoked_by_issuer
+                    OR NEW.revoked_by_actor_id IS DISTINCT FROM OLD.revoked_by_actor_id
+                    OR NEW.revoked_reason IS DISTINCT FROM OLD.revoked_reason
+                    OR NEW.revoked_correlation_id IS DISTINCT FROM OLD.revoked_correlation_id
+                    OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at
+                    OR NEW.consumed_revision IS DISTINCT FROM OLD.consumed_revision
+                    OR NEW.consumed_at IS DISTINCT FROM OLD.consumed_at THEN
+                    RAISE EXCEPTION 'invalid native ACS project policy baseline pin transition'
+                        USING ERRCODE = '55000';
+                END IF;
+                RETURN NEW;
+            ELSIF OLD.state IN ('Approved', 'Pinned') AND NEW.state = 'Revoked' THEN
+                IF NEW.revoked_by_issuer IS NULL OR NEW.revoked_by_actor_id IS NULL
+                    OR NEW.revoked_reason IS NULL OR NEW.revoked_correlation_id IS NULL
+                    OR NEW.revoked_at IS NULL
+                    OR NEW.operator_issuer IS DISTINCT FROM OLD.operator_issuer
+                    OR NEW.operator_actor_id IS DISTINCT FROM OLD.operator_actor_id
+                    OR NEW.operator_membership_id IS DISTINCT FROM OLD.operator_membership_id
+                    OR NEW.operator_membership_revision IS DISTINCT FROM OLD.operator_membership_revision
+                    OR NEW.pin_idempotency_key IS DISTINCT FROM OLD.pin_idempotency_key
+                    OR NEW.pin_request_digest IS DISTINCT FROM OLD.pin_request_digest
+                    OR NEW.pin_scope_digest IS DISTINCT FROM OLD.pin_scope_digest
+                    OR NEW.platform_policy_id IS DISTINCT FROM OLD.platform_policy_id
+                    OR NEW.platform_policy_revision IS DISTINCT FROM OLD.platform_policy_revision
+                    OR NEW.platform_content_sha256 IS DISTINCT FROM OLD.platform_content_sha256
+                    OR NEW.pin_reason IS DISTINCT FROM OLD.pin_reason
+                    OR NEW.pin_correlation_id IS DISTINCT FROM OLD.pin_correlation_id
+                    OR NEW.pinned_at IS DISTINCT FROM OLD.pinned_at
+                    OR NEW.consumed_revision IS DISTINCT FROM OLD.consumed_revision
+                    OR NEW.consumed_at IS DISTINCT FROM OLD.consumed_at THEN
+                    RAISE EXCEPTION 'invalid native ACS project policy baseline revoke transition'
+                        USING ERRCODE = '55000';
+                END IF;
+                RETURN NEW;
+            ELSIF OLD.state = 'Pinned' AND NEW.state = 'Consumed' THEN
+                IF NEW.consumed_revision IS NULL OR NEW.consumed_at IS NULL
+                    OR NEW.operator_issuer IS DISTINCT FROM OLD.operator_issuer
+                    OR NEW.operator_actor_id IS DISTINCT FROM OLD.operator_actor_id
+                    OR NEW.operator_membership_id IS DISTINCT FROM OLD.operator_membership_id
+                    OR NEW.operator_membership_revision IS DISTINCT FROM OLD.operator_membership_revision
+                    OR NEW.pin_idempotency_key IS DISTINCT FROM OLD.pin_idempotency_key
+                    OR NEW.pin_request_digest IS DISTINCT FROM OLD.pin_request_digest
+                    OR NEW.pin_scope_digest IS DISTINCT FROM OLD.pin_scope_digest
+                    OR NEW.platform_policy_id IS DISTINCT FROM OLD.platform_policy_id
+                    OR NEW.platform_policy_revision IS DISTINCT FROM OLD.platform_policy_revision
+                    OR NEW.platform_content_sha256 IS DISTINCT FROM OLD.platform_content_sha256
+                    OR NEW.pin_reason IS DISTINCT FROM OLD.pin_reason
+                    OR NEW.pin_correlation_id IS DISTINCT FROM OLD.pin_correlation_id
+                    OR NEW.pinned_at IS DISTINCT FROM OLD.pinned_at
+                    OR NEW.revoked_by_issuer IS DISTINCT FROM OLD.revoked_by_issuer
+                    OR NEW.revoked_by_actor_id IS DISTINCT FROM OLD.revoked_by_actor_id
+                    OR NEW.revoked_reason IS DISTINCT FROM OLD.revoked_reason
+                    OR NEW.revoked_correlation_id IS DISTINCT FROM OLD.revoked_correlation_id
+                    OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+                    RAISE EXCEPTION 'invalid native ACS project policy baseline consume transition'
+                        USING ERRCODE = '55000';
+                END IF;
+                RETURN NEW;
+            ELSE
+                RAISE EXCEPTION 'invalid native ACS project policy baseline state transition'
+                    USING ERRCODE = '55000';
+            END IF;
+        END;
+        """;
     private const string GovernanceDecisionHeadInitializeFunctionSource = """
         BEGIN
             IF NEW.sequence <> 0 OR NEW.fence_generation <> 0
@@ -344,10 +470,10 @@ internal static class InitializerChecks
         var appendOnlyLedgers = protectedTables.Count(item =>
             item.Table.MutationDenialGuards?.Any(guard => guard.TriggerType == 34) == true);
         // Two append-only ledgers also use row-lock columns, so the protected tables overlap.
-        if (services.Length != 5 || protectedTables.Length != 40 ||
-            lockTables.Length != 14 || appendOnlyLedgers != 27)
+        if (services.Length != 5 || protectedTables.Length != 41 ||
+            lockTables.Length != 14 || appendOnlyLedgers != 28)
             throw new InvalidOperationException(
-                $"The exact fourteen row-lock columns, twenty-seven append-only ledgers, and provider insert guard are required " +
+                $"The exact fourteen row-lock columns, twenty-eight append-only ledgers, and provider insert guard are required " +
                 $"(services={services.Length}, protected={protectedTables.Length}, locks={lockTables.Length}, append-only={appendOnlyLedgers}).");
 
         foreach (var (service, table) in protectedTables)
@@ -541,22 +667,51 @@ internal static class InitializerChecks
                 typeNineteenGuards[0].SqlState == "55000" &&
                 typeNineteenGuards[0].FunctionSource is { } advanceSource &&
                 NormalizeGuardSource(advanceSource) == NormalizeGuardSource(GovernanceDecisionHeadAdvanceFunctionSource);
+            var projectPolicyBaselineTable = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "native_acs_project_policy_baselines";
+            var hasProjectPolicyBaselineInsertGuard =
+                projectPolicyBaselineTable &&
+                typeSevenGuards.Length == 1 &&
+                typeSevenGuards[0].Trigger == "native_acs_project_policy_baselines_insert_guard" &&
+                typeSevenGuards[0].Function == "guard_native_acs_project_policy_baseline_insert()" &&
+                typeSevenGuards[0].Message ==
+                    "new native ACS project policy baselines must start Approved with no pin, revoke, or consume state" &&
+                typeSevenGuards[0].SqlState == "55000" &&
+                typeSevenGuards[0].FunctionSource is { } baselineInsertSource &&
+                NormalizeGuardSource(baselineInsertSource) ==
+                    NormalizeGuardSource(ProjectPolicyBaselineInsertFunctionSource);
+            var hasProjectPolicyBaselineTransitionGuard =
+                projectPolicyBaselineTable &&
+                typeNineteenGuards.Length == 1 &&
+                typeNineteenGuards[0].Trigger == "native_acs_project_policy_baselines_transition_guard" &&
+                typeNineteenGuards[0].Function == "guard_native_acs_project_policy_baseline_transition()" &&
+                typeNineteenGuards[0].Message == "invalid native ACS project policy baseline state transition" &&
+                typeNineteenGuards[0].SqlState == "55000" &&
+                typeNineteenGuards[0].FunctionSource is { } baselineTransitionSource &&
+                NormalizeGuardSource(baselineTransitionSource) ==
+                    NormalizeGuardSource(ProjectPolicyBaselineTransitionFunctionSource);
             var hasKnownTypeSevenGuard =
                 hasReservationIdentityGuard || hasHoldReservationGuard || hasProofReceiptIdentityGuard ||
                 hasNativeAcsRevisionGuard || hasGovernanceStampGuard ||
                 hasGovernanceHeadInitializeGuard || hasGovernanceCheckpointAnchorGuard ||
+                hasProjectPolicyBaselineInsertGuard ||
                 hasProviderReferenceGuard ||
                 (providerRevision && typeSevenGuards.Length == 1 && IsProviderWriteGuard(typeSevenGuards[0]));
-            var preflightTable = service.Service == "projects-config" &&
-                service.Schema == "projects_config" && table.Table == "model_provider_credential_preflights";
-            var hostRequestTable = service.Service == "projects-config" &&
-                service.Schema == "projects_config" && table.Table == "model_provider_host_requests";
             string[] hostRequestUpdateColumns =
             [
                 "delivery_state", "attempt_count", "next_attempt_at", "lease_owner", "lease_token",
                 "lease_expires_at", "environment_destination_id", "delivered_at", "failure_code",
                 "last_attempt_at", "updated_at",
             ];
+            string[] projectPolicyBaselineUpdateColumns =
+            [
+                "state", "revoked_by_issuer", "revoked_by_actor_id",
+                "revoked_reason", "revoked_correlation_id", "revoked_at",
+            ];
+            var preflightTable = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "model_provider_credential_preflights";
+            var hostRequestTable = service.Service == "projects-config" &&
+                service.Schema == "projects_config" && table.Table == "model_provider_host_requests";
             var mutationGuardCount = guards.Count(guard => guard.TriggerType is 11 or 19 or 27 or 34);
             var invalidColumnUpdates = governanceDecisionHead
                 ? !(table.UpdateColumns ?? []).SequenceEqual(GovernanceDecisionHeadUpdateColumns, StringComparer.Ordinal)
@@ -564,7 +719,9 @@ internal static class InitializerChecks
                     ? !(table.UpdateColumns ?? []).SequenceEqual(["consumed_at", "consumed_by_kind"], StringComparer.Ordinal)
                     : hostRequestTable
                         ? !(table.UpdateColumns ?? []).SequenceEqual(hostRequestUpdateColumns, StringComparer.Ordinal)
-                        : table.UpdateColumns is { Length: > 0 };
+                        : projectPolicyBaselineTable
+                            ? !(table.UpdateColumns ?? []).SequenceEqual(projectPolicyBaselineUpdateColumns, StringComparer.Ordinal)
+                            : table.UpdateColumns is { Length: > 0 };
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 (typeSevenGuards.Length > 0 && !hasKnownTypeSevenGuard) ||
                 guards.Length != mutationGuardCount + typeSevenGuards.Length +
@@ -575,7 +732,9 @@ internal static class InitializerChecks
                 (environmentReceipt && !hasProofReceiptIdentityGuard) ||
                 (table.LockColumn is not null &&
                  mutationGuardCount != (table.MutationDenialGuards is { Length: > 0 } ? 2 : 1)) ||
-                (table.LockColumn is null && mutationGuardCount != (providerHead ? 1 : governanceDecisionHead ? 3 : 2)) ||
+                (table.LockColumn is null && mutationGuardCount != (providerHead ? 1 : (governanceDecisionHead || projectPolicyBaselineTable) ? 3 : 2)) ||
+                (projectPolicyBaselineTable &&
+                 (!hasProjectPolicyBaselineInsertGuard || !hasProjectPolicyBaselineTransitionGuard)) ||
                 ((providerHead || providerReservation) && !hasProviderReferenceGuard) ||
                 (providerReservation && !hasInstallationGuard) ||
                 (providerHead && !hasProviderIdGuard) ||
@@ -607,7 +766,10 @@ internal static class InitializerChecks
                         (guard.TriggerType != 7 && guard.FunctionSource is not null &&
                          !(hasGovernanceHeadAdvanceGuard && guard.TriggerType == 19 &&
                            guard.Trigger == "project_governance_decision_head_advance" &&
-                           guard.Function == "require_governance_decision_head_advance()")) ||
+                           guard.Function == "require_governance_decision_head_advance()") &&
+                         !(hasProjectPolicyBaselineTransitionGuard && guard.TriggerType == 19 &&
+                           guard.Trigger == "native_acs_project_policy_baselines_transition_guard" &&
+                           guard.Function == "guard_native_acs_project_policy_baseline_transition()")) ||
                         (string.IsNullOrWhiteSpace(guard.Message) && !hasGovernanceStampGuard) ||
                         (guard.SqlState is not null &&
                          !System.Text.RegularExpressions.Regex.IsMatch(guard.SqlState, "^[0-9A-Z]{5}$")) ||
@@ -633,6 +795,11 @@ internal static class InitializerChecks
         "lease_expires_at", "environment_destination_id", "delivered_at", "failure_code",
         "last_attempt_at", "updated_at",
     ];
+    private static readonly string[] ProjectPolicyBaselineUpdateColumns =
+    [
+        "state", "revoked_by_issuer", "revoked_by_actor_id",
+        "revoked_reason", "revoked_correlation_id", "revoked_at",
+    ];
 
     internal static void AssertColumnUpdatePlan(ServicePlan[] services)
     {
@@ -649,6 +816,8 @@ internal static class InitializerChecks
                     ["SELECT", "INSERT"], ["consumed_at", "consumed_by_kind"], true),
                 ("projects-config", "projects_config", "model_provider_host_requests",
                     ["SELECT", "INSERT"], HostRequestUpdateColumns, true),
+                ("projects-config", "projects_config", "native_acs_project_policy_baselines",
+                    ["SELECT", "INSERT"], ProjectPolicyBaselineUpdateColumns, true),
             ];
         var planned = services.SelectMany(service => service.Tables
             .Where(table => table.UpdateColumns is not { Length: 0 })
@@ -669,8 +838,10 @@ internal static class InitializerChecks
                 table.Table == "model_provider_credential_preflights";
             var hostRequestGuarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
                 table.Table == "model_provider_host_requests";
-            var guarded = governanceGuarded || preflightGuarded || hostRequestGuarded;
-            var expectedGuardCount = governanceGuarded ? 4 : (preflightGuarded || hostRequestGuarded) ? 2 : 0;
+            var baselineGuarded = service.Service == "projects-config" && service.Schema == "projects_config" &&
+                table.Table == "native_acs_project_policy_baselines";
+            var guarded = governanceGuarded || preflightGuarded || hostRequestGuarded || baselineGuarded;
+            var expectedGuardCount = (governanceGuarded || baselineGuarded) ? 4 : (preflightGuarded || hostRequestGuarded) ? 2 : 0;
             if (table.LockColumn is not null || table.MutationDenialRequired != guarded ||
                 GetMutationDenialGuards(table).Length != expectedGuardCount)
                 throw new InvalidOperationException(
