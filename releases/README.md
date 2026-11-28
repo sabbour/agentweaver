@@ -294,6 +294,33 @@ rollback. Before retrying a failed migration, have an authorized operator
 diagnose the cause and state. Verify schema compatibility before choosing an
 older image.
 
+For `20261128012056_AddNativeAcsProjectPolicyBaselineConsumeGuard`,
+`azure:deploy-from-commit` and `deploy:kustomize` acquire
+`Lease/p1-db-maintenance-lock` in `agentweaver` before reading
+`p1-db-maintenance-state`, checking exact Pair A, reading live Deployments, or
+scaling `deployment/projects-config`. `deploy:kustomize` gates the effective
+`agentweaver.projects.config` digest even on partial manifests that inherit
+the live image, keeps `deployment/projects-config` at `0` through immutable
+ConfigMap replacement, and restores replicas only when applying the verified
+compatible image. `azure:deploy-from-commit` passes its held run ID
+to `deploy:kustomize` (`heldMaintenanceRunId`) so the inner helper reuses the
+outer Lease without nested-lock deadlock, and blocks historical or
+unguarded commits before checkout. After standalone `db:maintenance:projects-config`
+leaves an existing cluster's `deployment/projects-config` at `0`, roll out the
+compatible `agentweaver.projects.config` image with either
+`npm run deploy:kustomize -- --image-manifest <projects-config-manifest.json> --execute`
+(pinning `{"images":{"agentweaver.projects.config":"sha256:<digest>"}}`)
+or `npm run azure:deploy-from-commit -- <40-char-commit-sha> --projects-config-only --execute`
+(which updates only `agentweaver.projects.config` without triggering
+`agentweaver.environment` migration on existing installations).
+Lease releases use UID and resourceVersion preconditions; if `<run-id>` Jobs or
+Pods remain unsettled, recover with
+`npm run db:maintenance:projects-config -- --release-lock <run-id>`.
+Direct `kubectl` edits or older scripts invoked outside
+`azure:deploy-from-commit`, `deploy:kustomize`, and `db:maintenance:projects-config`
+bypass these gates; use the guarded entry points for all deployments,
+rollbacks, and migrations.
+
 Before any migration or Kubernetes write, the helper requires the live
 `identity-broker-runtime-config-v4` ConfigMap to match the rendered Broker map,
 including its identity, `immutable` flag, `data`, and `binaryData`. It also

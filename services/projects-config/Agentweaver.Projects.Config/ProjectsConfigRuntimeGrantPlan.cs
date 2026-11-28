@@ -453,7 +453,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
                 throw new InvalidOperationException("The model provider guard functions are missing.");
         }
 
-    private static string NormalizeGuardSource(string source)
+    internal static string NormalizeGuardSource(string source)
     {
         var result = new StringBuilder();
         var quote = '\0';

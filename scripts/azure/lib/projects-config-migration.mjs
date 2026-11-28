@@ -6,7 +6,13 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { verifyServiceRegistryImage } from '../../release/registry.mjs';
-import { DB_MAINTENANCE_TARGET, LOCK_NAME, dbMaintenanceTarget } from './db-maintenance.mjs';
+import {
+  deleteKubernetesResourceWithPreconditions,
+  isMaintenanceRunSettled,
+  sourceSupportsConsumeGuard,
+  sourceSupportsPairAVerifier,
+} from '../../release/deploy-kustomize.mjs';
+import { DB_MAINTENANCE_TARGET, LOCK_NAME, STATE_NAME, dbMaintenanceTarget } from './db-maintenance.mjs';
 import { installTarget } from './targets.mjs';
 import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 import { isOutsideCheckout } from './checkout-paths.mjs';
@@ -16,6 +22,7 @@ import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 const NAMESPACE = DB_MAINTENANCE_TARGET.namespace;
 const DATABASE_NAME = 'agentweaver';
 const JOB_TEMPLATE = path.join('deploy', 'k8s', 'migrations', 'projects-config', 'job.yaml');
+const RESTORE_REPLICAS_ANNOTATION = 'agentweaver.io/local-deploy-restore-replicas';
 const RUN_LABEL = 'agentweaver.io/db-maintenance-run';
 const SHA = /^[a-f0-9]{40}$/;
 const JOB_TIMEOUT_SECONDS = 900;
@@ -27,11 +34,14 @@ const FAILED_PULL_REASONS = new Set([
 ]);
 
 export const PROJECTS_CONFIG_MIGRATION_USAGE = `Usage: npm run db:maintenance:projects-config -- --image <ghcr-image@sha256:digest> [options]
+   or: npm run db:maintenance:projects-config -- --release-lock <run-id> [--resource-group <name>]
 
 Without --execute the runner checks the image digest, target access, and migration lock, then writes a plan receipt.
 Run it from a clean checkout of the fetched origin/v1 tip.
 
-  --image <reference>        Immutable Projects & Config image reference. Required.
+  --image <reference>        Immutable Projects & Config image reference. Required unless --release-lock is set.
+  --verifier-image <ref>     Optional immutable verifier-capable Projects & Config image for Pair A checks
+                             when --image predates 20261128012056.
   --bootstrap-first-platform-admin
                              Run the approved one-shot PlatformAdmin bootstrap instead of migrations and grants.
   --bootstrap-first-tenant-admin
@@ -39,6 +49,8 @@ Run it from a clean checkout of the fetched origin/v1 tip.
   --inspect-first-platform-admin
                              Read back the approved PlatformAdmin state and matching audit rows. This flag
                              runs the read-only inspection Job directly; --execute is neither needed nor allowed.
+  --release-lock <run-id>    Release Lease/p1-db-maintenance-lock only when holderIdentity matches <run-id>
+                             and no active Job or Pod remains for that run.
   --execute                  Execute migration or bootstrap. Migration mode creates a credential Secret;
                              bootstrap modes use the verified migration Workload Identity.
   --receipt-dir <directory>  Receipt directory outside the checkout. Default: ~/.agentweaver/db-maintenance.
@@ -79,11 +91,17 @@ function requireAncestor(exec, root, sourceSha, description) {
 
 export function parseProjectsConfigMigrationArgs(argv = []) {
   const options = {
-    image: undefined, execute: false, bootstrapFirstTenantAdmin: false, bootstrapFirstPlatformAdmin: false,
-    inspectFirstPlatformAdmin: false,
+    image: undefined, verifierImage: undefined, execute: false, bootstrapFirstTenantAdmin: false,
+    bootstrapFirstPlatformAdmin: false, inspectFirstPlatformAdmin: false, releaseLock: undefined,
     receiptDir: RECEIPT_DIRECTORY, resourceGroup: 'agentweaver', help: false,
   };
-  const valued = new Map([['--image', 'image'], ['--receipt-dir', 'receiptDir'], ['--resource-group', 'resourceGroup']]);
+  const valued = new Map([
+    ['--image', 'image'],
+    ['--verifier-image', 'verifierImage'],
+    ['--receipt-dir', 'receiptDir'],
+    ['--resource-group', 'resourceGroup'],
+    ['--release-lock', 'releaseLock'],
+  ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') options.help = true;
@@ -102,11 +120,25 @@ export function parseProjectsConfigMigrationArgs(argv = []) {
   }
   if (options.help) return options;
   if (!installTarget(options.resourceGroup)) fail('--resource-group must name a registered install target.');
+  if (options.releaseLock !== undefined) {
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(options.releaseLock)) {
+      fail('--release-lock must name a valid run ID.');
+    }
+    if (options.execute || options.bootstrapFirstTenantAdmin || options.bootstrapFirstPlatformAdmin ||
+        options.inspectFirstPlatformAdmin || options.image !== undefined) {
+      fail('--release-lock cannot be combined with --image, --execute, bootstrap, or inspection flags.');
+    }
+    return options;
+  }
   if (typeof options.image !== 'string' || !options.image.trim() || options.image.trim() !== options.image) {
     fail('--image is required and must not contain surrounding whitespace.');
   }
   if (!/^ghcr\.io\/sabbour\/agentweaver\.projects\.config@sha256:[a-f0-9]{64}$/.test(options.image)) {
     fail('--image must be an immutable Projects & Config GHCR reference.');
+  }
+  if (options.verifierImage !== undefined &&
+      !/^ghcr\.io\/sabbour\/agentweaver\.projects\.config@sha256:[a-f0-9]{64}$/.test(options.verifierImage)) {
+    fail('--verifier-image must be an immutable Projects & Config GHCR reference.');
   }
   if ([options.bootstrapFirstTenantAdmin, options.bootstrapFirstPlatformAdmin, options.inspectFirstPlatformAdmin]
     .filter(Boolean).length > 1) {
@@ -126,6 +158,67 @@ export async function resolveProjectsConfigImage(image, {
   const verified = await verifyImage(image);
   if (!verified || verified.digest !== match[1]) fail('Projects & Config image digest could not be verified.');
   return { image, digest: match[1] };
+}
+
+function imageSupportsConsumeGuard(exec, root, sourceSha, sourceTree) {
+  if (typeof sourceSha !== 'string' || !SHA.test(sourceSha)) return false;
+  if (exec('git', ['merge-base', '--is-ancestor', sourceSha, 'origin/v1'], { cwd: root, check: false }).status !== 0) {
+    return false;
+  }
+  return sourceSupportsConsumeGuard(exec, root, sourceSha, sourceTree);
+}
+
+function imageSupportsPairAVerifier(exec, root, sourceSha, sourceTree) {
+  if (typeof sourceSha !== 'string' || !SHA.test(sourceSha)) return false;
+  if (exec('git', ['merge-base', '--is-ancestor', sourceSha, 'origin/v1'], { cwd: root, check: false }).status !== 0) {
+    return false;
+  }
+  return sourceSupportsPairAVerifier(exec, root, sourceSha, sourceTree);
+}
+
+function isRunSettled(exec, baseArgs, root, targetRunId, checkUnlabeledMigrationJobs = false) {
+  return isMaintenanceRunSettled(exec, {
+    baseArgs,
+    root,
+    runId: targetRunId,
+    checkUnlabeledMigrationJobs,
+  });
+}
+
+async function deleteLeaseWithPreconditions(
+  exec, baseArgs, root, targetRunId, deleteLease = deleteKubernetesResourceWithPreconditions,
+) {
+  const leaseRes = exec('kubectl', [
+    ...baseArgs, '--namespace', NAMESPACE, 'get', 'lease', LOCK_NAME, '--output=json',
+  ], { cwd: root, check: false });
+  if (leaseRes.status !== 0) return false;
+  let lease;
+  try {
+    lease = JSON.parse(leaseRes.stdout);
+  } catch {
+    return false;
+  }
+  const holder = lease.spec?.holderIdentity;
+  const uid = lease.metadata?.uid;
+  const resourceVersion = lease.metadata?.resourceVersion;
+  if (holder !== targetRunId || typeof uid !== 'string' || !uid ||
+      typeof resourceVersion !== 'string' || !resourceVersion) {
+    return false;
+  }
+  const apiPath = `/apis/coordination.k8s.io/v1/namespaces/${encodeURIComponent(NAMESPACE)}/leases/${encodeURIComponent(LOCK_NAME)}`;
+  try {
+    await deleteLease({
+      baseArgs,
+      root,
+      apiPath,
+      uid,
+      resourceVersion,
+      resourceLabel: LOCK_NAME,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readCredentials({ inspectFirstPlatformAdmin = false, postgresHost = DB_MAINTENANCE_TARGET.postgresHost } = {}) {
@@ -493,6 +586,83 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
   if (!isOutsideCheckout(root, receiptDirectory)) {
     fail('--receipt-dir must be outside the source checkout.');
   }
+  const releaseLockRunId = options.releaseLock;
+  if (typeof releaseLockRunId === 'string') {
+    const receiptPath = path.join(receiptDirectory, `projects-config-release-lock-${runId}.json`);
+    const receipt = {
+      schemaVersion: 2,
+      runId,
+      mode: 'release-lock',
+      operation: 'release-lock',
+      targetRunId: releaseLockRunId,
+      result: 'running',
+      target: {
+        subscriptionId: target.subscriptionId,
+        resourceGroup: target.resourceGroup,
+        clusterName: target.clusterName,
+        namespace: NAMESPACE,
+      },
+      steps: [],
+      startedAt: deps.now().toISOString(),
+      receiptPath,
+    };
+    let releaseError;
+    try {
+      await deps.withKubeconfig({
+        resourceGroup: target.resourceGroup,
+        subscriptionId: target.subscriptionId,
+        clusterName: target.clusterName,
+      }, async baseArgs => {
+        const leaseRes = deps.exec('kubectl', [
+          ...baseArgs, '--namespace', NAMESPACE, 'get', 'lease', LOCK_NAME, '--output=json',
+        ], { cwd: root, check: false });
+        if (leaseRes.status !== 0) {
+          if (/NotFound/i.test(leaseRes.stderr ?? '')) {
+            receipt.result = 'succeeded';
+            receipt.steps.push({ at: deps.now().toISOString(), name: 'lock-already-absent' });
+            return;
+          }
+          fail(`could not read database maintenance lock: ${safeDiagnostic(new Error(leaseRes.stderr ?? ''), [])}`);
+        }
+        const lease = parseJson(leaseRes.stdout, 'database maintenance lock');
+        const holder = lease.spec?.holderIdentity;
+        if (holder !== releaseLockRunId) {
+          fail(`database maintenance lock is held by ${holder ?? 'an unknown run'}, not ${releaseLockRunId}.`);
+        }
+        if (!isRunSettled(deps.exec, baseArgs, root, releaseLockRunId, true)) {
+          fail(`cannot release lock for ${releaseLockRunId} while its Job or Pods remain active or unknown.`);
+        }
+        if (!(await deleteLeaseWithPreconditions(deps.exec, baseArgs, root, releaseLockRunId, deps.deleteLease))) {
+          fail(`could not delete database maintenance lock with UID/resourceVersion preconditions for ${releaseLockRunId}.`);
+        }
+        receipt.steps.push({ at: deps.now().toISOString(), targetRunId: releaseLockRunId, name: 'lock-released' });
+        receipt.result = 'succeeded';
+      }, {
+        requiredPermissions: [
+          ['get', `namespace/${NAMESPACE}`],
+          ['get', 'leases.coordination.k8s.io', NAMESPACE],
+          ['delete', 'leases.coordination.k8s.io', NAMESPACE],
+          ['get', 'jobs', NAMESPACE],
+          ['list', 'jobs', NAMESPACE],
+          ['list', 'pods', NAMESPACE],
+        ],
+        permissionContext: 'Projects & Config database maintenance lock release',
+        execKubectl: (args, settings) => deps.exec('kubectl', args, settings),
+      });
+    } catch (error) {
+      releaseError = error;
+      receipt.result = 'failed';
+      receipt.error = safeDiagnostic(error, []);
+    } finally {
+      receipt.completedAt = deps.now().toISOString();
+      mkdirSync(receiptDirectory, { recursive: true });
+      deps.writeReceipt(receiptPath, receipt);
+    }
+    if (releaseError) throw releaseError;
+    deps.log(`Receipt: ${receiptPath} (${receipt.result}).`);
+    return receipt;
+  }
+
   const bootstrapFirstTenantAdmin = options.bootstrapFirstTenantAdmin === true;
   const bootstrapFirstPlatformAdmin = options.bootstrapFirstPlatformAdmin === true;
   const inspectFirstPlatformAdmin = options.inspectFirstPlatformAdmin === true;
@@ -541,6 +711,9 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
   let lockHeld = false;
   let secretCreated = false;
   let jobCreated = false;
+  let jobCleaned = false;
+  let secretCleaned = false;
+  let retainLockOnExit = false;
 
   const record = (name, detail = {}) => {
     // Put the name last so a detail field cannot replace it.
@@ -572,7 +745,33 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
     const admitted = must(deps.exec('git', ['rev-parse', 'origin/v1'], { cwd: root }),
       'Could not read origin/v1').stdout.trim();
     if (head !== admitted) fail(`the source checkout must be the fetched origin/v1 tip ${admitted}, not ${head}.`);
-    const image = await resolveProjectsConfigImage(options.image, { verifyImage: deps.verifyImage });
+    let targetImageSourceSha;
+    let targetImageSourceTree;
+    const image = await resolveProjectsConfigImage(options.image, {
+      verifyImage: async targetImage => {
+        const verified = await deps.verifyImage(targetImage);
+        targetImageSourceSha = verified?.sourceSha;
+        targetImageSourceTree = verified?.sourceTree;
+        return verified;
+      },
+    });
+    let explicitVerifierImage;
+    if (options.verifierImage !== undefined) {
+      let verifierSha;
+      let verifierTree;
+      const resolvedVerifier = await resolveProjectsConfigImage(options.verifierImage, {
+        verifyImage: async targetImage => {
+          const verified = await deps.verifyImage(targetImage);
+          verifierSha = verified?.sourceSha;
+          verifierTree = verified?.sourceTree;
+          return verified;
+        },
+      });
+      if (!imageSupportsPairAVerifier(deps.exec, root, verifierSha, verifierTree)) {
+        fail(`--verifier-image ${options.verifierImage} lacks --verify-projects-config-pair-a support.`);
+      }
+      explicitVerifierImage = resolvedVerifier.image;
+    }
     receipt.sourceSha = head;
     receipt.image = image.image;
     record('image-verified', { image: image.image, digest: image.digest });
@@ -628,6 +827,135 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
         return result;
       };
       let actionError;
+      let targetSupportsConsumeGuard = false;
+      let inheritedConsumeGuardPending = false;
+      let pendingPersisted = false;
+      let scaledDownPreviousImage = false;
+      let priorReplicas = 1;
+      const updateMaintenanceState = entries => {
+        const existing = deps.exec('kubectl', [
+          ...baseArgs, '--namespace', NAMESPACE, 'get', 'configmap', STATE_NAME, '--ignore-not-found=true', '--output=json',
+        ], { cwd: root, check: false });
+        if (existing.status !== 0) {
+          fail(`could not read state ConfigMap ${STATE_NAME}: ${safeDiagnostic(new Error(existing.stderr ?? ''), secrets)}`);
+        }
+        if (!existing.stdout?.trim()) {
+          const nonNull = Object.fromEntries(Object.entries(entries).filter(([, v]) => v !== null));
+          if (Object.keys(nonNull).length === 0) return;
+          const cm = {
+            apiVersion: 'v1',
+            kind: 'ConfigMap',
+            metadata: { name: STATE_NAME, namespace: NAMESPACE },
+            data: nonNull,
+          };
+          kubectl(['create', '--filename', '-'], { input: JSON.stringify(cm) });
+          return;
+        }
+        kubectl(['patch', 'configmap', STATE_NAME, '--type=merge', '--patch',
+          JSON.stringify({ data: entries })]);
+      };
+
+      const runPairAVerifier = async () => {
+        if (typeof deps.verifyExactPairA === 'function') {
+          return Boolean(await deps.verifyExactPairA({
+            image: image.image,
+            root,
+            exec: deps.exec,
+            baseArgs,
+            runId,
+          }));
+        }
+        if (usesMigrationWorkloadIdentity) return false;
+        let verifierImageRef = explicitVerifierImage;
+        if (!verifierImageRef && targetSupportsConsumeGuard &&
+            imageSupportsPairAVerifier(deps.exec, root, targetImageSourceSha, targetImageSourceTree)) {
+          verifierImageRef = image.image;
+        }
+        if (!verifierImageRef) {
+          const pcDepRes = deps.exec('kubectl', [
+            ...baseArgs, '--namespace', NAMESPACE, 'get', 'deployment', 'projects-config',
+            '--ignore-not-found=true', '--output=json',
+          ], { cwd: root, check: false });
+          if (pcDepRes.status === 0 && pcDepRes.stdout?.trim()) {
+            const pcDep = parseJson(pcDepRes.stdout, 'Projects & Config deployment');
+            const liveImage = pcDep.spec?.template?.spec?.containers?.[0]?.image;
+            if (typeof liveImage === 'string' &&
+                /^ghcr\.io\/sabbour\/agentweaver\.projects\.config@sha256:[a-f0-9]{64}$/.test(liveImage)) {
+              const liveVerified = await deps.verifyImage(liveImage);
+              if (imageSupportsPairAVerifier(deps.exec, root, liveVerified?.sourceSha, liveVerified?.sourceTree)) {
+                verifierImageRef = liveImage;
+              }
+            }
+          }
+        }
+        if (!verifierImageRef) return false;
+        const verifyName = `${jobPrefix}-paira-${runId}`;
+        const secretName = `${jobPrefix}-${runId}`;
+        let createdTempSecret = false;
+        if (!secretCreated) {
+          const secret = {
+            apiVersion: 'v1',
+            kind: 'Secret',
+            metadata: { name: secretName, namespace: NAMESPACE, labels: { [RUN_LABEL]: runId } },
+            type: 'Opaque',
+            stringData: {
+              'migration-connection': secrets[0],
+              'access-token': secrets[1],
+            },
+          };
+          kubectl(['create', '--filename', '-'], { input: JSON.stringify(secret) });
+          createdTempSecret = true;
+        }
+        const verifyJob = prepareJob(jobTemplate, {
+          name: verifyName,
+          image: verifierImageRef,
+          runId,
+          secretName,
+        });
+        verifyJob.metadata.labels = { ...(verifyJob.metadata.labels ?? {}), [RUN_LABEL]: runId };
+        verifyJob.spec.template.metadata = {
+          ...(verifyJob.spec.template.metadata ?? {}),
+          labels: { ...(verifyJob.spec.template.metadata?.labels ?? {}), [RUN_LABEL]: runId },
+        };
+        verifyJob.spec.template.spec.containers[0].command = [
+          'dotnet', 'Agentweaver.Projects.Config.dll', '--verify-projects-config-pair-a',
+        ];
+        delete verifyJob.spec.template.spec.containers[0].args;
+        let verifyPassed = false;
+        let verifierError;
+        try {
+          kubectl(['create', '--filename', '-'], { input: JSON.stringify(verifyJob) });
+          await waitForJob(kubectl, deps, verifyName, { description: 'Pair A verification' });
+          const logs = kubectl(['logs', `job/${verifyName}`, '--tail=10']).stdout;
+          verifyPassed = logs.includes('PROJECTS_CONFIG_EXACT_PAIR_A');
+        } catch (error) {
+          verifierError = error;
+          verifyPassed = false;
+        } finally {
+          const deleted = deps.exec('kubectl', [
+            ...baseArgs, '--namespace', NAMESPACE, 'delete', 'job', verifyName,
+            '--cascade=foreground', '--ignore-not-found', '--wait=true', '--timeout=120s',
+          ], { cwd: root, check: false });
+          receipt.cleanup.pairAVerifierJob = deleted.status === 0;
+          if (createdTempSecret) {
+            const secretDeleted = deps.exec('kubectl', [
+              ...baseArgs, '--namespace', NAMESPACE, 'delete', 'secret', secretName, '--ignore-not-found',
+            ], { cwd: root, check: false });
+            receipt.cleanup.secret = secretDeleted.status === 0;
+          }
+          if (deleted.status !== 0 || !isRunSettled(deps.exec, baseArgs, root, runId)) {
+            retainLockOnExit = true;
+            record('recovery-deferred-pair-a-job-unsettled', { runId, job: verifyName });
+            const cleanupError = new Error(
+              `could not clean up Pair A verification Job ${verifyName}; retain ${LOCK_NAME} and run --release-lock ${runId}.`,
+            );
+            throw verifierError
+              ? new AggregateError([verifierError, cleanupError], `${verifierError.message}; ${cleanupError.message}`)
+              : cleanupError;
+          }
+        }
+        return verifyPassed;
+      };
       try {
         const lockRead = deps.exec('kubectl', [
           ...baseArgs, '--namespace', NAMESPACE, 'get', 'lease', LOCK_NAME, '--output=json',
@@ -683,6 +1011,91 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
         kubectl(['create', '--filename', '-'], { input: JSON.stringify(lease) });
         lockHeld = true;
         record('migration-lock-acquired', { runId });
+
+        if (!adminOperation) {
+          targetSupportsConsumeGuard = imageSupportsConsumeGuard(
+            deps.exec, root, targetImageSourceSha, targetImageSourceTree);
+          const stateRes = deps.exec('kubectl', [
+            ...baseArgs, '--namespace', NAMESPACE, 'get', 'configmap', STATE_NAME, '--ignore-not-found=true', '--output=json',
+          ], { cwd: root, check: false });
+          if (stateRes.status !== 0) {
+            fail(`could not read state ConfigMap ${STATE_NAME}: ${safeDiagnostic(new Error(stateRes.stderr ?? ''), secrets)}`);
+          }
+          const stateData = stateRes.stdout?.trim()
+            ? parseJson(stateRes.stdout, 'database maintenance state ConfigMap').data ?? {}
+            : {};
+          const consumeGuardPending = stateData['projectsConfig.consumeGuardPending'] === 'true';
+          inheritedConsumeGuardPending = consumeGuardPending;
+          const consumeGuardRequired = stateData['projectsConfig.consumeGuardRequired'] === 'true';
+          if ((consumeGuardPending || consumeGuardRequired) && !targetSupportsConsumeGuard) {
+            fail(`Projects & Config rollback guard blocks ${image.image} (${targetImageSourceSha ?? 'unknown'}): database requires AddNativeAcsProjectPolicyBaselineConsumeGuard.`);
+          }
+          if (!consumeGuardPending && !consumeGuardRequired && !targetSupportsConsumeGuard) {
+            const exactPairA = await runPairAVerifier();
+            if (!exactPairA) {
+              fail(`Projects & Config rollback guard blocks ${image.image} (${targetImageSourceSha ?? 'unknown'}): ${STATE_NAME} lacks consumeGuard markers and exact Pair A could not be verified.`);
+            }
+          }
+
+          if (targetSupportsConsumeGuard) {
+            const pcDepRes = deps.exec('kubectl', [
+              ...baseArgs, '--namespace', NAMESPACE, 'get', 'deployment', 'projects-config', '--ignore-not-found=true', '--output=json',
+            ], { cwd: root, check: false });
+            if (pcDepRes.status !== 0) {
+              fail(`could not read deployment/projects-config: ${safeDiagnostic(new Error(pcDepRes.stderr ?? ''), secrets)}`);
+            }
+            if (pcDepRes.stdout?.trim()) {
+              const pcDep = parseJson(pcDepRes.stdout, 'Projects & Config deployment');
+              const liveImage = pcDep.spec?.template?.spec?.containers?.[0]?.image;
+              let liveCompatible = false;
+              if (typeof liveImage === 'string' && /^ghcr\.io\/sabbour\/agentweaver\.projects\.config@sha256:[a-f0-9]{64}$/.test(liveImage)) {
+                const liveVerified = await deps.verifyImage(liveImage);
+                liveCompatible = imageSupportsConsumeGuard(
+                  deps.exec, root, liveVerified?.sourceSha, liveVerified?.sourceTree);
+              }
+              const podsRes = kubectl(['get', 'pods', '--selector=app.kubernetes.io/name=projects-config', '--output=json']);
+              const activePods = (parseJson(podsRes.stdout, 'Projects & Config pods').items ?? [])
+                .filter(p => p.metadata?.labels?.['agentweaver.io/migration'] !== 'projects-config');
+              const savedAnnotation = pcDep.metadata?.annotations?.[RESTORE_REPLICAS_ANNOTATION];
+              const hasSavedReplicas = typeof savedAnnotation === 'string' && /^(0|[1-9]\d*)$/.test(savedAnnotation);
+              if (!liveCompatible && (hasSavedReplicas || (pcDep.spec?.replicas ?? 0) > 0 || activePods.length > 0)) {
+                priorReplicas = hasSavedReplicas
+                  ? Number(savedAnnotation)
+                  : (Number.isInteger(pcDep.spec?.replicas) ? pcDep.spec.replicas : 1);
+                if (!hasSavedReplicas) {
+                  kubectl([
+                    'annotate', 'deployment/projects-config',
+                    `${RESTORE_REPLICAS_ANNOTATION}=${priorReplicas}`, '--overwrite',
+                  ]);
+                }
+                if ((pcDep.spec?.replicas ?? 0) > 0 || activePods.length > 0) {
+                  kubectl(['scale', 'deployment/projects-config', '--replicas=0']);
+                  scaledDownPreviousImage = true;
+                  let stopped = false;
+                  for (let attempt = 0; attempt < 24; attempt += 1) {
+                    const checkPods = parseJson(
+                      kubectl(['get', 'pods', '--selector=app.kubernetes.io/name=projects-config', '--output=json']).stdout,
+                      'Projects & Config pods').items ?? [];
+                    if (!checkPods.some(p => p.metadata?.labels?.['agentweaver.io/migration'] !== 'projects-config')) {
+                      stopped = true;
+                      break;
+                    }
+                    await deps.sleep(5_000);
+                  }
+                  if (!stopped) fail('timed out waiting for incompatible deployment/projects-config pods to stop before migration.');
+                  record('projects-config-scaled-down-for-cutover', { previousImage: liveImage ?? null, priorReplicas });
+                } else {
+                  scaledDownPreviousImage = true;
+                  record('projects-config-cutover-resumed-at-zero', { previousImage: liveImage ?? null, priorReplicas });
+                }
+              }
+            }
+
+            updateMaintenanceState({ 'projectsConfig.consumeGuardPending': 'true' });
+            pendingPersisted = true;
+            record('projects-config-consume-guard-pending-recorded');
+          }
+        }
 
         const secretName = `${jobPrefix}-${runId}`;
         if (!usesMigrationWorkloadIdentity) {
@@ -790,14 +1203,69 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
         } else {
           await waitForJob(kubectl, deps, name);
           record('migration-job-completed', { job: name, image: image.image });
+          if (targetSupportsConsumeGuard) {
+            updateMaintenanceState({ 'projectsConfig.consumeGuardRequired': 'true' });
+            record('projects-config-consume-guard-recorded');
+          }
+          if (scaledDownPreviousImage) {
+            const followUpCommands = [
+              `npm run deploy:kustomize -- --image-manifest <projects-config-manifest.json> --resource-group ${target.resourceGroup} --execute`,
+              `npm run azure:deploy-from-commit -- ${targetImageSourceSha ?? '<40-char-commit-sha>'} --projects-config-only --resource-group ${target.resourceGroup} --execute`,
+            ];
+            receipt.followUpCommands = followUpCommands;
+            record('projects-config-left-scaled-down-awaiting-rollout', { priorReplicas, followUpCommands });
+            deps.log(
+              `deployment/projects-config remains at 0 replicas after cutover. Deploy the compatible Projects & Config image ` +
+              `(manifest with {"images":{"agentweaver.projects.config":"${image.digest}"}}) using either:\n` +
+              `  ${followUpCommands[0]}\n  ${followUpCommands[1]}\n` +
+              `Add --registry <registry> if deploying from a non-default registry.`);
+          }
         }
 
         if (!adminOperation) receipt.result = 'succeeded';
       } catch (error) {
         actionError = error;
+        if (!adminOperation && lockHeld) {
+          if (jobCreated && !jobCleaned) {
+            const name = `${jobPrefix}-${runId}`;
+            const removed = deps.exec('kubectl', [
+              ...baseArgs, '--namespace', NAMESPACE, 'delete', 'job', name,
+              '--cascade=foreground', '--ignore-not-found', '--wait=true', '--timeout=120s',
+            ], { cwd: root, check: false });
+            jobCleaned = removed.status === 0;
+            receipt.cleanup.job = jobCleaned;
+          }
+          const settled = (!jobCreated || jobCleaned) && isRunSettled(deps.exec, baseArgs, root, runId);
+          if (!settled) {
+            retainLockOnExit = true;
+            record('recovery-deferred-job-unsettled', { runId });
+          } else if (pendingPersisted || inheritedConsumeGuardPending || scaledDownPreviousImage) {
+            const exactPairA = await runPairAVerifier();
+            if (exactPairA) {
+              if (pendingPersisted || inheritedConsumeGuardPending) {
+                updateMaintenanceState({ 'projectsConfig.consumeGuardPending': null });
+                record('projects-config-consume-guard-pending-cleared');
+              }
+              if (scaledDownPreviousImage) {
+                try {
+                  kubectl(['scale', 'deployment/projects-config', `--replicas=${priorReplicas}`]);
+                  kubectl(['rollout', 'status', 'deployment/projects-config', '--timeout=120s']);
+                  kubectl(['annotate', 'deployment/projects-config', `${RESTORE_REPLICAS_ANNOTATION}-`]);
+                  record('projects-config-replicas-restored', { priorReplicas });
+                } catch (restoreError) {
+                  retainLockOnExit = true;
+                  record('recovery-deferred-restore-unready', { priorReplicas });
+                  throw restoreError;
+                }
+              }
+            } else {
+              record('recovery-kept-pending-pair-a-unproven');
+            }
+          }
+        }
       } finally {
         const cleanupErrors = [];
-        if (jobCreated) {
+        if (jobCreated && !jobCleaned) {
           const name = `${jobPrefix}-${runId}`;
           const removed = deps.exec('kubectl', [
             ...baseArgs, '--namespace', NAMESPACE, 'delete', 'job', name,
@@ -806,7 +1274,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
           receipt.cleanup.job = removed.status === 0;
           if (!receipt.cleanup.job) cleanupErrors.push('migration Job');
         }
-        if (secretCreated) {
+        if (secretCreated && !secretCleaned) {
           const name = `${jobPrefix}-${runId}`;
           const removed = deps.exec('kubectl', [
             ...baseArgs, '--namespace', NAMESPACE, 'delete', 'secret', name, '--ignore-not-found',
@@ -815,16 +1283,17 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
           if (!receipt.cleanup.secret) cleanupErrors.push('credential Secret');
         }
         if (lockHeld) {
-          const current = deps.exec('kubectl', [
-            ...baseArgs, '--namespace', NAMESPACE, 'get', 'lease', LOCK_NAME,
-            '--output=jsonpath={.spec.holderIdentity}',
-          ], { cwd: root, check: false });
-          const released = current.status === 0 && current.stdout.trim() === runId &&
-            deps.exec('kubectl', [
-              ...baseArgs, '--namespace', NAMESPACE, 'delete', 'lease', LOCK_NAME,
-            ], { cwd: root, check: false }).status === 0;
-          receipt.cleanup.lock = released;
-          if (!released) cleanupErrors.push('database maintenance lock');
+          const settled = !retainLockOnExit && receipt.cleanup.job !== false &&
+            isRunSettled(deps.exec, baseArgs, root, runId);
+          if (!settled) {
+            receipt.cleanup.lock = false;
+            cleanupErrors.push(`database maintenance lock (retained for --release-lock ${runId})`);
+          } else {
+            const released = await deleteLeaseWithPreconditions(
+              deps.exec, baseArgs, root, runId, deps.deleteLease);
+            receipt.cleanup.lock = released;
+            if (!released) cleanupErrors.push('database maintenance lock');
+          }
         }
         if (cleanupErrors.length) {
           receipt.cleanupErrors = cleanupErrors;
@@ -844,12 +1313,26 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
         ...(executeJob ? [
           ['create', 'leases.coordination.k8s.io', NAMESPACE],
           ['delete', 'leases.coordination.k8s.io', NAMESPACE],
+          ...(!adminOperation ? [
+            ['get', 'configmaps', NAMESPACE],
+            ['create', 'configmaps', NAMESPACE],
+            ['patch', 'configmaps', NAMESPACE],
+            ['get', 'deployments.apps', NAMESPACE],
+            ['list', 'deployments.apps', NAMESPACE],
+            ['watch', 'deployments.apps', NAMESPACE],
+            ['patch', 'deployments.apps', NAMESPACE],
+            ['patch', 'deployments.apps', NAMESPACE, 'scale'],
+            ['get', 'pods', NAMESPACE],
+            ['watch', 'pods', NAMESPACE],
+            ['get', 'pods', NAMESPACE, 'log'],
+          ] : []),
           ...(!usesMigrationWorkloadIdentity ? [
             ['create', 'secrets', NAMESPACE],
             ['delete', 'secrets', NAMESPACE],
           ] : []),
           ['create', 'jobs', NAMESPACE],
           ['get', 'jobs', NAMESPACE],
+          ['list', 'jobs', NAMESPACE],
           ['delete', 'jobs', NAMESPACE],
           ['list', 'pods', NAMESPACE],
           ...(adminOperation ? [

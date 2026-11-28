@@ -7,7 +7,10 @@ import { test } from 'node:test';
 import {
   parseProjectsConfigMigrationArgs, resolveProjectsConfigImage, runProjectsConfigMigration,
 } from '../lib/projects-config-migration.mjs';
-import { DB_MAINTENANCE_TARGET, LOCK_NAME } from '../lib/db-maintenance.mjs';
+import { DB_MAINTENANCE_TARGET, LOCK_NAME, STATE_NAME } from '../lib/db-maintenance.mjs';
+import { assertP0KubernetesPermissions } from '../lib/namespace-bootstrap.mjs';
+import { parseDeployKustomizeArgs } from '../../release/deploy-kustomize.mjs';
+import { parseDeployFromCommitArgs } from '../../release/deploy-from-commit.mjs';
 
 const deploymentSourceSha = 'c'.repeat(40);
 const imageDigest = `sha256:${'1'.repeat(64)}`;
@@ -54,6 +57,9 @@ function createWorld({
   migrationServiceAccountClientId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
   expectedMigrationClientId = migrationServiceAccountClientId,
   originV1 = deploymentSourceSha,
+  projectsDeployment = null,
+  projectsPods = [],
+  supportsConsumeGuard = sha => sha === deploymentSourceSha,
 } = {}) {
   const directory = path.join(
     process.cwd(), '.test-scratch', `projects-config-migration-test-${randomUUID()}`);
@@ -75,6 +81,29 @@ function createWorld({
       if (args[0] === 'rev-parse' && args[1] === 'origin/v1') {
         return { status: 0, stdout: `${originV1}\n`, stderr: '' };
       }
+      if (args[0] === 'cat-file' && args[1] === '-e') {
+        const sha = args[2].split(':')[0];
+        return { status: supportsConsumeGuard(sha) ? 0 : 1, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'show') {
+        const sha = args[1].split(':')[0];
+        if (!supportsConsumeGuard(sha)) return { status: 1, stdout: '', stderr: '' };
+        if (args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json')) {
+          return {
+            status: 0,
+            stdout: readFileSync(path.join(process.cwd(), 'scripts', 'azure', 'lib', 'p1-postgres-plan.json'), 'utf8'),
+            stderr: '',
+          };
+        }
+        return {
+          status: 0,
+          stdout: readFileSync(
+            path.join(process.cwd(), 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Program.cs'),
+            'utf8',
+          ),
+          stderr: '',
+        };
+      }
       throw new Error(`unexpected git ${args.join(' ')}`);
     }
     if (command !== 'kubectl') throw new Error(`unexpected command ${command}`);
@@ -94,6 +123,13 @@ function createWorld({
     }
     if (args.includes('create') && args.includes('--filename')) {
       const object = JSON.parse(settings.input);
+      if (object.kind === 'Lease') {
+        object.metadata = {
+          ...object.metadata,
+          uid: object.metadata?.uid ?? 'lease-uid-1',
+          resourceVersion: object.metadata?.resourceVersion ?? '1',
+        };
+      }
       objects.set(`${object.kind.toLowerCase()}/${object.metadata.name}`, object);
       return { status: 0, stdout: `${object.kind}/${object.metadata.name} created`, stderr: '' };
     }
@@ -106,7 +142,36 @@ function createWorld({
         : { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases not found' };
     }
     if (args.includes('get') && args.includes('configmap')) {
+      if (args.includes(STATE_NAME)) {
+        const state = objects.get(`configmap/${STATE_NAME}`);
+        return { status: 0, stdout: state ? JSON.stringify(state) : '', stderr: '' };
+      }
       return { status: 0, stdout: JSON.stringify(configMap), stderr: '' };
+    }
+    if (args.includes('patch') && args.includes('configmap') && args.includes(STATE_NAME)) {
+      const existing = objects.get(`configmap/${STATE_NAME}`) ?? {
+        apiVersion: 'v1',
+        kind: 'ConfigMap',
+        metadata: { name: STATE_NAME, namespace: DB_MAINTENANCE_TARGET.namespace },
+        data: {},
+      };
+      const patch = JSON.parse(args[args.indexOf('--patch') + 1]);
+      existing.data = { ...existing.data, ...patch.data };
+      objects.set(`configmap/${STATE_NAME}`, existing);
+      return { status: 0, stdout: `configmap/${STATE_NAME} patched`, stderr: '' };
+    }
+    if (args.includes('get') && args.includes('deployment') && args.includes('projects-config')) {
+      return { status: 0, stdout: projectsDeployment ? JSON.stringify(projectsDeployment) : '', stderr: '' };
+    }
+    if (args.includes('scale') && args.includes('deployment/projects-config')) {
+      if (projectsDeployment) {
+        projectsDeployment.spec.replicas = 0;
+      }
+      projectsPods.length = 0;
+      return { status: 0, stdout: 'deployment.apps/projects-config scaled', stderr: '' };
+    }
+    if (args.includes('get') && args.includes('jobs')) {
+      return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
     }
     if (args.includes('get') && args.includes('job')) {
       const name = args[args.indexOf('job') + 1];
@@ -117,6 +182,12 @@ function createWorld({
         stderr: '',
       };
     }
+    if (args.includes('annotate') && args.includes('deployment/projects-config')) {
+      return { status: 0, stdout: 'deployment.apps/projects-config annotated', stderr: '' };
+    }
+    if (args.includes('rollout') && args.includes('status')) {
+      return { status: 0, stdout: 'deployment "projects-config" successfully rolled out', stderr: '' };
+    }
     if (args.includes('logs')) {
       const output = args.some(argument => argument.includes('tenant-admin-bootstrap'))
         ? tenantBootstrapLog
@@ -125,9 +196,33 @@ function createWorld({
       return { status: 0, stdout: `${output}\n`, stderr: '' };
     }
     if (args.includes('get') && args.includes('pods')) {
-      return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
+      const isRunSelector = args.some(a => a.includes('agentweaver.io/db-maintenance-run='));
+      return { status: 0, stdout: JSON.stringify({ kind: 'List', items: isRunSelector ? [] : projectsPods }), stderr: '' };
     }
     if (args.includes('delete')) {
+      const rawIdx = args.indexOf('--raw');
+      if (rawIdx >= 0) {
+        const rawPath = args[rawIdx + 1];
+        const expectedLeasePath = `/apis/coordination.k8s.io/v1/namespaces/${DB_MAINTENANCE_TARGET.namespace}/leases/${LOCK_NAME}`;
+        if (rawPath !== expectedLeasePath || !args.includes('--filename') || args[args.indexOf('--filename') + 1] !== '-') {
+          return { status: 1, stdout: '', stderr: `unexpected raw delete ${rawPath}` };
+        }
+        const current = objects.get(`lease/${LOCK_NAME}`);
+        let body;
+        try {
+          body = JSON.parse(settings?.input ?? '{}');
+        } catch {
+          return { status: 1, stdout: '', stderr: 'invalid DeleteOptions JSON' };
+        }
+        if (body.apiVersion !== 'v1' || body.kind !== 'DeleteOptions' ||
+            !current ||
+            body.preconditions?.uid !== current.metadata?.uid ||
+            body.preconditions?.resourceVersion !== current.metadata?.resourceVersion) {
+          return { status: 1, stdout: '', stderr: 'Error from server (Conflict): UID or resourceVersion mismatch' };
+        }
+        objects.delete(`lease/${LOCK_NAME}`);
+        return { status: 0, stdout: '', stderr: '' };
+      }
       const kind = args[args.indexOf('delete') + 1];
       const name = args[args.indexOf(kind) + 1];
       objects.delete(`${kind}/${name}`);
@@ -155,6 +250,15 @@ function createWorld({
       now: () => new Date('2026-10-23T00:00:00.000Z'),
       sleep: async () => {},
       log: () => {},
+      deleteLease: async ({ baseArgs, apiPath, uid, resourceVersion }) => {
+        assert.deepEqual(baseArgs, ['--kubeconfig', 'offline']);
+        assert.equal(apiPath, `/apis/coordination.k8s.io/v1/namespaces/${DB_MAINTENANCE_TARGET.namespace}/leases/${LOCK_NAME}`);
+        const current = objects.get(`lease/${LOCK_NAME}`);
+        if (!current || uid !== current.metadata?.uid || resourceVersion !== current.metadata?.resourceVersion) {
+          throw new Error('Conflict: UID or resourceVersion mismatch');
+        }
+        objects.delete(`lease/${LOCK_NAME}`);
+      },
       writeReceipt: (file, receipt) => receipts.push({ file, receipt: structuredClone(receipt) }),
     },
     dispose: () => rmSync(directory, { recursive: true, force: true }),
@@ -740,7 +844,10 @@ test('execute passes credentials only through Secret stdin, cleans up, and recor
   const world = createWorld();
   try {
     const receipt = await withMigrationCredentials(() =>
-      runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides));
+      runProjectsConfigMigration({ ...world.options, execute: true }, {
+        ...world.overrides,
+        verifyExactPairA: async () => true,
+      }));
     assert.equal(receipt.result, 'succeeded');
     assert.equal(receipt.schemaVersion, 2);
     assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
@@ -769,7 +876,10 @@ test('failed migration Job cleans up its resources and writes a failed receipt',
   const world = createWorld({ jobOutcome: 'Failed' });
   try {
     await assert.rejects(withMigrationCredentials(() =>
-      runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides)),
+      runProjectsConfigMigration({ ...world.options, execute: true }, {
+        ...world.overrides,
+        verifyExactPairA: async () => true,
+      })),
     /migration Job .* failed/);
     assert.equal(world.receipts[0].receipt.result, 'failed');
     assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
@@ -836,5 +946,753 @@ test('a separate target uses its own cluster and rejects an unregistered target'
     assert.deepEqual(targets.map(target => [target.resourceGroup, target.clusterName]), [['awwus2np01', 'awwus2np01-aks']]);
   } finally {
     world.dispose();
+  }
+});
+
+test('migration scales down incompatible live projects-config deployment, records consume guard, and blocks image-only rollback', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const world = createWorld({
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: { name: 'projects-config', namespace: DB_MAINTENANCE_TARGET.namespace },
+      spec: {
+        replicas: 2,
+        template: { spec: { containers: [{ image: legacyImage }] } },
+      },
+    },
+    projectsPods: [
+      { metadata: { name: 'projects-config-0', labels: { 'app.kubernetes.io/name': 'projects-config' } } },
+    ],
+  });
+  const verifyImage = async targetImage => targetImage === legacyImage
+    ? { digest: legacyDigest, sourceSha: legacySourceSha }
+    : { digest: imageDigest, sourceSha: deploymentSourceSha };
+  try {
+    const receipt = await withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world.options, execute: true },
+      { ...world.overrides, verifyImage }));
+    assert.equal(receipt.result, 'succeeded');
+    assert.ok(receipt.steps.some(step => step.name === 'projects-config-scaled-down-for-cutover'));
+    assert.ok(receipt.steps.some(step => step.name === 'projects-config-consume-guard-recorded'));
+    assert.equal(world.objects.get(`configmap/${STATE_NAME}`)?.data?.['projectsConfig.consumeGuardRequired'], 'true');
+    const scaleCallIndex = world.calls.findIndex(call =>
+      call.command === 'kubectl' && call.args.includes('scale') && call.args.includes('deployment/projects-config'));
+    const jobCreateIndex = world.calls.findIndex(call =>
+      call.command === 'kubectl' && call.args.includes('create') &&
+      JSON.parse(call.settings.input ?? '{}').kind === 'Job');
+    assert.ok(scaleCallIndex >= 0 && jobCreateIndex > scaleCallIndex);
+
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      {
+        ...parseProjectsConfigMigrationArgs([
+          '--image', legacyImage, '--receipt-dir', path.dirname(receipt.receiptPath),
+        ]),
+        execute: true,
+      },
+      { ...world.overrides, verifyImage })),
+    /Projects & Config rollback guard blocks/);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: acquires Lease before state/scale, persists Pending before Job, and prints exact follow-up commands', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const world = createWorld({
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: { name: 'projects-config', namespace: DB_MAINTENANCE_TARGET.namespace },
+      spec: {
+        replicas: 2,
+        template: { spec: { containers: [{ image: legacyImage }] } },
+      },
+    },
+    projectsPods: [
+      { metadata: { name: 'projects-config-0', labels: { 'app.kubernetes.io/name': 'projects-config' } } },
+    ],
+  });
+  const verifyImage = async targetImage => targetImage === legacyImage
+    ? { digest: legacyDigest, sourceSha: legacySourceSha }
+    : { digest: imageDigest, sourceSha: deploymentSourceSha };
+  const logs = [];
+  try {
+    const receipt = await withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world.options, execute: true },
+      { ...world.overrides, verifyImage, log: msg => logs.push(msg) }));
+    assert.equal(receipt.result, 'succeeded');
+
+    const leaseCreateIdx = world.calls.findIndex(c =>
+      c.command === 'kubectl' && c.args.includes('create') && JSON.parse(c.settings.input ?? '{}').kind === 'Lease');
+    const stateReadIdx = world.calls.findIndex(c =>
+      c.command === 'kubectl' && c.args.includes('get') && c.args.includes('configmap') && c.args.includes(STATE_NAME));
+    const scaleIdx = world.calls.findIndex(c =>
+      c.command === 'kubectl' && c.args.includes('scale') && c.args.includes('deployment/projects-config'));
+    const pendingPatchIdx = world.calls.findIndex(c =>
+      c.command === 'kubectl' && (c.args.includes('create') || c.args.includes('patch')) &&
+      (c.settings.input ?? c.args.join(' ')).includes('consumeGuardPending'));
+    const jobCreateIdx = world.calls.findIndex(c =>
+      c.command === 'kubectl' && c.args.includes('create') && JSON.parse(c.settings.input ?? '{}').kind === 'Job');
+    assert.ok(leaseCreateIdx >= 0 && leaseCreateIdx < stateReadIdx, 'Lease must be created before state read');
+    assert.ok(leaseCreateIdx < scaleIdx, 'Lease must be created before scale-down');
+    assert.ok(pendingPatchIdx >= 0 && pendingPatchIdx < jobCreateIdx, 'consumeGuardPending must be persisted before Job');
+
+    assert.equal(receipt.followUpCommands.length, 2);
+    assert.match(receipt.followUpCommands[0], /^npm run deploy:kustomize -- --image-manifest <projects-config-manifest\.json> --resource-group agentweaver --execute$/);
+    assert.match(receipt.followUpCommands[1], new RegExp(`^npm run azure:deploy-from-commit -- ${deploymentSourceSha} --projects-config-only --resource-group agentweaver --execute$`));
+    assert.ok(logs.some(l => l.includes(receipt.followUpCommands[0]) && l.includes(receipt.followUpCommands[1])));
+    assert.ok(logs.some(l => l.includes(`"agentweaver.projects.config":"${imageDigest}"`)));
+
+    const kustomizeArgs = receipt.followUpCommands[0].replace(/^npm run deploy:kustomize -- /, '').split(/\s+/);
+    const parsedKustomize = parseDeployKustomizeArgs(kustomizeArgs);
+    assert.equal(parsedKustomize.imageManifest, '<projects-config-manifest.json>');
+
+    const commitArgs = receipt.followUpCommands[1].replace(/^npm run azure:deploy-from-commit -- /, '').split(/\s+/);
+    const parsedCommit = parseDeployFromCommitArgs(commitArgs);
+    assert.equal(parsedCommit.sourceSha, deploymentSourceSha);
+    assert.equal(parsedCommit.projectsConfigOnly, true);
+
+    const perms = world.kubeconfigOptions[0].requiredPermissions;
+    for (const expected of [
+      ['patch', 'deployments.apps'],
+      ['patch', 'deployments.apps', 'scale'],
+      ['list', 'deployments.apps'],
+      ['watch', 'deployments.apps'],
+      ['get', 'pods'],
+      ['watch', 'pods'],
+      ['get', 'pods', 'log'],
+    ]) {
+      assert.ok(
+        perms.some(p => p[0] === expected[0] && p[1] === expected[1] && (expected[2] === undefined || p[3] === expected[2])),
+        `missing required permission ${expected.join(' ')}`,
+      );
+    }
+    assert.throws(
+      () => assertP0KubernetesPermissions(
+        ['--kubeconfig', 'offline'],
+        args => (args.includes('deployments.apps') && args.includes('--subresource=scale')
+          ? { status: 0, stdout: 'no\n', stderr: '' }
+          : { status: 0, stdout: 'yes\n', stderr: '' }),
+        perms,
+        'Projects & Config database migration',
+      ),
+      /patch deployments\.apps \(subresource scale\)/,
+    );
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: failed-before-commit settles Job first, verifies exact Pair A, clears Pending, and restores replicas', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const world = createWorld({
+    jobOutcome: 'Failed',
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: { name: 'projects-config', namespace: DB_MAINTENANCE_TARGET.namespace },
+      spec: {
+        replicas: 2,
+        template: { spec: { containers: [{ image: legacyImage }] } },
+      },
+    },
+    projectsPods: [
+      { metadata: { name: 'projects-config-0', labels: { 'app.kubernetes.io/name': 'projects-config' } } },
+    ],
+  });
+  const verifyImage = async targetImage => targetImage === legacyImage
+    ? { digest: legacyDigest, sourceSha: legacySourceSha }
+    : { digest: imageDigest, sourceSha: deploymentSourceSha };
+  const events = [];
+  const baseExec = world.overrides.exec;
+  const trackingExec = (cmd, args, settings) => {
+    if (cmd === 'kubectl' && args.includes('delete') && args.includes('job')) events.push('delete-job');
+    if (cmd === 'kubectl' && args.includes('scale') && args.includes('--replicas=2')) events.push('restore-replicas');
+    if (cmd === 'kubectl' && args.includes('patch') && args.join(' ').includes('consumeGuardPending":null')) {
+      events.push('clear-pending');
+    }
+    return baseExec(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world.options, execute: true },
+      {
+        ...world.overrides,
+        exec: trackingExec,
+        verifyImage,
+        verifyExactPairA: async () => {
+          events.push('verify-pair-a');
+          return true;
+        },
+      })),
+    /migration Job .* failed/);
+    assert.deepEqual(events, ['delete-job', 'verify-pair-a', 'clear-pending', 'restore-replicas']);
+    assert.equal(world.objects.get(`configmap/${STATE_NAME}`)?.data?.['projectsConfig.consumeGuardPending'], null);
+    assert.equal(world.receipts[0].receipt.cleanup.lock, true);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: retains Lease and Pending when Job cleanup fails or Pair A is unproven', async () => {
+  const world = createWorld({ jobOutcome: 'Failed' });
+  const baseExec = world.overrides.exec;
+  const failingJobDeleteExec = (cmd, args, settings) => {
+    if (cmd === 'kubectl' && args.includes('delete') && args.includes('job')) {
+      return { status: 1, stdout: '', stderr: 'delete job timed out' };
+    }
+    return baseExec(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world.options, execute: true },
+      {
+        ...world.overrides,
+        exec: failingJobDeleteExec,
+        verifyImage: async () => ({ digest: imageDigest, sourceSha: deploymentSourceSha }),
+        verifyExactPairA: async () => { throw new Error('must not run while Job is unsettled'); },
+      })),
+    /Cleanup failed/);
+    assert.ok(world.objects.has('lease/p1-db-maintenance-lock'), 'Lease must be retained when Job cleanup fails');
+    assert.equal(world.objects.get(`configmap/${STATE_NAME}`)?.data?.['projectsConfig.consumeGuardPending'], 'true');
+    assert.equal(world.receipts[0].receipt.cleanup.lock, false);
+
+    // --release-lock refuses mismatched holder, succeeds for exact holder once settled.
+    await assert.rejects(
+      runProjectsConfigMigration(parseProjectsConfigMigrationArgs([
+        '--release-lock', 'wrongrunid00', '--receipt-dir', path.dirname(world.options.receiptDir) + '/receipts2',
+      ]), world.overrides),
+      /held by abcdef123456, not wrongrunid00/);
+    const releaseReceipt = await runProjectsConfigMigration(parseProjectsConfigMigrationArgs([
+      '--release-lock', 'abcdef123456', '--receipt-dir', path.dirname(world.options.receiptDir) + '/receipts2',
+    ]), world.overrides);
+    assert.equal(releaseReceipt.result, 'succeeded');
+    assert.equal(world.objects.has('lease/p1-db-maintenance-lock'), false);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: production Pair A verifier Job replaces command without --migrate, includes list jobs permission, and handles mismatch', async () => {
+  const world = createWorld({ jobOutcome: 'Failed' });
+  const baseExec = world.overrides.exec;
+  const createdJobs = [];
+  const exec = (cmd, args, settings) => {
+    if (cmd === 'kubectl' && args.includes('create') && args.includes('--filename')) {
+      const doc = JSON.parse(settings.input ?? '{}');
+      if (doc.kind === 'Job') createdJobs.push(doc);
+    }
+    if (cmd === 'kubectl' && args.includes('get') && args.includes('job') &&
+        args.some(a => a.includes('paira'))) {
+      const name = args[args.indexOf('job') + 1];
+      const job = world.objects.get(`job/${name}`);
+      return {
+        status: 0,
+        stdout: JSON.stringify({ ...job, status: { conditions: [{ type: 'Complete', status: 'True' }] } }),
+        stderr: '',
+      };
+    }
+    if (cmd === 'kubectl' && args.includes('logs') && args.some(a => a.includes('paira'))) {
+      return { status: 0, stdout: 'PROJECTS_CONFIG_EXACT_PAIR_A\n', stderr: '' };
+    }
+    return baseExec(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world.options, execute: true },
+      {
+        ...world.overrides,
+        exec,
+        verifyImage: async () => ({ digest: imageDigest, sourceSha: deploymentSourceSha }),
+      })),
+    /migration Job .* failed/);
+    const pairAJob = createdJobs.find(j => j.metadata.name.includes('paira'));
+    assert.ok(pairAJob, 'Pair A verification Job must be created without override');
+    assert.deepEqual(pairAJob.spec.template.spec.containers[0].command, [
+      'dotnet', 'Agentweaver.Projects.Config.dll', '--verify-projects-config-pair-a',
+    ]);
+    assert.equal(pairAJob.spec.template.spec.containers[0].args, undefined);
+    assert.equal(pairAJob.metadata.labels['agentweaver.io/db-maintenance-run'], 'abcdef123456');
+    assert.equal(pairAJob.spec.template.metadata.labels['agentweaver.io/db-maintenance-run'], 'abcdef123456');
+    assert.ok(world.kubeconfigOptions[0].requiredPermissions.some(
+      p => p[0] === 'list' && p[1] === 'jobs'));
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: --release-lock preserves a changed Lease UID/resourceVersion and checks list jobs permission', async () => {
+  const world = createWorld();
+  world.objects.set(`lease/${LOCK_NAME}`, {
+    apiVersion: 'coordination.k8s.io/v1',
+    kind: 'Lease',
+    metadata: { name: LOCK_NAME, uid: 'uid-old', resourceVersion: '10' },
+    spec: { holderIdentity: 'abcdef123456' },
+  });
+  const racingDeleteLease = async opts => {
+    // Simulate another run replacing the Lease between read and delete.
+    world.objects.set(`lease/${LOCK_NAME}`, {
+      apiVersion: 'coordination.k8s.io/v1',
+      kind: 'Lease',
+      metadata: { name: LOCK_NAME, uid: 'uid-new', resourceVersion: '11' },
+      spec: { holderIdentity: 'other-run-999' },
+    });
+    return world.overrides.deleteLease(opts);
+  };
+  try {
+    await assert.rejects(
+      runProjectsConfigMigration(parseProjectsConfigMigrationArgs([
+        '--release-lock', 'abcdef123456', '--receipt-dir', path.dirname(world.options.receiptDir) + '/receipts2',
+      ]), { ...world.overrides, deleteLease: racingDeleteLease }),
+      /UID\/resourceVersion preconditions/);
+    assert.equal(world.objects.get(`lease/${LOCK_NAME}`)?.metadata?.uid, 'uid-new');
+    assert.ok(world.kubeconfigOptions[0].requiredPermissions.some(
+      p => p[0] === 'list' && p[1] === 'jobs'));
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: recovers scaled-down deployment if consumeGuardPending write fails only when exact Pair A is proven', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const verifyImage = async targetImage => targetImage === legacyImage
+    ? { digest: legacyDigest, sourceSha: legacySourceSha }
+    : { digest: imageDigest, sourceSha: deploymentSourceSha };
+
+  for (const pairAProven of [true, false]) {
+    const world = createWorld({
+      projectsDeployment: {
+        kind: 'Deployment',
+        metadata: { name: 'projects-config', namespace: DB_MAINTENANCE_TARGET.namespace },
+        spec: {
+          replicas: 2,
+          template: { spec: { containers: [{ image: legacyImage }] } },
+        },
+      },
+      projectsPods: [
+        { metadata: { name: 'projects-config-0', labels: { 'app.kubernetes.io/name': 'projects-config' } } },
+      ],
+    });
+    const baseExec = world.overrides.exec;
+    const failingPendingExec = (cmd, args, settings) => {
+      if (cmd === 'kubectl' && args.includes('create') &&
+          (settings?.input ?? '').includes('consumeGuardPending')) {
+        return { status: 1, stdout: '', stderr: 'simulated configmap write failure' };
+      }
+      return baseExec(cmd, args, settings);
+    };
+    try {
+      await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+        { ...world.options, execute: true },
+        {
+          ...world.overrides,
+          exec: failingPendingExec,
+          verifyImage,
+          verifyExactPairA: async () => pairAProven,
+        })),
+      /simulated configmap write failure/);
+      const restored = world.calls.some(c =>
+        c.command === 'kubectl' && c.args.includes('scale') && c.args.includes('--replicas=2'));
+      assert.equal(restored, pairAProven);
+    } finally {
+      world.dispose();
+    }
+  }
+});
+
+test('v9: interrupted retry at zero replicas reads saved annotation and restores prior replicas on Pair A recovery', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const world = createWorld({
+    jobOutcome: 'Failed',
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: {
+        name: 'projects-config',
+        namespace: DB_MAINTENANCE_TARGET.namespace,
+        annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+      },
+      spec: {
+        replicas: 0,
+        template: { spec: { containers: [{ image: legacyImage }] } },
+      },
+    },
+    projectsPods: [],
+  });
+  const verifyImage = async targetImage => targetImage === legacyImage
+    ? { digest: legacyDigest, sourceSha: legacySourceSha }
+    : { digest: imageDigest, sourceSha: deploymentSourceSha };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world.options, execute: true },
+      {
+        ...world.overrides,
+        verifyImage,
+        verifyExactPairA: async () => true,
+      })),
+    /migration Job .* failed/);
+    assert.ok(world.calls.some(c =>
+      c.command === 'kubectl' && c.args.includes('scale') && c.args.includes('--replicas=2')));
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: inherited consumeGuardPending is cleared on Pair A recovery even when this run fails before writing Pending', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const world = createWorld({
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: {
+        name: 'projects-config',
+        namespace: DB_MAINTENANCE_TARGET.namespace,
+        annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+      },
+      spec: {
+        replicas: 0,
+        template: { spec: { containers: [{ image: legacyImage }] } },
+      },
+    },
+  });
+  world.objects.set(`configmap/${STATE_NAME}`, {
+    apiVersion: 'v1',
+    kind: 'ConfigMap',
+    metadata: { name: STATE_NAME, namespace: DB_MAINTENANCE_TARGET.namespace },
+    data: { 'projectsConfig.consumeGuardPending': 'true' },
+  });
+  const verifyImage = async targetImage => targetImage === legacyImage
+    ? { digest: legacyDigest, sourceSha: legacySourceSha }
+    : { digest: imageDigest, sourceSha: deploymentSourceSha };
+  const baseExec = world.overrides.exec;
+  let patchCount = 0;
+  const failFirstPendingPatchExec = (cmd, args, settings) => {
+    if (cmd === 'kubectl' && args.includes('patch') && args.includes(STATE_NAME) &&
+        args.join(' ').includes('"projectsConfig.consumeGuardPending":"true"')) {
+      patchCount += 1;
+      if (patchCount === 1) {
+        return { status: 1, stdout: '', stderr: 'simulated pending patch failure' };
+      }
+    }
+    return baseExec(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world.options, execute: true },
+      {
+        ...world.overrides,
+        exec: failFirstPendingPatchExec,
+        verifyImage,
+        verifyExactPairA: async () => true,
+      })),
+    /simulated pending patch failure/);
+    assert.equal(world.objects.get(`configmap/${STATE_NAME}`)?.data?.['projectsConfig.consumeGuardPending'], null);
+    assert.ok(world.calls.some(c =>
+      c.command === 'kubectl' && c.args.includes('scale') && c.args.includes('--replicas=2')));
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: Pair A-to-Pair A standalone migration does not scale down projects-config', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const world = createWorld({
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: { name: 'projects-config', namespace: DB_MAINTENANCE_TARGET.namespace },
+      spec: {
+        replicas: 2,
+        template: { spec: { containers: [{ image: legacyImage }] } },
+      },
+    },
+    projectsPods: [
+      { metadata: { name: 'projects-config-0', labels: { 'app.kubernetes.io/name': 'projects-config' } } },
+    ],
+  });
+  try {
+    const receipt = await withMigrationCredentials(() => runProjectsConfigMigration(
+      parseProjectsConfigMigrationArgs([
+        '--image', legacyImage, '--receipt-dir', world.options.receiptDir, '--execute',
+      ]),
+      {
+        ...world.overrides,
+        verifyImage: async () => ({ digest: legacyDigest, sourceSha: legacySourceSha }),
+        verifyExactPairA: async () => true,
+      }));
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(world.calls.some(c => c.command === 'kubectl' && c.args.includes('scale')), false);
+    assert.equal(receipt.followUpCommands, undefined);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('v9: Pair A verifier Job delete failure and restore readiness timeout each retain Lock', async () => {
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+  const verifyImage = async targetImage => targetImage === legacyImage
+    ? { digest: legacyDigest, sourceSha: legacySourceSha }
+    : { digest: imageDigest, sourceSha: deploymentSourceSha };
+
+  // 1. Pair A verifier Job delete failure retains Lock and stops recovery.
+  const world1 = createWorld({
+    jobOutcome: 'Failed',
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: {
+        name: 'projects-config',
+        namespace: DB_MAINTENANCE_TARGET.namespace,
+        annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+      },
+      spec: { replicas: 0, template: { spec: { containers: [{ image: legacyImage }] } } },
+    },
+  });
+  const base1 = world1.overrides.exec;
+  const exec1 = (cmd, args, settings) => {
+    if (cmd === 'kubectl' && args.includes('get') && args.includes('job') && args.some(a => a.includes('paira'))) {
+      const name = args[args.indexOf('job') + 1];
+      const job = world1.objects.get(`job/${name}`);
+      return { status: 0, stdout: JSON.stringify({ ...job, status: { conditions: [{ type: 'Complete', status: 'True' }] } }), stderr: '' };
+    }
+    if (cmd === 'kubectl' && args.includes('logs') && args.some(a => a.includes('paira'))) {
+      return { status: 0, stdout: 'PROJECTS_CONFIG_EXACT_PAIR_A\n', stderr: '' };
+    }
+    if (cmd === 'kubectl' && args.includes('delete') && args.includes('job') && args.some(a => a.includes('paira'))) {
+      return { status: 1, stdout: '', stderr: 'delete paira job failed' };
+    }
+    return base1(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world1.options, execute: true },
+      { ...world1.overrides, exec: exec1, verifyImage })),
+    /could not clean up Pair A verification Job/);
+    assert.ok(world1.objects.has(`lease/${LOCK_NAME}`), 'Lock must be retained when Pair A Job delete fails');
+    assert.equal(world1.receipts[0].receipt.cleanup.lock, false);
+    assert.equal(world1.calls.some(c => c.command === 'kubectl' && c.args.includes('scale')), false);
+  } finally {
+    world1.dispose();
+  }
+
+  // 2. Replica restore readiness timeout retains Lock.
+  const world2 = createWorld({
+    jobOutcome: 'Failed',
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: {
+        name: 'projects-config',
+        namespace: DB_MAINTENANCE_TARGET.namespace,
+        annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+      },
+      spec: { replicas: 0, template: { spec: { containers: [{ image: legacyImage }] } } },
+    },
+  });
+  const base2 = world2.overrides.exec;
+  const exec2 = (cmd, args, settings) => {
+    if (cmd === 'kubectl' && args.includes('rollout') && args.includes('status')) {
+      return { status: 1, stdout: '', stderr: 'timed out waiting for rollout' };
+    }
+    return base2(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world2.options, execute: true },
+      { ...world2.overrides, exec: exec2, verifyImage, verifyExactPairA: async () => true })),
+    /timed out waiting for rollout/);
+    assert.ok(world2.objects.has(`lease/${LOCK_NAME}`), 'Lock must be retained when restored replicas are unready');
+    assert.equal(world2.receipts[0].receipt.cleanup.lock, false);
+  } finally {
+    world2.dispose();
+  }
+
+  // 3. Pair A verifier grant-contract failure (e.g. missing revoked_at) blocks clearing Pending and restoring replicas.
+  const world3 = createWorld({
+    jobOutcome: 'Failed',
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: {
+        name: 'projects-config',
+        namespace: DB_MAINTENANCE_TARGET.namespace,
+        annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+      },
+      spec: { replicas: 0, template: { spec: { containers: [{ image: legacyImage }] } } },
+    },
+  });
+  world3.objects.set(`configmap/${STATE_NAME}`, {
+    apiVersion: 'v1',
+    kind: 'ConfigMap',
+    metadata: { name: STATE_NAME, namespace: DB_MAINTENANCE_TARGET.namespace },
+    data: { 'projectsConfig.consumeGuardPending': 'true' },
+  });
+  const base3 = world3.overrides.exec;
+  const exec3 = (cmd, args, settings) => {
+    if (cmd === 'kubectl' && args.includes('get') && args.includes('job') && args.some(a => a.includes('paira'))) {
+      const name = args[args.indexOf('job') + 1];
+      const job = world3.objects.get(`job/${name}`);
+      return { status: 0, stdout: JSON.stringify({ ...job, status: { conditions: [{ type: 'Complete', status: 'True' }] } }), stderr: '' };
+    }
+    if (cmd === 'kubectl' && args.includes('logs') && args.some(a => a.includes('paira'))) {
+      return { status: 0, stdout: 'PROJECTS_CONFIG_PAIR_A_NOT_PROVEN:runtime_grants_mismatch_pair_a\n', stderr: '' };
+    }
+    return base3(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      { ...world3.options, execute: true },
+      { ...world3.overrides, exec: exec3, verifyImage })),
+    /migration Job .* failed/);
+    assert.equal(world3.objects.get(`configmap/${STATE_NAME}`)?.data?.['projectsConfig.consumeGuardPending'], 'true');
+    assert.equal(world3.calls.some(c => c.command === 'kubectl' && c.args.includes('scale')), false);
+  } finally {
+    world3.dispose();
+  }
+});
+
+test('v9: capable migration image lacking verifier uses explicit --verifier-image or fails closed', async () => {
+  const noVerifierSha = 'd'.repeat(40);
+  const noVerifierDigest = `sha256:${'3'.repeat(64)}`;
+  const noVerifierImage = `ghcr.io/sabbour/agentweaver.projects.config@${noVerifierDigest}`;
+  const verifierSha = 'e'.repeat(40);
+  const verifierDigest = `sha256:${'4'.repeat(64)}`;
+  const verifierImage = `ghcr.io/sabbour/agentweaver.projects.config@${verifierDigest}`;
+  const legacyDigest = `sha256:${'2'.repeat(64)}`;
+  const legacyImage = `ghcr.io/sabbour/agentweaver.projects.config@${legacyDigest}`;
+  const legacySourceSha = 'b'.repeat(40);
+
+  const verifyImage = async targetImage => {
+    if (targetImage === noVerifierImage) return { digest: noVerifierDigest, sourceSha: noVerifierSha };
+    if (targetImage === verifierImage) return { digest: verifierDigest, sourceSha: verifierSha };
+    return { digest: legacyDigest, sourceSha: legacySourceSha };
+  };
+
+  // 1. Without --verifier-image: capable migration image lacking --verify-projects-config-pair-a does not create a verifier Job or restore replicas.
+  const world1 = createWorld({
+    jobOutcome: 'Failed',
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: {
+        name: 'projects-config',
+        namespace: DB_MAINTENANCE_TARGET.namespace,
+        annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+      },
+      spec: { replicas: 0, template: { spec: { containers: [{ image: legacyImage }] } } },
+    },
+  });
+  const base1 = world1.overrides.exec;
+  const exec1 = (cmd, args, settings) => {
+    if (cmd === 'git' && args[0] === 'cat-file' && args[1] === '-e' && args[2].startsWith(noVerifierSha)) {
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    if (cmd === 'git' && args[0] === 'show' && args[1].startsWith(noVerifierSha)) {
+      if (args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json')) {
+        return {
+          status: 0,
+          stdout: readFileSync(path.join(process.cwd(), 'scripts', 'azure', 'lib', 'p1-postgres-plan.json'), 'utf8'),
+          stderr: '',
+        };
+      }
+      return { status: 0, stdout: 'static void Main() {}', stderr: '' };
+    }
+    return base1(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      parseProjectsConfigMigrationArgs([
+        '--image', noVerifierImage, '--receipt-dir', world1.options.receiptDir, '--execute',
+      ]),
+      { ...world1.overrides, exec: exec1, verifyImage })),
+    /migration Job .* failed/);
+    assert.equal(world1.calls.some(c => c.command === 'kubectl' && c.args.includes('create') &&
+      (c.settings?.input ?? '').includes('--verify-projects-config-pair-a')), false);
+    assert.equal(world1.calls.some(c => c.command === 'kubectl' && c.args.includes('scale')), false);
+  } finally {
+    world1.dispose();
+  }
+
+  // 2. With --verifier-image: preserves explicit verifier image and restores replicas when Pair A is proven.
+  const world2 = createWorld({
+    jobOutcome: 'Failed',
+    projectsDeployment: {
+      kind: 'Deployment',
+      metadata: {
+        name: 'projects-config',
+        namespace: DB_MAINTENANCE_TARGET.namespace,
+        annotations: { 'agentweaver.io/local-deploy-restore-replicas': '2' },
+      },
+      spec: { replicas: 0, template: { spec: { containers: [{ image: legacyImage }] } } },
+    },
+  });
+  const base2 = world2.overrides.exec;
+  const createdJobs = [];
+  const exec2 = (cmd, args, settings) => {
+    if (cmd === 'git' && args[0] === 'cat-file' && args[1] === '-e' &&
+        (args[2].startsWith(noVerifierSha) || args[2].startsWith(verifierSha))) {
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    if (cmd === 'git' && args[0] === 'show' && args[1].startsWith(noVerifierSha)) {
+      if (args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json')) {
+        return {
+          status: 0,
+          stdout: readFileSync(path.join(process.cwd(), 'scripts', 'azure', 'lib', 'p1-postgres-plan.json'), 'utf8'),
+          stderr: '',
+        };
+      }
+      return { status: 0, stdout: 'static void Main() {}', stderr: '' };
+    }
+    if (cmd === 'git' && args[0] === 'show' && args[1].startsWith(verifierSha)) {
+      if (args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json')) {
+        return {
+          status: 0,
+          stdout: readFileSync(path.join(process.cwd(), 'scripts', 'azure', 'lib', 'p1-postgres-plan.json'), 'utf8'),
+          stderr: '',
+        };
+      }
+      return {
+        status: 0,
+        stdout: readFileSync(
+          path.join(process.cwd(), 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Program.cs'),
+          'utf8',
+        ),
+        stderr: '',
+      };
+    }
+    if (cmd === 'kubectl' && args.includes('create') && args.includes('--filename')) {
+      const doc = JSON.parse(settings.input ?? '{}');
+      if (doc.kind === 'Job') createdJobs.push(doc);
+    }
+    if (cmd === 'kubectl' && args.includes('get') && args.includes('job') && args.some(a => a.includes('paira'))) {
+      const name = args[args.indexOf('job') + 1];
+      const job = world2.objects.get(`job/${name}`);
+      return { status: 0, stdout: JSON.stringify({ ...job, status: { conditions: [{ type: 'Complete', status: 'True' }] } }), stderr: '' };
+    }
+    if (cmd === 'kubectl' && args.includes('logs') && args.some(a => a.includes('paira'))) {
+      return { status: 0, stdout: 'PROJECTS_CONFIG_EXACT_PAIR_A\n', stderr: '' };
+    }
+    return base2(cmd, args, settings);
+  };
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration(
+      parseProjectsConfigMigrationArgs([
+        '--image', noVerifierImage, '--verifier-image', verifierImage,
+        '--receipt-dir', world2.options.receiptDir, '--execute',
+      ]),
+      { ...world2.overrides, exec: exec2, verifyImage })),
+    /migration Job .* failed/);
+    const pairAJob = createdJobs.find(j => j.metadata.name.includes('paira'));
+    assert.equal(pairAJob?.spec.template.spec.containers[0].image, verifierImage);
+    assert.ok(world2.calls.some(c => c.command === 'kubectl' && c.args.includes('scale') && c.args.includes('--replicas=2')));
+  } finally {
+    world2.dispose();
   }
 });

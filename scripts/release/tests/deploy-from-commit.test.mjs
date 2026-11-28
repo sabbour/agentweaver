@@ -11,8 +11,18 @@ import {
   deployFromCommit,
   parseDeployFromCommitArgs,
 } from '../deploy-from-commit.mjs';
+import { sourceSupportsConsumeGuard, sourceSupportsPairAVerifier } from '../deploy-kustomize.mjs';
+import {
+  parseProjectsConfigMigrationArgs,
+  runProjectsConfigMigration,
+} from '../../azure/lib/projects-config-migration.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const realPostgresPlanJson = readFileSync(path.join(root, 'scripts', 'azure', 'lib', 'p1-postgres-plan.json'), 'utf8');
+const realProgramCs = readFileSync(
+  path.join(root, 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Program.cs'),
+  'utf8',
+);
 const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
 const digestFor = index => `sha256:${index.toString(16).padStart(64, '0')}`;
@@ -28,22 +38,88 @@ function checkoutState() {
 
 function setup({
   ancestor = true, mismatch, addFailure = false, cleanupFailure = false,
-  registry = 'ghcr.io/sabbour',
+  registry = 'ghcr.io/sabbour', consumeGuardSupported = true, maintenanceState = {}, leaseHolder = undefined,
 } = {}) {
   const testRoot = path.join(root, `.deploy-from-commit-test-${randomUUID()}`);
   const worktreePath = path.join(testRoot, 'source');
   mkdirSync(testRoot);
   const calls = [];
+  let activeLeaseHolder = leaseHolder;
   const digests = Object.fromEntries(IMAGE_REPOSITORIES.map((repository, index) =>
     [repository, digestFor(index + 1)]));
   const exec = (name, args, options = {}) => {
-    calls.push({ name, args, cwd: options.cwd });
+    calls.push({ name, args, cwd: options.cwd, input: options.input });
     if (name === 'git' && args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
     if (name === 'git' && args[0] === 'merge-base') {
       return { status: ancestor ? 0 : 1, stdout: '', stderr: '' };
     }
     if (name === 'git' && args[0] === 'rev-parse') {
       return { status: 0, stdout: `${sourceTree}\n`, stderr: '' };
+    }
+    if (name === 'git' && args[0] === 'cat-file' && args[1] === '-e') {
+      return { status: consumeGuardSupported ? 0 : 1, stdout: '', stderr: '' };
+    }
+    if (name === 'git' && args[0] === 'show') {
+      if (!consumeGuardSupported) return { status: 1, stdout: '', stderr: '' };
+      if (args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json')) {
+        return { status: 0, stdout: realPostgresPlanJson, stderr: '' };
+      }
+      if (args[1].endsWith(':services/projects-config/Agentweaver.Projects.Config/Program.cs')) {
+        return { status: 0, stdout: realProgramCs, stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    if (name === 'kubectl') {
+      if (args[0] === 'config' && args[1] === 'current-context') {
+        return { status: 0, stdout: 'test-ctx\n', stderr: '' };
+      }
+      if (args[0] === 'config' && args[1] === 'view') {
+        return { status: 0, stdout: 'https://test-cluster.example.com\n', stderr: '' };
+      }
+      if (args[0] === 'get' && args[1] === 'lease') {
+        if (activeLeaseHolder) {
+          if (args.includes('--output=jsonpath={.spec.holderIdentity}')) {
+            return { status: 0, stdout: activeLeaseHolder, stderr: '' };
+          }
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              metadata: { uid: 'lease-uid-1', resourceVersion: '1' },
+              spec: { holderIdentity: activeLeaseHolder },
+            }),
+            stderr: '',
+          };
+        }
+        return { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases.coordination.k8s.io "p1-db-maintenance-lock" not found' };
+      }
+      if (args[0] === 'create' && args.includes('--filename')) {
+        const doc = JSON.parse(options.input ?? '{}');
+        if (doc.kind === 'Lease') {
+          activeLeaseHolder = doc.spec?.holderIdentity;
+          return { status: 0, stdout: 'lease.coordination.k8s.io/p1-db-maintenance-lock created', stderr: '' };
+        }
+      }
+      if (args[0] === 'get' && args[1] === 'configmap' && args[2] === 'p1-db-maintenance-state') {
+        return { status: 0, stdout: JSON.stringify({ kind: 'ConfigMap', data: maintenanceState }), stderr: '' };
+      }
+      if (args[0] === 'get' && (args[1] === 'jobs' || args[1] === 'pods')) {
+        return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
+      }
+      if (args[0] === 'delete' && args[1] === '--raw') {
+        const expectedPath = '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock';
+        if (args[2] !== expectedPath || !args.includes('--filename') || args[args.indexOf('--filename') + 1] !== '-' ||
+            !args.includes('--context')) {
+          return { status: 1, stdout: '', stderr: `unexpected raw delete ${args.join(' ')}` };
+        }
+        const body = JSON.parse(options.input ?? '{}');
+        if (body.apiVersion !== 'v1' || body.kind !== 'DeleteOptions' ||
+            body.preconditions?.uid !== 'lease-uid-1' ||
+            body.preconditions?.resourceVersion !== '1') {
+          return { status: 1, stdout: '', stderr: 'Conflict: UID or resourceVersion mismatch' };
+        }
+        activeLeaseHolder = undefined;
+        return { status: 0, stdout: 'lease.coordination.k8s.io "p1-db-maintenance-lock" deleted', stderr: '' };
+      }
     }
     if (name === 'git' && args[0] === 'worktree' && args[1] === 'add') {
       mkdirSync(worktreePath);
@@ -81,6 +157,8 @@ function setup({
   const deployKustomize = async (options, overrides) => {
     deployment = {
       root: overrides.root,
+      context: overrides.context,
+      heldMaintenanceRunId: overrides.heldMaintenanceRunId,
       registry: options.registry,
       modelBindings: options.modelBindings,
       removeModelBindings: options.removeModelBindings,
@@ -89,28 +167,41 @@ function setup({
       images: JSON.parse(readFileSync(options.imageManifest, 'utf8')).images,
     };
   };
+  const deleteMaintenanceLease = async ({ context, apiPath, uid, resourceVersion }) => {
+    assert.equal(context, 'test-ctx');
+    assert.equal(apiPath, '/apis/coordination.k8s.io/v1/namespaces/agentweaver/leases/p1-db-maintenance-lock');
+    if (uid !== 'lease-uid-1' || resourceVersion !== '1') {
+      throw new Error('Conflict: UID or resourceVersion mismatch');
+    }
+    activeLeaseHolder = undefined;
+  };
   return {
     testRoot, worktreePath, calls, digests, verifiedImages, exec, verifyImage,
-    deployKustomize, get deployment() { return deployment; },
+    deployKustomize, deleteMaintenanceLease, get deployment() { return deployment; },
+    get activeLeaseHolder() { return activeLeaseHolder; },
   };
 }
 
 function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true,
   modelOptions = {}, modelAwareHelper = true, targetAwareHelper = true, auditAwareHelper = true,
-  providerHostRequestAwareHelper = true, providerRateCardAwareHelper = true) {
+  providerHostRequestAwareHelper = true, providerRateCardAwareHelper = true,
+  consumeGuardAwareHelper = true) {
   return deployFromCommit({ sourceSha, registry, ...modelOptions }, {
     root,
     worktreePath: fixture.worktreePath,
     exec: fixture.exec,
     verifyImage: fixture.verifyImage,
     deployKustomize: fixture.deployKustomize,
+    deleteMaintenanceLease: fixture.deleteMaintenanceLease,
     deployModule: {
       DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper,
       DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION: modelAwareHelper,
       DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION: providerHostRequestAwareHelper,
       DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION: providerRateCardAwareHelper,
       DEPLOY_KUSTOMIZE_TARGET_OPTION: targetAwareHelper,
+      DEPLOY_KUSTOMIZE_CONTEXT_OPTION: true,
       DEPLOY_KUSTOMIZE_AUDIT_OPTION: auditAwareHelper,
+      DEPLOY_KUSTOMIZE_PROJECTS_CONFIG_CONSUME_GUARD: consumeGuardAwareHelper,
     },
   });
 }
@@ -174,13 +265,19 @@ test('passes a registered separate target and rejects it for an older Kustomize 
   ]) {
     assert.throws(() => parseDeployFromCommitArgs(args), /Usage:/);
   }
+  const awwusExec = base => (name, args, options) => {
+    if (name === 'kubectl' && args[0] === 'config' && args[1] === 'view') {
+      return { status: 0, stdout: 'https://awwus2np01-aks-88n4s6n7.hcp.westus2.azmk8s.io:443\n', stderr: '' };
+    }
+    return base.exec(name, args, options);
+  };
   const fixture = setup();
   try {
-    await runDeploy(fixture, undefined, true, { resourceGroup: 'awwus2np01' });
+    await runDeploy({ ...fixture, exec: awwusExec(fixture) }, undefined, true, { resourceGroup: 'awwus2np01' });
     assert.equal(fixture.deployment.resourceGroup, 'awwus2np01');
     const older = setup();
     try {
-      await assert.rejects(runDeploy(older, undefined, true, { resourceGroup: 'awwus2np01' }, true, false),
+      await assert.rejects(runDeploy({ ...older, exec: awwusExec(older) }, undefined, true, { resourceGroup: 'awwus2np01' }, true, false),
         /predates install target selection/);
       assert.equal(older.deployment, undefined);
     } finally {
@@ -416,4 +513,479 @@ test('protects an already enabled provider host-request channel before invoking 
   } finally {
     rmSync(disabled.testRoot, { recursive: true, force: true });
   }
+});
+
+test('v9: acquires Lease first, rejects historical commit pre-worktree when consumeGuardRequired is set, and hands off heldMaintenanceRunId', async () => {
+  const blocked = setup({
+    consumeGuardSupported: false,
+    maintenanceState: { 'projectsConfig.consumeGuardRequired': 'true' },
+  });
+  try {
+    await assert.rejects(
+      runDeploy(blocked),
+      /lacks AddNativeAcsProjectPolicyBaselineConsumeGuard/);
+    assert.equal(blocked.calls.some(({ name, args }) => name === 'git' && args[0] === 'worktree'), false);
+    assert.equal(blocked.calls.some(({ name }) => name === 'npm'), false);
+    const leaseCreateIdx = blocked.calls.findIndex(c =>
+      c.name === 'kubectl' && c.args.includes('create') && JSON.parse(c.input ?? '{}').kind === 'Lease');
+    const stateGetIdx = blocked.calls.findIndex(c =>
+      c.name === 'kubectl' && c.args.includes('get') && c.args.includes('configmap'));
+    assert.ok(leaseCreateIdx >= 0 && leaseCreateIdx < stateGetIdx);
+  } finally {
+    rmSync(blocked.testRoot, { recursive: true, force: true });
+  }
+
+  const concurrent = setup({ leaseHolder: 'other-run-id' });
+  try {
+    await assert.rejects(runDeploy(concurrent), /database maintenance lock is held by other-run-id/);
+    assert.equal(concurrent.calls.some(({ name, args }) => name === 'git' && args[0] === 'worktree'), false);
+  } finally {
+    rmSync(concurrent.testRoot, { recursive: true, force: true });
+  }
+
+  const ok = setup({ maintenanceState: { 'projectsConfig.consumeGuardRequired': 'true' } });
+  try {
+    await runDeploy(ok);
+    assert.match(ok.deployment.heldMaintenanceRunId, /^[a-f0-9]{12}$/);
+  } finally {
+    rmSync(ok.testRoot, { recursive: true, force: true });
+  }
+
+  // Finding 6: migration-capable source with NO markers still requires DEPLOY_KUSTOMIZE_PROJECTS_CONFIG_CONSUME_GUARD.
+  const noMarkersOlderDeployer = setup({ maintenanceState: {} });
+  const preWorktreeExec = (name, args, options) => {
+    if (name === 'git' && args[0] === 'show' && args[1].endsWith(':scripts/release/deploy-kustomize.mjs')) {
+      return { status: 0, stdout: 'export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;\n', stderr: '' };
+    }
+    return noMarkersOlderDeployer.exec(name, args, options);
+  };
+  try {
+    await assert.rejects(
+      deployFromCommit({ sourceSha, registry: 'ghcr.io/sabbour' }, {
+        root,
+        worktreePath: noMarkersOlderDeployer.worktreePath,
+        exec: preWorktreeExec,
+        verifyImage: noMarkersOlderDeployer.verifyImage,
+      }),
+      /predates Projects & Config consume-guard deployment support/);
+    assert.equal(noMarkersOlderDeployer.calls.some(({ name, args }) => name === 'git' && args[0] === 'worktree'), false);
+  } finally {
+    rmSync(noMarkersOlderDeployer.testRoot, { recursive: true, force: true });
+  }
+
+  // Finding 7: changed Lease UID/resourceVersion preserves new Lease.
+  const changedLease = setup({ maintenanceState: { 'projectsConfig.consumeGuardRequired': 'true' } });
+  const changedDeleteLease = async () => {
+    throw new Error('Kubernetes rejected the version-guarded p1-db-maintenance-lock delete (HTTP 409).');
+  };
+  try {
+    await assert.rejects(
+      runDeploy({ ...changedLease, deleteMaintenanceLease: changedDeleteLease }),
+      /Could not release p1-db-maintenance-lock/);
+  } finally {
+    rmSync(changedLease.testRoot, { recursive: true, force: true });
+  }
+
+  // Blocker 3: inner deployKustomize retain-Lease decision propagates to outer Lease owner.
+  const retainInner = setup({ maintenanceState: { 'projectsConfig.consumeGuardRequired': 'true' } });
+  let deleteCalled = false;
+  try {
+    await assert.rejects(
+      deployFromCommit({ sourceSha, registry: 'ghcr.io/sabbour' }, {
+        root,
+        worktreePath: retainInner.worktreePath,
+        exec: retainInner.exec,
+        verifyImage: retainInner.verifyImage,
+        deleteMaintenanceLease: async () => { deleteCalled = true; },
+        deployKustomize: async (_opts, ov) => {
+          assert.equal(ov.context, 'test-ctx');
+          ov.onRetainLease?.();
+          throw new Error('inner job cleanup failed');
+        },
+        deployModule: {
+          DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION: true,
+          DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION: true,
+          DEPLOY_KUSTOMIZE_PROJECTS_CONFIG_CONSUME_GUARD: true,
+        },
+      }),
+      /retaining p1-db-maintenance-lock.*--release-lock/);
+    assert.equal(deleteCalled, false, 'outer Lease must not be released when inner deploy retains it');
+  } finally {
+    rmSync(retainInner.testRoot, { recursive: true, force: true });
+  }
+
+  // Blocker 7: --projects-config-only parses and resolves only agentweaver.projects.config.
+  assert.deepEqual(
+    parseDeployFromCommitArgs([sourceSha, '--projects-config-only', '--resource-group', 'awwus2np01', '--execute']),
+    { sourceSha, projectsConfigOnly: true, resourceGroup: 'awwus2np01' },
+  );
+  assert.throws(
+    () => parseDeployFromCommitArgs([sourceSha, '--projects-config-only', '--projects-config-only', '--execute']),
+    /Usage:/,
+  );
+  const pcOnly = setup({ maintenanceState: { 'projectsConfig.consumeGuardRequired': 'true' } });
+  try {
+    await runDeploy(pcOnly, 'ghcr.io/sabbour', true, { projectsConfigOnly: true });
+    assert.deepEqual(Object.keys(pcOnly.deployment.images), ['agentweaver.projects.config']);
+    assert.equal(pcOnly.deployment.context, 'test-ctx');
+  } finally {
+    rmSync(pcOnly.testRoot, { recursive: true, force: true });
+  }
+
+  // Gap 1: historical deployKustomize without DEPLOY_KUSTOMIZE_CONTEXT_OPTION gets a scoped KUBECONFIG.
+  const hist = setup({ maintenanceState: {} });
+  const prevKubeconfig = process.env.KUBECONFIG;
+  let observedKubeconfig;
+  let observedKubeconfigText;
+  const histExec = (name, args, options) => {
+    if (name === 'kubectl' && args[0] === 'config' && args[1] === 'view' && args.includes('--raw')) {
+      assert.ok(args.includes('--minify') && args.includes('--context') && args.includes('test-ctx'));
+      return { status: 0, stdout: 'apiVersion: v1\nkind: Config\ncurrent-context: test-ctx\n', stderr: '' };
+    }
+    return hist.exec(name, args, options);
+  };
+  try {
+    await deployFromCommit({ sourceSha, registry: 'ghcr.io/sabbour' }, {
+      root,
+      worktreePath: hist.worktreePath,
+      exec: histExec,
+      verifyImage: hist.verifyImage,
+      deleteMaintenanceLease: hist.deleteMaintenanceLease,
+      deployKustomize: async () => {
+        observedKubeconfig = process.env.KUBECONFIG;
+        observedKubeconfigText = readFileSync(observedKubeconfig, 'utf8');
+      },
+      deployModule: {
+        DEPLOY_KUSTOMIZE_REGISTRY_OPTION: true,
+        DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION: true,
+        DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION: true,
+        DEPLOY_KUSTOMIZE_PROJECTS_CONFIG_CONSUME_GUARD: true,
+      },
+    });
+    assert.ok(observedKubeconfig && observedKubeconfig !== prevKubeconfig);
+    assert.match(observedKubeconfigText, /current-context: test-ctx/);
+    assert.equal(existsSync(observedKubeconfig), false, 'scoped kubeconfig must be removed after deploy');
+    assert.equal(process.env.KUBECONFIG, prevKubeconfig);
+  } finally {
+    rmSync(hist.testRoot, { recursive: true, force: true });
+  }
+
+  // Gap 2: Pair A verifier Job foreground delete failure retains Lease and stops progression.
+  const migrationClientId = '11111111-2222-4333-8444-555555555555';
+  const pairADelFail = setup({ consumeGuardSupported: false, maintenanceState: {} });
+  const verifierSha = 'e'.repeat(40);
+  const verifierTree = 'f'.repeat(40);
+  const verifierDigest = digestFor(9);
+  const verifierImage = `ghcr.io/sabbour/agentweaver.projects.config@${verifierDigest}`;
+  let pairALeaseDeleted = false;
+  const pairADelExec = (name, args, options) => {
+    if (name === 'git' && args[0] === 'rev-parse' && args[1] === '--verify' &&
+        (args[2] === 'refs/remotes/origin/v1' || args[2] === 'refs/remotes/origin/v1^{tree}' ||
+          args[2] === `${verifierSha}^{tree}`)) {
+      return { status: 0, stdout: args[2] === 'refs/remotes/origin/v1' ? `${verifierSha}\n` : `${verifierTree}\n`, stderr: '' };
+    }
+    if (name === 'git' && args[0] === 'cat-file' && args[1] === '-e') {
+      return { status: args[2].startsWith(verifierSha) ? 0 : 1, stdout: '', stderr: '' };
+    }
+    if (name === 'git' && args[0] === 'show') {
+      if (!args[1].startsWith(verifierSha)) return { status: 1, stdout: '', stderr: '' };
+      return {
+        status: 0,
+        stdout: args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json') ? realPostgresPlanJson : realProgramCs,
+        stderr: '',
+      };
+    }
+    if (name === 'docker' && args[0] === 'buildx' && args[3].includes(verifierSha)) {
+      return { status: 0, stdout: `${verifierDigest}\n`, stderr: '' };
+    }
+    if (name === 'kubectl' && args[0] === 'get' && args[1] === 'deployment') return { status: 0, stdout: '', stderr: '' };
+    if (name === 'kubectl' && args[0] === 'get' && args[1] === 'serviceaccount') {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          kind: 'ServiceAccount',
+          metadata: { name: 'projects-config-migration', annotations: { 'azure.workload.identity/client-id': migrationClientId } },
+        }),
+        stderr: '',
+      };
+    }
+    if (name === 'az' && args[0] === 'identity') return { status: 0, stdout: `${migrationClientId}\n`, stderr: '' };
+    if (name === 'kubectl' && args[0] === 'create' && args.includes('--filename')) {
+      const doc = JSON.parse(options.input ?? '{}');
+      if (doc.kind === 'Job') return { status: 0, stdout: 'job created', stderr: '' };
+    }
+    if (name === 'kubectl' && args[0] === 'wait') return { status: 0, stdout: '', stderr: '' };
+    if (name === 'kubectl' && args[0] === 'logs') return { status: 0, stdout: 'PROJECTS_CONFIG_EXACT_PAIR_A\n', stderr: '' };
+    if (name === 'kubectl' && args[0] === 'delete' && args[1] === 'job') {
+      return { status: 1, stdout: '', stderr: 'delete paira job failed' };
+    }
+    return pairADelFail.exec(name, args, options);
+  };
+  try {
+    await assert.rejects(
+      deployFromCommit({ sourceSha, registry: 'ghcr.io/sabbour' }, {
+        root,
+        worktreePath: pairADelFail.worktreePath,
+        exec: pairADelExec,
+        verifyImage: async img => img === verifierImage ? { sourceSha: verifierSha, sourceTree: verifierTree } : pairADelFail.verifyImage(img),
+        deleteMaintenanceLease: async () => { pairALeaseDeleted = true; },
+        deployKustomize: pairADelFail.deployKustomize,
+      }),
+      /retaining p1-db-maintenance-lock/);
+    assert.equal(pairALeaseDeleted, false);
+    assert.equal(pairADelFail.deployment, undefined);
+  } finally {
+    rmSync(pairADelFail.testRoot, { recursive: true, force: true });
+  }
+
+  // Blocker 2: wrong target context fails before any Lease, state, or verifier Job operations.
+  const wrongCtx = setup({ maintenanceState: {} });
+  const wrongCtxExec = (name, args, options) => {
+    if (name === 'kubectl' && args[0] === 'config' && args[1] === 'view') {
+      return { status: 0, stdout: 'https://awwus2np01-aks-88n4s6n7.hcp.westus2.azmk8s.io:443\n', stderr: '' };
+    }
+    return wrongCtx.exec(name, args, options);
+  };
+  try {
+    await assert.rejects(
+      deployFromCommit({ sourceSha, registry: 'ghcr.io/sabbour' }, {
+        root,
+        worktreePath: wrongCtx.worktreePath,
+        exec: wrongCtxExec,
+        verifyImage: wrongCtx.verifyImage,
+      }),
+      /does not point at the agentweaver cluster/);
+    assert.equal(wrongCtx.calls.some(({ name, args }) =>
+      name === 'kubectl' && (args.includes('lease') || args.includes('configmap') || args.includes('job'))), false);
+  } finally {
+    rmSync(wrongCtx.testRoot, { recursive: true, force: true });
+  }
+
+  // Finding 4 / Blocker 3: production Pair A Job path on an old Pair A installation uses configured Job template,
+  // source-pinned verifier image from origin/v1, verified workload identity, and PostgreSQL connection string.
+  for (const exact of [true, false]) {
+    const prodPairA = setup({ consumeGuardSupported: false, maintenanceState: {} });
+    const oldPairAImage = `ghcr.io/sabbour/agentweaver.projects.config@${digestFor(8)}`;
+    const verifierSha = 'e'.repeat(40);
+    const verifierTree = 'f'.repeat(40);
+    const verifierDigest = digestFor(9);
+    const verifierImage = `ghcr.io/sabbour/agentweaver.projects.config@${verifierDigest}`;
+    const createdJobs = [];
+    const prodExec = (name, args, options) => {
+      if (name === 'git' && args[0] === 'rev-parse' && args[1] === '--verify' && args[2] === 'refs/remotes/origin/v1') {
+        return { status: 0, stdout: `${verifierSha}\n`, stderr: '' };
+      }
+      if (name === 'git' && args[0] === 'rev-parse' && args[1] === '--verify' &&
+          (args[2] === 'refs/remotes/origin/v1^{tree}' || args[2] === `${verifierSha}^{tree}`)) {
+        return { status: 0, stdout: `${verifierTree}\n`, stderr: '' };
+      }
+      if (name === 'git' && args[0] === 'cat-file' && args[1] === '-e') {
+        return { status: args[2].startsWith(verifierSha) ? 0 : 1, stdout: '', stderr: '' };
+      }
+      if (name === 'git' && args[0] === 'show') {
+        if (!args[1].startsWith(verifierSha)) return { status: 1, stdout: '', stderr: '' };
+        return {
+          status: 0,
+          stdout: args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json') ? realPostgresPlanJson : realProgramCs,
+          stderr: '',
+        };
+      }
+      if (name === 'docker' && args[0] === 'buildx' && args[3] === `ghcr.io/sabbour/agentweaver.projects.config:sha-${verifierSha}`) {
+        return { status: 0, stdout: `${verifierDigest}\n`, stderr: '' };
+      }
+      if (name === 'kubectl' && args[0] === 'get' && args[1] === 'deployment' && args[2] === 'projects-config') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            spec: { template: { spec: { containers: [{ image: oldPairAImage }] } } },
+          }),
+          stderr: '',
+        };
+      }
+      if (name === 'kubectl' && args[0] === 'get' && args[1] === 'serviceaccount' && args[2] === 'projects-config-migration') {
+        assert.ok(args.includes('--context') && args.includes('test-ctx'));
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            kind: 'ServiceAccount',
+            metadata: {
+              name: 'projects-config-migration',
+              annotations: { 'azure.workload.identity/client-id': migrationClientId },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (name === 'az' && args[0] === 'identity' && args[1] === 'show') {
+        return { status: 0, stdout: `${migrationClientId}\n`, stderr: '' };
+      }
+      if (name === 'kubectl' && args[0] === 'create' && args.includes('--filename')) {
+        assert.ok(args.includes('--context') && args.includes('test-ctx'));
+        const doc = JSON.parse(options.input ?? '{}');
+        if (doc.kind === 'Job') {
+          createdJobs.push(doc);
+          return { status: 0, stdout: 'job created', stderr: '' };
+        }
+      }
+      if (name === 'kubectl' && args[0] === 'wait') return { status: 0, stdout: '', stderr: '' };
+      if (name === 'kubectl' && args[0] === 'logs') {
+        return { status: 0, stdout: exact ? 'PROJECTS_CONFIG_EXACT_PAIR_A\n' : 'PROJECTS_CONFIG_PAIR_A_NOT_PROVEN:drift\n', stderr: '' };
+      }
+      if (name === 'kubectl' && args[0] === 'delete' && args[1] === 'job') {
+        assert.ok(args.includes('--context') && args.includes('test-ctx'));
+        return { status: 0, stdout: 'job deleted', stderr: '' };
+      }
+      return prodPairA.exec(name, args, options);
+    };
+    const prodVerifyImage = async img => img === verifierImage
+      ? { sourceSha: verifierSha, sourceTree: verifierTree }
+      : prodPairA.verifyImage(img);
+    try {
+      if (exact) {
+        await runDeploy({ ...prodPairA, exec: prodExec, verifyImage: prodVerifyImage });
+        assert.ok(prodPairA.deployment);
+      } else {
+        await assert.rejects(
+          runDeploy({ ...prodPairA, exec: prodExec, verifyImage: prodVerifyImage }),
+          /exact Pair A could not be verified/);
+      }
+      assert.equal(createdJobs.length, 1);
+      const job = createdJobs[0];
+      const container = job.spec.template.spec.containers[0];
+      const env = Object.fromEntries((container.env ?? []).map(e => [e.name, e.value]));
+      assert.equal(container.image, verifierImage);
+      assert.deepEqual(container.command, [
+        'dotnet', 'Agentweaver.Projects.Config.dll', '--verify-projects-config-pair-a',
+      ]);
+      assert.equal(container.args, undefined);
+      assert.equal(job.spec.template.spec.serviceAccountName, 'projects-config-migration');
+      assert.equal(job.spec.template.metadata.labels['azure.workload.identity/use'], 'true');
+      assert.equal(env.ProjectsConfig__Migration__WorkloadIdentity__ClientId, migrationClientId);
+      assert.match(env.ConnectionStrings__ProjectsConfigMigration, /SSL Mode=VerifyFull/);
+      assert.ok(env.ProjectsConfig__Migration__WorkloadIdentity__TenantId);
+      assert.ok(env.ProjectsConfig__Migration__WorkloadIdentity__TokenFilePath);
+      const outerKubectlCalls = prodPairA.calls.filter(c =>
+        c.name === 'kubectl' && c.args[0] !== 'config');
+      assert.ok(outerKubectlCalls.every(c => c.args.includes('--context') && c.args.includes('test-ctx')));
+    } finally {
+      rmSync(prodPairA.testRoot, { recursive: true, force: true });
+    }
+  }
+
+  // Fix 1: verify compatibility and verifier availability against actual repo source files (HEAD).
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  const headTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: root, encoding: 'utf8' }).trim();
+  const realGitExec = (cmd, args, opts) => {
+    const res = execFileSync(cmd, args, { cwd: opts?.cwd ?? root, encoding: 'utf8' });
+    return { status: 0, stdout: res, stderr: '' };
+  };
+  assert.equal(sourceSupportsConsumeGuard(realGitExec, root, headSha, headTree), true);
+  assert.equal(sourceSupportsPairAVerifier((cmd, args, opts) => {
+    if (cmd === 'git' && args[0] === 'show' &&
+        args[1].endsWith(':services/projects-config/Agentweaver.Projects.Config/Program.cs')) {
+      return { status: 0, stdout: realProgramCs, stderr: '' };
+    }
+    return realGitExec(cmd, args, opts);
+  }, root, headSha, headTree), true);
+  assert.equal(sourceSupportsPairAVerifier((cmd, args, opts) => {
+    if (cmd === 'git' && args[0] === 'show' &&
+        args[1].endsWith(':services/projects-config/Agentweaver.Projects.Config/Program.cs')) {
+      return { status: 0, stdout: realProgramCs.replaceAll('--verify-projects-config-pair-a', '--other'), stderr: '' };
+    }
+    return realGitExec(cmd, args, opts);
+  }, root, headSha, headTree), false);
+
+  // Finding 3 + Residual 2: historical deployer lost wait with active unlabeled migration Job retains Lease,
+  // and manual --release-lock also refuses until the unlabeled Job settles, then succeeds.
+  const histActive = setup({ maintenanceState: {} });
+  let histActiveLeaseDeleted = false;
+  let unlabeledJobComplete = false;
+  const histActiveExec = (name, args, options) => {
+    if (name === 'kubectl' && args[0] === 'config' && args[1] === 'view' && args.includes('--raw')) {
+      return { status: 0, stdout: 'apiVersion: v1\nkind: Config\ncurrent-context: test-ctx\n', stderr: '' };
+    }
+    if (name === 'kubectl' && args.includes('get') && args.includes('jobs') &&
+        !args.some(a => a.includes('agentweaver.io/db-maintenance-run='))) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          kind: 'List',
+          items: [{
+            metadata: { name: 'identity-broker-migration-12345678' },
+            status: unlabeledJobComplete
+              ? { conditions: [{ type: 'Complete', status: 'True' }] }
+              : { active: 1 },
+          }],
+        }),
+        stderr: '',
+      };
+    }
+    if (name === 'kubectl' && args.includes('get') && args.includes('pods') &&
+        !args.some(a => a.includes('agentweaver.io/db-maintenance-run='))) {
+      return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
+    }
+    return histActive.exec(name, args, options);
+  };
+  try {
+    await assert.rejects(
+      deployFromCommit({ sourceSha, registry: 'ghcr.io/sabbour' }, {
+        root,
+        worktreePath: histActive.worktreePath,
+        exec: histActiveExec,
+        verifyImage: histActive.verifyImage,
+        deleteMaintenanceLease: async () => { histActiveLeaseDeleted = true; },
+        deployKustomize: async () => { throw new Error('historical wait disconnected'); },
+        deployModule: {
+          DEPLOY_KUSTOMIZE_REGISTRY_OPTION: true,
+          DEPLOY_KUSTOMIZE_PROVIDER_HOST_REQUEST_OPTION: true,
+          DEPLOY_KUSTOMIZE_PROVIDER_RATE_CARD_OPTION: true,
+          DEPLOY_KUSTOMIZE_PROJECTS_CONFIG_CONSUME_GUARD: true,
+        },
+      }),
+      /Cannot release p1-db-maintenance-lock|cannot release p1-db-maintenance-lock/i);
+    assert.equal(histActiveLeaseDeleted, false);
+
+    const heldRunId = histActive.activeLeaseHolder;
+    assert.ok(heldRunId);
+    const receiptDir = path.join(histActive.testRoot, 'release-lock-receipts');
+    const releaseOverrides = {
+      root: path.join(histActive.testRoot, 'checkout'),
+      exec: (cmd, args, opts) => {
+        if (cmd !== 'kubectl') return { status: 0, stdout: '', stderr: '' };
+        let stripped = args[0] === '--kubeconfig' ? args.slice(2) : args;
+        if (stripped[0] === '--namespace') stripped = stripped.slice(2);
+        return histActiveExec('kubectl', stripped, opts);
+      },
+      withKubeconfig: async (_target, action) => action(['--kubeconfig', 'offline']),
+      deleteLease: async () => { histActiveLeaseDeleted = true; },
+      log: () => {},
+    };
+    await assert.rejects(
+      runProjectsConfigMigration(
+        parseProjectsConfigMigrationArgs(['--release-lock', heldRunId, '--receipt-dir', receiptDir]),
+        releaseOverrides,
+      ),
+      /while its Job or Pods remain active or unknown/);
+    assert.equal(histActiveLeaseDeleted, false);
+
+    unlabeledJobComplete = true;
+    const releaseReceipt = await runProjectsConfigMigration(
+      parseProjectsConfigMigrationArgs(['--release-lock', heldRunId, '--receipt-dir', receiptDir]),
+      releaseOverrides,
+    );
+    assert.equal(releaseReceipt.result, 'succeeded');
+    assert.equal(histActiveLeaseDeleted, true);
+  } finally {
+    rmSync(histActive.testRoot, { recursive: true, force: true });
+  }
+  const withoutConsumedRevision = JSON.parse(realPostgresPlanJson);
+  const pcSvc = withoutConsumedRevision.services.find(s => s.schema === 'projects_config');
+  const blTbl = pcSvc.tables.find(t => t.table === 'native_acs_project_policy_baselines');
+  blTbl.updateColumns = blTbl.updateColumns.filter(c => c !== 'consumed_revision');
+  assert.equal(sourceSupportsConsumeGuard((cmd, args, opts) => {
+    if (cmd === 'git' && args[0] === 'show' && args[1].endsWith(':scripts/azure/lib/p1-postgres-plan.json')) {
+      return { status: 0, stdout: JSON.stringify(withoutConsumedRevision), stderr: '' };
+    }
+    return realGitExec(cmd, args, opts);
+  }, root, headSha, headTree), false);
 });
