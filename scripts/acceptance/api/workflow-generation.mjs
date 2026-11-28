@@ -288,12 +288,10 @@ export function buildCommands(input) {
       id: 'api-invoke-authorization-context',
       args: ['api', 'invoke', 'getAuthorizationContext', ...target, ...run],
     },
-    ...(input.caseId === CREDIT_ZERO_CASE_ID
-      ? [{
-          id: 'api-invoke-admin-authorization-context',
-          args: ['api', 'invoke', 'getAuthorizationContext', ...target, '--scope', 'projects.admin'],
-        }]
-      : []),
+    {
+      id: 'api-invoke-admin-authorization-context',
+      args: ['api', 'invoke', 'getAuthorizationContext', ...target, '--scope', 'projects.admin'],
+    },
     {
       id: 'api-invoke-run-selection',
       args: [
@@ -856,7 +854,7 @@ function isAuthorityDenialStderr(stderr) {
   return /\b(?:401|403|unauthorized|forbidden)\b|not signed in|run login (?:first|again)|sign in with|authorization[- ]context request was denied|permission denied|do not belong to the same actor/i.test(stderr);
 }
 
-function classifyCancelRecord(record, input) {
+function classifyCancelRecord(record, input, options = {}) {
   if (record.error || record.signal || record.timedOut) {
     return { kind: 'lost', failure: 'Run cancellation response was lost or timed out.' };
   }
@@ -885,6 +883,9 @@ function classifyCancelRecord(record, input) {
   if (response?.status === 503 && response.body?.error === RUNTIME_START_QUEUE_FULL) {
     return { kind: 'queue_full', failure: 'Run cancellation cleanup queue was full.' };
   }
+  if (options.allowOwnerTimeout && response?.status === 504 && response.body?.code === 'owner_timeout') {
+    return { kind: 'lost', failure: 'Run cancellation timed out at the Gateway owner.' };
+  }
   if (response?.status !== 200
     || response.body?.runId !== input.target.runId
     || response.body?.state !== 'cancelled') {
@@ -894,16 +895,29 @@ function classifyCancelRecord(record, input) {
   return { kind: 'ok', response: response.body };
 }
 
-function classifyRunStatusRecord(record, input) {
-  if (record.error || record.signal || record.timedOut) {
-    return { kind: 'transient', failure: 'Run status check did not complete.' };
+function classifyRunStatusRecord(record, input, options = {}) {
+  if (record.timedOut) {
+    return { kind: 'transient', failure: 'Run status check timed out.' };
+  }
+  if (record.error || record.signal) {
+    return {
+      kind: options.strictTransient ? 'stop' : 'transient',
+      failure: 'Run status check did not complete.',
+    };
   }
   const stdout = typeof record.stdout === 'string' ? record.stdout.trim() : '';
   if (!stdout) {
     if (isAuthorityDenialStderr(record.stderr)) {
       return { kind: 'stop', failure: 'Run status check was denied by authority.' };
     }
-    return { kind: 'transient', failure: 'Run status check returned no response.' };
+    if (options.strictTransient && typeof record.stderr === 'string'
+      && record.stderr.trim() === 'The Gateway request timed out.') {
+      return { kind: 'transient', failure: 'Run status check timed out.' };
+    }
+    return {
+      kind: options.strictTransient ? 'stop' : 'transient',
+      failure: 'Run status check returned no response.',
+    };
   }
   let response;
   try {
@@ -912,7 +926,10 @@ function classifyRunStatusRecord(record, input) {
     if (isAuthorityDenialStderr(record.stderr)) {
       return { kind: 'stop', failure: 'Run status check was denied by authority.' };
     }
-    return { kind: 'transient', failure: 'Run status check did not return valid JSON.' };
+    return {
+      kind: options.strictTransient ? 'stop' : 'transient',
+      failure: 'Run status check did not return valid JSON.',
+    };
   }
   if (response?.status === 401 || response?.status === 403) {
     return { kind: 'stop', failure: 'Run status check was denied by authority.' };
@@ -937,6 +954,36 @@ function isCompleteRuntimeCleanup(cleanupSummary) {
     && cleanupSummary.total > 0
     && cleanupSummary.pending === 0
     && cleanupSummary.complete === cleanupSummary.total;
+}
+
+function classifyStandardRuntimeCleanup(cleanupSummary) {
+  if (cleanupSummary === undefined || cleanupSummary === null) {
+    return { kind: 'pending', failure: 'The disposable run cleanup summary was absent.' };
+  }
+  if (typeof cleanupSummary !== 'object' || Array.isArray(cleanupSummary)) {
+    return { kind: 'malformed', failure: 'The disposable run cleanup summary was malformed or inconsistent.' };
+  }
+  const { state, total, pending, complete } = cleanupSummary;
+  if (state === 'failed') {
+    return { kind: 'failed', failure: 'The disposable run cleanup failed.' };
+  }
+  const validCounts = Number.isSafeInteger(total)
+    && total > 0
+    && Number.isSafeInteger(pending)
+    && pending >= 0
+    && Number.isSafeInteger(complete)
+    && complete >= 0
+    && pending + complete === total;
+  if (!validCounts) {
+    return { kind: 'malformed', failure: 'The disposable run cleanup summary was malformed or inconsistent.' };
+  }
+  if (state === 'complete' && pending === 0 && complete === total) {
+    return { kind: 'complete', summary: { state, total, pending, complete } };
+  }
+  if (state === 'pending' && pending > 0) {
+    return { kind: 'pending', failure: 'The disposable run cleanup remained pending.' };
+  }
+  return { kind: 'malformed', failure: 'The disposable run cleanup summary was malformed or inconsistent.' };
 }
 
 export async function runCase(options, env = process.env, dependencies = {}) {
@@ -1353,32 +1400,84 @@ export async function runCase(options, env = process.env, dependencies = {}) {
         : 'Preflight did not complete.';
       cleanup.cancellationRetained = false;
     }
-  } else if (runIdentityVerified && input.approvedDisposableRun) {
+  } else if (runIdentityVerified && verifiedAdminActorId !== null && input.approvedDisposableRun) {
     cleanup.status = 'running';
+    const cleanupDeadline = now() + (dependencies.cleanupDeadlineMs ?? CLEANUP_DEADLINE_MS);
+    const pollIntervalMs = dependencies.cleanupPollIntervalMs ?? CLEANUP_POLL_INTERVAL_MS;
+    const [rawCancelCommand, rawVerifyCommand] = buildCleanupCommands(input, randomUUID());
+    const cancelCommand = { ...rawCancelCommand, metadataOnly: true };
+    const verifyCommand = { ...rawVerifyCommand, metadataOnly: true };
+    let lastFailure = 'The disposable run cleanup did not complete before the 90-second deadline.';
+
     try {
-      const [cancelCommand, verifyCommand] = buildCleanupCommands(input, randomUUID());
-      const cancellation = await execute(cancelCommand).catch(() => null);
-      const statusRecord = await execute(verifyCommand);
-      const runStatus = apiResponse(statusRecord, verifyCommand.id, 200);
-      if (runStatus.projectId !== input.target.projectId
-        || runStatus.runId !== input.target.runId
-        || runStatus.executionState !== 'cancelled') {
-        throw new Error('The disposable run did not reach the cancelled state.');
+      const remainingForCancel = cleanupDeadline - now();
+      if (remainingForCancel <= 0) {
+        throw new Error(lastFailure);
       }
-      if (cancellation !== null) {
-        const response = apiResponse(cancellation, cancelCommand.id, 200);
-        if (response.runId !== input.target.runId || response.state !== 'cancelled') {
-          throw new Error('The run cancellation response did not confirm cancellation.');
+      const initialCancel = classifyCancelRecord(
+        await invokeLogged(cancelCommand, Math.min(COMMAND_TIMEOUT_MS, remainingForCancel)),
+        input,
+        { allowOwnerTimeout: true },
+      );
+      if (initialCancel.kind === 'stop' || initialCancel.kind === 'queue_full') {
+        throw new Error(initialCancel.failure);
+      }
+      if (initialCancel.kind === 'lost') {
+        lastFailure = initialCancel.failure;
+      }
+
+      while (now() < cleanupDeadline) {
+        const remainingForRead = cleanupDeadline - now();
+        if (remainingForRead <= 0) break;
+        const statusRecord = await invokeLogged(
+          verifyCommand,
+          Math.min(COMMAND_TIMEOUT_MS, remainingForRead),
+        );
+        if (now() >= cleanupDeadline) break;
+
+        const statusOutcome = classifyRunStatusRecord(statusRecord, input, { strictTransient: true });
+        if (statusOutcome.kind === 'stop') {
+          throw new Error(statusOutcome.failure);
         }
+        if (statusOutcome.kind === 'ok') {
+          const runStatus = statusOutcome.status;
+          if (runStatus.rootSessionId !== input.target.sessionId) {
+            throw new Error('Run status output did not match the target root session.');
+          }
+          if (['completed', 'failed', 'indeterminate'].includes(runStatus.executionState)) {
+            throw new Error(`The disposable run ended in incompatible terminal state ${runStatus.executionState}.`);
+          }
+          const summaryOutcome = classifyStandardRuntimeCleanup(runStatus.runtimeCleanup);
+          if (summaryOutcome.kind === 'failed' || summaryOutcome.kind === 'malformed') {
+            throw new Error(summaryOutcome.failure);
+          }
+          if (runStatus.executionState === 'cancelled' && summaryOutcome.kind === 'complete') {
+            cleanup.status = 'passed';
+            cleanup.runtimeCleanup = summaryOutcome.summary;
+            break;
+          }
+          lastFailure = runStatus.executionState !== 'cancelled'
+            ? 'The disposable run did not reach the cancelled state.'
+            : summaryOutcome.failure;
+        } else {
+          lastFailure = statusOutcome.failure;
+        }
+
+        const remainingForSleep = cleanupDeadline - now();
+        if (remainingForSleep <= 0) break;
+        await sleep(Math.min(pollIntervalMs, remainingForSleep));
       }
-      cleanup.status = 'passed';
+
+      if (cleanup.status !== 'passed') {
+        throw new Error(lastFailure);
+      }
     } catch (error) {
       cleanup.status = 'failed';
       cleanup.failure = error.message;
     }
   } else {
     cleanup.status = 'not-attempted';
-    cleanup.failure = 'The run identity did not match the case input.';
+    cleanup.failure = 'The caller contexts did not match the case input.';
   }
 
   if (generation.status === 'passed' && cleanup.status === 'passed') {

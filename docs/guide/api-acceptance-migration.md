@@ -120,11 +120,11 @@ evidence. It checks the stored assistant reply against the workflow completion
 receipt without keeping the reply text. The job and draft remain stored after
 the case.
 
-The case sends a model request and cancels the named run after it confirms the
-run identity. Use an explicitly approved non-production Gateway and a
+The case sends a model request and cancels the named run after it confirms
+both caller contexts. Use an explicitly approved non-production Gateway and a
 disposable run with a bounded model budget. The case is complete only when it
-verifies that the run reached `cancelled`. It does not launch a browser or
-delete the job or draft.
+verifies that the run reached `cancelled` and completed runtime cleanup. It does
+not launch a browser or delete the job or draft.
 
 ### Before you begin
 
@@ -207,21 +207,27 @@ the fields in the example and rejects unknown fields.
    node scripts\acceptance\api\workflow-generation.mjs --input $caseInput --output $evidence
    ```
 
-   The script checks the exact apphost hash, sign-in state, caller, and
-   accepted selection. Before submission, it checks that the apphost and
-   Gateway support the turn digest read. It then uses `api invoke` to submit
-   the generation request, poll job status, and read the completed result.
-   It reads the stored reply's hash before cancelling the disposable run
-   and verifying its status. If the first submission returns
-   HTTP 503 with `workflow_generation_queue_full`, the case sends the same
-   request with the same `Idempotency-Key` once more. It does not retry other
-   submission failures or timeouts.
+   The script checks the exact apphost hash, sign-in state, both caller
+   contexts (`projects.orchestrator` bound to the project and run, and unbound
+   `projects.admin`), and the accepted selection. Before submission, it checks
+   that the apphost and Gateway support the turn digest read. It then uses
+   `api invoke` to submit the generation request, poll job status, and read the
+   completed result. It reads the stored reply's hash, sends one
+   `cancelProjectRun` request with an idempotency key, and polls `readRunStatus`
+   for up to 90 seconds until `executionState` is `cancelled` and
+   `runtimeCleanup` is `complete` with a positive `total`, `pending: 0`, and
+   `complete === total`. If the first submission returns HTTP 503 with
+   `workflow_generation_queue_full`, the case sends the same request with the
+   same `Idempotency-Key` once more. It does not retry other submission
+   failures or timeouts.
 
-   The command log records submission attempts and turn digest reads without
-   their arguments or output. It redacts request bodies and headers for other
-   commands. The log contains the draft returned by the result read and the
-   target IDs. The result records the artifact ID, definition hash, and the verified reply's
-   project, run, session, and event IDs and hash. Store the evidence with the
+   The command log records submission attempts, turn digest reads,
+   cancellation, and cleanup status reads without their arguments or output. It
+   redacts request bodies and headers for other commands. The log contains the
+   draft returned by the result read and the target IDs. The result records the
+   artifact ID, definition hash, the verified reply's project, run, session, and
+   event IDs and hash, and the four validated `cleanup.runtimeCleanup` fields
+   (`state`, `total`, `pending`, and `complete`). Store the evidence with the
    project's access controls.
 
 ### Verify the result
@@ -229,17 +235,19 @@ the fields in the example and rejects unknown fields.
 The evidence directory contains `commands.jsonl` and `result.json`. A `passed`
 result (exit code `0`) requires a completed generation, matching workflow
 definition hash and artifact ID, valid native completion evidence, a matching
-stored reply hash, and verified run cancellation. The result records generation
-and cancellation separately. This case checks that the run reached `cancelled`.
-It does not check whether runtime cleanup finished; to verify owned runtime
-cleanup after cancellation, check `readRunStatus.runtimeCleanup` for matching
-run identity, a positive total, all tracked cleanup complete, and zero pending.
+stored reply hash, and verified run cancellation with complete
+`runtimeCleanup` (`state: "complete"`, positive `total`, `pending: 0`, and
+`complete === total`) for the matching project, run, and root session. The
+result records generation and cleanup separately.
 
 A missing sign-in, missing turn digest support, missing operation, or
 caller or selection mismatch is `blocked` (exit code `2`). A generation
-error, timeout, response mismatch, or unverified cancellation is `failed`
-(exit code `1`). A failed or blocked case is
-not a pass.
+error, timeout, response mismatch, or unverified cleanup is `failed` (exit code
+`1`). If cancellation returns a lost transport response or HTTP 504 with
+`code: "owner_timeout"`, the script polls `readRunStatus` within the same
+90-second deadline without sending a second cancellation. When cleanup does not
+finish before the deadline, inspect the exact run with `readRunStatus` instead
+of resubmitting generation. A failed or blocked case is not a pass.
 
 This route-specific case checks workflow generation. It does not replace full
 P1 API acceptance.

@@ -217,8 +217,10 @@ function fakeApphost(input, options = {}) {
   options.changeReceipt?.(result.nativeCompletion);
   let statusReads = 0;
   let submits = 0;
-  const runner = (_cliPath, args, env) => {
-    calls.push({ args, env });
+  let cancelCount = 0;
+  let cleanupStatusReads = 0;
+  const runner = (_cliPath, args, env, timeoutMs) => {
+    calls.push({ args, env, timeoutMs });
     const operation = args[0] === 'api' && args[1] === 'invoke' ? args[2] : null;
     if (args[0] === '--version') return { ...ok({}), stdout: '1.1.0\n' };
     if (args[0] === '--help') {
@@ -259,7 +261,15 @@ function fakeApphost(input, options = {}) {
     }
     switch (operation) {
       case 'getAuthorizationContext':
-        return ok({
+        if (args.includes('projects.admin')) {
+          return ok(options.adminContext ?? {
+            actorId: input.expectedActorId,
+            tenantId: input.target.tenantId,
+            boundProjectId: null,
+            boundRunId: null,
+          });
+        }
+        return ok(options.runContext ?? {
           actorId: input.expectedActorId,
           tenantId: input.target.tenantId,
           boundProjectId: input.target.projectId,
@@ -285,8 +295,12 @@ function fakeApphost(input, options = {}) {
       case 'readSessionTurnContent':
         return { ...plain({ ...storedTurn, ...options.turnFields }), ...options.turnFailure };
       case 'cancelProjectRun':
+        cancelCount += 1;
+        if (options.onCancel) return options.onCancel(cancelCount, timeoutMs);
         return options.cleanupFailed ? fail() : ok({ runId: input.target.runId, state: 'cancelled', cancelledAt: '2026-11-17T00:00:02Z' });
       case 'readRunStatus':
+        cleanupStatusReads += 1;
+        if (options.onRunStatus) return options.onRunStatus(cleanupStatusReads, timeoutMs);
         return ok({
           projectId: input.target.projectId,
           runId: input.target.runId,
@@ -295,6 +309,9 @@ function fakeApphost(input, options = {}) {
           logicalTurnOrdinal: 0,
           executionState: options.cleanupFailed ? 'running' : 'cancelled',
           stateVersion: 2,
+          runtimeCleanup: options.cleanupFailed
+            ? { state: 'pending', total: 1, pending: 1, complete: 0 }
+            : { state: 'complete', total: 1, pending: 0, complete: 1 },
         });
       default:
         throw new Error(`Unexpected operation: ${args.join(' ')}`);
@@ -304,21 +321,41 @@ function fakeApphost(input, options = {}) {
 }
 
 async function runFake(context, options = {}, runOptions = {}) {
-  const apphost = fakeApphost(context.caseInput, options);
+  let currentTime = runOptions.startTime ?? 1_000_000;
+  const sleepCalls = [];
+  const clockOptions = {
+    now: () => currentTime,
+    sleep: async ms => {
+      sleepCalls.push(ms);
+      currentTime += ms;
+    },
+    ...runOptions,
+  };
+  const apphost = fakeApphost(context.caseInput, {
+    ...options,
+    advanceClock: delta => { currentTime += delta; },
+  });
   const exitCode = await runCase(
     { inputPath: context.casePath, outputPath: context.outputPath, dryRun: false },
     context.env,
     {
-      runCommand: apphost.runner,
+      runCommand: (cliPath, args, env, timeoutMs) => {
+        const res = apphost.runner(cliPath, args, env, timeoutMs);
+        if (options.onAfterCommand) {
+          options.onAfterCommand(args, timeoutMs, delta => { currentTime += delta; });
+        }
+        return res;
+      },
       jobDeadlineMs: 100,
       pollIntervalMs: 0,
-      sleep: async () => {},
-      ...runOptions,
+      cleanupDeadlineMs: 90_000,
+      cleanupPollIntervalMs: 1_000,
+      ...clockOptions,
     },
   );
   const resultText = await readFile(path.join(context.outputPath, 'result.json'), 'utf8');
   const commands = await readFile(path.join(context.outputPath, 'commands.jsonl'), 'utf8');
-  return { exitCode, result: JSON.parse(resultText), resultText, commands, ...apphost };
+  return { exitCode, result: JSON.parse(resultText), resultText, commands, sleepCalls, ...apphost };
 }
 
 test('case input requires approval, a bound run, a selected model, and finite run limits', () => {
@@ -349,6 +386,7 @@ test('commands use run-bound API invoke and separate unbound project-writer auth
     'auth-status-run',
     'auth-status-project-writer',
     'api-invoke-authorization-context',
+    'api-invoke-admin-authorization-context',
     'api-invoke-run-selection',
   ]);
   assert.equal(buildGenerateCommand(input, 'key').args[2], 'generateProjectWorkflow');
@@ -607,7 +645,7 @@ test('generation and cleanup failures are recorded separately', async () => {
     assert.equal(result.generation.status, 'failed');
     assert.match(result.generation.failure, /workflow_generation_failed/);
     assert.equal(result.cleanup.status, 'failed');
-    assert.match(result.cleanup.failure, /cancelled state/);
+    assert.match(result.cleanup.failure, /pending|cancelled state/);
   });
 });
 
@@ -630,6 +668,344 @@ test('dry-run validates the apphost and input without a command or evidence writ
     assert.equal(code, 0);
     await assert.rejects(access(context.outputPath), { code: 'ENOENT' });
   });
+});
+
+test('standard cleanup polls pending runtimeCleanup until complete and stores validated summary only', async () => {
+  await withScratch(async context => {
+    const sentinelRef = 'sentinel-runtime-ref-12345';
+    const sentinelStdout = 'sentinel-cancel-stdout-67890';
+    const sentinelStderr = 'sentinel-status-stderr-abcde';
+    const { exitCode, result, resultText, commands, calls } = await runFake(context, {
+      onCancel: () => ({
+        ...ok({ runId: context.caseInput.target.runId, state: 'cancelled', note: sentinelStdout }),
+        stderr: sentinelStderr,
+      }),
+      onRunStatus: readCount => ok({
+        projectId: context.caseInput.target.projectId,
+        runId: context.caseInput.target.runId,
+        rootSessionId: context.caseInput.target.sessionId,
+        executionFence: 2,
+        logicalTurnOrdinal: 0,
+        executionState: 'cancelled',
+        stateVersion: 2 + readCount,
+        reference: sentinelRef,
+        runtimeCleanup: readCount === 1
+          ? { state: 'pending', total: 1, pending: 1, complete: 0 }
+          : { state: 'complete', total: 1, pending: 0, complete: 1, reference: sentinelRef },
+      }),
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(result.status, 'passed');
+    assert.equal(result.generation.status, 'passed');
+    assert.equal(result.cleanup.status, 'passed');
+    assert.deepEqual(result.cleanup.runtimeCleanup, { state: 'complete', total: 1, pending: 0, complete: 1 });
+    assert.equal(calls.filter(call => call.args[2] === 'cancelProjectRun').length, 1);
+    assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 2);
+
+    for (const sentinel of [sentinelRef, sentinelStdout, sentinelStderr]) {
+      assert.equal(commands.includes(sentinel), false);
+      assert.equal(resultText.includes(sentinel), false);
+    }
+    const logRecords = commands.trim().split('\n').map(line => JSON.parse(line));
+    for (const stepId of ['api-invoke-cancel-disposable-run', 'api-invoke-verify-run-cleanup']) {
+      const matching = logRecords.filter(record => record.stepId === stepId);
+      assert.ok(matching.length >= 1, stepId);
+      for (const entry of matching) {
+        for (const forbidden of ['arguments', 'stdout', 'stderr', 'error']) {
+          assert.equal(Object.hasOwn(entry, forbidden), false, `${stepId}:${forbidden}`);
+        }
+      }
+    }
+  });
+});
+
+test('standard cleanup rejects cancellation alone, missing/zero summary, and count mismatches', async t => {
+  for (const [name, runtimeCleanup, expectedFailure] of [
+    ['absent summary at deadline', undefined, /absent/],
+    ['null summary at deadline', null, /absent/],
+    ['zero total', { state: 'complete', total: 0, pending: 0, complete: 0 }, /malformed/],
+    ['complete with nonzero pending', { state: 'complete', total: 2, pending: 1, complete: 1 }, /malformed/],
+    ['complete count mismatch', { state: 'complete', total: 2, pending: 0, complete: 1 }, /malformed/],
+    ['pending with zero pending', { state: 'pending', total: 1, pending: 0, complete: 1 }, /malformed/],
+  ]) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result } = await runFake(context, {
+        onRunStatus: () => ok({
+          projectId: context.caseInput.target.projectId,
+          runId: context.caseInput.target.runId,
+          rootSessionId: context.caseInput.target.sessionId,
+          executionFence: 1,
+          logicalTurnOrdinal: 0,
+          executionState: 'cancelled',
+          stateVersion: 2,
+          runtimeCleanup,
+        }),
+      }, { cleanupDeadlineMs: 2_500, cleanupPollIntervalMs: 1_000 });
+      assert.equal(exitCode, 1);
+      assert.equal(result.generation.status, 'passed');
+      assert.equal(result.cleanup.status, 'failed');
+      assert.equal(result.cleanup.runtimeCleanup, undefined);
+      assert.match(result.cleanup.failure, expectedFailure);
+    }));
+  }
+});
+
+test('standard caller context gates block both generation and cleanup on mismatch', async t => {
+  for (const [name, overrides] of Object.entries({
+    'wrong admin actor': {
+      adminContext: input => ({
+        actorId: 'other-admin',
+        tenantId: input.target.tenantId,
+        boundProjectId: null,
+        boundRunId: null,
+      }),
+    },
+    'wrong admin tenant': {
+      adminContext: input => ({
+        actorId: input.expectedActorId,
+        tenantId: 'other-tenant',
+        boundProjectId: null,
+        boundRunId: null,
+      }),
+    },
+    'bound admin context': {
+      adminContext: input => ({
+        actorId: input.expectedActorId,
+        tenantId: input.target.tenantId,
+        boundProjectId: input.target.projectId,
+        boundRunId: null,
+      }),
+    },
+    'mismatched run context': {
+      runContext: input => ({
+        actorId: input.expectedActorId,
+        tenantId: input.target.tenantId,
+        boundProjectId: input.target.projectId,
+        boundRunId: 'other-run',
+      }),
+    },
+  })) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result, calls } = await runFake(context, {
+        adminContext: overrides.adminContext?.(context.caseInput),
+        runContext: overrides.runContext?.(context.caseInput),
+      });
+      assert.equal(exitCode, 2);
+      assert.equal(result.generation.status, 'blocked');
+      assert.equal(result.cleanup.status, 'not-attempted');
+      assert.equal(calls.some(call => call.args[2] === 'generateProjectWorkflow'), false);
+      assert.equal(calls.some(call => call.args[2] === 'cancelProjectRun'), false);
+      assert.equal(calls.some(call => call.args[2] === 'readRunStatus'), false);
+    }));
+  }
+});
+
+test('standard cleanup stops on foreign target, denial, or incompatible terminal state', async t => {
+  for (const [name, responseFn] of [
+    ['foreign project', input => ok({
+      projectId: 'other-project',
+      runId: input.target.runId,
+      rootSessionId: input.target.sessionId,
+      executionState: 'cancelled',
+      runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+    })],
+    ['foreign run', input => ok({
+      projectId: input.target.projectId,
+      runId: 'other-run',
+      rootSessionId: input.target.sessionId,
+      executionState: 'cancelled',
+      runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+    })],
+    ['foreign root session', input => ok({
+      projectId: input.target.projectId,
+      runId: input.target.runId,
+      rootSessionId: 'other-session',
+      executionState: 'cancelled',
+      runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+    })],
+    ['status denial 403', () => ok({ error: 'forbidden' }, 403)],
+    ['incompatible terminal state completed', input => ok({
+      projectId: input.target.projectId,
+      runId: input.target.runId,
+      rootSessionId: input.target.sessionId,
+      executionState: 'completed',
+    })],
+  ]) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result, calls } = await runFake(context, {
+        onRunStatus: () => responseFn(context.caseInput),
+      });
+      assert.equal(exitCode, 1);
+      assert.equal(result.generation.status, 'passed');
+      assert.equal(result.cleanup.status, 'failed');
+      assert.equal(result.cleanup.runtimeCleanup, undefined);
+      assert.equal(calls.filter(call => call.args[2] === 'cancelProjectRun').length, 1);
+      assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 1);
+    }));
+  }
+});
+
+test('standard cleanup stops on permanent CLI failure without a second read even if next response would be valid', async t => {
+  for (const [name, badRead] of [
+    ['empty stdout with stderr', () => ({ exitCode: 1, signal: null, stdout: '', stderr: 'invalid OpenAPI document', timedOut: false, error: null })],
+    ['invalid JSON stdout with stderr', () => ({ exitCode: 1, signal: null, stdout: 'not-json', stderr: 'discovery failed', timedOut: false, error: null })],
+    ['process error', () => ({ exitCode: null, signal: null, stdout: '', stderr: '', timedOut: false, error: 'ENOENT' })],
+  ]) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result, calls } = await runFake(context, {
+        onRunStatus: readCount => readCount === 1
+          ? badRead()
+          : ok({
+              projectId: context.caseInput.target.projectId,
+              runId: context.caseInput.target.runId,
+              rootSessionId: context.caseInput.target.sessionId,
+              executionState: 'cancelled',
+              runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+            }),
+      });
+      assert.equal(exitCode, 1);
+      assert.equal(result.generation.status, 'passed');
+      assert.equal(result.cleanup.status, 'failed');
+      assert.equal(result.cleanup.runtimeCleanup, undefined);
+      assert.equal(calls.filter(call => call.args[2] === 'cancelProjectRun').length, 1);
+      assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 1);
+    }));
+  }
+});
+
+test('standard cleanup retries CLI gateway-request-timeout diagnostic then passes on valid proof', async () => {
+  await withScratch(async context => {
+    const { exitCode, result, calls } = await runFake(context, {
+      onRunStatus: readCount => readCount === 1
+        ? {
+            exitCode: 1,
+            signal: null,
+            stdout: '',
+            stderr: 'The Gateway request timed out.\n',
+            timedOut: false,
+            error: null,
+          }
+        : ok({
+            projectId: context.caseInput.target.projectId,
+            runId: context.caseInput.target.runId,
+            rootSessionId: context.caseInput.target.sessionId,
+            executionState: 'cancelled',
+            runtimeCleanup: { state: 'complete', total: 1, pending: 0, complete: 1 },
+          }),
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(result.generation.status, 'passed');
+    assert.equal(result.cleanup.status, 'passed');
+    assert.deepEqual(result.cleanup.runtimeCleanup, { state: 'complete', total: 1, pending: 0, complete: 1 });
+    assert.equal(calls.filter(call => call.args[2] === 'cancelProjectRun').length, 1);
+    assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 2);
+  });
+});
+
+test('standard cleanup caps sleep to remaining budget (<1000ms) after pending read and starts no further read', async () => {
+  await withScratch(async context => {
+    const readTimeouts = [];
+    const { exitCode, result, sleepCalls, calls } = await runFake(context, {
+      onRunStatus: (_readCount, timeoutMs) => {
+        readTimeouts.push(timeoutMs);
+        return ok({
+          projectId: context.caseInput.target.projectId,
+          runId: context.caseInput.target.runId,
+          rootSessionId: context.caseInput.target.sessionId,
+          executionState: 'cancelled',
+          runtimeCleanup: { state: 'pending', total: 1, pending: 1, complete: 0 },
+        });
+      },
+      onAfterCommand: (args, _timeoutMs, advanceClock) => {
+        if (args[0] === 'api' && args[1] === 'invoke' && args[2] === 'readRunStatus') {
+          advanceClock(800);
+        }
+      },
+    }, { cleanupDeadlineMs: 1_500, cleanupPollIntervalMs: 1_000 });
+    assert.equal(exitCode, 1);
+    assert.deepEqual(readTimeouts, [1_500]);
+    assert.deepEqual(sleepCalls, [700]);
+    assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 1);
+    assert.equal(result.generation.status, 'passed');
+    assert.equal(result.cleanup.status, 'failed');
+    assert.equal(result.cleanup.runtimeCleanup, undefined);
+  });
+});
+
+test('standard cleanup caps remaining budget for cancel, read, and sleep and rejects post-read deadline', async () => {
+  await withScratch(async context => {
+    const cancelTimeouts = [];
+    const readTimeouts = [];
+    const { exitCode, result, sleepCalls } = await runFake(context, {
+      onCancel: (_count, timeoutMs) => {
+        cancelTimeouts.push(timeoutMs);
+        return ok({ runId: context.caseInput.target.runId, state: 'cancelled' });
+      },
+      onRunStatus: (readCount, timeoutMs) => {
+        readTimeouts.push(timeoutMs);
+        return ok({
+          projectId: context.caseInput.target.projectId,
+          runId: context.caseInput.target.runId,
+          rootSessionId: context.caseInput.target.sessionId,
+          executionState: 'cancelled',
+          runtimeCleanup: readCount === 1
+            ? { state: 'pending', total: 1, pending: 1, complete: 0 }
+            : { state: 'complete', total: 1, pending: 0, complete: 1 },
+        });
+      },
+      onAfterCommand: (args, _timeoutMs, advanceClock) => {
+        const op = args[0] === 'api' && args[1] === 'invoke' ? args[2] : null;
+        if (op === 'cancelProjectRun') advanceClock(500);
+        if (op === 'readRunStatus' && readTimeouts.length === 1) advanceClock(200);
+        if (op === 'readRunStatus' && readTimeouts.length === 2) advanceClock(800);
+      },
+    }, { cleanupDeadlineMs: 2_500, cleanupPollIntervalMs: 1_000 });
+    assert.equal(exitCode, 1);
+    assert.deepEqual(cancelTimeouts, [2_500]);
+    assert.deepEqual(readTimeouts, [2_000, 800]);
+    assert.deepEqual(sleepCalls, [1_000]);
+    assert.equal(result.generation.status, 'passed');
+    assert.equal(result.cleanup.status, 'failed');
+    assert.equal(result.cleanup.runtimeCleanup, undefined);
+  });
+});
+
+test('standard cleanup permits exact readback with one cancel on 504 owner_timeout or lost cancel', async t => {
+  for (const [name, cancelResponse] of [
+    ['504 owner_timeout', () => ok({ code: 'owner_timeout', detail: 'Gateway timed out waiting for owner.' }, 504)],
+    ['transport-lost cancel', () => ({ exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, error: 'ETIMEDOUT' })],
+  ]) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result, calls } = await runFake(context, {
+        onCancel: cancelResponse,
+      });
+      assert.equal(exitCode, 0);
+      assert.equal(result.cleanup.status, 'passed');
+      assert.deepEqual(result.cleanup.runtimeCleanup, { state: 'complete', total: 1, pending: 0, complete: 1 });
+      assert.equal(calls.filter(call => call.args[2] === 'cancelProjectRun').length, 1);
+      assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 1);
+    }));
+  }
+});
+
+test('standard cleanup fails without polling or second cancel on other 504, denial, conflict, or queue_full', async t => {
+  for (const [name, cancelResponse] of [
+    ['other 504', () => ok({ code: 'upstream_gateway_timeout' }, 504)],
+    ['denial 403', () => ok({ error: 'forbidden' }, 403)],
+    ['conflict 409', () => ok({ error: 'conflict' }, 409)],
+    ['queue_full 503', () => queueFull('runtime_start_queue_full')],
+  ]) {
+    await t.test(name, () => withScratch(async context => {
+      const { exitCode, result, calls } = await runFake(context, {
+        onCancel: cancelResponse,
+      });
+      assert.equal(exitCode, 1);
+      assert.equal(result.generation.status, 'passed');
+      assert.equal(result.cleanup.status, 'failed');
+      assert.equal(calls.filter(call => call.args[2] === 'cancelProjectRun').length, 1);
+      assert.equal(calls.filter(call => call.args[2] === 'readRunStatus').length, 0);
+    }));
+  }
 });
 
 const creditZeroExamplePath = path.resolve(directory, '..', 'examples', 'workflow-generation-credit-zero.json');
