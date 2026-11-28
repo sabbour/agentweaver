@@ -1440,9 +1440,11 @@ who approves each review.
 ## Test workflow generation through the Gateway
 
 The workflow-generation case exercises the public POST, status, and result
-operations through native CLI `api invoke` commands. It checks the accepted
-selection, a generated draft and artifact hash, native completion evidence,
-the stored assistant reply's hash, and cancellation of the disposable run.
+operations through native CLI `api invoke` commands. It checks both caller
+contexts, the accepted selection, a generated draft and artifact hash, native
+completion evidence, the stored assistant reply's hash, and one-shot
+cancellation with bounded 90-second `runtimeCleanup` verification of the
+disposable run.
 
 Run its controlled case tests from the repository root:
 
@@ -1451,11 +1453,14 @@ node --test scripts\acceptance\api\tests\workflow-generation.test.mjs
 ```
 
 These tests use controlled CLI responses. They check that the case resends
-the same request once when Orchestrator reports a full queue. They also check
-that reply verification failures do not resubmit the request and that partial
-digest command output does not enter the evidence files. The tests do not
-contact a live Gateway or run a model. Run the live case only with the exact native apphost, an
-approved non-production target, and an approved disposable run. Follow
+the same request once when Orchestrator reports a full queue, that reply
+verification failures do not resubmit the request, and that partial digest or
+cleanup command output does not enter the evidence files. They also check both
+caller gates, one-shot cancellation, uncertain `504` `owner_timeout` readback,
+strict deadline enforcement, and `runtimeCleanup` summary validation. The tests
+do not contact a live Gateway or run a model. Run the live case only with the
+exact native apphost, an approved non-production target, and an approved
+disposable run. Follow
 [Run workflow generation](./api-acceptance-migration.md#run-workflow-generation)
 for the input and retained evidence.
 
